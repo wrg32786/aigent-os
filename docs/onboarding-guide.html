@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIgent — Setup Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Geist+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ─── Design Tokens ─────────────────────────────────────────────── */
+:root {
+  --bg:            #0E0E11;
+  --bg-raised:     #13131A;
+  --bg-card:       #17171E;
+  --bg-code:       #0A0A0D;
+  --border:        rgba(94, 230, 208, 0.10);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  --cyan:          #5EE6D0;
+  --cyan-dim:      rgba(94, 230, 208, 0.10);
+  --cyan-mid:      rgba(94, 230, 208, 0.20);
+  --amber:         #F5A524;
+  --amber-dim:     rgba(245, 165, 36, 0.10);
+  --ivory:         #F4F1EA;
+  --ivory-mid:     rgba(244, 241, 234, 0.58);
+  --ivory-dim:     rgba(244, 241, 234, 0.33);
+
+  /* Easing — standard ease-out/ease-in-out curves for UI motion */
+  --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* 4pt spacing scale */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --sp-24: 96px;
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background-color: var(--bg);
+  color: var(--ivory);
+  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
+  font-size: 1rem;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+}
+
+/* ─── Page layout ────────────────────────────────────────────────── */
+.page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--sp-16) var(--sp-6) var(--sp-24);
+}
+
+/* ─── Wordmark ───────────────────────────────────────────────────── */
+/* "AI" in Geist Mono + cyan + 0.08em tracking prevents "Algent" misread */
+.wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  color: var(--ivory);
+  margin-bottom: var(--sp-16);
+}
+
+.wm-ai {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: 0.08em;
+  font-variant-ligatures: none;
+}
+
+/* ─── Hero ───────────────────────────────────────────────────────── */
+.hero {
+  padding-bottom: var(--sp-12);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--sp-12);
+  animation: fadeUp 480ms var(--ease-out) both;
+}
+
+.hero-eyebrow {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: var(--sp-3);
+}
+
+.hero-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-weight: 800;
+  font-size: clamp(2.25rem, 6vw, 3.25rem);
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+  color: var(--ivory);
+  margin-bottom: var(--sp-4);
+}
+
+.hero-sub {
+  font-size: 1.0625rem;
+  color: var(--ivory-mid);
+  line-height: 1.65;
+  margin-bottom: var(--sp-6);
+  max-width: 50ch;
+}
+
+/* ─── OS Toggle ──────────────────────────────────────────────────── */
+.os-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  margin-top: var(--sp-2);
+}
+
+.os-pill {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ivory-dim);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition:
+    color 160ms var(--ease-out),
+    background 160ms var(--ease-out);
+}
+
+.os-pill[aria-pressed="true"] {
+  color: var(--bg);
+  background: var(--cyan);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .os-pill:not([aria-pressed="true"]):hover {
+    color: var(--ivory);
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+/* ─── Section label ──────────────────────────────────────────────── */
+.section-label {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 600;
+  font-size: 0.67rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ivory-dim);
+  margin-bottom: var(--sp-4);
+}
+
+/* ─── Prerequisites ──────────────────────────────────────────────── */
+.prereqs {
+  margin-bottom: var(--sp-12);
+  animation: fadeUp 480ms 60ms var(--ease-out) both;
+}
+
+.checklist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.checklist li { display: flex; }
+
+.checklist label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  cursor: pointer;
+  font-size: 0.9375rem;
+  color: var(--ivory);
+  line-height: 1.55;
+  user-select: none;
+}
+
+/* Hide native checkbox */
+.checklist input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* Custom checkbox */
+.check-box {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 1.5px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 180ms var(--ease-out),
+    border-color 180ms var(--ease-out);
+}
+
+.checklist input[type="checkbox"]:checked + .check-box {
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+/* Tick: L-shape with transform, never scale(0) → use scale(0.4) */
+.check-box::after {
+  content: '';
+  display: block;
+  width: 10px;
+  height: 6px;
+  border-bottom: 2px solid var(--bg);
+  border-left: 2px solid var(--bg);
+  transform: rotate(-45deg) translate(0, -1px) scale(0.4);
+  opacity: 0;
+  transition:
+    transform 160ms var(--ease-out),
+    opacity 160ms var(--ease-out);
+}
+
+.checklist input[type="checkbox"]:checked + .check-box::after {
+  transform: rotate(-45deg) translate(0, -1px) scale(1);
+  opacity: 1;
+}
+
+.checklist input[type="checkbox"]:checked ~ .check-text {
+  color: var(--ivory-dim);
+  text-decoration: line-through;
+  text-decoration-color: rgba(244, 241, 234, 0.2);
+  transition: color 180ms var(--ease-out);
+}
+
+.check-text { transition: color 180ms var(--ease-out); }
+
+/* Amber required badge — amber ONLY for required items */
+.req-badge {
+  display: inline-block;
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bg);
+  background: var(--amber);
+  border-radius: 3px;
+  padding: 1px 6px;
+  vertical-align: middle;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+/* Note row (non-checkbox) inside checklist */
+.prereq-note {
+  font-size: 0.875rem;
+  color: var(--ivory-dim);
+  line-height: 1.6;
+  padding-left: calc(18px + var(--sp-3)); /* align with check text */
+  margin-top: calc(-1 * var(--sp-1));
+}
+
+/* ─── Progress rail ──────────────────────────────────────────────── */
+.progress-rail {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-8);
+  animation: fadeUp 480ms 100ms var(--ease-out) both;
+}
+
+.rail-seg {
+  height: 2px;
+  flex: 1;
+  background: var(--border-subtle);
+  border-radius: 2px;
+  transition: background 320ms var(--ease-out);
+}
+
+.rail-seg.done { background: var(--cyan); }
+
+.rail-label {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--ivory-dim);
+  white-space: nowrap;
+}
+
+/* ─── Step cards ─────────────────────────────────────────────────── */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-12);
+}
+
+/* Entry: scale(0.95) + opacity — per impeccable doctrine (never scale(0)) */
+.step {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: var(--sp-6);
+  opacity: 0;
+  transform: scale(0.95);
+  transition:
+    opacity 360ms var(--ease-out),
+    transform 360ms var(--ease-out),
+    border-color 200ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .step:hover { border-color: var(--border); }
+}
+
+.step.visible {
+  opacity: 1;
+  transform: none;
+}
+
+.step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+/* Step number: background tint, NOT a side stripe */
+.step-num {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  border-radius: 5px;
+  padding: 3px 8px;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.step-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-weight: 700;
+  font-size: 1.125rem;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--ivory);
+}
+
+.step-body {
+  font-size: 0.9375rem;
+  color: var(--ivory-mid);
+  line-height: 1.7;
+  max-width: 60ch;
+}
+
+.step-body p + p { margin-top: var(--sp-3); }
+
+/* Inline code inside prose */
+.step-body code,
+.cmd-after code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ─── Command blocks ─────────────────────────────────────────────── */
+.cmd-block {
+  margin-top: var(--sp-4);
+  background: var(--bg-code);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cmd-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cmd-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.cmd-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.copy-btn {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ivory-dim);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition:
+    color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
+    background 150ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .copy-btn:hover {
+    color: var(--cyan);
+    border-color: rgba(94, 230, 208, 0.35);
+    background: var(--cyan-dim);
+  }
+}
+
+.copy-btn:active { transform: scale(0.97); }
+
+.copy-btn.copied {
+  color: var(--cyan);
+  border-color: rgba(94, 230, 208, 0.35);
+  background: var(--cyan-dim);
+}
+
+.cmd-content { padding: var(--sp-4); overflow-x: auto; }
+
+.cmd-content code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ivory);
+  line-height: 1.75;
+  white-space: pre;
+  display: block;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.cmd-after {
+  margin-top: var(--sp-3);
+  font-size: 0.875rem;
+  color: var(--ivory-mid);
+  line-height: 1.65;
+}
+
+.cmd-caption {
+  margin-top: var(--sp-2);
+  font-size: 0.8rem;
+  color: var(--ivory-dim);
+  font-style: italic;
+}
+
+/* ─── Link button ────────────────────────────────────────────────── */
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  border: 1px solid rgba(94, 230, 208, 0.2);
+  border-radius: 6px;
+  padding: var(--sp-2) var(--sp-4);
+  text-decoration: none;
+  transition:
+    background 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .link-btn:hover {
+    background: var(--cyan-mid);
+    border-color: rgba(94, 230, 208, 0.38);
+  }
+}
+
+.link-btn:active { transform: scale(0.97); }
+
+.link-btn svg { width: 11px; height: 11px; flex-shrink: 0; }
+
+/* ─── Amber callout ──────────────────────────────────────────────── */
+/* Full border — never a border-left accent stripe (impeccable ban) */
+.callout-amber {
+  margin-top: var(--sp-4);
+  background: var(--amber-dim);
+  border: 1px solid rgba(245, 165, 36, 0.18);
+  border-radius: 8px;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: 0.875rem;
+  color: var(--ivory-mid);
+  line-height: 1.65;
+}
+
+.callout-amber strong { color: var(--amber); }
+
+.callout-amber code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.79rem;
+  font-weight: 600;
+  color: var(--amber);
+  background: rgba(245, 165, 36, 0.10);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ─── Troubleshooting accordion ──────────────────────────────────── */
+.troubleshooting { margin-bottom: var(--sp-12); }
+
+.trouble-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: var(--sp-2);
+}
+
+/* Grid-row accordion — animates height without animating height */
+.trouble-item details { }
+
+details summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-6);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ivory);
+  user-select: none;
+  transition:
+    background 150ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+
+details summary::-webkit-details-marker { display: none; }
+details summary::marker { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  details summary:hover {
+    background: rgba(255, 255, 255, 0.025);
+    color: var(--cyan);
+  }
+}
+
+details[open] summary {
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--ivory);
+}
+
+.summary-chevron {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--ivory-dim);
+  transition:
+    transform 220ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+
+details[open] .summary-chevron {
+  transform: rotate(180deg);
+  color: var(--cyan);
+}
+
+.trouble-body {
+  padding: var(--sp-4) var(--sp-6);
+  font-size: 0.875rem;
+  color: var(--ivory-mid);
+  line-height: 1.7;
+}
+
+.trouble-body a {
+  color: var(--cyan);
+  text-underline-offset: 3px;
+}
+
+.trouble-body code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ─── Info card ───────────────────────────────────────────────────── */
+/* "Opening AIgent anytime" — not a step, not in the rail */
+.info-card {
+  margin-top: var(--sp-6);
+  margin-bottom: var(--sp-12);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: var(--sp-4) var(--sp-6);
+}
+
+.info-card-label {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: var(--sp-3);
+}
+
+.info-card-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: var(--ivory);
+  margin-bottom: var(--sp-3);
+}
+
+.info-card-body {
+  font-size: 0.875rem;
+  color: var(--ivory-mid);
+  line-height: 1.7;
+}
+
+.info-card-body ol {
+  padding-left: var(--sp-4);
+  margin-top: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.info-card-body code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ─── Footer ─────────────────────────────────────────────────────── */
+.footer {
+  padding-top: var(--sp-8);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.8rem;
+  color: var(--ivory-dim);
+  line-height: 1.7;
+}
+
+/* ─── Entrance animation ─────────────────────────────────────────── */
+/* Uses translateY not scale — heroes benefit from upward motion feel */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  .step {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 540px) {
+  .page { padding: var(--sp-8) var(--sp-4) var(--sp-16); }
+  .step { padding: var(--sp-4); }
+  .cmd-content code { font-size: 0.74rem; }
+  details summary { padding: var(--sp-3) var(--sp-4); }
+  .trouble-body { padding: var(--sp-3) var(--sp-4); }
+  .hero-title { font-size: clamp(1.875rem, 7vw, 3.25rem); }
+}
+</style>
+</head>
+<body>
+
+<main class="page">
+
+  <!-- Wordmark -->
+  <div class="wordmark" aria-label="AIgent">
+    <span class="wm-ai">AI</span>gent
+  </div>
+
+  <!-- ─── Hero ──────────────────────────────────────────────────── -->
+  <section class="hero">
+    <p class="hero-eyebrow">Setup Guide</p>
+    <h1 class="hero-title">From zero to your operator<br>in about 15 minutes.</h1>
+    <p class="hero-sub">We'll do this together on a call — if anything looks off, screen-share and we'll fix it in seconds.</p>
+
+    <!-- OS Toggle -->
+    <div class="os-toggle" role="group" aria-label="Choose your operating system">
+      <button class="os-pill" id="pill-mac" aria-pressed="true" data-os="mac">macOS</button>
+      <button class="os-pill" id="pill-win" aria-pressed="false" data-os="win">Windows</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- macOS TRACK                                                    -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div id="track-mac" data-track="mac">
+
+    <!-- ─── Prerequisites (Mac) ───────────────────────────────────── -->
+    <section class="prereqs" aria-labelledby="prereqs-mac-heading">
+      <p class="section-label" id="prereqs-mac-heading">Before you start</p>
+      <ul class="checklist" role="list">
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-mac-os" data-persist="ck-mac-os">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">macOS (Monterey or newer)</span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-mac-claude" data-persist="ck-mac-claude">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">
+              A Claude <strong>Pro or Max</strong> subscription
+              <span class="req-badge">required</span>
+              <span style="display:block;margin-top:3px;font-size:0.875em;color:var(--ivory-dim);">the AIgent runs on your own Claude login</span>
+            </span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-mac-gh" data-persist="ck-mac-gh">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">A GitHub account</span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-mac-time" data-persist="ck-mac-time">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">~15 minutes</span>
+          </label>
+        </li>
+
+      </ul>
+      <p class="prereq-note">Homebrew + developer tools install themselves in Step 2 — nothing to set up first.</p>
+    </section>
+
+    <!-- ─── Progress rail (Mac) ───────────────────────────────────── -->
+    <div class="progress-rail" id="rail-mac" role="progressbar" aria-label="Step progress" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0">
+      <span class="rail-label">STEP</span>
+      <span class="rail-seg" data-rail="1"></span>
+      <span class="rail-seg" data-rail="2"></span>
+      <span class="rail-seg" data-rail="3"></span>
+      <span class="rail-seg" data-rail="4"></span>
+      <span class="rail-seg" data-rail="5"></span>
+      <span class="rail-seg" data-rail="6"></span>
+      <span class="rail-label" id="rail-mac-count">0 / 6</span>
+    </div>
+
+    <!-- ─── Steps (Mac) ───────────────────────────────────────────── -->
+    <section class="steps" id="steps-mac" aria-label="Installation steps">
+
+      <!-- Mac 01 -->
+      <article class="step" data-step="1" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">01</span>
+          <h2 class="step-title">Unzip the download</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            Find the <code>aigent-os.zip</code> file you downloaded. Double-click it to unzip — you'll get a folder called <code>aigent-os</code>. Put it somewhere you'll remember (Desktop or home folder works fine).
+          </p>
+        </div>
+      </article>
+
+      <!-- Mac 02 -->
+      <article class="step" data-step="2" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">02</span>
+          <h2 class="step-title">Install Homebrew</h2>
+        </div>
+        <div class="step-body">
+          <p>Open Terminal (press <code>⌘ Space</code>, type <code>Terminal</code>, press Enter) and paste this in. It may ask for your Mac password.</p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</code>
+            </div>
+          </div>
+
+          <p class="cmd-after"><strong>When it finishes: completely quit Terminal and open a brand-new window before continuing.</strong> Homebrew isn't on your PATH until a fresh shell loads it. (If Homebrew printed a "Next steps" box with an <code>echo … &gt;&gt; ~/.zprofile</code> line and an <code>eval …</code> line, paste those into the new window first.)</p>
+        </div>
+      </article>
+
+      <!-- Mac 03 -->
+      <article class="step" data-step="3" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">03</span>
+          <h2 class="step-title">Connect your GitHub</h2>
+        </div>
+        <div class="step-body">
+          <p>In the new Terminal window, paste both lines. The first installs the GitHub CLI; the second links it to your account.</p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="brew install gh
+gh auth login" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>brew install gh
+gh auth login</code>
+            </div>
+          </div>
+
+          <p class="cmd-after">
+            When prompted, answer exactly this way:
+            <strong>GitHub.com → HTTPS → Yes (authenticate Git) → Login with a web browser.</strong>
+            It shows a one-time code — copy it, press Enter to open the browser, paste the code, and click Authorize. You only do this once.
+          </p>
+        </div>
+      </article>
+
+      <!-- Mac 04 -->
+      <article class="step" data-step="4" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">04</span>
+          <h2 class="step-title">Run the installer</h2>
+        </div>
+        <div class="step-body">
+          <p>Open Terminal (press <code>⌘ Space</code>, type <code>Terminal</code>, press Enter). Navigate to the unzipped folder and run the installer:</p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="cd ~/aigent-os
+bash install.sh" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>cd ~/aigent-os
+bash install.sh</code>
+            </div>
+          </div>
+
+          <p class="cmd-after">Replace <code>~/aigent-os</code> with wherever you put the unzipped folder. The installer wires everything up — takes under a minute. If a Claude login prompt appears, sign in with your Pro or Max account.</p>
+        </div>
+      </article>
+
+      <!-- Mac 05 -->
+      <article class="step" data-step="5" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">05</span>
+          <h2 class="step-title">Log in with Claude <em style="font-weight:400;font-size:0.85em;color:var(--ivory-dim);">(only if asked)</em></h2>
+        </div>
+        <div class="step-body">
+          <p>
+            Most people with Claude Code already set up are skipped straight to Step 6. If you <em>are</em> prompted, a browser opens — sign in with your Claude <strong>Pro or Max</strong> account. If anything later says authentication is missing, run:
+          </p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="claude setup-token" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>claude setup-token</code>
+            </div>
+          </div>
+
+          <div class="callout-amber">
+            <strong>If it says login failed,</strong> it almost always means there's no active Pro/Max subscription on that account. Subscribe at <strong>claude.ai</strong>, then re-run: <code>claude setup-token</code>
+          </div>
+        </div>
+      </article>
+
+      <!-- Mac 06 -->
+      <article class="step" data-step="6" data-track-step="mac">
+        <div class="step-header">
+          <span class="step-num">06</span>
+          <h2 class="step-title">Open your AIgent for the first time</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            <strong>Open a new Terminal window</strong> — this matters. The installer added the launcher to your PATH, which only loads in a fresh shell. Then type:
+          </p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="aigent" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>aigent</code>
+            </div>
+          </div>
+
+          <p class="cmd-caption">Your operator boots and runs its first-run setup. That's it — you're in.</p>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- ─── Opening AIgent anytime ──────────────────────────────────── -->
+    <!-- NOT a step — excluded from the rail count -->
+    <div class="info-card" aria-label="Opening AIgent anytime">
+      <p class="info-card-label">Opening AIgent anytime</p>
+      <p class="info-card-title">Three ways to launch it</p>
+      <div class="info-card-body">
+        <ol>
+          <li><strong>Spotlight</strong> — press <code>⌘ Space</code>, type <code>AIgent</code>, press Enter.</li>
+          <li><strong>Applications folder</strong> — double-click AIgent.</li>
+          <li><strong>Any Terminal</strong> — type <code>aigent</code>.</li>
+        </ol>
+        <p style="margin-top:var(--sp-3);">The Spotlight shortcut and Applications app are created by the installer in Step 4.</p>
+      </div>
+    </div>
+
+    <!-- ─── Three habits info card (Mac) ──────────────────────────────── -->
+    <!-- NOT a step — excluded from the rail count -->
+    <div class="info-card" aria-label="Three habits that make it work">
+      <p class="info-card-label">Good to know</p>
+      <p class="info-card-title">Three habits that make it work</p>
+      <div class="info-card-body">
+        <ol>
+          <li><strong>Open:</strong> start every session with <code>/open</code> — your AIgent loads your context and tells you exactly where to pick up.</li>
+          <li><strong>Close:</strong> when you're done, say <code>close up</code> — your AIgent banks the session so next time resumes clean. (Forgot? It recovers automatically.)</li>
+          <li><strong>Context counter (once):</strong> run <code>/statusline</code> in Claude Code and enable context usage. You'll see a live indicator as your session fills. When it gets heavy, close up, start fresh, and open again.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ─── Troubleshooting (Mac) ──────────────────────────────────── -->
+    <section class="troubleshooting" aria-labelledby="trouble-mac-heading">
+      <p class="section-label" id="trouble-mac-heading">Troubleshooting</p>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>'brew' command not found after installing it</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            You need a fresh shell. Completely quit Terminal and open a new window, or run the <code>eval "$(/opt/homebrew/bin/brew shellenv)"</code> line that Homebrew printed at the end of its install.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>'gh' command not found</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Finish Step 3 (<code>brew install gh</code>) first.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>"bash: install.sh: No such file or directory"</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Your terminal isn't in the aigent-os folder. Run <code>cd ~/aigent-os</code> (or wherever you put it) first, then re-run <code>bash install.sh</code>.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>Claude login failed</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            You need an active Claude Pro or Max subscription. Subscribe at <a href="https://claude.ai" target="_blank" rel="noopener">claude.ai</a>, then run: <code>claude setup-token</code>
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>'aigent' command not found / nothing happens</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Open a brand-new Terminal window — the launcher is added to your PATH by the installer; new windows pick it up. If it's still missing: run <code>source ~/.zshrc</code>
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>I want to start over</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Safe to re-run the Step 4 block. To wipe and redo cleanly: <code>rm -rf ~/aigent</code> then re-run Step 4.
+          </div>
+        </details>
+      </div>
+
+    </section>
+
+  </div><!-- /track-mac -->
+
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Windows TRACK                                                  -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div id="track-win" data-track="win" style="display:none;">
+
+    <!-- ─── Prerequisites (Win) ───────────────────────────────────── -->
+    <section class="prereqs" aria-labelledby="prereqs-win-heading">
+      <p class="section-label" id="prereqs-win-heading">Before you start</p>
+      <ul class="checklist" role="list">
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-win" data-persist="ck-win">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">
+              Windows 10 or 11
+              <span style="color:var(--ivory-dim);font-size:0.875em;"> — with "App Installer" / winget (built in on Windows 11)</span>
+            </span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-claude" data-persist="ck-claude">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">
+              A Claude <strong>Pro or Max</strong> subscription
+              <span class="req-badge">required</span>
+              <span style="display:block;margin-top:3px;font-size:0.875em;color:var(--ivory-dim);">the AIgent runs on your own Claude login</span>
+            </span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-gh" data-persist="ck-gh">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">A GitHub account</span>
+          </label>
+        </li>
+
+        <li>
+          <label>
+            <input type="checkbox" id="ck-time" data-persist="ck-time">
+            <span class="check-box" aria-hidden="true"></span>
+            <span class="check-text">~15 minutes</span>
+          </label>
+        </li>
+
+      </ul>
+    </section>
+
+    <!-- ─── Progress rail (Win) ───────────────────────────────────── -->
+    <div class="progress-rail" id="rail-win" role="progressbar" aria-label="Step progress" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0">
+      <span class="rail-label">STEP</span>
+      <span class="rail-seg" data-rail="1"></span>
+      <span class="rail-seg" data-rail="2"></span>
+      <span class="rail-seg" data-rail="3"></span>
+      <span class="rail-seg" data-rail="4"></span>
+      <span class="rail-seg" data-rail="5"></span>
+      <span class="rail-seg" data-rail="6"></span>
+      <span class="rail-label" id="rail-win-count">0 / 6</span>
+    </div>
+
+    <!-- ─── Steps (Win) ───────────────────────────────────────────── -->
+    <section class="steps" id="steps-win" aria-label="Installation steps">
+
+      <!-- Win 01 -->
+      <article class="step" data-step="1" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">01</span>
+          <h2 class="step-title">Unzip the download</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            Find the <code>aigent-os.zip</code> file you downloaded. Right-click it and choose <strong>Extract All</strong> — you'll get a folder called <code>aigent-os</code>. Put it somewhere you'll remember (Desktop or Documents works fine).
+          </p>
+        </div>
+      </article>
+
+      <!-- Win 02 -->
+      <article class="step" data-step="2" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">02</span>
+          <h2 class="step-title">Install PowerShell 7</h2>
+        </div>
+        <div class="step-body">
+          <p>Open the Start menu, type <code>PowerShell</code>, open it, and paste this in:</p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>winget install --id Microsoft.PowerShell --source winget --accept-package-agreements --accept-source-agreements</code>
+            </div>
+          </div>
+
+          <p class="cmd-after">Then close that window. From now on, use PowerShell 7 (search <code>pwsh</code> in Start).</p>
+          <p class="cmd-caption">If it says "winget is not recognized", install "App Installer" from the Microsoft Store, then try again.</p>
+        </div>
+      </article>
+
+      <!-- Win 03 -->
+      <article class="step" data-step="3" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">03</span>
+          <h2 class="step-title">Find the installer</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            In the <code>aigent-os</code> folder you unzipped in Step 1, you'll find <code>install.sh</code>. Note the full path to this folder — you'll need it in Step 4.
+          </p>
+        </div>
+      </article>
+
+      <!-- Win 04 -->
+      <article class="step" data-step="4" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">04</span>
+          <h2 class="step-title">Run the installer</h2>
+        </div>
+        <div class="step-body">
+          <p>Open PowerShell 7 and navigate to the unzipped folder, then run the installer:</p>
+
+          <div class="cmd-block">
+            <div class="cmd-bar">
+              <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <button class="copy-btn" data-copy="cd $HOME\aigent-os
+bash install.sh" aria-label="Copy command">Copy</button>
+            </div>
+            <div class="cmd-content">
+              <code>cd $HOME\aigent-os
+bash install.sh</code>
+            </div>
+          </div>
+
+          <p class="cmd-after">
+            Replace <code>$HOME\aigent-os</code> with wherever you put the unzipped folder. The installer wires everything up — takes under a minute.
+          </p>
+          <div class="callout-amber">
+            <strong>Windows users:</strong> <code>bash</code> requires Git for Windows (Git Bash). If <code>bash</code> is not recognized, install Git from <strong>git-scm.com</strong> first, then reopen PowerShell.
+          </div>
+        </div>
+      </article>
+
+      <!-- Win 05 -->
+      <article class="step" data-step="5" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">05</span>
+          <h2 class="step-title">Log in with Claude</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            A browser window opens. Sign in with your Claude <strong>Pro or Max</strong> account and approve. That's the only login you need.
+          </p>
+
+          <div class="callout-amber">
+            <strong>If it says login failed,</strong> it almost always means there's no active Pro/Max subscription on that account. Subscribe at <strong>claude.ai</strong>, then re-run: <code>claude setup-token</code>
+          </div>
+        </div>
+      </article>
+
+      <!-- Win 06 -->
+      <article class="step" data-step="6" data-track-step="win">
+        <div class="step-header">
+          <span class="step-num">06</span>
+          <h2 class="step-title">You're in</h2>
+        </div>
+        <div class="step-body">
+          <p>
+            An <strong>AIgent</strong> icon appears on your Desktop. Double-click it — your operator wakes up and runs <code>/open</code>. That's it.
+          </p>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- ─── Three habits info card (Win) ──────────────────────────────── -->
+    <!-- NOT a step — excluded from the rail count -->
+    <div class="info-card" aria-label="Three habits that make it work">
+      <p class="info-card-label">Good to know</p>
+      <p class="info-card-title">Three habits that make it work</p>
+      <div class="info-card-body">
+        <ol>
+          <li><strong>Open:</strong> start every session with <code>/open</code> — your AIgent loads your context and tells you exactly where to pick up.</li>
+          <li><strong>Close:</strong> when you're done, say <code>close up</code> — your AIgent banks the session so next time resumes clean. (Forgot? It recovers automatically.)</li>
+          <li><strong>Context counter (once):</strong> run <code>/statusline</code> in Claude Code and enable context usage. You'll see a live indicator as your session fills. When it gets heavy, close up, start fresh, and open again.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ─── Troubleshooting (Win) ──────────────────────────────────── -->
+    <section class="troubleshooting" aria-labelledby="trouble-win-heading">
+      <p class="section-label" id="trouble-win-heading">Troubleshooting</p>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>"pwsh" is not recognized</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Finish Step 2 (install PowerShell 7), then close and reopen your terminal.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>"winget" is not recognized</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            Install "App Installer" from the Microsoft Store, then retry Step 2.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>"bash" is not recognized</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            You need Git for Windows. Download and install from <strong>git-scm.com</strong> (use all default options), then close and reopen PowerShell 7.
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>Claude login failed</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            You need an active Claude Pro or Max subscription. Subscribe at <a href="https://claude.ai" target="_blank" rel="noopener">claude.ai</a>, then run: <code>claude setup-token</code>
+          </div>
+        </details>
+      </div>
+
+      <div class="trouble-item">
+        <details>
+          <summary>
+            <span>I want to start over</span>
+            <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </summary>
+          <div class="trouble-body">
+            It's safe to re-run the Step 4 command anytime.
+          </div>
+        </details>
+      </div>
+
+    </section>
+
+  </div><!-- /track-win -->
+
+
+  <!-- ─── Footer ────────────────────────────────────────────────── -->
+  <footer class="footer">
+    Runs on your own Claude subscription (Pro $20/mo or Max $100/mo). No API keys, no separate billing, no console.
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── OS Toggle ─────────────────────────────────────────────────── */
+  var OS_KEY = 'aigent-onboard-os';
+
+  function getStoredOS() {
+    try { return localStorage.getItem(OS_KEY) || 'mac'; }
+    catch (e) { return 'mac'; }
+  }
+
+  function storeOS(os) {
+    try { localStorage.setItem(OS_KEY, os); }
+    catch (e) {}
+  }
+
+  function switchOS(os) {
+    var isMac = os === 'mac';
+
+    /* Show/hide tracks */
+    document.getElementById('track-mac').style.display = isMac ? '' : 'none';
+    document.getElementById('track-win').style.display = isMac ? 'none' : '';
+
+    /* Update pill pressed state */
+    document.getElementById('pill-mac').setAttribute('aria-pressed', isMac ? 'true' : 'false');
+    document.getElementById('pill-win').setAttribute('aria-pressed', isMac ? 'false' : 'true');
+
+    /* Re-run stagger entrance for the newly visible track */
+    var selector = isMac ? '#steps-mac .step' : '#steps-win .step';
+    document.querySelectorAll(selector).forEach(function (s) {
+      if (!s.classList.contains('visible')) {
+        triggerEntrance(s);
+      }
+    });
+
+    /* Re-compute rail for the active track */
+    updateRail(os);
+
+    storeOS(os);
+  }
+
+  document.getElementById('pill-mac').addEventListener('click', function () { switchOS('mac'); });
+  document.getElementById('pill-win').addEventListener('click', function () { switchOS('win'); });
+
+  /* ── Checkbox persistence ──────────────────────────────────────── */
+  var STORE_KEY = 'aigent-onboard-v2';
+
+  function loadState() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+
+  function saveState(s) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); }
+    catch (e) {}
+  }
+
+  var state = loadState();
+
+  document.querySelectorAll('input[type="checkbox"][data-persist]').forEach(function (cb) {
+    var key = cb.dataset.persist;
+    if (state[key]) { cb.checked = true; }
+    cb.addEventListener('change', function () {
+      state[key] = cb.checked;
+      saveState(state);
+    });
+  });
+
+  /* ── Copy to clipboard ─────────────────────────────────────────── */
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.dataset.copy;
+      if (!text) return;
+
+      function onSuccess() {
+        var prev = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        btn.disabled = true;
+        setTimeout(function () {
+          btn.textContent = prev;
+          btn.classList.remove('copied');
+          btn.disabled = false;
+        }, 1500);
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(function () { fallback(text, onSuccess); });
+      } else {
+        fallback(text, onSuccess);
+      }
+    });
+  });
+
+  function fallback(text, cb) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); cb(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  /* ── Rail update ───────────────────────────────────────────────── */
+  /* Only counts visible steps belonging to the active track */
+  function updateRail(os) {
+    var trackId = os === 'mac' ? 'mac' : 'win';
+    var total   = os === 'mac' ? 6 : 6;
+    var count   = document.querySelectorAll('#steps-' + trackId + ' .step.visible').length;
+
+    var rail    = document.getElementById('rail-' + trackId);
+    var counter = document.getElementById('rail-' + trackId + '-count');
+
+    if (rail) {
+      rail.querySelectorAll('.rail-seg').forEach(function (seg) {
+        seg.classList.toggle('done', parseInt(seg.dataset.rail, 10) <= count);
+      });
+      rail.setAttribute('aria-valuenow', count);
+    }
+    if (counter) counter.textContent = count + ' / ' + total;
+  }
+
+  /* ── Step staggered entrance ───────────────────────────────────── */
+  /* 60ms stagger — standard 30-80ms window for perceived responsiveness */
+  var STAGGER = 60;
+
+  function triggerEntrance(el) {
+    var n = parseInt(el.dataset.step, 10) || 0;
+    setTimeout(function () {
+      el.classList.add('visible');
+      /* determine active OS from storage */
+      var currentOS = getStoredOS();
+      updateRail(currentOS);
+    }, n * STAGGER);
+  }
+
+  if ('IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var el = entry.target;
+        /* Only animate if the step's track is currently visible */
+        var trackStep = el.dataset.trackStep;
+        var activeOS = getStoredOS();
+        if (trackStep !== activeOS) {
+          /* Hidden track — skip entrance, mark visible silently for later */
+          return;
+        }
+        triggerEntrance(el);
+        obs.unobserve(el);
+      });
+    }, { threshold: 0.08 });
+
+    document.querySelectorAll('.step').forEach(function (s) { obs.observe(s); });
+  } else {
+    document.querySelectorAll('.step').forEach(function (s) { s.classList.add('visible'); });
+    updateRail('mac');
+    updateRail('win');
+  }
+
+  /* ── Init: restore OS preference and update rail ───────────────── */
+  var initialOS = getStoredOS();
+  /* Apply stored OS (sets display + pills) */
+  switchOS(initialOS);
+
+})();
+</script>
+
+</body>
+</html>

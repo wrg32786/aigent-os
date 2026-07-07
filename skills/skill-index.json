@@ -1,0 +1,1296 @@
+{
+  "_meta": {
+    "version": "1.2",
+    "description": "Typed SkillCard index for aigent-OS skill router. Skills are data, not hardcoded triggers.",
+    "doctrine": "concepts/MAP.md",
+    "updated": "2026-05-11"
+  },
+  "cards": [
+    {
+      "id": "sk_open",
+      "name": "open",
+      "description": "Session open protocol \u2014 load vault context, check comms, orient the session",
+      "triggers": [
+        "open",
+        "start session",
+        "good morning",
+        "let's go"
+      ],
+      "intent_patterns": [
+        "user starts a new session",
+        "user wants to pick up where we left off"
+      ],
+      "model_preference": "opus",
+      "lifecycle": "open",
+      "path": "~/.claude/skills/open",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_close",
+      "name": "close",
+      "description": "Session close \u2014 commit memory, write session log, capsule state",
+      "triggers": [
+        "close",
+        "end session",
+        "wrap up",
+        "done for today"
+      ],
+      "intent_patterns": [
+        "user wants to end the session",
+        "user is wrapping up"
+      ],
+      "model_preference": "opus",
+      "lifecycle": "close",
+      "path": "~/.claude/skills/close",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_comms",
+      "name": "comms",
+      "description": "Check your comms inbox, assess messages, reply autonomously",
+      "triggers": [
+        "comms",
+        "inbox",
+        "messages",
+        "comms hub",
+        "agent ops"
+      ],
+      "intent_patterns": [
+        "user wants to check messages",
+        "user asks about comms",
+        "unread messages need attention"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/comms",
+      "pantheon_agent": "Echo",
+      "active": true
+    },
+    {
+      "id": "sk_graphify",
+      "name": "graphify",
+      "description": "Any input \u00e2\u2020\u2019 knowledge graph \u00e2\u2020\u2019 clustered communities \u00e2\u2020\u2019 HTML + JSON",
+      "triggers": [
+        "graphify",
+        "knowledge graph",
+        "graph this",
+        "map this"
+      ],
+      "intent_patterns": [
+        "user wants to visualize relationships",
+        "user wants a knowledge graph from content"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/graphify",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_investigate",
+      "name": "investigate",
+      "description": "4-phase root cause debugging \u2014 investigate, analyze, hypothesize, implement",
+      "triggers": [
+        "investigate",
+        "debug",
+        "root cause",
+        "why is this broken",
+        "diagnose"
+      ],
+      "intent_patterns": [
+        "user has a bug",
+        "something is broken and needs diagnosis",
+        "user wants root cause analysis"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/investigate",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_security_audit",
+      "name": "security-audit",
+      "description": "OWASP Top 10 + STRIDE security audit with confidence-gated findings",
+      "triggers": [
+        "security",
+        "audit",
+        "owasp",
+        "vulnerabilities",
+        "pentest"
+      ],
+      "intent_patterns": [
+        "user wants a security review",
+        "user asks about vulnerabilities"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/security-audit",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_browser_harness",
+      "name": "browser-harness",
+      "description": "Self-healing Chrome automation via CDP \u2014 screenshots, clicks, form fills",
+      "triggers": [
+        "browser",
+        "chrome",
+        "website",
+        "click",
+        "screenshot",
+        "scrape",
+        "navigate"
+      ],
+      "intent_patterns": [
+        "user wants to interact with a website",
+        "user needs browser automation",
+        "user wants to scrape or test a site"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/browser-harness",
+      "pantheon_agent": "Lyra",
+      "active": true
+    },
+    {
+      "id": "sk_impeccable",
+      "name": "impeccable",
+      "description": "Frontend interface design, critique, polish \u2014 anti-AI-slop aesthetics",
+      "triggers": [
+        "design",
+        "ui",
+        "frontend",
+        "landing page",
+        "dashboard",
+        "polish",
+        "redesign"
+      ],
+      "intent_patterns": [
+        "user wants to build or improve a UI",
+        "user wants design feedback",
+        "user wants a landing page"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/impeccable",
+      "pantheon_agent": "Iris",
+      "active": true
+    },
+    {
+      "id": "sk_deep_recon",
+      "name": "deep-recon",
+      "description": "Extended multi-agent research sessions \u2014 brainstorm, explore, structured output",
+      "triggers": [
+        "research",
+        "deep dive",
+        "explore",
+        "brainstorm",
+        "recon"
+      ],
+      "intent_patterns": [
+        "user wants thorough research on a topic",
+        "user wants multi-angle exploration"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/deep-recon",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_defuddle",
+      "name": "defuddle",
+      "description": "Extract clean markdown from web pages \u2014 removes clutter, saves tokens",
+      "triggers": [
+        "read this url",
+        "fetch page",
+        "web page",
+        "article"
+      ],
+      "intent_patterns": [
+        "user provides a URL to read",
+        "user wants content from a web page"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/defuddle",
+      "pantheon_agent": "Echo",
+      "active": true
+    },
+    {
+      "id": "sk_lint",
+      "name": "lint",
+      "description": "Vault health check \u2014 orphans, stale claims, contradictions, missing cross-references",
+      "triggers": [
+        "lint",
+        "vault health",
+        "check vault",
+        "orphan notes"
+      ],
+      "intent_patterns": [
+        "user wants to check vault quality",
+        "user wants to find broken links or stale content"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/lint",
+      "pantheon_agent": "Hestia",
+      "active": true
+    },
+    {
+      "id": "sk_context_capsule",
+      "name": "context-capsule",
+      "description": "Structured state preservation when context pressure rises or task completes",
+      "triggers": [
+        "capsule",
+        "save state",
+        "preserve context",
+        "checkpoint"
+      ],
+      "intent_patterns": [
+        "context window is getting full",
+        "user wants to save progress for resume"
+      ],
+      "model_preference": "opus",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/context-capsule",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_careful",
+      "name": "careful",
+      "description": "Warn before destructive bash commands \u2014 rm -rf, DROP TABLE, force-push",
+      "triggers": [
+        "careful",
+        "production",
+        "destructive",
+        "dangerous"
+      ],
+      "intent_patterns": [
+        "user is working on production systems",
+        "user wants safety guards"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "daemon",
+      "path": "~/.claude/skills/careful",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_animated_slideshow",
+      "name": "animated-slideshow",
+      "description": "Full cinematic AI video from audio + images + text \u2014 Whisper \u00e2\u2020\u2019 storyboard \u00e2\u2020\u2019 Veo",
+      "triggers": [
+        "video",
+        "slideshow",
+        "animation",
+        "music video",
+        "cinematic video"
+      ],
+      "intent_patterns": [
+        "user wants to create a video from audio and images",
+        "user wants an animated slideshow"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/animated-slideshow",
+      "pantheon_agent": "Iris",
+      "active": true
+    },
+    {
+      "id": "sk_viral_content",
+      "name": "viral-content",
+      "description": "Hook architecture, platform templates, AI tell detection, adversarial refinement",
+      "triggers": [
+        "viral",
+        "hooks",
+        "content creation",
+        "social media copy",
+        "carousel"
+      ],
+      "intent_patterns": [
+        "user wants to create viral content",
+        "user wants social media hooks"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/viral-content",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_humanizer",
+      "name": "humanizer",
+      "description": "Remove AI writing patterns \u2014 inflated symbols, cliches, perfect structures",
+      "triggers": [
+        "humanize",
+        "ai writing",
+        "sounds like ai",
+        "too robotic",
+        "em-dash"
+      ],
+      "intent_patterns": [
+        "user wants to make text sound human",
+        "user flags AI-sounding writing"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/humanizer",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_autoplan",
+      "name": "autoplan",
+      "description": "Full plan review gauntlet \u2014 strategy, design, engineering with auto-decisions",
+      "triggers": [
+        "plan review",
+        "autoplan",
+        "review the plan",
+        "architecture review"
+      ],
+      "intent_patterns": [
+        "user wants a plan reviewed from multiple angles",
+        "user wants strategy + design + engineering critique"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/autoplan",
+      "pantheon_agent": "Vitruvius",
+      "active": true
+    },
+    {
+      "id": "sk_frontend_slides",
+      "name": "frontend-slides",
+      "description": "Animation-rich HTML presentations \u2014 anti-AI-slop slide design",
+      "triggers": [
+        "slides",
+        "presentation",
+        "deck",
+        "ppt",
+        "powerpoint"
+      ],
+      "intent_patterns": [
+        "user wants to create a presentation",
+        "user wants to convert PPT to web"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/frontend-slides",
+      "pantheon_agent": "Iris",
+      "active": true
+    },
+    {
+      "id": "sk_status",
+      "name": "status",
+      "description": "aigent-OS operational status \u2014 quick health check",
+      "triggers": [
+        "status",
+        "how are things",
+        "what's the state"
+      ],
+      "intent_patterns": [
+        "user wants a quick operational status"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/status",
+      "pantheon_agent": "Echo",
+      "active": true
+    },
+    {
+      "id": "sk_seo_research",
+      "name": "seo-research",
+      "description": "Competitor YouTube channel analysis \u2014 headline/SEO strategy reverse engineering",
+      "triggers": [
+        "seo research",
+        "competitor analysis",
+        "youtube seo",
+        "channel analysis"
+      ],
+      "intent_patterns": [
+        "user wants to analyze competitor YouTube channels",
+        "user wants SEO strategy"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/seo-research",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_ai_seo",
+      "name": "ai-seo",
+      "description": "Optimize content for LLM citations across AI Overviews, ChatGPT, Perplexity, and answer engines",
+      "triggers": [
+        "AI SEO",
+        "AEO",
+        "GEO",
+        "LLM visibility",
+        "AI citations",
+        "answer engine optimization",
+        "AI Overviews",
+        "AI search"
+      ],
+      "intent_patterns": [
+        "user wants content optimized for LLM citation",
+        "user asks about AI search visibility"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/ai-seo",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_audio_transcriber",
+      "name": "audio-transcriber",
+      "description": "Transcribe audio files to structured markdown with speaker labels via Whisper",
+      "triggers": [
+        "transcribe audio",
+        "audio to text",
+        "meeting notes",
+        "speech to text",
+        "audio to markdown",
+        "speaker diarization",
+        "SRT subtitles"
+      ],
+      "intent_patterns": [
+        "user has audio to transcribe",
+        "user wants meeting notes from recording"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/audio-transcriber",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_content_creator",
+      "name": "content-creator",
+      "description": "Brand voice analysis + SEO blog post + social content frameworks",
+      "triggers": [
+        "write blog post",
+        "brand voice",
+        "content calendar",
+        "SEO content",
+        "blog writing",
+        "content marketing",
+        "brand guidelines"
+      ],
+      "intent_patterns": [
+        "user wants a blog post written",
+        "user wants content in brand voice"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/content-creator",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_content_strategy",
+      "name": "content-strategy",
+      "description": "Plan content programs \u2014 pillars, topic clusters, editorial roadmap, keyword research",
+      "triggers": [
+        "content strategy",
+        "content pillars",
+        "topic clusters",
+        "editorial roadmap",
+        "content planning",
+        "content gap analysis",
+        "keyword research"
+      ],
+      "intent_patterns": [
+        "user wants a content strategy",
+        "user wants to plan a content program"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/content-strategy",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_context_engineering",
+      "name": "context-engineering",
+      "description": "Architectural guidance for production AI agent systems \u2014 memory, tool design, context windows, evaluation",
+      "triggers": [
+        "context engineering",
+        "agent architecture",
+        "multi-agent system",
+        "context window",
+        "agent memory",
+        "tool design",
+        "agent evaluation",
+        "sub-agent coordination"
+      ],
+      "intent_patterns": [
+        "user is designing an AI agent system",
+        "user wants guidance on context architecture"
+      ],
+      "model_preference": "opus",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/context-engineering",
+      "pantheon_agent": "Vitruvius",
+      "active": true
+    },
+    {
+      "id": "sk_fal_audio",
+      "name": "fal-audio",
+      "description": "TTS/STT via fal.ai audio models \u2014 speech synthesis, voice generation, narration",
+      "triggers": [
+        "text to speech",
+        "TTS",
+        "generate audio",
+        "fal.ai audio",
+        "speech synthesis",
+        "voice generation",
+        "narration audio"
+      ],
+      "intent_patterns": [
+        "user wants to generate spoken audio",
+        "user needs TTS from fal.ai"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/fal-audio",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_remotion_best_practices",
+      "name": "remotion-best-practices",
+      "description": "Remotion best practices \u2014 captions, fonts, timing, subtitles, Lottie, Tailwind, third-party integrations",
+      "triggers": [
+        "Remotion best practices",
+        "Remotion subtitle",
+        "Remotion word highlighting",
+        "Remotion SRT",
+        "Remotion voiceover",
+        "Remotion Lottie",
+        "Remotion Tailwind"
+      ],
+      "intent_patterns": [
+        "user is building with Remotion and needs best practice guidance"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/remotion-best-practices",
+      "pantheon_agent": "Lyra",
+      "active": true
+    },
+    {
+      "id": "sk_seek_and_analyze_video",
+      "name": "seek-and-analyze-video",
+      "description": "Persistent video intelligence via Memories.ai LVMM \u2014 index, search, Q&A over video",
+      "triggers": [
+        "analyze video",
+        "search TikTok",
+        "search YouTube",
+        "video knowledge base",
+        "meeting recording summary",
+        "video Q and A",
+        "find moments in video",
+        "persistent video index"
+      ],
+      "intent_patterns": [
+        "user wants to search or query video content",
+        "user wants to index video for retrieval"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/seek-and-analyze-video",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_seo",
+      "name": "seo",
+      "description": "Full-site SEO audit \u2014 technical, on-page, schema markup, Core Web Vitals, AI search readiness",
+      "triggers": [
+        "SEO audit",
+        "technical SEO",
+        "on-page SEO",
+        "sitemap",
+        "schema markup",
+        "Core Web Vitals",
+        "hreflang",
+        "programmatic SEO",
+        "E-E-A-T"
+      ],
+      "intent_patterns": [
+        "user wants a technical SEO audit",
+        "user asks about on-page SEO or schema"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/seo",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_social_content",
+      "name": "social-content",
+      "description": "Platform-specific social content \u2014 LinkedIn, Twitter/X, Instagram, TikTok, Facebook",
+      "triggers": [
+        "social media post",
+        "LinkedIn post",
+        "Twitter thread",
+        "Instagram caption",
+        "TikTok script",
+        "social content calendar",
+        "hook formula"
+      ],
+      "intent_patterns": [
+        "user wants social media posts",
+        "user wants platform-specific content"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/social-content",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_social_orchestrator",
+      "name": "social-orchestrator",
+      "description": "Cross-channel social publishing \u2014 Instagram, Telegram, WhatsApp with unified metrics",
+      "triggers": [
+        "publish to all channels",
+        "cross-channel posting",
+        "Instagram Telegram WhatsApp",
+        "multi-channel social",
+        "synchronized social posting"
+      ],
+      "intent_patterns": [
+        "user wants to publish across social channels simultaneously"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/social-orchestrator",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_videodb",
+      "name": "videodb",
+      "description": "Video perception and editing \u2014 ingest, index, search, edit, transcode via VideoDB",
+      "triggers": [
+        "VideoDB",
+        "upload video",
+        "video search timestamps",
+        "scene search",
+        "video transcript",
+        "burn subtitles",
+        "video timeline editing",
+        "reframe for Instagram"
+      ],
+      "intent_patterns": [
+        "user wants to work with VideoDB",
+        "user needs video search or editing"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/videodb",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_videodb_skills",
+      "name": "videodb-skills",
+      "description": "Guided first-time setup for VideoDB SDK",
+      "triggers": [
+        "videodb setup",
+        "set up video processing",
+        "install videodb",
+        "video SDK setup"
+      ],
+      "intent_patterns": [
+        "user is setting up VideoDB for the first time"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/videodb-skills",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_youtube_automation",
+      "name": "youtube-automation",
+      "description": "YouTube ops via Composio MCP \u2014 upload, playlists, analytics, comments",
+      "triggers": [
+        "upload to YouTube",
+        "YouTube upload",
+        "YouTube playlist",
+        "YouTube analytics",
+        "YouTube comments",
+        "YouTube API",
+        "manage YouTube channel"
+      ],
+      "intent_patterns": [
+        "user wants to automate YouTube operations",
+        "user needs YouTube upload or analytics"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/youtube-automation",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_youtube_summarizer",
+      "name": "youtube-summarizer",
+      "description": "Extract transcripts and structured summaries from YouTube videos",
+      "triggers": [
+        "summarize YouTube",
+        "YouTube summary",
+        "extract YouTube transcript",
+        "YouTube URL summary",
+        "document YouTube"
+      ],
+      "intent_patterns": [
+        "user provides a YouTube URL to summarize",
+        "user wants a transcript from YouTube"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/youtube-summarizer",
+      "pantheon_agent": "Echo",
+      "active": true
+    },
+    {
+      "id": "sk_system_check",
+      "name": "system-check",
+      "description": "Audit aigent-OS install \u2014 verifies kernel, skills, hooks, daemons, vault, semantic search. Reports green/yellow/red.",
+      "triggers": [
+        "system check",
+        "audit my install",
+        "is aigent-OS working",
+        "verify install",
+        "check aigent-OS install",
+        "health check",
+        "aigent-OS health",
+        "broken install"
+      ],
+      "intent_patterns": [
+        "user wants to verify aigent-OS is fully operational",
+        "user suspects a broken installation"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/system-check",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_caddy_mute",
+      "name": "caddy-mute",
+      "description": "Suppress Caddy hints for a bounded duration \u2014 auto-restores, respects flow",
+      "triggers": [
+        "caddy mute",
+        "mute caddy",
+        "no suggestions",
+        "stop hinting",
+        "in flow",
+        "quiet mode",
+        "suppress caddy",
+        "stop caddy"
+      ],
+      "intent_patterns": [
+        "user wants Caddy hints suppressed temporarily",
+        "user is in deep focus mode"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/caddy-mute",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_taste_skill",
+      "name": "taste-skill",
+      "description": "Opinionated design judgment \u2014 distills taste-driven decisions into concrete recommendations",
+      "triggers": [
+        "good taste",
+        "design judgment",
+        "opinionated design",
+        "make it feel premium",
+        "elevate design",
+        "design quality"
+      ],
+      "intent_patterns": [
+        "user wants opinionated design guidance",
+        "user wants to elevate design quality"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/taste-skill",
+      "pantheon_agent": "Iris",
+      "active": true
+    },
+    {
+      "id": "sk_body_check",
+      "name": "body-check",
+      "description": "Compose the AIgent's body state \u2014 reads HEAT_INDEX, usage_log, DECISION_LOG, ACTIVE_PRIORITIES, DELEGATION_TRACKER, MEMORY_CANDIDATES. The 'how am I doing?' read.",
+      "triggers": [
+        "body check",
+        "body state",
+        "how am I doing",
+        "check pressure",
+        "context pressure",
+        "memory pressure",
+        "somatic check",
+        "vital signs"
+      ],
+      "intent_patterns": [
+        "user wants a aigent-OS health/state readout",
+        "user asks about context or memory pressure"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/body-check",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_digest",
+      "name": "digest",
+      "description": "Background curation \u2014 reviews MEMORY_CANDIDATES.md and surfaces promote/skip/supersede choices. Never auto-promotes.",
+      "triggers": [
+        "digest",
+        "digest candidates",
+        "review memory candidates",
+        "process candidates",
+        "promote candidates",
+        "clean memory backlog",
+        "memory candidates"
+      ],
+      "intent_patterns": [
+        "user wants to process staged memory candidates",
+        "user wants to review memory backlog"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/digest",
+      "pantheon_agent": "Mnemosyne",
+      "active": true
+    },
+    {
+      "id": "sk_skill_recall",
+      "name": "skill-recall",
+      "description": "Match current task to installed skills via SKILL_LEDGER taxonomy \u2014 prefix matching, chain recall, gap detection",
+      "triggers": [
+        "skill recall",
+        "find skill",
+        "what skill",
+        "which skill",
+        "do we have a skill for",
+        "is there a skill",
+        "match skill"
+      ],
+      "intent_patterns": [
+        "user wants to find the right skill for a task",
+        "user asks if a skill exists"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/skill-recall",
+      "pantheon_agent": "Echo",
+      "active": true
+    },
+    {
+      "id": "sk_skill_hunt",
+      "name": "skill-hunt",
+      "description": "Search GitHub and skill marketplaces for missing capabilities \u2014 quarantine install, safety scan, test, promote",
+      "triggers": [
+        "skill hunt",
+        "find a skill",
+        "search for skill",
+        "install skill",
+        "missing capability",
+        "need a skill for",
+        "skill marketplace"
+      ],
+      "intent_patterns": [
+        "user wants to find and install a new skill",
+        "user has a capability gap"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/skill-hunt",
+      "pantheon_agent": "Newton",
+      "active": true
+    },
+    {
+      "id": "sk_solution_hunt",
+      "name": "solution-hunt",
+      "description": "Creative workaround engine \u2014 search local memory, skills, GitHub, docs for alternate routes when blocked",
+      "triggers": [
+        "solution hunt",
+        "workaround",
+        "creative workaround",
+        "alternate route",
+        "blocked",
+        "stuck on",
+        "can't do",
+        "find a way"
+      ],
+      "intent_patterns": [
+        "user is blocked and needs an alternate approach",
+        "user wants creative workarounds"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/solution-hunt",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_api_design",
+      "name": "api-design",
+      "description": "Design or review REST/GraphQL APIs \u2014 resource modeling, versioning, error formats, pagination, idempotency",
+      "triggers": [
+        "api design",
+        "rest api",
+        "graphql",
+        "api review",
+        "endpoint design",
+        "api versioning",
+        "api structure"
+      ],
+      "intent_patterns": [
+        "user is designing a new API",
+        "user wants an API review",
+        "user is adding endpoints"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/api-design",
+      "pantheon_agent": "Vitruvius",
+      "active": true
+    },
+    {
+      "id": "sk_api_docs",
+      "name": "api-docs",
+      "description": "Generate OpenAPI 3.0/Swagger specs with schemas, examples, and auth documentation from existing code",
+      "triggers": [
+        "api docs",
+        "openapi",
+        "swagger",
+        "generate documentation",
+        "api specification",
+        "document endpoints"
+      ],
+      "intent_patterns": [
+        "user wants API documentation generated",
+        "user needs an OpenAPI spec"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/api-docs",
+      "pantheon_agent": "Lyra",
+      "active": true
+    },
+    {
+      "id": "sk_data_visualization",
+      "name": "data-visualization",
+      "description": "Create charts, dashboards, and infographics using D3.js, Chart.js, or Recharts \u2014 comparison, trend, distribution, relationship",
+      "triggers": [
+        "data visualization",
+        "chart",
+        "dashboard",
+        "infographic",
+        "d3",
+        "recharts",
+        "chart.js",
+        "bar chart",
+        "line chart",
+        "heatmap"
+      ],
+      "intent_patterns": [
+        "user wants to visualize data",
+        "user needs a chart or dashboard built"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/data-visualization",
+      "pantheon_agent": "Iris",
+      "active": true
+    },
+    {
+      "id": "sk_freeze",
+      "name": "freeze",
+      "description": "Restrict file edits to a specific directory for the session \u2014 blocks Edit/Write outside the allowed path",
+      "triggers": [
+        "freeze",
+        "lock edits",
+        "restrict edits",
+        "edit restriction",
+        "freeze directory"
+      ],
+      "intent_patterns": [
+        "user wants to restrict edits to a specific directory",
+        "user wants safety guards on file edits"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/freeze",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_git_workflow",
+      "name": "git-workflow",
+      "description": "Git workflow automation \u2014 conventional commits, changelog generation, branch management, release flow, PR descriptions",
+      "triggers": [
+        "git workflow",
+        "conventional commit",
+        "changelog",
+        "git release",
+        "branch management",
+        "git commit message",
+        "pr description"
+      ],
+      "intent_patterns": [
+        "user wants automated git workflow",
+        "user needs a conventional commit or changelog generated"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/git-workflow",
+      "pantheon_agent": "Lyra",
+      "active": true
+    },
+    {
+      "id": "sk_guard",
+      "name": "guard",
+      "description": "Full safety mode \u2014 combines /careful (destructive command warnings) with /freeze (edit directory restriction)",
+      "triggers": [
+        "guard",
+        "full safety",
+        "maximum safety",
+        "guard mode",
+        "safe mode"
+      ],
+      "intent_patterns": [
+        "user wants maximum safety on production or live systems",
+        "user wants both destructive warnings and edit restrictions"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/guard",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_learn_from_failure",
+      "name": "learn-from-failure",
+      "description": "Convert failures into reusable artifacts \u2014 classify failure mode, check for recurrence, write durable prevention rule",
+      "triggers": [
+        "learn from failure",
+        "recurring issue",
+        "same issue again",
+        "happened again",
+        "keeps happening",
+        "third time"
+      ],
+      "intent_patterns": [
+        "a failure occurred and needs to be logged as a durable lesson",
+        "user wants to prevent a recurring mistake"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/learn-from-failure",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_meta_improve",
+      "name": "meta-improve",
+      "description": "Constrained self-modification \u2014 implement approved DREAM_LOG candidates, branch + test + surface for Will's approval only",
+      "triggers": [
+        "meta improve",
+        "self improve",
+        "dream log",
+        "implement improvement",
+        "system improvement candidate"
+      ],
+      "intent_patterns": [
+        "user wants to implement a banked system improvement",
+        "user wants to action a DREAM_LOG candidate"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/meta-improve",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_migration_generator",
+      "name": "migration-generator",
+      "description": "Generate safe, reversible database migrations with up/down support for Prisma, Knex, Alembic, Django, ActiveRecord",
+      "triggers": [
+        "migration",
+        "database migration",
+        "schema migration",
+        "prisma migrate",
+        "knex migration",
+        "alembic",
+        "add column",
+        "add table"
+      ],
+      "intent_patterns": [
+        "user needs a database migration written",
+        "user wants to add or modify a database schema"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/migration-generator",
+      "pantheon_agent": "Lyra",
+      "active": true
+    },
+    {
+      "id": "sk_pdf_workflow",
+      "name": "pdf-workflow",
+      "description": "PDF operations \u2014 extract text/tables, create, merge, split, fill forms, annotate, and convert",
+      "triggers": [
+        "pdf",
+        "extract pdf",
+        "merge pdf",
+        "split pdf",
+        "pdf form",
+        "pdf to text",
+        "annotate pdf",
+        "pdf creation"
+      ],
+      "intent_patterns": [
+        "user wants to work with a PDF file",
+        "user needs to extract or create a PDF"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/pdf-workflow",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_query_optimizer",
+      "name": "query-optimizer",
+      "description": "Analyze and optimize slow SQL queries using EXPLAIN plans, index analysis, N+1 detection, and query rewriting",
+      "triggers": [
+        "slow query",
+        "optimize query",
+        "sql performance",
+        "query optimization",
+        "explain plan",
+        "n+1 query",
+        "database slow",
+        "index missing"
+      ],
+      "intent_patterns": [
+        "user has a slow SQL query to optimize",
+        "user wants database performance analysis"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/query-optimizer",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_run_evals",
+      "name": "run-evals",
+      "description": "Automated eval runner \u2014 runs structured test suites against vault and runtime state, scores results, updates SELF_MODEL",
+      "triggers": [
+        "run evals",
+        "eval runner",
+        "run tests",
+        "cognitive evals",
+        "eval suite",
+        "eval harness"
+      ],
+      "intent_patterns": [
+        "user wants to run the eval harness",
+        "user wants to verify aigent-OS capabilities against test suites"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/run-evals",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_sql_builder",
+      "name": "sql-builder",
+      "description": "Build complex SQL from natural language \u2014 CTEs, window functions, subqueries, pivots, aggregations, joins",
+      "triggers": [
+        "build sql",
+        "write sql",
+        "sql query",
+        "natural language sql",
+        "sql from description",
+        "complex query",
+        "window function",
+        "CTE"
+      ],
+      "intent_patterns": [
+        "user wants a SQL query written from natural language",
+        "user needs a complex SQL query built"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/sql-builder",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_unfreeze",
+      "name": "unfreeze",
+      "description": "Clear the freeze boundary set by /freeze, restoring edits to all directories without ending the session",
+      "triggers": [
+        "unfreeze",
+        "clear freeze",
+        "remove restriction",
+        "unlock edits",
+        "restore edits"
+      ],
+      "intent_patterns": [
+        "user wants to lift the directory edit restriction",
+        "user is done with freeze mode"
+      ],
+      "model_preference": "haiku",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/unfreeze",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_video_analyzer",
+      "name": "video-analyzer",
+      "description": "Analyze video files \u2014 extract frames, detect scene changes, transcribe audio, produce structured markdown timeline with key moments",
+      "triggers": [
+        "analyze video",
+        "video analysis",
+        "video timeline",
+        "describe video",
+        "what happens in video",
+        "video frames",
+        "scene detection"
+      ],
+      "intent_patterns": [
+        "user provides a video file to analyze",
+        "user wants a structured breakdown of video content"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/video-analyzer",
+      "pantheon_agent": null,
+      "active": true
+    }
+  ]
+}

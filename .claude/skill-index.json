@@ -1,0 +1,818 @@
+[
+  {
+    "name": "open",
+    "triggers": [
+      "start session",
+      "begin work",
+      "load context",
+      "session start",
+      "new session",
+      "boot up",
+      "what did we leave off"
+    ],
+    "why": "Start session, load vault context, surface open threads and priorities"
+  },
+  {
+    "name": "close",
+    "triggers": [
+      "end session",
+      "wrap up",
+      "commit memory",
+      "session close",
+      "end of session",
+      "save session",
+      "close out"
+    ],
+    "why": "End session, commit memory, write daily note + SESSION_LOG entry"
+  },
+  {
+    "name": "brief",
+    "triggers": [
+      "write a brief",
+      "delegate to",
+      "create a brief",
+      "hand off this work",
+      "assign this to",
+      "task brief",
+      "handoff brief"
+    ],
+    "why": "Generate a structured delegation brief for a sub-agent"
+  },
+  {
+    "name": "decide",
+    "triggers": [
+      "should I",
+      "evaluate this opportunity",
+      "help me decide",
+      "decision framework",
+      "is this worth doing",
+      "go or no-go",
+      "run the lenses"
+    ],
+    "why": "Run a decision through the 12-lens evaluation framework"
+  },
+  {
+    "name": "setup",
+    "triggers": [
+      "first time setup",
+      "configure aigent-OS",
+      "new installation",
+      "initialize aigent-OS",
+      "just cloned"
+    ],
+    "why": "First-run interview that configures aigent-OS for a new user"
+  },
+  {
+    "name": "deep-recon",
+    "agent": "newton",
+    "triggers": [
+      "deep recon",
+      "brainstorm deeply",
+      "explore ideas from multiple angles",
+      "multi-angle analysis",
+      "reconnaissance",
+      "investigate topic",
+      "research document"
+    ],
+    "why": "Multi-agent reconnaissance (Explorer/Associator/Critic/Synthesizer)"
+  },
+  {
+    "name": "semantic-search",
+    "triggers": [
+      "find notes about",
+      "search vault by meaning",
+      "what notes relate to",
+      "vault search",
+      "find related notes",
+      "semantic search"
+    ],
+    "why": "Vault search by meaning via local embeddings"
+  },
+  {
+    "name": "caddy-enroll",
+    "triggers": [
+      "enroll this skill",
+      "add to Caddy",
+      "update Caddy for",
+      "add skill to index",
+      "caddy enroll",
+      "register new skill",
+      "add to golf bag"
+    ],
+    "why": "Add a new skill to Caddy's index so it can be surfaced by prompt match"
+  },
+  {
+    "name": "system-check",
+    "triggers": [
+      "system check",
+      "audit my install",
+      "is aigent-OS working",
+      "verify install",
+      "check aigent-OS install",
+      "is everything wired",
+      "post-setup check",
+      "health check",
+      "aigent-OS health",
+      "broken install"
+    ],
+    "why": "Audit aigent-OS install — verifies kernel, skills, hooks, daemons, vault, semantic search. Reports green/yellow/red."
+  },
+  {
+    "name": "skill-audit",
+    "triggers": [
+      "skill audit",
+      "which skills do I use",
+      "dead skills",
+      "retire a skill",
+      "skill catalog",
+      "Caddy hygiene",
+      "trigger mismatch",
+      "missing skills",
+      "capability gaps",
+      "skills audit"
+    ],
+    "why": "List skills by usage, flag dead ones for retirement, detect Caddy trigger mismatches, surface missing skills."
+  },
+  {
+    "name": "diagnose",
+    "triggers": [
+      "diagnose",
+      "something is broken",
+      "something feels off",
+      "what changed",
+      "hook not firing",
+      "Caddy not working",
+      "AI behavior changed",
+      "wikilinks broken",
+      "open isn't loading",
+      "intermittent failure",
+      "weird behavior"
+    ],
+    "why": "Walk the seven-layer aigent-OS stack to identify which layer is causing an issue. Caddy pattern applied to debugging."
+  },
+  {
+    "name": "envelope",
+    "triggers": [
+      "should I",
+      "before I start",
+      "is this clear",
+      "is this OK to do",
+      "couple options",
+      "two paths",
+      "ambiguous request",
+      "not sure if you want",
+      "want me to",
+      "ship or ask",
+      "envelope",
+      "A/B/C",
+      "do I need permission",
+      "is this reversible",
+      "should I propose",
+      "or should I",
+      "ship vs ask",
+      "decision tree",
+      "fork in the road"
+    ],
+    "why": "Classify any directive as Ship / Ask one focused question / Propose first. Replaces multi-option surveys with sharp decisions."
+  },
+  {
+    "name": "self-review",
+    "triggers": [
+      "self review",
+      "review my changes",
+      "review this diff",
+      "review before merge",
+      "before I declare done",
+      "second pair of eyes",
+      "code review my work",
+      "verify my fix",
+      "did I miss anything",
+      "review the implementation",
+      "before shipping",
+      "non-trivial change",
+      "multi-file edit",
+      "hot path change",
+      "30 LOC change"
+    ],
+    "why": "Spawn reviewer subagent with 4-6 specific verification questions before declaring non-trivial work done."
+  },
+  {
+    "name": "honesty-check",
+    "triggers": [
+      "done",
+      "shipped",
+      "complete",
+      "ready for review",
+      "PR ready",
+      "all good",
+      "fix is in",
+      "wrapped up",
+      "task complete",
+      "honesty check",
+      "honesty ledger",
+      "what didn't I do",
+      "what did I change",
+      "what tradeoffs",
+      "what did I guess",
+      "before declaring done",
+      "delivery summary"
+    ],
+    "why": "Run the volunteering ledger before declaring done — what changed/didn't, noticed-but-not-fixed, tradeoffs, guesses, things stopped short of."
+  },
+  {
+    "name": "first-10-moves",
+    "triggers": [
+      "first 10 moves",
+      "first ten moves",
+      "fix the X",
+      "investigate this bug",
+      "trace this bug",
+      "how does X work",
+      "unfamiliar codebase",
+      "where is X defined",
+      "what calls Y",
+      "navigate the code",
+      "find the bug in",
+      "look into this code",
+      "drop me into the codebase",
+      "explore this module",
+      "understand how this works",
+      "recon the code",
+      "diagnose this in code"
+    ],
+    "why": "Operational recon sequence for unfamiliar codebases. Read first, ask never. 10-step sequence replaces 'survey-mode' with 'read-mode'."
+  },
+  {
+    "name": "stuck",
+    "triggers": [
+      "blocked",
+      "not sure how",
+      "can't find",
+      "need help",
+      "stuck on",
+      "this isn't working",
+      "hitting a wall",
+      "give up",
+      "I'm stuck",
+      "no idea",
+      "lost",
+      "can't figure out",
+      "ran out of ideas",
+      "tried everything",
+      "ran into a problem",
+      "waiting for direction",
+      "need clarification"
+    ],
+    "why": "6-rung escalation ladder before declaring stuck. Try alternatives â†’ helper â†’ re-read request â†’ ask. Stopping is last resort."
+  },
+  {
+    "name": "timeline-calibration",
+    "triggers": [
+      "how long will this take",
+      "how long",
+      "estimate",
+      "timeline",
+      "ETA",
+      "scope estimate",
+      "how much time",
+      "when will",
+      "rough sizing",
+      "by Friday",
+      "by tomorrow",
+      "few hours",
+      "a couple hours",
+      "half a day",
+      "couple days",
+      "a few days",
+      "a week",
+      "weeks",
+      "this will take",
+      "should take",
+      "would take",
+      "hours of work",
+      "days of work",
+      "this will be done in",
+      "ready when",
+      "ship by"
+    ],
+    "why": "SELF-CORRECT timeline estimates. About to quote hours/days/weeks? STOP. Divide by 30-60x. Estimate in tool calls and session cycles, not human-dev hours."
+  },
+  {
+    "name": "sandbox-routing",
+    "triggers": [
+      "read large file",
+      "analyze this file",
+      "summarize this output",
+      "process this data",
+      "parse JSON",
+      "filter results",
+      "extract from",
+      "check build output",
+      "analyze dependencies",
+      "process API response",
+      "large file analysis",
+      "git log many commits",
+      "find TODOs",
+      "count lines",
+      "scan logs",
+      "raw output",
+      "find anchor in file",
+      "find insertion point",
+      "where in the file"
+    ],
+    "why": "SELF-CORRECT tool choice. Use sandbox tools (ctx_execute / ctx_execute_file) for analyzing large outputs. Read/Bash send raw output into context; sandbox sends only the summary."
+  },
+  {
+    "name": "learn",
+    "triggers": [
+      "learn",
+      "I just read",
+      "evaluating",
+      "looked into",
+      "should I use",
+      "what did we decide about",
+      "captured this",
+      "interesting tool",
+      "considered tool",
+      "evaluating a tool",
+      "researched",
+      "reviewed this repo",
+      "watched a talk on",
+      "checked out",
+      "explored",
+      "tool eval",
+      "log a learning",
+      "capture this learning"
+    ],
+    "why": "Capture a learning sweep as a structured note in vault/concepts/learning/. Categorize, locate on the modern AI stack, assess relevance, capture reconsideration triggers."
+  },
+  {
+    "name": "caddy-explain",
+    "triggers": [
+      "caddy explain",
+      "why did Caddy suggest",
+      "explain that hint",
+      "why no hint",
+      "why this skill",
+      "Caddy scoring",
+      "Caddy why",
+      "Caddy reasoning",
+      "explain caddy",
+      "caddy decision",
+      "show me caddy math"
+    ],
+    "why": "Walk the deterministic Caddy scoring for a prompt — which trigger matched, what points, what threshold, what near-misses. Pairs with the legibility thesis."
+  },
+  {
+    "name": "caddy-mute",
+    "triggers": [
+      "caddy mute",
+      "mute caddy",
+      "no suggestions",
+      "stop hinting",
+      "in flow",
+      "leave me alone caddy",
+      "quiet mode",
+      "suppress caddy",
+      "shut caddy up",
+      "stop caddy"
+    ],
+    "why": "Suppress Caddy hints for a bounded duration. Auto-restores. Respects flow without breaking the framework's advisory discipline."
+  },
+  {
+    "name": "caddy-audit",
+    "triggers": [
+      "caddy audit",
+      "audit caddy",
+      "skill index drift",
+      "is the skill index correct",
+      "verify skill catalog",
+      "skill drift check",
+      "caddy hygiene",
+      "audit skill index"
+    ],
+    "why": "Quarterly hygiene check. Walks skill-index vs SKILL.md files on disk. Reports orphans (in index/not on disk and vice versa) and trigger drift."
+  },
+  {
+    "name": "promote",
+    "triggers": [
+      "promote that",
+      "make a note that",
+      "save that insight",
+      "elevate to doctrine",
+      "capture this conversation",
+      "remember that we decided",
+      "this should be a vault note",
+      "promote",
+      "elevate this",
+      "save to vault",
+      "make permanent",
+      "document this conversation"
+    ],
+    "why": "Take a slice of the conversation and elevate it to a durable vault artifact (concept / project / person / decision). Selective elevation, not transcript saving."
+  },
+  {
+    "name": "trust-decay",
+    "triggers": [
+      "trust decay",
+      "log this claim",
+      "capture confidence",
+      "agent claimed",
+      "wrong claim",
+      "the bug came back",
+      "that wasn't actually fixed",
+      "trust event",
+      "confidence was wrong",
+      "verify claim",
+      "resolve claim",
+      "claim outcome"
+    ],
+    "why": "Two-phase ledger of confident agent claims and their eventual outcomes. Phase 1 captures the claim; Phase 2 resolves right or wrong. Builds calibration data over time."
+  },
+  {
+    "name": "scout-vault",
+    "agent": "echo",
+    "triggers": [
+      "scout vault",
+      "vault traversal",
+      "find notes about",
+      "trace wikilinks",
+      "what notes exist on",
+      "spelunk",
+      "inventory vault",
+      "find all references to"
+    ],
+    "why": "Echo's read-only graph walk. Find notes related to a topic, trace wikilink chains, inventory a directory."
+  },
+  {
+    "name": "comms-summarize",
+    "agent": "echo",
+    "triggers": [
+      "summarize comms",
+      "comms summary",
+      "what's unread",
+      "check inbox",
+      "poll messages",
+      "unread messages",
+      "summarize channel",
+      "what came in"
+    ],
+    "why": "Echo's comms polling. Read inbox/channel/thread, return structured unread summary — sender, topic, action, urgency."
+  },
+  {
+    "name": "port-spec",
+    "agent": "lyra",
+    "triggers": [
+      "port this spec",
+      "implement this spec",
+      "build from spec",
+      "port spec",
+      "implement from brief",
+      "execute this brief",
+      "build this",
+      "port to code"
+    ],
+    "why": "Lyra's spec-port skill. Takes a complete written specification and ports it into working code or vault artifact with honesty ledger."
+  },
+  {
+    "name": "ship-adapter",
+    "agent": "lyra",
+    "triggers": [
+      "ship adapter",
+      "port adapter",
+      "write adapter",
+      "DB adapter",
+      "API adapter",
+      "data transformer",
+      "schema migration",
+      "interface adapter"
+    ],
+    "why": "Lyra's adapter-shipping skill. Ports a schema, interface, or API contract — DB adapters, API client wrappers, data transformers."
+  },
+  {
+    "name": "research-deep",
+    "agent": "newton",
+    "triggers": [
+      "research this",
+      "deep research",
+      "investigate topic",
+      "multi-source research",
+      "research and synthesize",
+      "build me a briefing",
+      "what does the evidence say",
+      "research brief"
+    ],
+    "why": "Newton's multi-source research. Vault prior art + web + GitHub synthesized into citation-dense briefing with hypothesis, evidence, recommendation."
+  },
+  {
+    "name": "tool-evaluation",
+    "agent": "newton",
+    "triggers": [
+      "evaluate this tool",
+      "tool evaluation",
+      "should I use",
+      "compare these tools",
+      "assess this library",
+      "which library should I use",
+      "tool comparison",
+      "is this the right tool"
+    ],
+    "why": "Newton's tool evaluation. Assesses tool/library/framework against your needs — alternatives, adoption risks, fit score, recommendation."
+  },
+  {
+    "name": "sprite-spec",
+    "agent": "iris",
+    "triggers": [
+      "design sprite",
+      "sprite spec",
+      "pixel art spec",
+      "character sprite",
+      "sprite design",
+      "design character",
+      "LPC sprite",
+      "sprite sheet spec"
+    ],
+    "why": "Iris's sprite spec. Palette, proportions, silhouette, accessories, animation states, frame counts, AI image-gen prompts."
+  },
+  {
+    "name": "visual-polish",
+    "agent": "iris",
+    "triggers": [
+      "visual polish",
+      "polish the UI",
+      "UI review",
+      "design review",
+      "visual audit",
+      "improve the visuals",
+      "make this look better",
+      "visual feedback"
+    ],
+    "why": "Iris's UI polish review. Audits an existing UI surface against palette, proportion, hierarchy, motion. Spec output, no code."
+  },
+  {
+    "name": "ui-architecture",
+    "agent": "iris",
+    "triggers": [
+      "design this UI",
+      "UI architecture",
+      "design a screen",
+      "design a component",
+      "new UI surface",
+      "design system",
+      "component architecture",
+      "layout design"
+    ],
+    "why": "Iris's new UI surface design. Component tree, layout grid, interaction states, breakpoints, tokens. Spec output, no code."
+  },
+  {
+    "name": "supersede",
+    "agent": "mnemosyne",
+    "triggers": [
+      "supersede this entry",
+      "supersede",
+      "update this note",
+      "mark as superseded",
+      "replace outdated entry",
+      "this is no longer true",
+      "update the record",
+      "strike and replace"
+    ],
+    "why": "Mnemosyne's OpenChronicle supersede. Strikes outdated entries, adds new with date, preserves history, flags what was kept and why."
+  },
+  {
+    "name": "compact-note",
+    "agent": "mnemosyne",
+    "triggers": [
+      "compact this note",
+      "compact note",
+      "this note is too long",
+      "compress the log",
+      "distill this note",
+      "trim the vault note",
+      "note is getting bloated",
+      "needs compact"
+    ],
+    "why": "Mnemosyne's note compaction. Distills high-churn bloated note into standing-rule summary + truncated log. Preserves signal, removes noise."
+  },
+  {
+    "name": "critique-plan",
+    "agent": "hypatia",
+    "triggers": [
+      "critique this plan",
+      "critique plan",
+      "challenge this",
+      "adversarial review",
+      "pre-decision review",
+      "what am I missing",
+      "poke holes in this",
+      "steelman the opposition"
+    ],
+    "why": "Hypatia's adversarial pre-commitment review. Strongest counterargument first, hidden assumptions surfaced, alternatives named."
+  },
+  {
+    "name": "find-weakness",
+    "agent": "hypatia",
+    "triggers": [
+      "find the weakness",
+      "find weakness",
+      "what's the flaw",
+      "what's wrong with this",
+      "strongest objection",
+      "single biggest risk",
+      "stress test this",
+      "what's the weakest point"
+    ],
+    "why": "Hypatia's targeted weakness-finding. For a specific claim/architecture/decision: single strongest objection + hidden assumption most likely wrong."
+  },
+  {
+    "name": "sweep-tracker",
+    "agent": "hestia",
+    "triggers": [
+      "sweep tracker",
+      "clean delegation tracker",
+      "sweep delegation",
+      "tracker sweep",
+      "close finished items",
+      "archive stale items",
+      "DELEGATION_TRACKER sweep",
+      "clean up tracker"
+    ],
+    "why": "Hestia's delegation tracker sweep. Closes finished items, archives stale items, flags orphaned items. Edit-only on status fields."
+  },
+  {
+    "name": "sweep-heat",
+    "agent": "hestia",
+    "triggers": [
+      "sweep heat",
+      "heat index sweep",
+      "flip dormant",
+      "mark dormant",
+      "cold notes sweep",
+      "HEAT_INDEX sweep",
+      "sweep cold notes",
+      "dormant flip"
+    ],
+    "why": "Hestia's HEAT_INDEX dormant flip. Finds cold bottom-20 notes and sets status:dormant in their frontmatter. Edit-only."
+  },
+  {
+    "name": "sweep-links",
+    "agent": "hestia",
+    "triggers": [
+      "sweep links",
+      "broken links",
+      "find broken wikilinks",
+      "wikilink scan",
+      "link check",
+      "find dead links",
+      "broken wikilink scan",
+      "check wikilinks"
+    ],
+    "why": "Hestia's broken wikilink scan. Finds [[wikilinks]] pointing to non-existent files. Reports source file and line. Read-only."
+  },
+  {
+    "name": "orient",
+    "triggers": [
+      "where does X live",
+      "which repo",
+      "where is this",
+      "who handles",
+      "I'm lost",
+      "where do I start",
+      "how do I find",
+      "what's the rule for",
+      "I'm confused",
+      "lost in the vault",
+      "orient me",
+      "orient"
+    ],
+    "why": "Load the canonical MAP when confused about geography, ownership, or rules."
+  },
+  {
+    "name": "body-check",
+    "triggers": [
+      "body check",
+      "body state",
+      "how am I doing",
+      "check pressure",
+      "context pressure",
+      "memory pressure",
+      "somatic check",
+      "vital signs"
+    ],
+    "why": "Compose the AIgent's body state by reading existing signals. Lazy compute. The 'how am I doing?' read."
+  },
+  {
+    "name": "digest",
+    "triggers": [
+      "digest",
+      "digest candidates",
+      "review memory candidates",
+      "process candidates",
+      "promote candidates",
+      "clean memory backlog",
+      "memory candidates"
+    ],
+    "why": "Background curation tier. Reviews staged memory candidates from MEMORY_CANDIDATES.md and surfaces promote/skip/supersede choices."
+  },
+  {
+    "name": "context-capsule",
+    "triggers": [
+      "context capsule",
+      "capsule",
+      "context getting long",
+      "before compact",
+      "structured handoff",
+      "resume prompt",
+      "save context",
+      "preserve context",
+      "task done",
+      "milestone shipped"
+    ],
+    "why": "Structured state preservation. Fires on context pressure OR task completion. Output is a resume-ready capsule, not a vibes summary."
+  },
+  {
+    "name": "start",
+    "triggers": [
+      "start",
+      "menu",
+      "first run",
+      "home screen",
+      "what can you do",
+      "what should i do today"
+    ],
+    "why": "Day-one first-run flow + everyday home screen: on first launch greet, run the operator-setup interview, carry the operator to their first win; on return give a short briefing + plain-English action menu."
+  },
+  {
+    "name": "operator-setup",
+    "triggers": [
+      "operator setup",
+      "set me up",
+      "learn my business",
+      "onboard me",
+      "set up my business",
+      "tell you about my business"
+    ],
+    "why": "AIgent first-run operator-business interview — learns the operator's business in 3 plain questions, writes the first memory, plays back a personal briefing (the 'it remembers me' moment). Layers on top of the base /setup; invoked by /start, not a replacement."
+  },
+  {
+    "name": "first-win",
+    "triggers": [
+      "first win",
+      "ship something",
+      "do something real",
+      "quick win",
+      "show me what you can do",
+      "make something"
+    ],
+    "why": "Day-one first-win menu — 3 dead-simple high-value tasks (2 zero-dependency) that each put a real, usable artifact in the operator's hands in minutes, satisfying the 'ship something real, fast' promise on day one."
+  },
+  {
+    "name": "impeccable",
+    "triggers": [
+      "build a UI",
+      "design a page",
+      "build a component",
+      "design this",
+      "make it look good",
+      "frontend design",
+      "web component",
+      "web page",
+      "landing page",
+      "design system",
+      "visual design",
+      "UI polish",
+      "craft this interface"
+    ],
+    "why": "Create distinctive, production-grade frontend interfaces with high design quality. Avoids generic AI aesthetics. Use for web components, pages, posters, or any design-forward output."
+  },
+  {
+    "name": "frontend-slides",
+    "triggers": [
+      "presentation",
+      "slide deck",
+      "slides",
+      "HTML slides",
+      "make a slideshow",
+      "create a presentation",
+      "build slides",
+      "pitch deck"
+    ],
+    "why": "Build cinematic HTML/CSS slide decks with bold templates and animation presets. MIT license — Zara Zhang."
+  },
+  {
+    "name": "taste-skill",
+    "triggers": [
+      "UI architecture",
+      "component architecture",
+      "animation design",
+      "motion design",
+      "design engineering",
+      "React UI",
+      "Next.js UI",
+      "frontend architecture",
+      "hardware acceleration",
+      "CSS animation"
+    ],
+    "why": "Senior UI/UX engineer persona with metric-based design rules, CSS hardware acceleration, and balanced design engineering. MIT license — LeonxInx."
+  }
+]

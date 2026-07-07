@@ -1,0 +1,109 @@
+{
+  "_meta": {
+    "version": "0.4",
+    "doctrine": "system/15_somatic_layer.md",
+    "compute": "lazy via /body-check skill",
+    "updated": null
+  },
+  "_schema": {
+    "context_pressure": {
+      "type": "enum",
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "source": "tool_call_count + token_usage",
+      "read_only": true
+    },
+    "memory_candidate_backlog": {
+      "type": "int",
+      "limit": 50,
+      "source": "memory/MEMORY_CANDIDATES.md (status:staged)",
+      "read_only": true
+    },
+    "decision_reviews_due": {
+      "type": "int",
+      "limit": 20,
+      "source": "memory/DECISION_LOG.md vs DECISION_OUTCOMES.md (30/60/90d)",
+      "read_only": true
+    },
+    "delegation_open_count": {
+      "type": "int",
+      "limit": 30,
+      "source": "memory/DELEGATION_TRACKER.md (status:open)",
+      "read_only": true
+    },
+    "token_pressure": {
+      "type": "enum",
+      "values": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "source": "memory/usage_log.md last entry vs weekly avg",
+      "read_only": true
+    },
+    "attention_drift_active": {
+      "type": "bool",
+      "source": "/open attention reconciliation result",
+      "read_only": true
+    },
+    "comms_unread_count": {
+      "type": "int",
+      "limit": 50,
+      "source": "comms API unread-summary",
+      "read_only": true
+    },
+    "session_age_minutes": {
+      "type": "int",
+      "source": "current session start time",
+      "read_only": true
+    },
+    "last_digest_run": {
+      "type": "iso8601 | null",
+      "source": "memory/MEMORY_CANDIDATES.md last digest entry",
+      "read_only": true
+    },
+    "hestia_last_sweep": {
+      "type": "iso8601 | null",
+      "source": "memory/HESTIA_SWEEP_LOG.md (or /open if absent)",
+      "read_only": true
+    },
+    "recommended_reflex": {
+      "type": "enum",
+      "values": [
+        "digest",
+        "capsule",
+        "compact",
+        "close",
+        "sweep",
+        "none"
+      ],
+      "source": "rule-based composite of above",
+      "read_only": true
+    },
+    "last_capsule": {
+      "type": "object | null",
+      "fields": {
+        "id": "string",
+        "path": "string",
+        "objective": "string",
+        "status": {
+          "type": "enum",
+          "values": [
+            "active",
+            "resumed",
+            "resolved"
+          ]
+        },
+        "created_at": "iso8601",
+        "resolved_at": "iso8601 | null"
+      },
+      "source": "/close writes after capsule creation; /open reads to offer resume",
+      "read_only": true
+    }
+  },
+  "state": {}
+}

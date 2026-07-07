@@ -1,0 +1,14 @@
+{
+  "comment": "Paths (relative to vault/) that never decay below PIN_FLOOR. See concepts/Memory Decay Doctrine.md. Edit to match your constitutional notes.",
+  "pins": [
+    "system/00_identity.md",
+    "system/12_authority_matrix.md",
+    "system/11_session_rhythm.md",
+    "system/13_memory_operating_layer.md",
+    "system/14_decision_framework.md",
+    "concepts/Memory Decay Doctrine.md",
+    "concepts/Feature Design Workflow.md",
+    "concepts/Self-Improving CLAUDE.md.md",
+    "concepts/Caddy.md"
+  ]
+}

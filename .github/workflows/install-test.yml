@@ -1,0 +1,124 @@
+name: Install Smoke Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  install-smoke-test:
+    name: Install smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run installer into temp dir
+        run: |
+          # Run the REAL install.sh against this checkout (AIGENT_SRC) rather than
+          # an inlined copy of its logic — so the installer itself is tested and
+          # can't silently drift from what this workflow validates. AIGENT_SRC
+          # also avoids the network clone, which fails while the repo is private.
+          INSTALL_TARGET=/tmp/aigent-test
+          mkdir -p "$INSTALL_TARGET"
+          AIGENT_SRC="$GITHUB_WORKSPACE" bash install.sh "$INSTALL_TARGET" --no-deps
+          echo "INSTALL_TARGET=$INSTALL_TARGET" >> "$GITHUB_ENV"
+
+      - name: Validate settings.json exists
+        run: |
+          if [ ! -f "$INSTALL_TARGET/.claude/settings.json" ]; then
+            echo "FAIL: .claude/settings.json not created"
+            exit 1
+          fi
+          echo "PASS: .claude/settings.json exists"
+
+      - name: Validate no literal __AIGENT_ROOT__ in settings.json
+        run: |
+          if grep -q "__AIGENT_ROOT__" "$INSTALL_TARGET/.claude/settings.json"; then
+            echo "FAIL: settings.json still contains literal __AIGENT_ROOT__ — placeholder not substituted"
+            grep "__AIGENT_ROOT__" "$INSTALL_TARGET/.claude/settings.json"
+            exit 1
+          fi
+          echo "PASS: __AIGENT_ROOT__ placeholder substituted"
+
+      - name: Validate .claude/skills/open/SKILL.md exists
+        run: |
+          if [ ! -f "$INSTALL_TARGET/.claude/skills/open/SKILL.md" ]; then
+            echo "FAIL: .claude/skills/open/SKILL.md not installed"
+            exit 1
+          fi
+          echo "PASS: .claude/skills/open/SKILL.md found"
+
+      - name: Validate core skill source files exist
+        run: |
+          FAIL=0
+          for skill in open close setup; do
+            if [ ! -f "$INSTALL_TARGET/.claude/skills/$skill/SKILL.md" ]; then
+              echo "FAIL: .claude/skills/$skill/SKILL.md missing"
+              FAIL=1
+            else
+              echo "PASS: $skill skill installed"
+            fi
+          done
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Validate .claude/skill-index.json exists
+        run: |
+          if [ ! -f "$INSTALL_TARGET/.claude/skill-index.json" ]; then
+            echo "FAIL: .claude/skill-index.json not installed — Caddy enrollment will not work"
+            exit 1
+          fi
+          echo "PASS: .claude/skill-index.json exists"
+
+      - name: Validate vault/daily/ exists
+        run: |
+          if [ ! -d "$INSTALL_TARGET/vault/daily" ]; then
+            echo "FAIL: vault/daily/ not created — auto-capture hook will error"
+            exit 1
+          fi
+          echo "PASS: vault/daily/ exists"
+
+      - name: Validate hook paths in settings.json resolve to real files
+        run: |
+          FAIL=0
+          # Extract all "command" values, strip leading 'bash ', check paths exist
+          python3 - "$INSTALL_TARGET/.claude/settings.json" "$INSTALL_TARGET" <<'EOF'
+          import json, shlex, sys, os
+
+          settings_path = sys.argv[1]
+          root = sys.argv[2]
+
+          with open(settings_path) as f:
+              settings = json.load(f)
+
+          def collect_commands(obj):
+              if isinstance(obj, dict):
+                  if "command" in obj:
+                      yield obj["command"]
+                  for v in obj.values():
+                      yield from collect_commands(v)
+              elif isinstance(obj, list):
+                  for item in obj:
+                      yield from collect_commands(item)
+
+          fail = 0
+          for cmd in collect_commands(settings):
+              # Commands are "bash /path/to/script.sh" or "bash \"/path with spaces/script.sh\"" —
+              # use shlex to honor shell-style quoting so paths with spaces resolve correctly.
+              parts = shlex.split(cmd.strip())
+              if len(parts) >= 2 and parts[0] == "bash":
+                  script = parts[1]
+                  if not os.path.isfile(script):
+                      print(f"FAIL: hook script not found: {script}")
+                      fail += 1
+                  else:
+                      print(f"PASS: {script}")
+          sys.exit(fail)
+          EOF
+
+      - name: Run doctor.sh — must exit clean
+        run: |
+          chmod +x scripts/doctor.sh hooks/*.sh daemons/*.sh || true
+          bash scripts/doctor.sh "$INSTALL_TARGET"

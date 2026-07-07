@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "version": "0.4.1",
+    "doctrine": "system/15_somatic_layer.md + concepts/Somatic v0.4.1 Wiring.md §6",
+    "default_duration_hours": 4,
+    "classes": ["memory", "context", "body", "routing", "all"],
+    "schema": {
+      "<class>": {
+        "muted_until": "iso8601 — caddy.sh suppresses class hints while now < muted_until",
+        "reason": "string — human note for why",
+        "default_duration_hours": "int — used by /caddy-mute when --hours absent"
+      }
+    }
+  }
+}

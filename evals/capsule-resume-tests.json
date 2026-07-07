@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cr-001",
+    "capsule_status": "active",
+    "expected_offer_resume": true,
+    "notes": "Active capsule = work in progress. Must offer resume at /open."
+  },
+  {
+    "id": "cr-002",
+    "capsule_status": "paused",
+    "expected_offer_resume": true,
+    "notes": "Paused capsule = explicitly suspended but not closed. Must offer resume."
+  },
+  {
+    "id": "cr-003",
+    "capsule_status": "resolved",
+    "expected_offer_resume": false,
+    "notes": "Resolved capsule = work complete. Must NOT offer resume — there is nothing to pick up."
+  },
+  {
+    "id": "cr-004",
+    "capsule_status": "abandoned",
+    "expected_offer_resume": false,
+    "notes": "Abandoned capsule = explicitly discarded. Must NOT offer resume — reviving abandoned work creates noise."
+  },
+  {
+    "id": "cr-005",
+    "capsule_status": null,
+    "expected_offer_resume": false,
+    "notes": "No capsule present. Must NOT offer resume — nothing to resume."
+  }
+]

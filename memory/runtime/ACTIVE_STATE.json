@@ -1,0 +1,33 @@
+{
+  "version": "",
+  "updated_at": "",
+  "mode": "",
+  "current_objective": "",
+  "active_capsule": {
+    "id": "",
+    "objective": "",
+    "status": "",
+    "path": ""
+  },
+  "active_loop": null,
+  "pressure": {
+    "context": "",
+    "memory": "",
+    "decision": "",
+    "token": "",
+    "attention": ""
+  },
+  "open_threads": [],
+  "pending_decisions": [],
+  "skill_gaps": [],
+  "blocked_items": [],
+  "last_verified_state": null,
+  "next_valid_action": "",
+  "reflexes": {
+    "should_capsule": false,
+    "should_digest": false,
+    "should_skill_hunt": false,
+    "should_close": false,
+    "should_escalate": false
+  }
+}

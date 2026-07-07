@@ -1,0 +1,14 @@
+{
+  "name": "semantic-search",
+  "version": "1.0.0",
+  "description": "Vault-native semantic search using local embeddings",
+  "type": "module",
+  "scripts": {
+    "embed": "node embed-vault.js",
+    "embed:changed": "node embed-vault.js --changed-only",
+    "search": "node search-vault.js"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2"
+  }
+}

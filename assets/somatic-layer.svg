@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 440" width="1000" height="440" role="img" aria-label="aigent-OS — The Somatic Layer">
+  <defs>
+
+    <!-- Background -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e17"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+
+    <!-- Subtle grid -->
+    <pattern id="grid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1f2937" stroke-width="0.5" opacity="0.5"/>
+    </pattern>
+
+    <!-- Gauge fill gradients -->
+    <linearGradient id="grad-teal" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="grad-amber" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="grad-blue" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#4338ca"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+
+    <!-- Glow filters -->
+    <filter id="glow-teal" x="-40%" y="-20%" width="180%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-amber" x="-40%" y="-20%" width="180%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-blue" x="-40%" y="-20%" width="180%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-badge" x="-10%" y="-60%" width="120%" height="220%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-title" x="-5%" y="-40%" width="110%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Clip paths for gauge bars — track: y=148, h=170 -->
+    <!-- Each gauge track: width=36, centered at x=130,itage 300,itage 470,itage 640,itage 810 -->
+    <!-- Gauge centers: 130, 300, 470, 640, 810 — track x = center-18 -->
+    <clipPath id="clip-g1"><rect x="112" y="148" width="36" height="170" rx="3"/></clipPath>
+    <clipPath id="clip-g2"><rect x="282" y="148" width="36" height="170" rx="3"/></clipPath>
+    <clipPath id="clip-g3"><rect x="452" y="148" width="36" height="170" rx="3"/></clipPath>
+    <clipPath id="clip-g4"><rect x="622" y="148" width="36" height="170" rx="3"/></clipPath>
+    <clipPath id="clip-g5"><rect x="792" y="148" width="36" height="170" rx="3"/></clipPath>
+
+    <style>
+      /*
+       * Fill level math: track height = 170px
+       * translateY = 170 - (fill_pct * 170)
+       * G1 CONTEXT    40% → 170-(68)  = 102
+       * G2 MEMORY     70% → 170-(119) = 51
+       * G3 DECISIONS  20% → 170-(34)  = 136
+       * G4 DELEGATION 50% → 170-(85)  = 85
+       * G5 TOKENS     60% → 170-(102) = 68
+       */
+      @keyframes fill-g1 {
+        0%   { transform: translateY(170px); }
+        100% { transform: translateY(102px); }
+      }
+      @keyframes fill-g2 {
+        0%   { transform: translateY(170px); }
+        100% { transform: translateY(51px); }
+      }
+      @keyframes fill-g3 {
+        0%   { transform: translateY(170px); }
+        100% { transform: translateY(136px); }
+      }
+      @keyframes fill-g4 {
+        0%   { transform: translateY(170px); }
+        100% { transform: translateY(85px); }
+      }
+      @keyframes fill-g5 {
+        0%   { transform: translateY(170px); }
+        100% { transform: translateY(68px); }
+      }
+      @keyframes pulse-warn {
+        0%, 100% { opacity: 0.6; }
+        50%       { opacity: 1; }
+      }
+      @keyframes badge-breathe {
+        0%, 100% { opacity: 0.4; }
+        50%       { opacity: 0.9; }
+      }
+      @keyframes scan {
+        0%   { transform: translateX(-40px); opacity: 0; }
+        8%   { opacity: 0.6; }
+        92%  { opacity: 0.6; }
+        100% { transform: translateX(1040px); opacity: 0; }
+      }
+      .gf1 { transform: translateY(102px); animation: fill-g1 1.4s cubic-bezier(0.22,1,0.36,1) 0.1s both; }
+      .gf2 { transform: translateY(51px);  animation: fill-g2 1.4s cubic-bezier(0.22,1,0.36,1) 0.4s both; }
+      .gf3 { transform: translateY(136px); animation: fill-g3 1.4s cubic-bezier(0.22,1,0.36,1) 0.7s both; }
+      .gf4 { transform: translateY(85px);  animation: fill-g4 1.4s cubic-bezier(0.22,1,0.36,1) 1.0s both; }
+      .gf5 { transform: translateY(68px);  animation: fill-g5 1.4s cubic-bezier(0.22,1,0.36,1) 1.3s both; }
+      .warn-pulse { animation: pulse-warn 2.2s ease-in-out 1.8s infinite; }
+      .badge-glow { animation: badge-breathe 3s ease-in-out infinite; }
+      .scan-line  { animation: scan 5s linear 0.8s infinite; }
+    </style>
+  </defs>
+
+  <!-- ── Background ── -->
+  <rect width="1000" height="440" fill="url(#bg)"/>
+  <rect width="1000" height="440" fill="url(#grid)" opacity="0.4"/>
+
+  <!-- Top accent line -->
+  <line x1="0" y1="0" x2="1000" y2="0" stroke="#10b981" stroke-width="2" opacity="0.35"/>
+
+  <!-- Scan line sweep -->
+  <line class="scan-line" x1="0" y1="62" x2="6" y2="62" stroke="#10b981" stroke-width="1.5" opacity="0"/>
+
+  <!-- ── Title block ── -->
+  <!-- System tag -->
+  <text x="500" y="26" text-anchor="middle"
+        font-family="monospace" font-size="12" fill="#10b981" letter-spacing="4" opacity="0.65">
+    [ AIGENT INTROSPECTION MODULE ]
+  </text>
+
+  <!-- Main title -->
+  <text x="500" y="64" text-anchor="middle"
+        font-family="monospace" font-size="28" font-weight="700" fill="#e2e8f0" letter-spacing="6"
+        filter="url(#glow-title)">
+    THE SOMATIC LAYER
+  </text>
+
+  <!-- Subtitle -->
+  <text x="500" y="88" text-anchor="middle"
+        font-family="monospace" font-size="16" fill="#6b7280" letter-spacing="3">
+    introspection · self-awareness · fitness
+  </text>
+
+  <!-- Separator line with center dot -->
+  <line x1="50" y1="104" x2="450" y2="104" stroke="#1f2937" stroke-width="1"/>
+  <circle cx="500" cy="104" r="3" fill="#10b981" opacity="0.55"/>
+  <line x1="550" y1="104" x2="950" y2="104" stroke="#1f2937" stroke-width="1"/>
+
+  <!-- ── Gauge area — centers at x=130, 300, 470, 640, 810 ── -->
+  <!-- Track top: y=148, height=170, track width=36 -->
+  <!-- Tick x-right edge at center+20=+20 from right of track -->
+
+  <!-- ════ GAUGE 1: CONTEXT — teal 40% ════ -->
+  <text x="130" y="136" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" fill="#e2e8f0" letter-spacing="1">CONTEXT</text>
+  <!-- Track -->
+  <rect x="112" y="148" width="36" height="170" rx="3" fill="#1f2937"/>
+  <!-- Tick marks on right side -->
+  <line x1="150" y1="148" x2="157" y2="148" stroke="#374151" stroke-width="1.5"/>
+  <line x1="150" y1="191" x2="155" y2="191" stroke="#374151" stroke-width="1"/>
+  <line x1="150" y1="233" x2="158" y2="233" stroke="#374151" stroke-width="1.5"/>
+  <line x1="150" y1="276" x2="155" y2="276" stroke="#374151" stroke-width="1"/>
+  <line x1="150" y1="318" x2="157" y2="318" stroke="#374151" stroke-width="1.5"/>
+  <!-- Tick labels -->
+  <text x="162" y="152" font-family="monospace" font-size="11" fill="#4b5563">100</text>
+  <text x="162" y="237" font-family="monospace" font-size="11" fill="#4b5563">50</text>
+  <text x="162" y="322" font-family="monospace" font-size="11" fill="#4b5563">0</text>
+  <!-- Fill bar -->
+  <g clip-path="url(#clip-g1)">
+    <rect class="gf1" x="112" y="148" width="36" height="170" rx="3"
+          fill="url(#grad-teal)" filter="url(#glow-teal)" opacity="0.9"/>
+  </g>
+  <!-- Value label -->
+  <text x="130" y="340" text-anchor="middle"
+        font-family="monospace" font-size="18" font-weight="700" fill="#10b981">low</text>
+  <text x="130" y="360" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#4b5563">40%</text>
+
+  <!-- ════ GAUGE 2: MEMORY — amber 70% ════ -->
+  <text x="300" y="136" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" fill="#e2e8f0" letter-spacing="1">MEMORY</text>
+  <!-- Track -->
+  <rect x="282" y="148" width="36" height="170" rx="3" fill="#1f2937"/>
+  <!-- Warning threshold at 65% = 170*0.65=110.5 above bottom → y = 148+(170-110)=208 -->
+  <line x1="281" y1="208" x2="320" y2="208" stroke="#f59e0b" stroke-width="1"
+        stroke-dasharray="4,3" opacity="0.45"/>
+  <!-- Tick marks -->
+  <line x1="320" y1="148" x2="327" y2="148" stroke="#374151" stroke-width="1.5"/>
+  <line x1="320" y1="191" x2="325" y2="191" stroke="#374151" stroke-width="1"/>
+  <line x1="320" y1="233" x2="328" y2="233" stroke="#374151" stroke-width="1.5"/>
+  <line x1="320" y1="276" x2="325" y2="276" stroke="#374151" stroke-width="1"/>
+  <line x1="320" y1="318" x2="327" y2="318" stroke="#374151" stroke-width="1.5"/>
+  <!-- Fill bar with pulse -->
+  <g clip-path="url(#clip-g2)">
+    <rect class="gf2 warn-pulse" x="282" y="148" width="36" height="170" rx="3"
+          fill="url(#grad-amber)" filter="url(#glow-amber)" opacity="0.95"/>
+  </g>
+  <!-- Warning ring -->
+  <rect class="warn-pulse" x="280" y="146" width="40" height="174" rx="4"
+        fill="none" stroke="#f59e0b" stroke-width="1.5" opacity="0.2"/>
+  <!-- Value label -->
+  <text x="300" y="340" text-anchor="middle"
+        font-family="monospace" font-size="18" font-weight="700" fill="#f59e0b">medium</text>
+  <text x="300" y="360" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#4b5563">70%</text>
+
+  <!-- ════ GAUGE 3: DECISIONS — blue 20% ════ -->
+  <text x="470" y="136" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" fill="#e2e8f0" letter-spacing="1">DECISIONS</text>
+  <!-- Track -->
+  <rect x="452" y="148" width="36" height="170" rx="3" fill="#1f2937"/>
+  <!-- Tick marks -->
+  <line x1="490" y1="148" x2="497" y2="148" stroke="#374151" stroke-width="1.5"/>
+  <line x1="490" y1="191" x2="495" y2="191" stroke="#374151" stroke-width="1"/>
+  <line x1="490" y1="233" x2="498" y2="233" stroke="#374151" stroke-width="1.5"/>
+  <line x1="490" y1="276" x2="495" y2="276" stroke="#374151" stroke-width="1"/>
+  <line x1="490" y1="318" x2="497" y2="318" stroke="#374151" stroke-width="1.5"/>
+  <!-- Fill bar -->
+  <g clip-path="url(#clip-g3)">
+    <rect class="gf3" x="452" y="148" width="36" height="170" rx="3"
+          fill="url(#grad-blue)" filter="url(#glow-blue)" opacity="0.9"/>
+  </g>
+  <!-- Value label -->
+  <text x="470" y="340" text-anchor="middle"
+        font-family="monospace" font-size="18" font-weight="700" fill="#6366f1">low</text>
+  <text x="470" y="360" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#4b5563">20%</text>
+
+  <!-- ════ GAUGE 4: DELEGATION — teal 50% ════ -->
+  <text x="640" y="136" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" fill="#e2e8f0" letter-spacing="1">DELEGATION</text>
+  <!-- Track -->
+  <rect x="622" y="148" width="36" height="170" rx="3" fill="#1f2937"/>
+  <!-- Tick marks -->
+  <line x1="660" y1="148" x2="667" y2="148" stroke="#374151" stroke-width="1.5"/>
+  <line x1="660" y1="191" x2="665" y2="191" stroke="#374151" stroke-width="1"/>
+  <line x1="660" y1="233" x2="668" y2="233" stroke="#374151" stroke-width="1.5"/>
+  <line x1="660" y1="276" x2="665" y2="276" stroke="#374151" stroke-width="1"/>
+  <line x1="660" y1="318" x2="667" y2="318" stroke="#374151" stroke-width="1.5"/>
+  <!-- Fill bar -->
+  <g clip-path="url(#clip-g4)">
+    <rect class="gf4" x="622" y="148" width="36" height="170" rx="3"
+          fill="url(#grad-teal)" filter="url(#glow-teal)" opacity="0.9"/>
+  </g>
+  <!-- Value label -->
+  <text x="640" y="340" text-anchor="middle"
+        font-family="monospace" font-size="18" font-weight="700" fill="#10b981">medium</text>
+  <text x="640" y="360" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#4b5563">50%</text>
+
+  <!-- ════ GAUGE 5: TOKENS — amber 60% ════ -->
+  <text x="810" y="136" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" fill="#e2e8f0" letter-spacing="1">TOKENS</text>
+  <!-- Track -->
+  <rect x="792" y="148" width="36" height="170" rx="3" fill="#1f2937"/>
+  <!-- Tick marks -->
+  <line x1="830" y1="148" x2="837" y2="148" stroke="#374151" stroke-width="1.5"/>
+  <line x1="830" y1="191" x2="835" y2="191" stroke="#374151" stroke-width="1"/>
+  <line x1="830" y1="233" x2="838" y2="233" stroke="#374151" stroke-width="1.5"/>
+  <line x1="830" y1="276" x2="835" y2="276" stroke="#374151" stroke-width="1"/>
+  <line x1="830" y1="318" x2="837" y2="318" stroke="#374151" stroke-width="1.5"/>
+  <!-- Fill bar -->
+  <g clip-path="url(#clip-g5)">
+    <rect class="gf5" x="792" y="148" width="36" height="170" rx="3"
+          fill="url(#grad-amber)" filter="url(#glow-amber)" opacity="0.9"/>
+  </g>
+  <!-- Value label -->
+  <text x="810" y="340" text-anchor="middle"
+        font-family="monospace" font-size="18" font-weight="700" fill="#f59e0b">medium</text>
+  <text x="810" y="360" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#4b5563">60%</text>
+
+  <!-- ── Recommended Reflex badge ── -->
+  <!-- Glow layer -->
+  <rect class="badge-glow" x="300" y="380" width="400" height="38" rx="19"
+        fill="none" stroke="#10b981" stroke-width="2" filter="url(#glow-badge)"/>
+  <!-- Badge body -->
+  <rect x="300" y="380" width="400" height="38" rx="19"
+        fill="#0d1520" stroke="#1f2937" stroke-width="1.5"/>
+  <!-- Accent dots -->
+  <circle cx="326" cy="399" r="5" fill="#10b981" opacity="0.75"/>
+  <circle cx="674" cy="399" r="5" fill="#10b981" opacity="0.75"/>
+  <!-- Badge text -->
+  <text x="500" y="404" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="700" letter-spacing="1">
+    <tspan fill="#9ca3af">RECOMMENDED REFLEX: </tspan><tspan fill="#10b981">none</tspan>
+  </text>
+
+  <!-- ── Bottom caption ── -->
+  <text x="500" y="432" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#374151" letter-spacing="1">
+    The AIgent reads its own state before acting. Lazy-computed. No daemon.
+  </text>
+
+  <!-- Bottom edge -->
+  <line x1="0" y1="440" x2="1000" y2="440" stroke="#10b981" stroke-width="1" opacity="0.2"/>
+
+</svg>
