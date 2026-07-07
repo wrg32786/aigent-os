@@ -1,0 +1,74 @@
+{
+  "env": {
+    "AIGENT_ROOT": "__AIGENT_ROOT__",
+    "AIGENT_VAULT": "__AIGENT_ROOT__"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/daemons/caddy.sh\"",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/suggest-compact.sh\"",
+            "timeout": 1000
+          },
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/auto-capture.sh\"",
+            "timeout": 2000
+          },
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/security-scan.sh\"",
+            "timeout": 2000
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/daemons/caddy-detect-new-skill.sh\"",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/session-capture-summary.sh\"",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/session-end-check.sh\"",
+            "timeout": 2000
+          },
+          {
+            "type": "command",
+            "command": "bash \"__AIGENT_ROOT__/hooks/log-token-usage.sh\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

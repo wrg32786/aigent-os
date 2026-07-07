@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  validate:
+    name: Validate — shell syntax, JSON, doctor
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax check
+        run: |
+          FAIL=0
+          while IFS= read -r -d '' script; do
+            if ! bash -n "$script" 2>&1; then
+              echo "SYNTAX ERROR: $script"
+              FAIL=1
+            fi
+          done < <(find . -name "*.sh" -not -path "*/node_modules/*" -print0)
+          if [ "$FAIL" -ne 0 ]; then
+            echo "Shell syntax check failed."
+            exit 1
+          fi
+          echo "All shell scripts pass syntax check."
+
+      - name: JSON syntax check
+        run: |
+          FAIL=0
+          while IFS= read -r -d '' jfile; do
+            if ! python3 -m json.tool "$jfile" > /dev/null 2>&1; then
+              echo "JSON PARSE ERROR: $jfile"
+              FAIL=1
+            fi
+          done < <(find . -name "*.json" -not -path "*/node_modules/*" -print0)
+          if [ "$FAIL" -ne 0 ]; then
+            echo "JSON syntax check failed."
+            exit 1
+          fi
+          echo "All JSON files parse cleanly."
+
+      - name: Make scripts executable
+        run: chmod +x scripts/doctor.sh hooks/*.sh daemons/*.sh || true
+
+      - name: Fresh install smoke test
+        run: |
+          TMP="$(mktemp -d)"
+          # Install from this checkout (AIGENT_SRC) instead of cloning over the
+          # network — the repo is private, so an unauthenticated CI clone fails.
+          AIGENT_SRC="$GITHUB_WORKSPACE" bash install.sh "$TMP" --no-deps
+          test -f "$TMP/CLAUDE.md"
+          test -f "$TMP/system/00_identity.md"
+          test -d "$TMP/vault/memory"
+          test -d "$TMP/vault/daily"
+          test -f "$TMP/.claude/settings.json"
+          test -f "$TMP/.claude/skill-index.json"
+          test -d "$TMP/.claude/skills"
+          find "$TMP/.claude/skills" -name SKILL.md | grep -q .
+          bash "$TMP/scripts/doctor.sh" "$TMP"

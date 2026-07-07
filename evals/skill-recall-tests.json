@@ -1,0 +1,30 @@
+[
+  {
+    "id": "sr-001",
+    "prompt": "transcribe this audio recording",
+    "expected_skill": "audio-transcriber",
+    "expected_taxonomy": "research.audio.transcriber",
+    "notes": "Direct audio domain match. Should not route to video-analyzer or generic research."
+  },
+  {
+    "id": "sr-002",
+    "prompt": "check this PR for security issues",
+    "expected_skill": "security-audit",
+    "expected_taxonomy": "security.audit.owasp",
+    "notes": "Security + PR review combined. security-audit is the correct primary skill over code-review."
+  },
+  {
+    "id": "sr-003",
+    "prompt": "optimize this slow database query",
+    "expected_skill": "query-optimizer",
+    "expected_taxonomy": "research.deep.investigate",
+    "notes": "Database performance domain. query-optimizer is the installed skill; investigate is the fallback taxonomy path."
+  },
+  {
+    "id": "sr-005",
+    "prompt": "generate an OpenAPI spec for this codebase",
+    "expected_skill": "api-docs",
+    "expected_taxonomy": "content.seo.audit",
+    "notes": "API documentation generation. api-docs is the correct skill. taxonomy path is approximate — update if SKILL_LEDGER gets a dedicated api-docs path."
+  }
+]

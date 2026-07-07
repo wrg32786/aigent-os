@@ -1,0 +1,349 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" width="1000" height="560">
+
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0e17;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#111827;stop-opacity:1"/>
+    </linearGradient>
+
+    <filter id="glowTeal" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowAmber" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowRed" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowBlue" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="centerGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <marker id="arrowTeal" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L9,3.5 z" fill="#10b981"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L9,3.5 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L9,3.5 z" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L9,3.5 z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L0,7 L9,3.5 z" fill="#6366f1"/>
+    </marker>
+  </defs>
+
+  <style>
+    @keyframes centerBreath {
+      0%, 100% { opacity: 0.8; }
+      50%       { opacity: 1;   }
+    }
+  </style>
+
+  <rect width="1000" height="560" fill="url(#bgGrad)"/>
+
+  <g opacity="0.035" stroke="#6366f1" stroke-width="1" fill="none">
+    <line x1="0"   y1="112" x2="1000" y2="112"/>
+    <line x1="0"   y1="224" x2="1000" y2="224"/>
+    <line x1="0"   y1="336" x2="1000" y2="336"/>
+    <line x1="0"   y1="448" x2="1000" y2="448"/>
+    <line x1="200" y1="0"   x2="200"  y2="560"/>
+    <line x1="400" y1="0"   x2="400"  y2="560"/>
+    <line x1="600" y1="0"   x2="600"  y2="560"/>
+    <line x1="800" y1="0"   x2="800"  y2="560"/>
+  </g>
+
+  <!--
+    Ellipse center: (500, 268)  rx=272  ry=168
+    Node positions (on ellipse, r=48):
+      TASK      270 deg  =>  cx=500  cy=100
+      RECALL    330 deg  =>  cx=736  cy=184
+      EXECUTE    30 deg  =>  cx=736  cy=352
+      EVALUATE   90 deg  =>  cx=500  cy=436
+      CLASSIFY  150 deg  =>  cx=264  cy=352
+      ARTIFACT  210 deg  =>  cx=264  cy=184
+  -->
+
+  <path id="mainLoopPath"
+        d="M 500,100
+           A 272,168 0 0 1 736,184
+           A 272,168 0 0 1 736,352
+           A 272,168 0 0 1 500,436
+           A 272,168 0 0 1 264,352
+           A 272,168 0 0 1 264,184
+           A 272,168 0 0 1 500,100 Z"
+        fill="none" stroke="none"/>
+
+  <path id="failBranchPath"
+        d="M 500,436
+           A 272,168 0 0 1 264,352
+           A 272,168 0 0 1 264,184"
+        fill="none" stroke="none"/>
+
+  <!-- Success shortcut curves from EVALUATE up to TASK, staying right of center -->
+  <path id="successShortcut"
+        d="M 500,390 C 620,330 640,160 548,103"
+        fill="none" stroke="none"/>
+
+  <path id="updateArcPath"
+        d="M 264,184 A 272,168 0 0 1 500,100 A 272,168 0 0 1 736,184"
+        fill="none" stroke="none"/>
+
+  <!-- TASK to RECALL -->
+  <path d="M 544,116 A 272,168 0 0 1 703,192"
+        fill="none" stroke="#10b981" stroke-width="2.2" stroke-opacity="0.55"
+        marker-end="url(#arrowBlue)"/>
+
+  <!-- RECALL to EXECUTE -->
+  <path d="M 757,210 A 272,168 0 0 1 757,326"
+        fill="none" stroke="#6366f1" stroke-width="2.2" stroke-opacity="0.55"
+        marker-end="url(#arrowTeal)"/>
+
+  <!-- EXECUTE to EVALUATE -->
+  <path d="M 703,370 A 272,168 0 0 1 548,424"
+        fill="none" stroke="#10b981" stroke-width="2.2" stroke-opacity="0.55"
+        marker-end="url(#arrowAmber)"/>
+
+  <!-- EVALUATE to CLASSIFY (failure) -->
+  <path d="M 452,424 A 272,168 0 0 1 297,370"
+        fill="none" stroke="#ef4444" stroke-width="2.8" stroke-opacity="0.65"
+        marker-end="url(#arrowRed)"/>
+
+  <!-- CLASSIFY to ARTIFACT -->
+  <path d="M 243,322 A 272,168 0 0 1 243,214"
+        fill="none" stroke="#ef4444" stroke-width="2.2" stroke-opacity="0.55"
+        marker-end="url(#arrowAmber)"/>
+
+  <!-- ARTIFACT to RECALL (system updated — amber top arc) -->
+  <path d="M 309,175 A 272,168 0 0 1 691,175"
+        fill="none" stroke="#f59e0b" stroke-width="2.8" stroke-opacity="0.6"
+        marker-end="url(#arrowBlue)"/>
+
+  <!-- SUCCESS SHORTCUT: EVALUATE to TASK (dashed green) -->
+  <path d="M 500,390 C 620,330 640,160 548,103"
+        fill="none" stroke="#22c55e" stroke-width="2" stroke-opacity="0.35"
+        stroke-dasharray="7,5"
+        marker-end="url(#arrowGreen)">
+    <animate attributeName="stroke-opacity" values="0.2;0.65;0.65;0.2" dur="4.5s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- "system updated" — left arc between ARTIFACT (264,184) and TASK (500,100), well outside center -->
+  <text x="318" y="118" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#f59e0b" fill-opacity="0.8"
+        letter-spacing="1.5">system updated</text>
+
+  <!-- "SUCCESS" label — right side of shortcut curve, clear of center -->
+  <text x="660" y="248" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#22c55e" fill-opacity="0.75"
+        transform="rotate(-65, 660, 248)">SUCCESS</text>
+
+  <!-- Main loop: 3 dots clockwise -->
+  <circle r="5.5" fill="#10b981" opacity="0.9">
+    <animateMotion dur="10s" repeatCount="indefinite" begin="0s">
+      <mpath href="#mainLoopPath"/>
+    </animateMotion>
+  </circle>
+  <circle r="5.5" fill="#6366f1" opacity="0.9">
+    <animateMotion dur="10s" repeatCount="indefinite" begin="-3.33s">
+      <mpath href="#mainLoopPath"/>
+    </animateMotion>
+  </circle>
+  <circle r="4.5" fill="#10b981" opacity="0.55">
+    <animateMotion dur="10s" repeatCount="indefinite" begin="-6.66s">
+      <mpath href="#mainLoopPath"/>
+    </animateMotion>
+  </circle>
+
+  <!-- Failure branch dots -->
+  <circle r="5.5" fill="#f59e0b" opacity="0.95">
+    <animateMotion dur="5.5s" repeatCount="indefinite" begin="0s">
+      <mpath href="#failBranchPath"/>
+    </animateMotion>
+  </circle>
+  <circle r="4.5" fill="#ef4444" opacity="0.8">
+    <animateMotion dur="5.5s" repeatCount="indefinite" begin="-2.75s">
+      <mpath href="#failBranchPath"/>
+    </animateMotion>
+  </circle>
+
+  <!-- Success shortcut dots -->
+  <circle r="4.5" fill="#22c55e" opacity="0.9">
+    <animateMotion dur="3.8s" repeatCount="indefinite" begin="0s">
+      <mpath href="#successShortcut"/>
+    </animateMotion>
+  </circle>
+  <circle r="3.5" fill="#22c55e" opacity="0.6">
+    <animateMotion dur="3.8s" repeatCount="indefinite" begin="-1.9s">
+      <mpath href="#successShortcut"/>
+    </animateMotion>
+  </circle>
+
+  <!-- System-updated arc dot -->
+  <circle r="4.5" fill="#f59e0b" opacity="0.9">
+    <animateMotion dur="4.5s" repeatCount="indefinite" begin="-1.2s">
+      <mpath href="#updateArcPath"/>
+    </animateMotion>
+  </circle>
+
+  <!-- ARTIFACT double pulse ring -->
+  <circle cx="264" cy="184" r="50" fill="none" stroke="#f59e0b" stroke-width="2">
+    <animate attributeName="r"       values="50;74" dur="2.2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.75;0" dur="2.2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="264" cy="184" r="50" fill="none" stroke="#f59e0b" stroke-width="1.2">
+    <animate attributeName="r"       values="50;74" dur="2.2s" begin="-1.1s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.5;0"  dur="2.2s" begin="-1.1s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- EVALUATE pulse ring -->
+  <circle cx="500" cy="436" r="50" fill="none" stroke="#f59e0b" stroke-width="1.2">
+    <animate attributeName="r"       values="50;72" dur="3.2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.45;0" dur="3.2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- NODE CIRCLES (r=48) -->
+
+  <!-- TASK (500, 100) teal -->
+  <circle cx="500" cy="100" r="48" fill="#0a0f1a" stroke="#10b981" stroke-width="2.8" filter="url(#glowTeal)"/>
+
+  <!-- RECALL (736, 184) blue -->
+  <circle cx="736" cy="184" r="48" fill="#0a0f1a" stroke="#6366f1" stroke-width="2.8" filter="url(#glowBlue)"/>
+
+  <!-- EXECUTE (736, 352) teal -->
+  <circle cx="736" cy="352" r="48" fill="#0a0f1a" stroke="#10b981" stroke-width="2.8" filter="url(#glowTeal)"/>
+
+  <!-- EVALUATE (500, 436) amber -->
+  <circle cx="500" cy="436" r="48" fill="#0a0f1a" stroke="#f59e0b" stroke-width="2.8" filter="url(#glowAmber)"/>
+
+  <!-- CLASSIFY (264, 352) red -->
+  <circle cx="264" cy="352" r="48" fill="#0a0f1a" stroke="#ef4444" stroke-width="2.8" filter="url(#glowRed)"/>
+
+  <!-- ARTIFACT (264, 184) amber — pulsing stroke -->
+  <circle cx="264" cy="184" r="48" fill="#0d1221" stroke="#f59e0b" stroke-width="3.5" filter="url(#softGlow)">
+    <animate attributeName="stroke-width" values="3.5;5.5;3.5" dur="2.2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- NODE LABELS — single words, r=48 gives room at font-size 14 -->
+
+  <text x="500" y="100" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="16" font-weight="bold"
+        fill="#10b981" letter-spacing="1.5">TASK</text>
+
+  <text x="736" y="184" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="15" font-weight="bold"
+        fill="#6366f1" letter-spacing="1">RECALL</text>
+
+  <text x="736" y="352" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="14" font-weight="bold"
+        fill="#10b981" letter-spacing="0.5">EXECUTE</text>
+
+  <!-- EVALUATE and CLASSIFY now fit on single lines at font-size 14 with r=48 -->
+  <text x="500" y="436" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="14" font-weight="bold"
+        fill="#f59e0b" letter-spacing="0.5">EVALUATE</text>
+
+  <text x="264" y="352" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="14" font-weight="bold"
+        fill="#ef4444" letter-spacing="0.5">CLASSIFY</text>
+
+  <text x="264" y="184" text-anchor="middle" dominant-baseline="middle"
+        font-family="monospace" font-size="14" font-weight="bold"
+        fill="#f59e0b" letter-spacing="0.5">ARTIFACT</text>
+
+  <!-- SUBLABELS — pushed outward, clear of arcs -->
+
+  <!-- TASK — top, above node -->
+  <text x="500" y="38" text-anchor="middle"
+        font-family="sans-serif" font-size="15" fill="#10b981" fill-opacity="0.85">
+    "Task arrives"
+  </text>
+
+  <!-- RECALL — right side -->
+  <text x="828" y="175" text-anchor="start"
+        font-family="sans-serif" font-size="15" fill="#6366f1" fill-opacity="0.85">Search 130+</text>
+  <text x="828" y="195" text-anchor="start"
+        font-family="sans-serif" font-size="15" fill="#6366f1" fill-opacity="0.85">skills</text>
+
+  <!-- EXECUTE — right side -->
+  <text x="828" y="343" text-anchor="start"
+        font-family="sans-serif" font-size="15" fill="#10b981" fill-opacity="0.85">Run the</text>
+  <text x="828" y="363" text-anchor="start"
+        font-family="sans-serif" font-size="15" fill="#10b981" fill-opacity="0.85">solution</text>
+
+  <!-- EVALUATE — bottom, below node -->
+  <text x="500" y="500" text-anchor="middle"
+        font-family="sans-serif" font-size="15" fill="#f59e0b" fill-opacity="0.85">
+    "Did it work?"
+  </text>
+
+  <!-- CLASSIFY — left side, further out -->
+  <text x="170" y="334" text-anchor="end"
+        font-family="sans-serif" font-size="15" fill="#ef4444" fill-opacity="0.85">Failure mode:</text>
+  <text x="170" y="354" text-anchor="end"
+        font-family="sans-serif" font-size="14" fill="#ef4444" fill-opacity="0.7">routing / verify /</text>
+  <text x="170" y="372" text-anchor="end"
+        font-family="sans-serif" font-size="14" fill="#ef4444" fill-opacity="0.7">tool / knowledge</text>
+
+  <!-- ARTIFACT — left side, further out -->
+  <text x="170" y="168" text-anchor="end"
+        font-family="sans-serif" font-size="15" fill="#f59e0b" fill-opacity="0.85">Rule · Skill ·</text>
+  <text x="170" y="188" text-anchor="end"
+        font-family="sans-serif" font-size="15" fill="#f59e0b" fill-opacity="0.85">Trigger · Checklist</text>
+
+  <!-- CENTER TEXT — NEVER REPEAT moved up to y=222, subtitle at y=250 -->
+
+  <!-- Breathing halo -->
+  <ellipse cx="500" cy="268" rx="118" ry="58" fill="#10b981" fill-opacity="0.04">
+    <animate attributeName="rx"           values="118;132;118" dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="ry"           values="58;68;58"   dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="fill-opacity" values="0.03;0.08;0.03" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- NEVER REPEAT — raised to y=222 so success arc clears it -->
+  <text x="500" y="254" text-anchor="middle"
+        font-family="monospace" font-size="28" font-weight="bold"
+        fill="#e2e8f0" letter-spacing="4" filter="url(#centerGlow)">
+    NEVER REPEAT
+    <animate attributeName="fill-opacity" values="0.78;1;0.78" dur="4s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="500" y="282" text-anchor="middle"
+        font-family="sans-serif" font-size="15" fill="#94a3b8" letter-spacing="0.8">
+    Every failure produces an artifact
+    <animate attributeName="fill-opacity" values="0.55;0.88;0.55" dur="4s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- Flanking separator lines -->
+  <line x1="354" y1="268" x2="418" y2="268" stroke="#334155" stroke-width="1" opacity="0.55"/>
+  <line x1="582" y1="268" x2="646" y2="268" stroke="#334155" stroke-width="1" opacity="0.55"/>
+
+  <!-- TITLE -->
+  <text x="500" y="20" text-anchor="middle"
+        font-family="monospace" font-size="16" font-weight="bold"
+        fill="#64748b" letter-spacing="3">
+    SELF-LEARNING LOOP — AIGENT-OS
+  </text>
+
+  <!-- BOTTOM CAPTION -->
+  <text x="500" y="546" text-anchor="middle"
+        font-family="monospace" font-size="14" fill="#475569" letter-spacing="0.8">
+    "First time: log.  Second time: artifact.  Third time: fix the fix."
+  </text>
+
+</svg>

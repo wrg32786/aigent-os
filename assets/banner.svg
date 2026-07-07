@@ -1,0 +1,316 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="aigent-OS — AI Operating System">
+  <defs>
+
+    <!-- Background gradient -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#080d14"/>
+      <stop offset="100%" stop-color="#0d1520"/>
+    </linearGradient>
+
+    <!-- Wordmark glow filter -->
+    <filter id="glow-emerald" x="-25%" y="-50%" width="150%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Scan line glow -->
+    <filter id="glow-scan" x="0%" y="-100%" width="100%" height="300%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Radial halo behind center -->
+    <radialGradient id="center-halo" cx="50%" cy="50%" r="30%">
+      <stop offset="0%"   stop-color="#10b981" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Scan line gradient -->
+    <linearGradient id="scan-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#6366f1" stop-opacity="0"/>
+      <stop offset="50%"  stop-color="#6366f1" stop-opacity="0.04"/>
+      <stop offset="85%"  stop-color="#10b981" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Clip to banner bounds -->
+    <clipPath id="banner-clip">
+      <rect x="0" y="0" width="1200" height="340"/>
+    </clipPath>
+
+  </defs>
+
+  <style>
+    /* Typefaces — generic fallbacks only */
+    .mono { font-family: "Courier New", Courier, monospace; }
+    .sans { font-family: Arial, Helvetica, sans-serif; }
+
+    /* Wordmark breathing glow */
+    @keyframes breathe {
+      0%, 100% { opacity: 0.90; }
+      50%       { opacity: 1.00; }
+    }
+    .wordmark { animation: breathe 4s ease-in-out infinite; }
+
+    /* Operational dot pulse */
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1;   }
+      50%       { opacity: 0.4; }
+    }
+    .pulse-dot { animation: pulse-dot 2.4s ease-in-out infinite; }
+
+    /* Expanding ring */
+    @keyframes pulse-ring {
+      0%   { r: 5;  opacity: 0.55; }
+      100% { r: 13; opacity: 0;    }
+    }
+    .pulse-ring { animation: pulse-ring 2.4s ease-out infinite; }
+
+    /* Stat fade-in — staggered */
+    @keyframes fade-up {
+      0%   { opacity: 0; transform: translateY(5px); }
+      100% { opacity: 1; transform: translateY(0);   }
+    }
+    .s0  { animation: fade-up 0.5s ease-out 0.10s both; }
+    .s1  { animation: fade-up 0.5s ease-out 0.30s both; }
+    .s2  { animation: fade-up 0.5s ease-out 0.55s both; }
+    .s3  { animation: fade-up 0.5s ease-out 0.80s both; }
+    .s4  { animation: fade-up 0.5s ease-out 1.05s both; }
+    .s5  { animation: fade-up 0.5s ease-out 1.30s both; }
+    .s6  { animation: fade-up 0.5s ease-out 1.55s both; }
+    .r1  { animation: fade-up 0.5s ease-out 0.45s both; }
+    .r2  { animation: fade-up 0.5s ease-out 0.70s both; }
+    .r3  { animation: fade-up 0.5s ease-out 0.95s both; }
+    .r4  { animation: fade-up 0.5s ease-out 1.20s both; }
+    .r5  { animation: fade-up 0.5s ease-out 1.45s both; }
+    .tag { animation: fade-up 0.5s ease-out 1.80s both; }
+    .sep { animation: fade-up 0.4s ease-out 0.20s both; }
+
+    /* Scan line sweep */
+    @keyframes scan {
+      0%   { transform: translateX(-100px); opacity: 0;   }
+      5%   { opacity: 1; }
+      93%  { opacity: 0.7; }
+      100% { transform: translateX(1300px); opacity: 0; }
+    }
+    .scan-line { animation: scan 9s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+    /* Corner brackets */
+    @keyframes bracket-blink {
+      0%, 88%, 100% { opacity: 0.22; }
+      94%            { opacity: 0.45; }
+    }
+    .bracket { animation: bracket-blink 5s ease-in-out infinite; }
+  </style>
+
+  <!-- ── Background ── -->
+  <rect width="1200" height="340" fill="url(#bg)"/>
+  <rect width="1200" height="340" fill="url(#center-halo)"/>
+
+  <!-- ── Faint circuit grid ── -->
+  <!-- Horizontal lines -->
+  <line x1="0" y1="68"  x2="1200" y2="68"  stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.10"/>
+  <line x1="0" y1="136" x2="1200" y2="136" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.07"/>
+  <line x1="0" y1="204" x2="1200" y2="204" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.07"/>
+  <line x1="0" y1="272" x2="1200" y2="272" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.10"/>
+  <!-- Vertical lines -->
+  <line x1="270" y1="0" x2="270" y2="340" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.09"/>
+  <line x1="600" y1="0" x2="600" y2="340" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.05"/>
+  <line x1="930" y1="0" x2="930" y2="340" stroke="#6366f1" stroke-width="0.3" stroke-opacity="0.09"/>
+  <!-- Junction dots -->
+  <circle cx="270" cy="68"  r="1.2" fill="#6366f1" fill-opacity="0.22"/>
+  <circle cx="600" cy="68"  r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="930" cy="68"  r="1.2" fill="#6366f1" fill-opacity="0.22"/>
+  <circle cx="270" cy="136" r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="930" cy="136" r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="270" cy="204" r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="930" cy="204" r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="270" cy="272" r="1.2" fill="#6366f1" fill-opacity="0.22"/>
+  <circle cx="600" cy="272" r="1.2" fill="#6366f1" fill-opacity="0.14"/>
+  <circle cx="930" cy="272" r="1.2" fill="#6366f1" fill-opacity="0.22"/>
+  <!-- Circuit trace accents -->
+  <polyline points="30,68 75,68 75,136 130,136" fill="none" stroke="#6366f1" stroke-width="0.6" stroke-opacity="0.14"/>
+  <circle cx="75"  cy="68"  r="1.4" fill="#6366f1" fill-opacity="0.22"/>
+  <circle cx="75"  cy="136" r="1.4" fill="#6366f1" fill-opacity="0.18"/>
+  <circle cx="130" cy="136" r="1.4" fill="#6366f1" fill-opacity="0.18"/>
+  <polyline points="1170,272 1125,272 1125,204 1070,204" fill="none" stroke="#6366f1" stroke-width="0.6" stroke-opacity="0.14"/>
+  <circle cx="1125" cy="272" r="1.4" fill="#6366f1" fill-opacity="0.22"/>
+  <circle cx="1125" cy="204" r="1.4" fill="#6366f1" fill-opacity="0.18"/>
+  <circle cx="1070" cy="204" r="1.4" fill="#6366f1" fill-opacity="0.18"/>
+
+  <!-- ── Corner brackets ── -->
+  <path d="M 22 22 L 22 13 L 31 13" fill="none" stroke="#6366f1" stroke-width="1.2" stroke-opacity="0.4" stroke-linecap="square" class="bracket"/>
+  <path d="M 1178 22 L 1178 13 L 1169 13" fill="none" stroke="#6366f1" stroke-width="1.2" stroke-opacity="0.4" stroke-linecap="square" class="bracket"/>
+  <path d="M 22 318 L 22 327 L 31 327" fill="none" stroke="#6366f1" stroke-width="1.2" stroke-opacity="0.4" stroke-linecap="square" class="bracket"/>
+  <path d="M 1178 318 L 1178 327 L 1169 327" fill="none" stroke="#6366f1" stroke-width="1.2" stroke-opacity="0.4" stroke-linecap="square" class="bracket"/>
+
+  <!-- ── Separator lines ── -->
+  <line x1="270" y1="46" x2="270" y2="294" stroke="#6366f1" stroke-width="0.9" stroke-opacity="0.22" class="sep"/>
+  <line x1="930" y1="46" x2="930" y2="294" stroke="#6366f1" stroke-width="0.9" stroke-opacity="0.22" class="sep"/>
+
+  <!-- ══════════════════════════════
+       LEFT SIDEBAR — SYSTEM
+       Column x=40, rows spaced 28px
+       Label  y=56
+       Row 1  y=90
+       Row 2  y=118
+       Row 3  y=146
+       Row 4  y=174
+       Row 5  y=202
+  ══════════════════════════════ -->
+
+  <!-- Label: SYSTEM -->
+  <text x="40" y="56" class="mono s0"
+    fill="#6366f1" fill-opacity="0.55"
+    font-size="14" letter-spacing="3" font-weight="700">SYSTEM</text>
+
+  <!-- › SYS.ONLINE -->
+  <text x="40" y="90" class="mono s1" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">SYS</tspan><tspan fill="#374151">.</tspan><tspan fill="#d1fae5" fill-opacity="0.9" font-weight="600">ONLINE</tspan>
+  </text>
+
+  <!-- › VAULT.LOADED -->
+  <text x="40" y="118" class="mono s2" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">VAULT</tspan><tspan fill="#374151">.</tspan><tspan fill="#d1fae5" fill-opacity="0.9" font-weight="600">LOADED</tspan>
+  </text>
+
+  <!-- › AGENTS: 10 -->
+  <text x="40" y="146" class="mono s3" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">AGENTS:</tspan>
+    <tspan dx="5" fill="#f59e0b" fill-opacity="0.95" font-size="20" font-weight="700">10</tspan>
+  </text>
+
+  <!-- › SKILLS: 138 -->
+  <text x="40" y="174" class="mono s4" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">SKILLS:</tspan>
+    <tspan dx="5" fill="#f59e0b" fill-opacity="0.95" font-size="20" font-weight="700">138</tspan>
+  </text>
+
+  <!-- › HOOKS: ACTIVE -->
+  <text x="40" y="202" class="mono s5" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">HOOKS:</tspan>
+    <tspan dx="5" fill="#d1fae5" fill-opacity="0.9" font-weight="600">ACTIVE</tspan>
+  </text>
+
+  <!-- ══════════════════════════════
+       RIGHT SIDEBAR — RUNTIME
+       Column x=940, same row heights
+  ══════════════════════════════ -->
+
+  <!-- Label: RUNTIME -->
+  <text x="940" y="56" class="mono s0"
+    fill="#6366f1" fill-opacity="0.55"
+    font-size="14" letter-spacing="3" font-weight="700">RUNTIME</text>
+
+  <!-- › OPUS.PRIMARY -->
+  <text x="940" y="90" class="mono r1" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">OPUS</tspan><tspan fill="#374151">.</tspan><tspan fill="#d1fae5" fill-opacity="0.9" font-weight="600">PRIMARY</tspan>
+  </text>
+
+  <!-- › MEMORY.LINKED -->
+  <text x="940" y="118" class="mono r2" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">MEMORY</tspan><tspan fill="#374151">.</tspan><tspan fill="#d1fae5" fill-opacity="0.9" font-weight="600">LINKED</tspan>
+  </text>
+
+  <!-- › LEARNING: ON -->
+  <text x="940" y="146" class="mono r3" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">LEARNING:</tspan>
+    <tspan dx="5" fill="#10b981" fill-opacity="0.95" font-weight="700">ON</tspan>
+  </text>
+
+  <!-- › KERNEL: 15 -->
+  <text x="940" y="174" class="mono r4" fill="#6b7280" font-size="18" letter-spacing="0.5">
+    <tspan fill="#10b981" fill-opacity="0.65">›</tspan>
+    <tspan dx="7">KERNEL:</tspan>
+    <tspan dx="5" fill="#f59e0b" fill-opacity="0.95" font-size="20" font-weight="700">15</tspan>
+  </text>
+
+  <!-- ══════════════════════════════
+       CENTER COLUMN
+       x=600 text-anchor="middle"
+
+       OPERATIONAL indicator — bottom-left at y=308
+       AIGENT-OS wordmark   y=176
+       underline        y=188
+       AI OPER SYSTEM   y=208
+  ══════════════════════════════ -->
+
+  <!-- OPERATIONAL indicator (bottom-left corner) -->
+  <g class="s0" transform="translate(40, 308)">
+    <!-- Expanding ring -->
+    <circle cx="0" cy="0" r="5" fill="none" stroke="#10b981" stroke-width="1.2" stroke-opacity="0.5" class="pulse-ring"/>
+    <!-- Solid dot -->
+    <circle cx="0" cy="0" r="5" fill="#10b981" class="pulse-dot"/>
+    <!-- Label -->
+    <text x="16" y="5"
+      class="mono"
+      fill="#10b981" fill-opacity="0.88"
+      font-size="15" letter-spacing="3" font-weight="700"
+      text-anchor="start">OPERATIONAL</text>
+  </g>
+
+  <!-- AIGENT-OS wordmark -->
+  <text
+    x="600" y="176"
+    text-anchor="middle"
+    class="sans wordmark s0"
+    fill="#ecfdf5"
+    fill-opacity="0.96"
+    font-size="62"
+    font-weight="700"
+    letter-spacing="12"
+    filter="url(#glow-emerald)"
+  >AIGENT-OS</text>
+
+  <!-- Thin accent line under wordmark -->
+  <line x1="390" y1="190" x2="810" y2="190" stroke="#10b981" stroke-width="0.7" stroke-opacity="0.28" class="sep"/>
+
+  <!-- AI OPERATING SYSTEM -->
+  <text
+    x="600" y="214"
+    text-anchor="middle"
+    class="mono s0"
+    fill="#6b7280"
+    font-size="18"
+    letter-spacing="6"
+    font-weight="400"
+  >AI OPERATING SYSTEM</text>
+
+  <!-- ══════════════════════════════
+       BOTTOM TAGLINE
+       y=300 — well inside 340 boundary
+  ══════════════════════════════ -->
+  <text
+    x="600" y="300"
+    text-anchor="middle"
+    class="mono tag"
+    fill="#4b5563"
+    font-size="16"
+    letter-spacing="2.5"
+  >open source · zero deps · markdown · self-learning</text>
+
+  <!-- ── Scanning line (clipped) ── -->
+  <g clip-path="url(#banner-clip)">
+    <g class="scan-line">
+      <rect x="-80" y="0" width="100" height="340" fill="url(#scan-grad)" opacity="1"/>
+      <line x1="18" y1="0" x2="18" y2="340"
+        stroke="#10b981" stroke-width="0.9" stroke-opacity="0.38"
+        filter="url(#glow-scan)"/>
+    </g>
+  </g>
+
+</svg>
