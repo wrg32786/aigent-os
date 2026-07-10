@@ -51,11 +51,16 @@ TARGET="$WORK/target with spaces"
   cd "$FIXTURE"
   bash install.sh --no-deps --target "$TARGET" >/dev/null
 )
+# install.sh writes the canonicalized (pwd -P) form of TARGET into settings.json,
+# not the raw mktemp string -- on Windows Git Bash /tmp aliases the user temp dir,
+# and on macOS /tmp symlinks /private/tmp, so the two forms differ there. Compare
+# against the same canonical form the installer itself writes.
+TARGET_CANON="$(cd "$TARGET" && pwd -P)"
 test -f "$TARGET/system/00_identity.md"
 test -d "$TARGET/memory"
 test -d "$TARGET/evals"
 json_valid "$TARGET/.claude/settings.json"
-grep -F "$TARGET" "$TARGET/.claude/settings.json" >/dev/null
+grep -F "$TARGET_CANON" "$TARGET/.claude/settings.json" >/dev/null
 
 # Reruns refresh one managed block rather than appending duplicates.
 (
@@ -75,9 +80,10 @@ JSON
   cd "$FIXTURE"
   bash install.sh --target "$MERGE_TARGET" --no-deps >/dev/null
 )
+MERGE_TARGET_CANON="$(cd "$MERGE_TARGET" && pwd -P)"
 json_valid "$MERGE_TARGET/.claude/settings.json"
 grep -F '"CUSTOM": "keep"' "$MERGE_TARGET/.claude/settings.json" >/dev/null
-grep -F "$MERGE_TARGET" "$MERGE_TARGET/.claude/settings.json" >/dev/null
+grep -F "$MERGE_TARGET_CANON" "$MERGE_TARGET/.claude/settings.json" >/dev/null
 
 # Invalid settings remain untouched and receive a durable repair candidate.
 INVALID_TARGET="$WORK/invalid-target"
