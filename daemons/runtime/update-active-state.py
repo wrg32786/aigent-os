@@ -91,6 +91,20 @@ def resolve_vault_path() -> Path:
     return home / "vault"
 
 
+def resolve_framework_memory(vault: Path) -> Path:
+    """Locate framework-owned indexes separately from operator vault memory."""
+    root_raw = os.environ.get("AIGENT_ROOT")
+    candidates = []
+    if root_raw:
+        candidates.append(_native_path(root_raw) / "memory")
+    candidates.append(vault.parent / "memory")
+    candidates.append(vault / "memory")
+    for candidate in _unique_paths(candidates):
+        if (candidate / "SKILL_GAPS.md").exists() or (candidate / "SKILL_LEDGER.md").exists():
+            return candidate
+    return candidates[0]
+
+
 def read_json(path: Path) -> dict[str, Any] | None:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -273,7 +287,8 @@ def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, A
             pass
 
     pending_decisions = get_pending_decisions(vault, today)
-    skill_gaps = get_open_skill_gaps(vault / "memory" / "SKILL_GAPS.md")
+    framework_memory = resolve_framework_memory(vault)
+    skill_gaps = get_open_skill_gaps(framework_memory / "SKILL_GAPS.md")
     blocked_items = get_blocked_items(vault / "memory" / "DELEGATION_TRACKER.md")
     memory_candidates = count_memory_candidates(vault)
 
