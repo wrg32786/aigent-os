@@ -1,51 +1,111 @@
-// Tool activity tracker hook for Claude Code. Invoked via PostToolUse (auto-capture.sh).
-// Reads JSON from stdin (not argv) to avoid Windows Defender ClickFix.MTB heuristic:
-// node.exe <script> <large-JSON-argv> matches attacker payload pattern; stdin does not.
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => { raw += chunk; });
-process.stdin.on('end', () => {
-  try {
-    const d = JSON.parse(raw || '{}');
-    const tool = d.tool_name || '';
-    const input = d.tool_input || {};
-    const now = new Date();
-    const TIME = now.toTimeString().slice(0,8);
+'use strict';
 
-    // Skip read-only tools — only capture actions
-    const SKIP = ['Read','Grep','Glob','LS','WebFetch','WebSearch','ToolSearch','TaskGet','TaskList','NotebookRead','ListMcpResourcesTool','ReadMcpResourceTool'];
-    if (SKIP.includes(tool)) process.exit(0);
+// Privacy-preserving tool activity tracker for Claude Code hooks.
+// Records action metadata only. It never persists file contents, raw shell
+// commands, MCP queries, channel IDs, or arbitrary fallback input.
 
-    // Extract brief description based on tool type
-    let desc = '';
-    if (tool === 'Edit' || tool === 'Write') {
-      const fp = input.file_path || '';
-      // Shorten path: strip vault prefix (forward or backslash)
-      const vaultRoot = process.env.AIGENT_ROOT || '.';
-      desc = fp.replace(new RegExp('^' + vaultRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[/\\\\]?'), '').replace(/\\/g, '/');
-    } else if (tool === 'Bash') {
-      // First 80 chars of command
-      desc = (input.command || '').substring(0, 80).replace(/\n/g, ' ');
-    } else if (tool === 'Agent') {
-      desc = input.description || (input.prompt || '').substring(0, 60);
-    } else if (tool.startsWith('mcp__')) {
-      // MCP tool — extract the meaningful part
-      const parts = tool.split('__');
-      const server = parts[1] || '';
-      const action = parts[2] || '';
-      desc = server + '/' + action;
-      // Add key param if available
-      if (input.query) desc += ': ' + String(input.query).substring(0, 40);
-      else if (input.channel_id) desc += ' ch:' + input.channel_id;
-    } else if (tool === 'TaskCreate' || tool === 'TaskUpdate') {
-      desc = input.subject || input.taskId || '';
-    } else if (tool === 'Skill') {
-      desc = input.skill || '';
-    } else {
-      // Generic fallback — tool name only
-      desc = JSON.stringify(input).substring(0, 60);
+const SECRET_PATTERNS = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
+  /\bBasic\s+[A-Za-z0-9+/=]+/gi,
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\s*[:=]\s*["']?[^\s"']+/gi,
+  /\b(?:sk|pk|ghp|github_pat|xox[baprs]|AKIA)[-_A-Za-z0-9]{12,}\b/g,
+  /([a-z][a-z0-9+.-]*:\/\/[^\s:/]+:)[^@\s]+@/gi,
+];
+
+function redact(value) {
+  let text = String(value ?? '');
+  for (const pattern of SECRET_PATTERNS) {
+    text = text.replace(pattern, (match, prefix) => prefix ? `${prefix}[REDACTED]@` : '[REDACTED]');
+  }
+  return text;
+}
+
+function compact(value, limit = 160) {
+  return redact(value).replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function classifyBash(command) {
+  const normalized = String(command ?? '').trim().toLowerCase();
+  if (!normalized) return 'shell command';
+  if (/^(git|gh)\b/.test(normalized)) return 'version-control command';
+  if (/^(npm|pnpm|yarn|bun)\b/.test(normalized)) return 'package/build command';
+  if (/^(pytest|python\s+-m\s+pytest|npm\s+test|pnpm\s+test|yarn\s+test|node\s+--test|go\s+test|cargo\s+test|make\s+test)\b/.test(normalized)) return 'test command';
+  if (/^(curl|wget|http|https)\b/.test(normalized)) return 'network command';
+  if (/^(cp|mv|rm|mkdir|rmdir|touch|chmod|chown|ln|rsync)\b/.test(normalized)) return 'filesystem command';
+  if (/^(docker|podman|kubectl|helm|terraform|ansible)\b/.test(normalized)) return 'infrastructure command';
+  return 'shell command';
+}
+
+function relativePath(filePath, root) {
+  const fp = String(filePath ?? '').replace(/\\/g, '/');
+  const normalizedRoot = String(root ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+  if (!normalizedRoot) return compact(fp);
+  return compact(fp.startsWith(`${normalizedRoot}/`) ? fp.slice(normalizedRoot.length + 1) : fp);
+}
+
+function describeTool(tool, input, env = process.env) {
+  switch (tool) {
+    case 'Edit':
+    case 'Write':
+      return relativePath(input.file_path, env.AIGENT_ROOT || '.');
+    case 'Bash':
+      return classifyBash(input.command);
+    case 'Agent':
+      return compact(input.description || 'agent dispatch');
+    case 'TaskCreate':
+    case 'TaskUpdate':
+      return compact(input.subject || input.taskId || 'task update');
+    case 'Skill':
+      return compact(input.skill || 'skill invocation');
+    default:
+      if (tool.startsWith('mcp__')) {
+        const parts = tool.split('__');
+        return compact(`${parts[1] || 'mcp'}/${parts[2] || 'tool'}`);
+      }
+      return '';
+  }
+}
+
+function formatCapture(event, env = process.env, now = new Date()) {
+  const tool = typeof event.tool_name === 'string' ? event.tool_name : '';
+  const input = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
+  if (!tool) return '';
+
+  const readOnly = new Set([
+    'Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch',
+    'TaskGet', 'TaskList', 'NotebookRead', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
+  ]);
+  if (readOnly.has(tool)) return '';
+
+  const description = describeTool(tool, input, env);
+  if (!description) return '';
+  const time = now.toTimeString().slice(0, 8);
+  return `- ${time} | ${compact(tool, 80)} | ${description}`;
+}
+
+function main() {
+  let raw = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { raw += chunk; });
+  process.stdin.on('end', () => {
+    try {
+      const event = JSON.parse(raw || '{}');
+      const capture = formatCapture(event);
+      if (capture) process.stdout.write(`${capture}\n`);
+    } catch {
+      process.exitCode = 0;
     }
+  });
+}
 
-    if (desc) console.log('- ' + TIME + ' | ' + tool + ' | ' + desc);
-  } catch(e) { process.exit(0); }
-});
+if (require.main === module) main();
+
+module.exports = {
+  classifyBash,
+  compact,
+  describeTool,
+  formatCapture,
+  redact,
+};
