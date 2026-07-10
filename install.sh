@@ -169,6 +169,11 @@ copy_missing_tree() {
   local destination="$2"
   [[ -d "$source" ]] || return 0
   mkdir -p "$destination"
+  # Guard against source and destination canonicalizing to the same directory
+  # (e.g. a macOS /var -> /private/var symlink, or a Windows 8.3 short-name
+  # alias resolving to the same path as the long form). cp -R onto oneself
+  # fails hard on BSD and Windows cp, killing the script under set -e.
+  [[ "$(cd "$source" && pwd -P)" != "$(cd "$destination" && pwd -P)" ]] || return 0
   cp -R -n "$source/." "$destination/"
 }
 
