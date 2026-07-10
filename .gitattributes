@@ -1,0 +1,5 @@
+# Force LF everywhere. This repo ships bash scripts that run on macOS, Linux,
+# and Windows (Git Bash). Without this, a Windows checkout with the common
+# core.autocrlf=true default silently converts install.sh and its tests to
+# CRLF, which is a well-known source of heredoc/parsing breakage in bash.
+* text=auto eol=lf

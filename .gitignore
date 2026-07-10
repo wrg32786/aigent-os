@@ -1,9 +1,15 @@
 node_modules/
-vault/memory/embeddings.json
 .obsidian/
 *.log
 .DS_Store
 Thumbs.db
-vault/memory/HEAT_INDEX.json
 STRIP-REPORT.md
 *.tmp
+
+# aigent-os:generated-state:start
+.aigent/
+vault/memory/embeddings.json
+vault/memory/HEAT_INDEX.json
+memory/.daemon-errors.log
+.claude/settings.aigent.json
+# aigent-os:generated-state:end

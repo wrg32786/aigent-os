@@ -6,9 +6,12 @@ on:
   pull_request:
     branches: ["**"]
 
+permissions:
+  contents: read
+
 jobs:
   validate:
-    name: Validate — shell syntax, JSON, doctor
+    name: Validate source and behavior
     runs-on: ubuntu-latest
 
     steps:
@@ -16,50 +19,52 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Shell syntax check
+        shell: bash
         run: |
-          FAIL=0
+          set -euo pipefail
+          fail=0
           while IFS= read -r -d '' script; do
-            if ! bash -n "$script" 2>&1; then
+            if ! bash -n "$script"; then
               echo "SYNTAX ERROR: $script"
-              FAIL=1
+              fail=1
             fi
-          done < <(find . -name "*.sh" -not -path "*/node_modules/*" -print0)
-          if [ "$FAIL" -ne 0 ]; then
-            echo "Shell syntax check failed."
-            exit 1
-          fi
-          echo "All shell scripts pass syntax check."
+          done < <(find . -name '*.sh' -not -path '*/node_modules/*' -print0)
+          test "$fail" -eq 0
 
       - name: JSON syntax check
+        shell: bash
         run: |
-          FAIL=0
-          while IFS= read -r -d '' jfile; do
-            if ! python3 -m json.tool "$jfile" > /dev/null 2>&1; then
-              echo "JSON PARSE ERROR: $jfile"
-              FAIL=1
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' file; do
+            if ! python3 -m json.tool "$file" >/dev/null; then
+              echo "JSON PARSE ERROR: $file"
+              fail=1
             fi
-          done < <(find . -name "*.json" -not -path "*/node_modules/*" -print0)
-          if [ "$FAIL" -ne 0 ]; then
-            echo "JSON syntax check failed."
-            exit 1
-          fi
-          echo "All JSON files parse cleanly."
+          done < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
+          test "$fail" -eq 0
 
-      - name: Make scripts executable
-        run: chmod +x scripts/doctor.sh hooks/*.sh daemons/*.sh || true
+      - name: Node hook tests
+        run: node --test tests/tool-tracker.test.cjs
 
-      - name: Fresh install smoke test
-        run: |
-          TMP="$(mktemp -d)"
-          # Install from this checkout (AIGENT_SRC) instead of cloning over the
-          # network — the repo is private, so an unauthenticated CI clone fails.
-          AIGENT_SRC="$GITHUB_WORKSPACE" bash install.sh "$TMP" --no-deps
-          test -f "$TMP/CLAUDE.md"
-          test -f "$TMP/system/00_identity.md"
-          test -d "$TMP/vault/memory"
-          test -d "$TMP/vault/daily"
-          test -f "$TMP/.claude/settings.json"
-          test -f "$TMP/.claude/skill-index.json"
-          test -d "$TMP/.claude/skills"
-          find "$TMP/.claude/skills" -name SKILL.md | grep -q .
-          bash "$TMP/scripts/doctor.sh" "$TMP"
+      - name: Python runtime tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Caddy router tests
+        run: bash tests/test-caddy.sh
+
+  installer:
+    name: Installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Installer regression suite
+        shell: bash
+        run: bash tests/test-installer.sh

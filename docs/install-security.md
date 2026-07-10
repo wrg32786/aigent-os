@@ -1,83 +1,139 @@
 # Install Path Security
 
-The install script (`bash install.sh`) runs locally from the folder you downloaded. You are not fetching code from the internet at install time — this document explains the trust model, what `install.sh` actually does, and how to verify the script before running it.
+`install.sh` is a local installer. It activates the downloaded checkout in place or copies the framework into a target selected by the user. This document describes the current behavior, including file mutations, network access, trust boundaries, and rollback paths.
 
-## What `install.sh` does
-
-In one sentence: **copies a curated set of files from the unzipped folder into your current directory, asks before overwriting anything, and creates no symlinks.**
-
-The full sequence:
-
-1. Detects whether you're inside a git repo, a project directory, or your home folder
-2. Asks where to install (defaults to current working directory)
-3. Confirms before overwriting any existing file
-4. Copies `system/`, `vault/templates/`, `skills/`, `hooks/`, `daemons/`, `CLAUDE.md` into the destination; creates `.claude/` with `settings.json` (AIGENT_ROOT substituted), `skill-index.json`, `rules/`, and `skills/` (runtime slash commands)
-5. Creates `vault/projects/`, `vault/people/`, `vault/concepts/`, `vault/memory/`, `vault/daily/` if they don't exist
-6. Initializes a `.gitignore` if there isn't one
-7. Prints a "you're done" message with the next-step instruction
-
-It does **not**:
-- Send any data anywhere
-- Modify files outside the install directory
-- Modify shell rc files or PATH
-- Touch your existing git config
-- Require sudo
-
-One optional step runs `npm install --silent` inside `daemons/semantic-search/` if `package.json` is present there (installs the local embedding model for semantic search — no network calls at query time). To skip this entirely, pass `--no-deps`:
-
-```bash
-bash install.sh /your/target/dir --no-deps
-```
-
-## What you're trusting
-
-Running `bash install.sh` from the downloaded folder trusts:
-
-1. **The ZIP you downloaded** — that it matches what was packaged in the repository
-2. **Your download channel** — GitHub (or whatever mirror you used) delivers the file over HTTPS
-
-That's it. There is no remote fetch at install time. The script copies files from the folder it lives in.
-
-## How to verify before running
-
-### Option A — read the script first
+## Inspect before running
 
 ```bash
 less install.sh
+bash install.sh --help
+bash install.sh --target /path/to/project --dry-run
 ```
 
-The script is ~3KB and entirely shell. You can read it end-to-end in 2 minutes. Look for:
-- Any URL it fetches
-- Any path it writes outside `$INSTALL_DIR`
-- Any `eval`, `exec`, `source` of remote content
-- Any `sudo` or privilege escalation
+The dry run reports the source, target, mode, copied directories, configuration changes, and whether optional dependencies would be installed. It does not create the target directory or modify files.
 
-If anything in the script surprises you, don't run it.
+## Files and directories written
 
-### Option B — verify the ZIP you downloaded
+The installer writes only inside the resolved target directory.
 
-If you want to confirm the file you received hasn't been tampered with, compute its checksum and compare to the value published in the release notes or repository:
+For an external target it may:
+
+1. Copy missing files from the local checkout's `system/`, `vault/`, `skills/`, `hooks/`, `daemons/`, `scripts/`, `docs/`, `memory/`, and `evals/` directories.
+2. Create or refresh a marked aigent-OS block in `CLAUDE.md`.
+3. Create `.claude/rules/`, `.claude/skills/`, and `.claude/agents/`.
+4. Create or merge `.claude/settings.json`.
+5. Create vault runtime directories.
+6. Create `.aigent/state.json` and `.aigent/backups/`.
+7. Refresh a marked generated-state block in `.gitignore`.
+8. Optionally run npm inside `daemons/semantic-search/`.
+
+The installer does not:
+
+- Use `sudo`.
+- Modify shell startup files, `PATH`, global Git configuration, or files outside the target.
+- Fetch and execute an installer script from a remote URL.
+- Replace same-named files inside copied framework trees.
+- Replace an invalid existing `.claude/settings.json`.
+
+## Existing-file behavior
+
+### Framework trees
+
+Files copied from framework directories use no-clobber behavior. Existing destination files remain untouched. This protects user customizations but also means rerunning the installer is not a blind upgrade mechanism for modified framework files.
+
+### CLAUDE.md
+
+External installations use these markers:
+
+```text
+<!-- aigent-os:start -->
+<!-- aigent-os:end -->
+```
+
+On rerun, only the marked block is replaced. The previous `CLAUDE.md` is copied into `.aigent/backups/` first. Older installations that contain an unmarked appended copy cannot be safely identified automatically and may require one manual cleanup.
+
+### settings.json
+
+A valid existing `.claude/settings.json` is backed up and deep-merged. Existing user values are preserved except the managed `AIGENT_ROOT` and `AIGENT_VAULT` entries, which are refreshed to the target path. Hook arrays are extended without adding byte-identical duplicates.
+
+If the existing file is invalid JSON, it is left untouched and the rendered aigent settings are saved as `.claude/settings.aigent.json`.
+
+### .gitignore
+
+Only the marked aigent generated-state block is refreshed. Existing ignore rules remain.
+
+## Network behavior
+
+The core copy and configuration steps use local files only.
+
+Unless `--no-deps` is supplied, the installer may run:
 
 ```bash
-# macOS
-shasum -a 256 aigent-os.zip
-
-# Linux
-sha256sum aigent-os.zip
-
-# Windows (PowerShell)
-Get-FileHash aigent-os.zip -Algorithm SHA256
+npm ci --silent
 ```
 
-Compare the output to the published checksum. A match means you have exactly what was packaged.
+or:
 
-## Reporting an install-path vulnerability
+```bash
+npm install --silent
+```
 
-Any of these counts:
+inside `daemons/semantic-search/`. npm may contact configured registries and execute package lifecycle behavior according to the dependency lock and npm configuration. Review `package.json` and the lock file before enabling this step in a high-trust environment.
 
-- A path traversal issue in `install.sh` that writes outside `$INSTALL_DIR`
-- Behavior that fetches URLs not under the user's control
-- Silent overwrite of files without confirmation
-- Embedded credentials or telemetry
+Skip it with:
 
-See [`SECURITY.md`](../SECURITY.md) for how to report privately.
+```bash
+bash install.sh --no-deps
+```
+
+## Trust boundaries
+
+Running the installer trusts:
+
+1. The local checkout and its Git history.
+2. The channel used to obtain that checkout.
+3. The shell, Python, Node.js, and npm executables selected through the current `PATH`.
+4. npm dependencies when optional installation is enabled.
+
+After installation, Claude Code hooks run with the user's operating-system permissions. Review `.claude/settings.json` and every command hook before using the system with sensitive files.
+
+## Verify the source
+
+Prefer a tagged release or pinned commit:
+
+```bash
+git rev-parse HEAD
+git status --short
+```
+
+When release checksums are published, verify the downloaded archive with the platform's SHA-256 tool before extraction. Tagged releases are not a substitute for signed provenance; consult `SECURITY.md` for the current signing status.
+
+Search the installer for unexpected capabilities:
+
+```bash
+grep -nE 'curl|wget|sudo|eval|exec|source |npm |pip |ssh |scp ' install.sh
+```
+
+Expected results should correspond only to documented optional dependency handling or explanatory text.
+
+## Sensitive data
+
+The installer does not ask for or transmit credentials. Hook activity capture stores metadata only and deliberately omits raw Bash commands, MCP queries, arbitrary tool input, and file contents. The tracker also redacts common credential formats before writing.
+
+This is defense in depth, not a guarantee that every secret format is recognizable. Keep secrets out of command lines when possible, restrict vault permissions, use disk encryption where appropriate, and review generated daily notes before sharing them.
+
+## Failure and rollback
+
+Temporary installer files are removed through an exit trap. Backups of managed configuration are kept under `.aigent/backups/`.
+
+To inspect a failed installation:
+
+```bash
+bash scripts/doctor.sh /path/to/install
+```
+
+Do not delete backups until the installation and hooks have been exercised in a fresh Claude Code session.
+
+## Reporting a vulnerability
+
+Report installer path traversal, command injection, secret logging, unsafe overwrite, dependency confusion, or writes outside the target through the private process in [`../SECURITY.md`](../SECURITY.md). Include the tested commit, operating system, exact command, and minimal reproduction.

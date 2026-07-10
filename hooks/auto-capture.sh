@@ -1,31 +1,28 @@
-#!/bin/bash
-# Hook: PostToolUse — auto-capture meaningful tool actions to daily note
-# Reads JSON from stdin, filters to write/execute actions, appends to daily note
-# Must be FAST — runs on every tool call
+#!/usr/bin/env bash
+# Hook: PostToolUse — capture privacy-safe action metadata in the daily note.
+# hooks/tool-tracker.js intentionally omits raw commands, content, and queries.
 
-VAULT="${AIGENT_ROOT:-.}"
-TODAY=$(date +%Y-%m-%d)
-DAILY="$VAULT/vault/daily/$TODAY.md"
+set -u
+umask 077
 
-# Read stdin (Claude Code sends JSON)
-INPUT=$(cat)
-
-# Parse and filter via saved script — skip read-only tools, emit one-line capture
-# Pipe via stdin (not argv) to avoid Windows Defender ClickFix.MTB heuristic:
-# node.exe <script> <large-JSON-argv> matches attacker payload pattern; stdin does not.
+ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TODAY="$(date +%Y-%m-%d)"
+DAILY="$ROOT/vault/daily/$TODAY.md"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CAPTURE=$(printf '%s' "$INPUT" | node "$SCRIPT_DIR/tool-tracker.js" 2>/dev/null)
+TRACKER="$SCRIPT_DIR/tool-tracker.js"
 
-# If nothing to capture, exit silently
-[ -z "$CAPTURE" ] && exit 0
+INPUT="$(cat 2>/dev/null)"
+[[ -n "$INPUT" ]] || exit 0
+[[ -f "$TRACKER" ]] || exit 0
+command -v node >/dev/null 2>&1 || exit 0
 
-# Ensure vault/daily/ directory exists
+CAPTURE="$(printf '%s' "$INPUT" | node "$TRACKER" 2>/dev/null)"
+[[ -n "$CAPTURE" ]] || exit 0
+
 mkdir -p "$(dirname "$DAILY")"
 
-# Append to daily note — create Session Captures section if needed
-if [ ! -f "$DAILY" ]; then
-  # Create minimal daily note
-  cat > "$DAILY" << EOF
+if [[ ! -f "$DAILY" ]]; then
+  cat > "$DAILY" <<EOF_NOTE
 ---
 title: "$TODAY"
 tags:
@@ -37,14 +34,9 @@ date: $TODAY
 
 ## Session Captures
 $CAPTURE
-EOF
+EOF_NOTE
+elif grep -q '^## Session Captures$' "$DAILY" 2>/dev/null; then
+  printf '%s\n' "$CAPTURE" >> "$DAILY"
 else
-  # Check if Session Captures section exists
-  if grep -q "## Session Captures" "$DAILY" 2>/dev/null; then
-    # Append under existing section (before next ## or end of file)
-    echo "$CAPTURE" >> "$DAILY"
-  else
-    # Add section at end of file
-    printf "\n## Session Captures\n%s\n" "$CAPTURE" >> "$DAILY"
-  fi
+  printf '\n## Session Captures\n%s\n' "$CAPTURE" >> "$DAILY"
 fi
