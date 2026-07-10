@@ -24,12 +24,22 @@
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/suggest-compact.sh\"",
             "timeout": 1000
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|Bash|Agent|TaskCreate|TaskUpdate|Skill|mcp__.*",
+        "hooks": [
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/auto-capture.sh\"",
             "timeout": 2000
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Read|WebFetch|WebSearch|Bash|Grep",
+        "hooks": [
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/security-scan.sh\"",
@@ -48,7 +58,7 @@
         ]
       }
     ],
-    "Stop": [
+    "SessionEnd": [
       {
         "matcher": "",
         "hooks": [
@@ -56,11 +66,6 @@
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/session-capture-summary.sh\"",
             "timeout": 3000
-          },
-          {
-            "type": "command",
-            "command": "bash \"__AIGENT_ROOT__/hooks/session-end-check.sh\"",
-            "timeout": 2000
           },
           {
             "type": "command",
