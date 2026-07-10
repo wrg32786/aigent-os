@@ -2,166 +2,167 @@
 
 ## Prerequisites
 
-1. **Claude Code** — CLI, desktop app, or IDE extension. [Get it here](https://claude.ai/code)
-2. **Node.js 18+** — Optional. Required for semantic search and hook automation. The installer detects Node and installs these automatically if present.
-3. **Obsidian** — Optional. Free app for visual vault navigation. [Download](https://obsidian.md/)
+Required:
 
----
+1. **Claude Code** in the CLI, desktop app, or an IDE integration.
+2. **Bash** for installation and hook scripts.
 
-## Install
+Optional:
 
-You already have the aigent-OS folder — you downloaded and unzipped it. Open a terminal in that folder and run:
+- **Node.js 18 or newer** for semantic search and Node-based hooks.
+- **Python 3** for runtime-state computation and selected daemons.
+- **Obsidian** for visual navigation of the vault.
+
+The Markdown kernel and normal vault workflow do not require a database or server.
+
+## Installation modes
+
+The installer supports two explicit modes.
+
+### Activate the downloaded checkout in place
+
+Open a terminal in the downloaded `aigent-os` directory and run:
 
 ```bash
 bash install.sh
 ```
 
-Run from the directory where you work — your existing project root, your home folder, anywhere — or pass a target path as the first argument:
+This leaves the source tree in place and configures `.claude/`, local state, runtime skills, agents, and optional dependencies.
+
+To skip optional dependencies:
+
+```bash
+bash install.sh --no-deps
+```
+
+### Install into another working directory
+
+```bash
+bash install.sh --target /path/to/your/project
+```
+
+A positional target remains supported:
 
 ```bash
 bash install.sh /path/to/your/project
 ```
 
-The installer:
-- Copies `system/`, `vault/`, `skills/`, `hooks/`, `daemons/` into your working directory
-- Creates or appends `CLAUDE.md`
-- Creates `.claude/settings.json` with all paths resolved to your actual location (no manual `AIGENT_ROOT` export needed)
-- Installs semantic search via `npm install` if Node.js is available
-- Copies skills to `.claude/skills/` so Claude Code's slash-command resolver can find them
+Flags may appear before or after the target:
 
-If you already have a `CLAUDE.md`, the installer appends the aigent-OS config block rather than overwriting.
+```bash
+bash install.sh --no-deps --target /path/to/your/project
+bash install.sh /path/to/your/project --no-deps
+```
 
-To skip the Node.js dependency step entirely: `bash install.sh --no-deps`
+Preview the installation without changing anything:
 
----
+```bash
+bash install.sh --target /path/to/your/project --dry-run
+```
+
+Run `bash install.sh --help` for the complete command reference.
+
+## What the installer changes
+
+For an external target, the installer:
+
+- Copies missing files from `system/`, `vault/`, `skills/`, `hooks/`, `daemons/`, `scripts/`, `docs/`, `memory/`, and `evals/` without overwriting existing files in those trees.
+- Creates or refreshes a marked aigent-OS block in `CLAUDE.md` and backs up the previous file under `.aigent/backups/`.
+- Installs runtime skills under `.claude/skills/` and dispatchable agents under `.claude/agents/` without replacing same-named user definitions.
+- Creates or deep-merges `.claude/settings.json`. Existing scalar settings are preserved except the managed aigent-OS root variables, which are refreshed to the current target path.
+- Preserves invalid existing settings and writes the proposed aigent configuration to `.claude/settings.aigent.json` for manual repair.
+- Creates `.aigent/state.json` for machine-readable first-run state.
+- Adds a marked generated-state block to `.gitignore`.
+- Runs `npm ci` or `npm install` inside `daemons/semantic-search/` when Node.js 18 or newer is available, unless `--no-deps` was supplied.
+
+The optional npm step can use the network. The rest of the installer reads from the local checkout and writes only inside the target directory.
+
+Rerunning the installer is safe and idempotent for managed configuration. It refreshes the marked `CLAUDE.md` and `.gitignore` blocks, merges settings, and preserves existing framework and user files. It is deliberately conservative rather than pretending every customized installation can be upgraded by blindly overwriting files.
 
 ## First session
 
-Open Claude Code in the same directory and start a conversation. aigent-OS is live — CLAUDE.md loads automatically.
+Open Claude Code in the installed directory and run:
 
-**Recommended first steps (takes ~10 minutes):**
-
-1. Edit `system/00_identity.md` — fill in the "Your Principal" section with who you are
-2. Edit `system/14_decision_framework.md` — encode how YOU make decisions
-3. Edit `system/12_authority_matrix.md` — set boundaries that match your risk tolerance
-4. Edit `vault/memory/ACTIVE_PRIORITIES.md` — add your current priorities
-
-Then say `/open`. aigent-OS will boot with whatever context exists and walk you through anything missing.
-
----
-
-## Session flow
-
-Every session follows the same loop:
-
-1. **`/open`** — aigent-OS loads vault context, surfaces open threads, active priorities, and last-session state
-2. **Work** — Talk normally. aigent-OS routes tasks, tracks decisions, manages delegation.
-3. **`/close`** — aigent-OS commits memory, writes the daily note, logs decisions, sets up next session pickup
-
-The vault grows with every `/close`. After a week of daily use it becomes genuinely useful. After a month it's indispensable.
-
-**Context management:** Every Claude Code session has a finite context window. Run `/statusline` in Claude Code (once, on your first session) and enable the context usage display -- this adds a live counter so you can see the window filling. When context gets heavy, the aigent-OS rhythm is: run `/close` to bank the session, start a fresh conversation, then `/open` to resume at full context. Claude Code's built-in `/compact` and `/clear` commands exist too, but `/close` then fresh session then `/open` is preferred because it also commits your memory to the vault.
-
----
-
-## Where memory lives
-
+```text
+/start
 ```
+
+`/start` owns first-run detection and onboarding. It records setup progress in `.aigent/state.json`, learns the operator's context, produces a first usable artifact, and marks setup ready only after durable writes succeed.
+
+Use `/setup` later for deeper configuration or to revise identity, priorities, authority boundaries, decision logic, projects, people, or agent definitions.
+
+## Normal session flow
+
+1. **`/open`** loads recent vault context, runtime state, blockers, open threads, and relevant decision or attention drift.
+2. **Work normally.** Skills and hooks route tasks, capture privacy-safe action metadata, and update durable notes when appropriate.
+3. **`/close`** commits the session to vault memory, writes the daily and session-log entries, runs health checks, recomputes runtime state, and stamps `.aigent/last-close` only after required writes succeed.
+
+Run `/statusline` once in Claude Code and enable context usage. When the context window becomes crowded, use `/close`, start a fresh conversation, and run `/open`.
+
+## State layout
+
+### Operator-owned operational memory
+
+```text
 vault/
+  daily/                         Date-stamped session notes
+  projects/                      Project notes
+  people/                        People and role context
+  concepts/                      Durable doctrine and reusable knowledge
+  agents/                        Human-readable agent definitions
   memory/
-    ACTIVE_PRIORITIES.md   — current priority stack
-    DECISION_LOG.md        — append-only decision history
-    DELEGATION_TRACKER.md  — active handoffs
-    SESSION_LOG.md         — rolling 5-session log
-    BUSINESS_CONTEXT.md    — portfolio overview
-    PRODUCT_STATE.md       — build state
-    PEOPLE_AND_ROLES.md    — people + agents
-  concepts/   — standing rules, doctrine, architectural decisions
-  projects/   — one note per project
-  people/     — one note per person
-  daily/      — date-stamped session notes (written by /close)
+    ACTIVE_PRIORITIES.md
+    DECISION_LOG.md
+    DECISION_OUTCOMES.md
+    DELEGATION_TRACKER.md
+    SESSION_LOG.md
+    BODY_STATE.json
+    runtime/                     Computed active state and events
+    facts/                       Temporal fact ledger
+    capsules/                    Resume-ready context capsules
 ```
 
-Every file is plain Obsidian-flavored markdown. You can read, edit, and search it directly. No hidden database, no embeddings required for basic recall.
+### Framework-owned indexes
 
----
+The root `memory/` directory currently contains framework indexes used by Caddy and capability expansion, including `SKILL_LEDGER.md`, `SKILL_GAPS.md`, and `SKILL_CHAINS.md`. These are distinct from the operator's `vault/memory/` state. A future schema migration may consolidate or rename this internal area; until then, code must not treat root `memory/` as the operational vault.
 
-## Vault structure conventions
+### Generated local state
 
-All vault notes use YAML frontmatter:
+`.aigent/` contains installation state, close markers, caches, and backups. It is excluded from version control by default.
 
-```yaml
----
-title: Note Title
-tags: [concept, memory]
-aliases: []
-created: 2026-04-27
----
+## Customization
+
+Start with:
+
+- `system/00_identity.md` for role and operating posture.
+- `system/12_authority_matrix.md` for autonomy and escalation boundaries.
+- `system/14_decision_framework.md` for personal decision logic.
+- `vault/memory/ACTIVE_PRIORITIES.md` for current focus.
+
+Use the setup skills rather than editing every file manually unless direct editing is preferable. Every important state remains readable Markdown or JSON.
+
+## Diagnostics
+
+Run:
+
+```bash
+bash scripts/doctor.sh
 ```
 
-Cross-references use wikilinks: `[[Project Alpha]]`, `[[people/Jane]]`. The link graph IS the knowledge graph — navigable in Obsidian or greppable from the command line.
+To inspect another installation:
 
----
+```bash
+bash scripts/doctor.sh /path/to/install
+```
 
-## Customization guide
+Common checks:
 
-### Essential (do first)
-- `system/00_identity.md` — Who you are, what you need
-- `system/14_decision_framework.md` — Your personal decision logic
-- `system/12_authority_matrix.md` — What the AI can decide alone
+- **Hooks are missing:** inspect `.claude/settings.json`, then restart Claude Code because hook configuration loads at session start.
+- **Settings are invalid:** repair the existing file using `.claude/settings.aigent.json` as the proposed aigent block.
+- **Semantic search is unavailable:** verify Node.js 18 or newer, then run `npm install` in `daemons/semantic-search/` and rebuild the index.
+- **Runtime state appears empty:** run `python3 daemons/runtime/update-active-state.py --print-vault` and confirm it resolves to the project's `vault/` directory.
+- **Setup repeats:** inspect `.aigent/state.json`, `.aigent/first-run-done`, and `memory/about-you.md` for an interrupted first-run write.
 
-### Important (do soon)
-- `system/03_roles_and_scope.md` — Your agent hierarchy
-- `vault/memory/ACTIVE_PRIORITIES.md` — Current priorities
-- Add your people to `vault/people/`
-- Add your projects to `vault/projects/`
+## Security
 
-### Optional (customize over time)
-- `system/04_decision_frameworks.md` — Add or remove evaluation lenses
-- `system/08_financial_thinking.md` — Adjust financial thresholds
-- `vault/templates/` — Modify note templates to match your style
-
----
-
-## Self-improvement loop
-
-When aigent-OS makes a mistake, trigger the learning cycle with one sentence:
-
-> **"Reflect on this mistake. Abstract and generalize the learning. Write it to CLAUDE.md."**
-
-The AI analyzes the failure, extracts the general pattern, and writes a rule. Over time the framework gets smarter — basic mistakes disappear, conversations elevate to higher-level concerns.
-
-**Where rules go:**
-- Operational mistakes → root `CLAUDE.md`
-- Domain knowledge → new concept note in `vault/concepts/`
-- Behavioral patterns → `system/02_operating_standards.md`
-
----
-
-## Skills
-
-Skills are slash commands. Included out of the box:
-
-| Command | What it does |
-|---------|-------------|
-| `/open` | Boot session with full vault context |
-| `/close` | Commit memory, write daily note, set next-session pickup |
-| `/statusline` | Claude Code built-in: run once to enable live context usage display |
-| `/brief` | Generate a structured delegation brief |
-| `/decide` | Run a decision through your decision framework |
-| `/deep-recon` | Extended multi-agent research on complex questions |
-| `/semantic-search` | Vector search across the vault (requires Node) |
-
-Source templates live in `skills/`. Runtime copies live in `.claude/skills/`. See [Advanced Setup](advanced-setup.md) for adding new skills and managing the Caddy index.
-
----
-
-## Troubleshooting
-
-**Hooks not firing:** Run `bash scripts/doctor.sh` — it checks whether `.claude/settings.json` has resolved paths. If `AIGENT_ROOT` literal appears in the file, re-run the installer or manually replace it.
-
-**Semantic search not working:** Run `node daemons/semantic-search/embed-vault.js` to rebuild the index. Requires Node.js 18+.
-
-**Vault feels empty:** Expected. The vault grows with use. Every `/close` adds to the knowledge graph.
-
-**Something broken?** Run `bash scripts/doctor.sh` for a full health check. See [Advanced Setup](advanced-setup.md) for per-component debugging.
+Read [`install-security.md`](install-security.md) before installing into a sensitive project. Hooks run with the user's permissions, and the vault can contain private operational context. Use full-disk encryption when the threat model requires encryption at rest, and never commit `.aigent/` or generated embedding indexes.
