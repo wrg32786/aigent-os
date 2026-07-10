@@ -5,19 +5,19 @@
 // commands, MCP queries, channel IDs, or arbitrary fallback input.
 
 const SECRET_PATTERNS = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
-  /\bBasic\s+[A-Za-z0-9+/=]+/gi,
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
-  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\s*[:=]\s*["']?[^\s"']+/gi,
-  /\b(?:sk|pk|ghp|github_pat|xox[baprs]|AKIA)[-_A-Za-z0-9]{12,}\b/g,
-  /([a-z][a-z0-9+.-]*:\/\/[^\s:/]+:)[^@\s]+@/gi,
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, '[REDACTED]'],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]'],
+  [/\bBasic\s+[A-Za-z0-9+/=]+/gi, '[REDACTED]'],
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]'],
+  [/\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\s*[:=]\s*["']?[^\s"']+/gi, '[REDACTED]'],
+  [/\b(?:sk|pk|ghp|github_pat|xox[baprs]|AKIA)[-_A-Za-z0-9]{12,}\b/g, '[REDACTED]'],
+  [/([a-z][a-z0-9+.-]*:\/\/[^\s:/]+:)[^@\s]+@/gi, '$1[REDACTED]@'],
 ];
 
 function redact(value) {
   let text = String(value ?? '');
-  for (const pattern of SECRET_PATTERNS) {
-    text = text.replace(pattern, (match, prefix) => prefix ? `${prefix}[REDACTED]@` : '[REDACTED]');
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    text = text.replace(pattern, replacement);
   }
   return text;
 }
