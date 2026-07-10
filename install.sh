@@ -306,7 +306,12 @@ const [basePath, addPath, outPath] = process.argv.slice(2);
 const base = JSON.parse(fs.readFileSync(basePath, 'utf8'));
 const addition = JSON.parse(fs.readFileSync(addPath, 'utf8'));
 const managed = new Set(['env.AIGENT_ROOT', 'env.AIGENT_VAULT']);
-const canonical = value => JSON.stringify(value, Object.keys(value || {}).sort());
+const normalize = value => Array.isArray(value)
+  ? value.map(normalize)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]))
+    : value;
+const canonical = value => JSON.stringify(normalize(value));
 function merge(oldValue, newValue, path = []) {
   if (managed.has(path.join('.'))) return newValue;
   if (Array.isArray(oldValue) && Array.isArray(newValue)) {
