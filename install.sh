@@ -82,18 +82,38 @@ TARGET="${TARGET:-$PWD}"
 
 abspath() {
   local path="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$path" <<'PY'
-import os, sys
-print(os.path.abspath(os.path.expanduser(sys.argv[1])))
-PY
-  elif command -v node >/dev/null 2>&1; then
-    node -e 'console.log(require("path").resolve(process.argv[1].replace(/^~/, require("os").homedir())))' "$path"
-  elif [[ "$path" = /* ]]; then
-    printf '%s\n' "$path"
-  else
-    printf '%s/%s\n' "$PWD" "$path"
+  local existing suffix leaf parent resolved
+
+  case "$path" in
+    "~") path="$HOME" ;;
+    "~/"*) path="$HOME/${path#\~/}" ;;
+  esac
+
+  if command -v cygpath >/dev/null 2>&1 && [[ "$path" =~ ^[A-Za-z]:[\\/] ]]; then
+    path="$(cygpath -u "$path")"
   fi
+  [[ "$path" = /* ]] || path="$PWD/$path"
+
+  existing="${path%/}"
+  [[ -n "$existing" ]] || existing="/"
+  suffix=""
+  while [[ ! -e "$existing" ]]; do
+    leaf="${existing##*/}"
+    suffix="/$leaf$suffix"
+    parent="${existing%/*}"
+    [[ -n "$parent" ]] || parent="/"
+    [[ "$parent" != "$existing" ]] || break
+    existing="$parent"
+  done
+
+  if [[ -d "$existing" ]]; then
+    resolved="$(cd "$existing" && pwd -P)"
+  else
+    parent="$(dirname "$existing")"
+    leaf="$(basename "$existing")"
+    resolved="$(cd "$parent" && pwd -P)/$leaf"
+  fi
+  printf '%s%s\n' "${resolved%/}" "$suffix"
 }
 
 SRC="$(abspath "$SRC")"
