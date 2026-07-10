@@ -189,9 +189,9 @@ copy_missing_tree() {
 
   while IFS= read -r -d '' rel; do
     rel="${rel#./}"
-    # cp must run OUTSIDE an AND-OR list: under set -e, failures inside
-    # `[[ ... ]] || cmd` are exempt from errexit, silently swallowing real
-    # copy errors (permissions, disk full). The if-form propagates them.
+    # Explicit if-form rather than `[[ -e ]] || cp`: cp is the final
+    # command in that list so set -e already catches its failure, but the
+    # if-form is unambiguous for readers and matches this file's style.
     if [[ ! -e "$destination/$rel" ]]; then
       cp "$source/$rel" "$destination/$rel"
     fi
@@ -252,7 +252,7 @@ if [[ -f "$RULES_SRC" ]]; then
     # Check existence ourselves rather than relying on cp -n's exit code for
     # a declined overwrite: BSD cp (macOS) exits 1 in that case, GNU cp
     # exits 0, which is exactly the platform split copy_missing_tree() had.
-    # if-form (not `[[ ]] ||`) so a real cp failure still trips set -e.
+    # Explicit if-form for the same reason as copy_missing_tree() above.
     if [[ ! -e "$RULES_DST" ]]; then
       cp "$RULES_SRC" "$RULES_DST"
     fi
