@@ -34,6 +34,29 @@ class RuntimePathTests(unittest.TestCase):
             with patch.dict(os.environ, {"AIGENT_VAULT": str(vault)}, clear=False):
                 self.assertEqual(runtime_state.resolve_vault_path(), vault.resolve())
 
+    def test_framework_skill_gaps_remain_outside_operator_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            (root / "memory").mkdir(parents=True)
+            (root / "memory" / "SKILL_GAPS.md").write_text(
+                "| 2026-01-01 | gap-1 | Missing test capability | open |\n",
+                encoding="utf-8",
+            )
+            (vault / "memory").mkdir(parents=True)
+            (vault / "memory" / "SKILL_GAPS.md").write_text(
+                "| 2026-01-01 | gap-2 | Wrong vault copy | open |\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"AIGENT_ROOT": str(root), "AIGENT_VAULT": str(root)}, clear=False):
+                framework_memory = runtime_state.resolve_framework_memory(vault)
+                self.assertEqual(framework_memory, root / "memory")
+                state, _ = runtime_state.compute_state(
+                    vault,
+                    datetime(2026, 7, 10, tzinfo=timezone.utc),
+                )
+                self.assertEqual(state["skill_gaps"], ["Missing test capability"])
+
     def test_state_is_written_inside_vault(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "vault"
