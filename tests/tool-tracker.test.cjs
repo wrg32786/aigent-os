@@ -16,6 +16,12 @@ test('redacts common credentials', () => {
   assert.equal(output.includes('hunter2'), false);
   assert.equal(output.includes('ghp_abcdefghijklmnopqrstuvwxyz'), false);
   assert.equal(output.includes('abc.def.ghi'), false);
+  assert.doesNotMatch(output, /\d+\[REDACTED\]@/);
+});
+
+test('redacts passwords embedded in URLs without corrupting the prefix', () => {
+  const output = redact('postgres://alice:hunter2@db.example.com/app');
+  assert.equal(output, 'postgres://alice:[REDACTED]@db.example.com/app');
 });
 
 test('classifies bash without retaining the command', () => {
