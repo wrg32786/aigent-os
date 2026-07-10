@@ -221,8 +221,15 @@ else
 fi
 
 mkdir -p "$TARGET/.claude/rules" "$TARGET/.claude/skills" "$TARGET/.claude/agents"
-if [[ -f "$SRC/.claude/rules/post-compact-critical.md" ]]; then
-  cp -n "$SRC/.claude/rules/post-compact-critical.md" "$TARGET/.claude/rules/" || true
+RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
+RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
+if [[ -f "$RULES_SRC" ]]; then
+  # Same-file guard, mirroring the settings.json.template check below: in
+  # in-place mode SRC and TARGET canonicalize to the same directory, so a
+  # blind cp -n here would target itself and fail hard on BSD/Windows cp.
+  if [[ "$(abspath "$RULES_SRC")" != "$(abspath "$RULES_DST")" ]]; then
+    cp -n "$RULES_SRC" "$TARGET/.claude/rules/"
+  fi
 fi
 
 skills_new=0
