@@ -174,7 +174,28 @@ copy_missing_tree() {
   # alias resolving to the same path as the long form). cp -R onto oneself
   # fails hard on BSD and Windows cp, killing the script under set -e.
   [[ "$(cd "$source" && pwd -P)" != "$(cd "$destination" && pwd -P)" ]] || return 0
-  cp -R -n "$source/." "$destination/"
+
+  # Copy only what's missing, file by file, instead of `cp -R -n`. cp's exit
+  # code for a declined no-clobber overwrite is not portable: GNU cp (Linux,
+  # Git-for-Windows) exits 0, BSD cp (macOS) exits 1 -- which kills this
+  # script under set -e the first time a destination file already exists.
+  # -print0 / read -d '' keep this safe for names containing spaces.
+  local rel
+  while IFS= read -r -d '' rel; do
+    rel="${rel#./}"
+    [[ -n "$rel" ]] || continue
+    mkdir -p "$destination/$rel"
+  done < <(cd "$source" && find . -type d -print0)
+
+  while IFS= read -r -d '' rel; do
+    rel="${rel#./}"
+    # cp must run OUTSIDE an AND-OR list: under set -e, failures inside
+    # `[[ ... ]] || cmd` are exempt from errexit, silently swallowing real
+    # copy errors (permissions, disk full). The if-form propagates them.
+    if [[ ! -e "$destination/$rel" ]]; then
+      cp "$source/$rel" "$destination/$rel"
+    fi
+  done < <(cd "$source" && find . -type f -print0)
 }
 
 if [[ "$MODE" == "copy" ]]; then
@@ -226,9 +247,15 @@ RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then
   # Same-file guard, mirroring the settings.json.template check below: in
   # in-place mode SRC and TARGET canonicalize to the same directory, so a
-  # blind cp -n here would target itself and fail hard on BSD/Windows cp.
+  # blind cp here would target itself and fail hard on BSD/Windows cp.
   if [[ "$(abspath "$RULES_SRC")" != "$(abspath "$RULES_DST")" ]]; then
-    cp -n "$RULES_SRC" "$TARGET/.claude/rules/"
+    # Check existence ourselves rather than relying on cp -n's exit code for
+    # a declined overwrite: BSD cp (macOS) exits 1 in that case, GNU cp
+    # exits 0, which is exactly the platform split copy_missing_tree() had.
+    # if-form (not `[[ ]] ||`) so a real cp failure still trips set -e.
+    if [[ ! -e "$RULES_DST" ]]; then
+      cp "$RULES_SRC" "$RULES_DST"
+    fi
   fi
 fi
 
