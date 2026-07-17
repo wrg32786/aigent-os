@@ -3,6 +3,10 @@
     "AIGENT_ROOT": "__AIGENT_ROOT__",
     "AIGENT_VAULT": "__AIGENT_ROOT__"
   },
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"__AIGENT_ROOT__/daemons/statusline-ctx.sh\""
+  },
   "hooks": {
     "SessionStart": [
       {

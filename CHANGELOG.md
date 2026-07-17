@@ -19,6 +19,7 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
   - `daemons/sessionstart-reinject.mjs` — warm-start pointer-table reinject, a new `SessionStart` hook covering every source (startup/resume/clear/compact) in one merged file.
   - `daemons/stop-capsule-writer.mjs` — every-turn rolling capsule delta writer, a new `Stop` hook. Includes a speaker-tag classifier (`OPERATOR`/`RELAY:x`/`PEER:x`/`INJECT:harness`) so injected instructions and cross-session relay text never masquerade as the operator's own objective.
   - `daemons/ctx-refresh-sensor.mjs` — optional context-pressure self-refresh reflex, a new `PreToolUse` hook. Silently inert unless a statusline integration writes `~/.claude/ctx-refresh/<sid>.json`.
+  - `daemons/statusline-ctx.sh` — the statusline integration that writes it: a `statusLine` wrapper (wired in `settings.json.template`) persisting `{"used_percentage": N, "ts": "..."}` per session (atomic tmp+rename, 7-day stale-file pruning), then delegating the visible line to `~/.claude/statusline-command.sh` when present (override: `AIGENT_STATUSLINE_DELEGATE`) or a minimal model + ctx-% fallback. No-op without `jq`. Test: `daemons/tests/statusline-ctx.test.mjs`.
   - `.claude/settings.json.template` — wires the four new hooks above.
   - `skills/context-capsule/SKILL.md`, `skills/resume/SKILL.md` — rewritten to the two-verb contract.
   - `skill-index.json` — added `sk_resume`; `sk_open`/`sk_close` marked `active: false` (deprecated, not removed).
