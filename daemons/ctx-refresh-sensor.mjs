@@ -258,7 +258,7 @@ async function runAutofireWorker(payload) {
     if (!root || typeof sid !== 'string' || sid.length === 0) {
       throw new Error('worker payload lacks root/session id');
     }
-    const [{ runCapsuleVerb }, lifecycle, { readRequest }, { readCursor, cursorEqual },
+    const [{ runCapsuleVerb, capsuleLeftSkeleton }, lifecycle, { readRequest }, { readCursor, cursorEqual },
       { createCycleRecord, readCycleRecord, cycleRecordPath }] =
       await Promise.all([
         import('./capsule-verb.mjs'),
@@ -318,6 +318,32 @@ async function runAutofireWorker(payload) {
       capsulePath = path.isAbsolute(stopState.capsule_path)
         ? stopState.capsule_path
         : path.resolve(root, stopState.capsule_path);
+    }
+    // SKELETON GATE (readiness, before every validity check below): a fresh
+    // autosave capsule still carries the writer skeleton's null-family
+    // waiting_on — the agent's finalize step has not run yet. Handing it to the
+    // verb can only produce a refusal, and that refusal reads like a failure
+    // (the exact known-issue this gate closes: refresh cycles refused against
+    // brand-new capsules until real state lands). Defer QUIETLY instead; a
+    // later poll fires once the capsule has left skeleton state. Never seed a
+    // placeholder — a writer-producible waiting_on would destroy the proof
+    // that the agent's own finalize ran. Read failures fall THROUGH to the
+    // verb: an unreadable capsule is not "still skeleton", it is the verb's
+    // loud refusal to make.
+    let leftSkeleton = true;
+    try {
+      leftSkeleton = capsuleLeftSkeleton(fs.readFileSync(capsulePath, 'utf8'));
+    } catch { /* fall through to the verb's own refusal machinery */ }
+    if (!leftSkeleton) {
+      logAutofire(root, {
+        sid,
+        outcome: 'skipped_skeleton',
+        mode: transcriptPath ? 'cycle' : 'legacy',
+        capsule_source: capsuleSource,
+        capsule_path: capsulePath,
+        reason: 'capsule has not left skeleton state (waiting_on is null-family; finalize has not run) — deferred, not refused',
+      });
+      return;
     }
     const dryRun = process.env.CAPSULE_VERB_AUTOFIRE_DRY_RUN !== '0';
 

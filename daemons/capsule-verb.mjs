@@ -152,6 +152,24 @@ function isUnquotedYamlNull(frontmatter, key) {
   return /^(?:null|~)$/i.test(raw);
 }
 
+// Skeleton-state predicate (the refresh cycle's READINESS gate — distinct from
+// validateCapsuleText's VALIDITY gate). The stop-writer's skeleton is born with
+// `waiting_on: null` and only the agent's own finalize step ever writes a real
+// value there, so a capsule has "left skeleton state" exactly when waiting_on
+// carries a non-empty scalar outside the null family: missing field, empty,
+// unquoted null/Null/NULL/~, and quoted-empty ""/'' are all still-skeleton.
+// A QUOTED "null" stays an intentional string, same as validateCapsuleText —
+// this predicate reuses the identical parsers so gate and verb can never
+// disagree about the same bytes. Never seed a placeholder instead of gating:
+// a writer-producible waiting_on would destroy the proof that finalize ran.
+export function capsuleLeftSkeleton(text) {
+  const frontmatter = frontmatterOf(text);
+  if (frontmatter === null) return false;
+  const value = frontmatterScalar(frontmatter, 'waiting_on');
+  if (typeof value !== 'string' || value.length === 0) return false;
+  return !isUnquotedYamlNull(frontmatter, 'waiting_on');
+}
+
 export function validateCapsuleText(text) {
   const frontmatter = frontmatterOf(text);
   if (frontmatter === null) {

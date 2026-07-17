@@ -469,3 +469,108 @@ test('autofire worker invokes the trusted verb in dry-run mode and logs outcome'
   assert.equal(entries.at(-1).stamped, false);
   assert.equal(JSON.parse(readFileSync(path.join(seat.memory, 'BODY_STATE.json'), 'utf8')).state.last_capsule, undefined);
 });
+
+// ── Option-1 skeleton gate (PR #2 known issue; ruling: gate readiness, never ──
+// ── seed a placeholder — a writer-producible waiting_on would destroy the   ──
+// ── proof that the agent's own finalize ran).                               ──
+
+function skeletonCapsule(id, waitingOnRaw) {
+  // Mirrors stop-capsule-writer's skeleton(): status active, autosave tag,
+  // waiting_on still in the null family — the finalize step has not run.
+  return [
+    '---',
+    'id: ' + id,
+    'parent_capsule_id: null',
+    'status: active',
+    'objective: "Auto-captured working state"',
+    'waiting_on: ' + waitingOnRaw,
+    'resume_trigger: compact',
+    'trigger: stop-delta',
+    'next_valid_action: "Re-ground against live state and continue"',
+    'tags: [capsule, autosave]',
+    '---',
+    '',
+    '> [!info] [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.',
+    '',
+  ].join('\n');
+}
+
+function runAutofireWorker(seat, sid) {
+  const payload = Buffer.from(JSON.stringify({
+    root: seat.root,
+    sid,
+    eventId: 'evt-skeleton-gate',
+  }), 'utf8').toString('base64url');
+  const env = { ...process.env, AIGENT_ROOT: seat.root };
+  delete env.CAPSULE_VERB_AUTOFIRE_DRY_RUN;
+  const result = spawnSync(process.execPath, [SENSOR, '--autofire-worker', payload], {
+    encoding: 'utf8',
+    env,
+    cwd: seat.root,
+    timeout: 40_000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  const logPath = path.join(seat.memory, 'runtime', 'capsule-verb-autofire.jsonl');
+  return readFileSync(logPath, 'utf8').trim().split('\n').map(JSON.parse);
+}
+
+test('autofire worker DEFERS on a skeleton capsule — every null-family waiting_on spelling', (t) => {
+  const spellings = [
+    ['unquoted-null', 'null'],
+    ['tilde', '~'],
+    ['capitalized-Null', 'Null'],
+    ['empty-double-quoted', '""'],
+    ['empty-single-quoted', "''"],
+    ['empty-bare', ''],
+  ];
+  for (const [label, raw] of spellings) {
+    const seat = mkSeat(os.tmpdir());
+    t.after(seat.cleanup);
+    const sid = 'sensor-skel-' + label;
+    const capsule = writeCapsule(seat, skeletonCapsule('capsule-skel-' + label, raw));
+    writeFileSync(
+      path.join(seat.memory, 'runtime', 'stop-writer', sid + '.json'),
+      JSON.stringify({ capsule_path: capsule }),
+    );
+    const entries = runAutofireWorker(seat, sid);
+    const last = entries.at(-1);
+    assert.equal(last.outcome, 'skipped_skeleton',
+      label + ': a not-yet-finalized capsule must DEFER the cycle, never surface as a refusal');
+    assert.equal(last.capsule_path, capsule, label + ': defer entry names the capsule it deferred on');
+    assert.equal(existsSync(path.join(seat.memory, '.daemon-errors.log')), false,
+      label + ': deferring readiness is not an error');
+  }
+});
+
+test('autofire worker runs the verb once the capsule has left skeleton state (contrast pin)', (t) => {
+  const seat = mkSeat(os.tmpdir(), { git: true });
+  t.after(seat.cleanup);
+  const sid = 'sensor-skel-left';
+  const capsule = writeCapsule(seat, validCapsule('capsule-left-skeleton'));
+  writeFileSync(
+    path.join(seat.memory, 'runtime', 'stop-writer', sid + '.json'),
+    JSON.stringify({ capsule_path: capsule }),
+  );
+  const entries = runAutofireWorker(seat, sid);
+  assert.equal(entries.at(-1).outcome, 'completed',
+    'a finalized capsule must still flow to the verb — the gate only filters skeletons');
+});
+
+test('quoted "null" waiting_on is an intentional string — the gate lets the verb see it', (t) => {
+  // Consistency pin with validateCapsuleText: a QUOTED "null" is deliberate
+  // content, not the writer skeleton. The gate must not widen past the
+  // validator's own null family, or gate and verb would disagree about the
+  // same bytes.
+  const seat = mkSeat(os.tmpdir(), { git: true });
+  t.after(seat.cleanup);
+  const sid = 'sensor-skel-quoted-null';
+  const capsule = writeCapsule(seat, skeletonCapsule('capsule-quoted-null', '"null"'));
+  writeFileSync(
+    path.join(seat.memory, 'runtime', 'stop-writer', sid + '.json'),
+    JSON.stringify({ capsule_path: capsule }),
+  );
+  const entries = runAutofireWorker(seat, sid);
+  assert.notEqual(entries.at(-1).outcome, 'skipped_skeleton',
+    'quoted "null" left skeleton state — the verb owns judging it, not the gate');
+});
