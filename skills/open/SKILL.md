@@ -2,9 +2,12 @@
 name: open
 description: Boot the session, load context from the vault, and surface what matters
 trigger: /open
+status: DEPRECATED by the two-verb lifecycle — see skills/resume/SKILL.md. /resume absorbs /open; the post-clear boot runs it automatically via daemons/resume-verb.mjs. Kept for manual invocation during the transition; not deleted.
 ---
 
 # Session Open
+
+> **Deprecated.** This skill is superseded by [[skills/resume/SKILL.md|/resume]] (docs/two-verb-lifecycle.md). New installs should reach for `/resume`; this file stays for anyone still invoking `/open` by habit during the transition.
 
 Run this at the start of every normal working session.
 
