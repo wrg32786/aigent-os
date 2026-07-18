@@ -38,7 +38,7 @@
 
 import { readFileSync, existsSync, appendFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { memRoot as resolveMemRoot, flipCapsuleToResumed } from './lifecycle-common.mjs';
+import { memRoot as resolveMemRoot, flipCapsuleToResumed, stampBootEvidence, resumeFlipShouldDefer } from './lifecycle-common.mjs';
 
 const TOP_LINKS = 5;
 
@@ -79,10 +79,10 @@ function activeCapsule(root) {
     const bs = JSON.parse(readFileSync(path.join(MEM, 'BODY_STATE.json'), 'utf8'));
     const c = bs?.state?.last_capsule;
     const cap = c && c.status === 'active' ? c : null;
-    if (!cap?.path) return { path: null, dangling: false };
+    if (!cap?.path) return { path: null, dangling: false, pointer: null };
     const p = path.isAbsolute(cap.path) ? cap.path : path.join(root, cap.path);
-    if (existsSync(p)) return { path: p, dangling: false };
-    return { path: p, dangling: true };
+    if (existsSync(p)) return { path: p, dangling: false, pointer: cap };
+    return { path: p, dangling: true, pointer: cap };
   } catch {
     return { path: null, dangling: false };
   }
@@ -143,6 +143,13 @@ try {
   const root = process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || payload.cwd || '';
   if (!root) process.exit(0);
   const source = String(payload.source || 'startup');
+
+  // BOOT EVIDENCE (board c1f777e9): stamp how THIS session booted, every source,
+  // before anything else — crossSessionCuratedAllowed reads it as the Case-A
+  // discriminator for cross-session curated closes. Fail-open: a stamp failure
+  // must never break a session start.
+  try { stampBootEvidence(resolveMemRoot(root), String(payload.session_id || ''), source); }
+  catch (e) { logErr(root, `boot-evidence stamp failed: ${e?.message || e}`); }
 
   // CLOCK — ground the waking session in real day/time BEFORE any orientation. A
   // bare wake fires no UserPromptSubmit, so a prompt-time clock injection can't
@@ -220,7 +227,19 @@ try {
     // Compact is NOT a resume — the same session continues, and flipping
     // mid-cycle would disarm an auto-refresh watcher's capsule-ready gate — so
     // startup/resume/clear only.
-    if (source !== 'compact') {
+    // A curated close awaiting seal must NOT be consumed by a rotation boot —
+    // deferring keeps the close status:active for the autofire's consumed-gate.
+    // source=clear always flips (Case-A boot-native consumption, preserved).
+    // Gated on the CAPSULE's own frontmatter status (round-2 R2-2): a non-active
+    // capsule was never going to flip, so announcing a defer for it is noise —
+    // the pointer's status can go stale against the file. Compact never flips
+    // and never announces (unchanged).
+    const flipDeferred = fm(doc, 'status') === 'active'
+      && source !== 'compact'
+      && resumeFlipShouldDefer(cap.pointer, source);
+    if (flipDeferred) {
+      out.push(`   [resume-flip] deferred — curated close awaiting seal (within window, non-clear boot); not consumed.`);
+    } else if (source !== 'compact') {
       const result = flipCapsuleToResumed(cap.path, payload.session_id);
       if (result.outcome === 'flipped') {
         out.push(`   [resume-flip] capsule marked resumed — finalize-lock released, rolling repoints re-armed.`);

@@ -26,7 +26,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { memRoot as resolveMemRoot } from './lifecycle-common.mjs';
+import { memRoot as resolveMemRoot, crossSessionCuratedAllowed, curatedWindowMs } from './lifecycle-common.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -475,12 +475,25 @@ ${ANCHORS.rows}
       const cur = JSON.parse(readFileSync(path.join(MEM, 'BODY_STATE.json'), 'utf8'))?.state?.last_capsule;
       if (!cur) return false;
       if (cur.trigger !== 'curated-close' && cur.trigger !== 'manual-close') return false;
-      if (String(cur.session_id || '') !== sid) return false;
       const fin = Date.parse(String(cur.finalized_at || ''));
       if (!Number.isFinite(fin)) return false;
-      const win = Number(process.env.SCW_CURATED_WIN_MS) > 0
-        ? Number(process.env.SCW_CURATED_WIN_MS) : 45 * 60 * 1000;
-      return (Date.now() - fin) < win;
+      if ((Date.now() - fin) >= curatedWindowMs()) return false;
+      if (String(cur.session_id || '') !== sid) {
+        // A session that rotated WITHOUT a clear keeps its curated close
+        // authoritative — raw equality made the close invisible after rotation and
+        // the stop-delta clobbered it every turn. Case-A stays safe: a clear-born
+        // session, stale/absent boot evidence, or a consumed (status:resumed)
+        // capsule all fall back to the old exclusion. A falsy session_id (the
+        // stamper's own no-sid-resolvable branch) is never cross-session eligible —
+        // hard reject, as raw !== always did. Window checked above (cheap) before
+        // the helper's file reads.
+        if (!cur.session_id) return false;
+        const capAbs = typeof cur.path === 'string' && cur.path.trim() !== ''
+          ? (path.isAbsolute(cur.path) ? cur.path : path.resolve(root, cur.path))
+          : null;
+        if (!capAbs || !crossSessionCuratedAllowed(MEM, sid, capAbs)) return false;
+      }
+      return true;
     } catch { return false; }
   }
   const pointer = {
@@ -609,13 +622,19 @@ async function launchStopAutofire() {
         ? (path.isAbsolute(pointer.path) ? pointer.path : path.resolve(root, pointer.path))
         : null;
       shouldLaunch = pointer?.trigger === 'curated-close'
-        && pointer.session_id === sid
         && Number.isFinite(finalizedAtMs)
         && capsulePath !== null
         && existsSync(capsulePath)
         && typeof launchedAt === 'number'
         && Number.isFinite(launchedAt)
-        && finalizedAtMs > launchedAt;
+        && finalizedAtMs > launchedAt
+        // Same cross-session acceptance as curatedPointerWins / readCuratedPointer —
+        // a rotated-but-not-cleared close re-launches the autofire too, instead of
+        // waiting out request.expires_at.
+        && (pointer.session_id === sid
+          || (Boolean(pointer.session_id)
+            && (Date.now() - finalizedAtMs) < curatedWindowMs()
+            && crossSessionCuratedAllowed(memory, sid, capsulePath)));
     }
     if (!shouldLaunch) return;
 
