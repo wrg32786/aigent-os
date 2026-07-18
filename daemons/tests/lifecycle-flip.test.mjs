@@ -10,8 +10,11 @@
 //   - CONFIRMED-5: already-resumed is STEADY-STATE (not drift, not an error)
 //   - malformed frontmatter logs, never a silent no-op
 //   - compact is NOT a resume — capsule untouched
-//   - startup, resume, and clear ALL flip (folding what used to be two separate
-//     per-source scripts into this one hook's source-agnostic anchor step)
+//   - clear ALWAYS flips (boot-native Case-A consumption); startup/resume flip
+//     UNLESS the pointer is a curated close inside its seal window — that close
+//     is AWAITING SEAL and the flip DEFERS (the livelock fix: consuming it
+//     handed the autofire's consumed-gate the exact close it protects). A
+//     stale-window or non-curated pointer flips on rotation boots as before.
 //
 // FIXTURE SHAPE: field list/order and the null-placeholder pair mirror a real
 // autosave capsule's frontmatter shape (see stop-capsule-writer.mjs's skeleton()).
@@ -76,6 +79,10 @@ function fixture(label, opts = {}) {
   mkdirSync(capDir, { recursive: true });
   const capPath = path.join(capDir, 'test-capsule.md');
   writeFileSync(capPath, realFrontmatter(opts));
+  // Pointer defaults to the curated-close-in-window shape (a close AWAITING
+  // SEAL — the defer path). Flip-mechanics tests override pointerTrigger or
+  // pointerFinalizedAgoMs to stay on the flip path.
+  const { pointerTrigger = 'curated-close', pointerFinalizedAgoMs = 0 } = opts;
   writeFileSync(path.join(root, 'memory', 'BODY_STATE.json'), JSON.stringify({
     state: {
       last_capsule: {
@@ -83,9 +90,9 @@ function fixture(label, opts = {}) {
         path: 'memory/capsules/test-capsule.md',
         status: 'active',
         objective: 'prove the flip',
-        trigger: 'curated-close',
+        trigger: pointerTrigger,
         session_id: 'prev-sid',
-        finalized_at: new Date().toISOString(),
+        finalized_at: new Date(Date.now() - pointerFinalizedAgoMs).toISOString(),
       },
     },
   }));
@@ -201,16 +208,27 @@ console.log('-- lifecycle-flip suite --');
   rmSync(base, { recursive: true, force: true });
 }
 
-// 6. source=startup flips too (folds what used to be a separate cold-start script
-// into this one hook's source-agnostic anchor step).
+// 6. source=startup on a curated-close-in-window pointer DEFERS (the livelock
+// fix): the close is awaiting seal — announced as deferred, capsule untouched.
 {
   const { base, root, capPath } = fixture('startup');
+  const before = readFileSync(capPath, 'utf8');
   const r = runReinject(root, 'startup', 'newsid-7777');
   const doc = readFileSync(capPath, 'utf8');
   ok(r.status === 0, 'startup run exits 0', r.stderr || '');
   ok(/ACTIVE CAPSULE/.test(r.stdout), 'pointer table still prints on startup');
-  ok(/resume-flip.*finalize-lock released/.test(r.stdout), 'flip announced on startup');
-  ok(/^status: resumed$/m.test(doc), 'frontmatter status flipped to resumed (startup)');
+  ok(/resume-flip\] deferred/.test(r.stdout), 'defer announced on startup (curated close awaiting seal)');
+  ok(doc === before, 'deferred flip leaves the capsule byte-identical (still status: active)');
+  rmSync(base, { recursive: true, force: true });
+}
+
+// 6b. source=startup with a NON-curated pointer still flips (mechanics intact).
+{
+  const { base, root, capPath } = fixture('startup-noncurated', { pointerTrigger: 'refresh-cycle' });
+  const r = runReinject(root, 'startup', 'newsid-7777');
+  const doc = readFileSync(capPath, 'utf8');
+  ok(/resume-flip.*finalize-lock released/.test(r.stdout), 'flip announced on startup (non-curated pointer)');
+  ok(/^status: resumed$/m.test(doc), 'frontmatter status flipped to resumed (startup, non-curated)');
   const stamps = stampLines(doc);
   ok(stamps.length === 2, `exactly one resumed_at + one resumed_by_session line survives (startup dedupe), got ${stamps.length}`, JSON.stringify(stamps));
   ok(/^resumed_by_session: newsid-7/.test(stamps[1] || ''), 'resume stamps written', JSON.stringify(stamps));
@@ -218,13 +236,26 @@ console.log('-- lifecycle-flip suite --');
   rmSync(base, { recursive: true, force: true });
 }
 
-// 7. source=resume flips identically.
+// 6c. source=startup with a curated pointer past its seal window still flips —
+// cross-session protection stays window-bounded.
+{
+  const { base, root, capPath } = fixture('startup-stale', { pointerFinalizedAgoMs: 2 * 3600e3 });
+  const r = runReinject(root, 'startup', 'newsid-7777');
+  const doc = readFileSync(capPath, 'utf8');
+  ok(/resume-flip.*finalize-lock released/.test(r.stdout), 'flip announced on startup (window lapsed)');
+  ok(/^status: resumed$/m.test(doc), 'frontmatter status flipped to resumed (startup, stale window)');
+  rmSync(base, { recursive: true, force: true });
+}
+
+// 7. source=resume defers identically on a curated-close-in-window pointer.
 {
   const { base, root, capPath } = fixture('resume');
+  const before = readFileSync(capPath, 'utf8');
   const r = runReinject(root, 'resume', 'newsid-8888');
   const doc = readFileSync(capPath, 'utf8');
   ok(r.status === 0, 'resume run exits 0', r.stderr || '');
-  ok(/^status: resumed$/m.test(doc), 'frontmatter status flipped to resumed (source=resume)');
+  ok(/resume-flip\] deferred/.test(r.stdout), 'defer announced on resume (curated close awaiting seal)');
+  ok(doc === before, 'deferred flip leaves the capsule byte-identical (source=resume)');
   rmSync(base, { recursive: true, force: true });
 }
 
