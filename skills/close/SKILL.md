@@ -2,9 +2,12 @@
 name: close
 description: Commit the session to durable vault memory and prepare a clean resume point
 trigger: /close
+status: DEPRECATED by the two-verb lifecycle — see skills/context-capsule/SKILL.md. /context-capsule absorbs /close; there is no separate close ceremony. Kept for manual invocation during the transition; not deleted.
 ---
 
 # Session Close
+
+> **Deprecated.** This skill is superseded by [[skills/context-capsule/SKILL.md|/context-capsule]] (docs/two-verb-lifecycle.md). New installs should reach for `/context-capsule`; this file stays for anyone still invoking `/close` by habit during the transition.
 
 Run the aigent-OS end-of-session memory commit inline. The close must be idempotent: rerunning it after a partial failure must not duplicate ledger entries, capsules, or session summaries.
 
