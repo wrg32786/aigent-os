@@ -78,7 +78,7 @@ If a fork wires multiple agents/sessions that need to pause for a conducted, mul
 
 `daemons/ctx-refresh-sensor.mjs` is a `PreToolUse` hook implementing a single-session self-refresh reflex: at 60% context usage it nudges a capsule-then-clear/compact; at 75% it escalates to mandatory `/clear`; it re-arms below 50%, and re-nudges every +5 points while armed to avoid going silent between 60% and 90%.
 
-This reflex depends on an **optional** integration: something must write `~/.claude/ctx-refresh/<session-id>.json` with a `used_percentage` field (a statusline script is the natural place). Nothing in this port writes that file — if it's absent, the sensor is silently inert (checked first, before any other logic runs). Wiring a percentage-tracking statusline is a documented but unbundled integration point.
+This reflex depends on one integration: something must write `~/.claude/ctx-refresh/<session-id>.json` with a numeric `used_percentage` field. `daemons/statusline-ctx.sh` is that writer — a statusline wrapper wired through the template's `statusLine` entry. On every statusline refresh it persists `{"used_percentage": N, "ts": "..."}` for the current session (atomic tmp+rename, so the sensor never reads a torn file) and prunes sensor files idle more than 7 days (session ids rotate on `/clear`; old files are dead), then delegates the visible status line unchanged to `~/.claude/statusline-command.sh` when that exists (the conventional home of an operator's own statusline script — override the path with `AIGENT_STATUSLINE_DELEGATE`), falling back to a minimal model-name + ctx-% line. The write degrades to a no-op without `jq`, and if the file is absent the sensor is silently inert (checked first, before any other logic runs) — so a missing or unwired statusline can never error the lifecycle. To opt out of the bundled writer, drop the `statusLine` entry from `settings.json`; the sensor then waits for whatever integration the operator wires instead.
 
 Behind an opt-in flag (`CAPSULE_VERB_AUTOFIRE=1`), the sensor can also drive the trusted writer automatically: it waits for the transcript to fall genuinely still (two identical capture-cursor reads separated by an age floor, guarding against reading mid-flush), then calls `runCapsuleVerb()` in dry-run mode by default. A real, request-gated cycle (`daemons/refresh-request.mjs` + `daemons/refresh-cycle.mjs`) exists for a controller that wants to mint a nonce-bound refresh challenge and verify the receipt — none of that fires unless something writes a `RefreshRequest` file, which, like the board adapter, ships as a seam rather than a default behavior.
 
@@ -109,6 +109,7 @@ Behind an opt-in flag (`CAPSULE_VERB_AUTOFIRE=1`), the sensor can also drive the
 | `daemons/refresh-request.mjs` | The controller→session challenge-crossing request |
 | `daemons/refresh-cursor.mjs` | The capture-cursor primitive (byte-exact transcript position) |
 | `daemons/ctx-refresh-sensor.mjs` | Context-pressure self-refresh reflex — PreToolUse hook |
+| `daemons/statusline-ctx.sh` | Context-percentage writer — statusLine wrapper feeding the sensor |
 | `skills/context-capsule/SKILL.md` | The capsule verb, explicit invocation |
 | `skills/resume/SKILL.md` | The resume verb, explicit invocation |
 
