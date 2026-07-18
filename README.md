@@ -31,12 +31,14 @@ No database. No server. No build step. Drop the files in, open a session, and yo
 > **Dependency model:** The core kernel is markdown + shell — no build step, no database, no server. Optional features (semantic search, hooks automation) require Node.js 18+ and are installed automatically by the installer if Node is present. Obsidian is optional for visual vault navigation.
 
 ```
-You: /open
+[new Claude Code session — nothing typed]
 aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending review.
        Priority 1 is blocked — surfacing now. What do you want to hit?
 ```
 
 ---
+
+> **v0.9 (2026-07-17):** The two-verb lifecycle — automatic capsule + resume supersedes manual `/open` + `/close`; the OS now checkpoints and resumes itself across sessions, compaction, and clears. Adds a statusline context writer and zero-leak flush legs. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
 
 > **v0.7 (2026-05-09):** Cognitive architecture shipped — runtime consciousness (ACTIVE_STATE computed on every /open and /close), persistent self-model (capabilities, limitations, failure modes), goal stack with success criteria, belief tracking with confidence scores, operational lessons + procedures, /dream offline consolidation, /reconcile cross-system consistency checks, /meta-improve constrained self-modification, eval harness. aigent-OS now models itself, tracks what it believes, detects drift, and proposes its own improvements. See [The Cognitive Architecture](#-the-cognitive-architecture) below.
 
@@ -65,9 +67,10 @@ The installer handles everything automatically: copies the kernel files, creates
 **Start a new Claude Code conversation** in the same directory. aigent-OS is live.
 
 Every session works like this:
-- **Start:** `/open` — aigent-OS boots with full context from last session
+- **Start:** aigent-OS resumes itself — loads the last capsule, re-grounds against what's actually changed, and greets you with full context. No `/open` to type.
 - **Work:** Just talk. aigent-OS handles routing, memory, delegation.
-- **End:** `/close` — Saves everything. Next session picks up exactly where you left off.
+- **End:** aigent-OS checkpoints itself — reconciles live state and writes a resume-ready capsule when the session ends, compacts, or clears. No `/close` to type.
+- **Manual override:** `/context-capsule` and `/resume` are still real commands — force a checkpoint or reload mid-session whenever you want one on demand.
 
 **Optional:** Open the `vault/` folder in [Obsidian](https://obsidian.md) to see and navigate your AI's knowledge graph visually.
 
@@ -109,7 +112,7 @@ daemons/agent-fitness-report.py    Per-agent calibration report
 ## 👀 What a session actually looks like
 
 ```text
-You: /open
+[new Claude Code session — nothing typed]
 
 AI:  3 open threads from yesterday.
      - Pricing decision pending (you said you'd think on it overnight)
@@ -139,11 +142,11 @@ AI:  Got it. Updating the Onboarding v2 project note. Anything else
 
 [... 90 minutes of work ...]
 
-You: /close
+[you close the terminal — nothing typed]
 
-AI:  Session captured. Summary written to vault/daily/2026-04-25.md.
+[capsule fires automatically: reconciles the session, writes to vault/daily/2026-04-25.md]
 
-     What you decided today:
+     What got decided today:
      - Pricing: $49/$59 split. Logged.
      - Onboarding v2: ship Friday, no further scope additions.
 
@@ -154,7 +157,7 @@ AI:  Session captured. Summary written to vault/daily/2026-04-25.md.
      See you tomorrow.
 ```
 
-That's the loop. `/open` → work → `/close`. The vault remembers everything. Next session picks up exactly where you left off. See [`vault/examples/`](vault/examples/) for what populated content actually looks like.
+That's the loop — except you never typed either verb. `resume` → work → `capsule`, both automatic, both still callable by hand when you want to force one. The vault remembers everything. Next session picks up exactly where you left off. See [`vault/examples/`](vault/examples/) for what populated content actually looks like.
 
 ---
 
@@ -184,7 +187,7 @@ If you're building an agent framework for end-users to consume, you probably wan
 | Built for principals, not developers | ✅ | ❌ | ❌ | ❌ |
 | Obsidian-native vault | ✅ | ❌ | ❌ | ❌ |
 
-**The honest tradeoff:** aigent-OS is opinionated. If you want a flexible toolkit you build on, pick LangChain. If you want a memory layer for an existing AI app, pick mem0. If you want your AI to actually run your operating cadence — `/open`, work, `/close`, week after week — pick this.
+**The honest tradeoff:** aigent-OS is opinionated. If you want a flexible toolkit you build on, pick LangChain. If you want a memory layer for an existing AI app, pick mem0. If you want your AI to actually run your operating cadence — checkpoint, work, resume, automatically, week after week — pick this.
 
 ---
 
@@ -206,7 +209,7 @@ Released 2026-05-03. The somatic layer gives the OS a body — a way to read its
 
 ## 🧠 The Self-Learning Engine
 
-Released 2026-05-08. The self-learning engine makes aigent-OS a system that expands its own capability surface. It never stops at inability — it recalls, hunts, workarounds, learns, and captures every failure as a durable artifact. All of this is automatic. The user only types `/open` and `/close`.
+Released 2026-05-08. The self-learning engine makes aigent-OS a system that expands its own capability surface. It never stops at inability — it recalls, hunts, workarounds, learns, and captures every failure as a durable artifact. All of this is automatic — including the session boundary itself now, since `capsule` and `resume` fire on their own.
 
 ### Core capabilities
 
@@ -216,9 +219,9 @@ Released 2026-05-08. The self-learning engine makes aigent-OS a system that expa
 | **Skill Hunt** | Searches GitHub and skill marketplaces for missing capabilities | Auto-fires when recall finds no match |
 | **Solution Hunt** | Finds 3 alternate routes when blocked (direct fix, workaround, replace) | Caddy fires on "stuck", "blocked", "can't do" |
 | **Learn from Failure** | Classifies failures, checks repetition, produces durable artifacts | Caddy fires on "happened again", "same issue" |
-| **Capsule v2** | Resumable execution state with waiting_on, success_criteria, next_action | `/close` creates; `/open` offers resume |
-| **Temporal Facts** | Facts with provenance, validity windows, supersede chains | `/close` auto-captures new facts |
-| **Skill Gap Scan** | Weekly scan for open gaps older than 7 days | `/open` auto-runs |
+| **Capsule v2** | Resumable execution state with waiting_on, success_criteria, next_action | `capsule` writes it automatically; `resume` loads it automatically |
+| **Temporal Facts** | Facts with provenance, validity windows, supersede chains | `capsule` auto-captures new facts |
+| **Skill Gap Scan** | Weekly scan for open gaps older than 7 days | `resume` auto-runs |
 
 ### How it works
 
@@ -295,8 +298,8 @@ Released 2026-05-09. The cognitive architecture gives aigent-OS a persistent sel
 
 | Skill | What it does | When it fires |
 |-------|-------------|---------------|
-| `/reconcile` | Cross-system consistency check — goals vs priorities vs beliefs vs facts | Weekly on /open |
-| `/dream` | Offline consolidation — review sessions, propose improvement candidates | After /close or weekly |
+| `/reconcile` | Cross-system consistency check — goals vs priorities vs beliefs vs facts | Weekly on resume |
+| `/dream` | Offline consolidation — review sessions, propose improvement candidates | After capsule or weekly |
 | `/meta-improve` | Implement approved improvements via branch-test-approve-merge | When /dream candidates are approved |
 | `/status` | 12-line operational heartbeat summary | On demand |
 
@@ -331,7 +334,7 @@ These aren't prompts. They're a **complete operating manual** that tells the AI 
 | `08` | **Financial Thinking** | Revenue, profit, cash flow — not vibes |
 | `09` | **Sub-Agent Manifest** | Creates specialists only when it creates leverage |
 | `10` | **Memory & Learning** | Gets smarter every session. Tracks patterns. Learns from mistakes. |
-| `11` | **Session Rhythm** | `/open` → work → `/close` — nothing falls through cracks |
+| `11` | **Session Rhythm** | `resume` → work → `capsule` — automatic, nothing falls through cracks |
 | `12` | **Authority Matrix** | Knows its lane. Asks when it should. Acts when it can. |
 | `13` | **Memory Layer** | 4-tier vault architecture with staleness rules |
 | `14` | **Your Decision Logic** | YOUR brain encoded — customize this completely |
@@ -396,7 +399,7 @@ Runs locally. `all-MiniLM-L6-v2` on your machine. **No API calls. No data leaves
 Forget vector databases. Your AI's memory is an **Obsidian vault** — the same tool you can open, read, search, and navigate yourself.
 
 - **Wikilinks** create a knowledge graph. `[[Project Alpha]]` connects to `[[People/Jane]]` connects to `[[Decision Log]]`. The graph IS the intelligence.
-- **Session continuity** without magic. `/open` reads the vault. `/close` writes to it. Everything persists. Everything is auditable.
+- **Session continuity** without magic. `resume` reads the vault. `capsule` writes to it. Both fire on their own now — no command required. Everything persists. Everything is auditable.
 - **Human-first.** You can read every thought your AI has ever had. No hidden embeddings. No opaque database. Markdown files in a folder.
 
 ### Model Routing — Smart Spend
@@ -501,7 +504,7 @@ aigent-OS measures that. Not as a punishment system — as a calibration system.
 
 **Drift detection at session start:**
 
-`/open` runs two reconciliation checks before the normal protocol output:
+`resume` runs two reconciliation checks before the normal protocol output:
 - **Decision aging** — for every decision logged 30/60/90 days ago without an outcome captured, surface a one-line prompt. The principal answers in one word; the outcome appends to `DECISION_OUTCOMES.md`.
 - **Attention reconciliation** — last 7 days of daily notes vs `ACTIVE_PRIORITIES.md`. If a Tier 1 project is at <40% of intended share OR a non-priority project consumed >25% of attention, drift is flagged. Forces the principal to either re-prioritize or refocus.
 
