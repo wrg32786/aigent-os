@@ -8,6 +8,8 @@
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Compatible-blueviolet?style=flat-square)](https://claude.ai/code)
 [![Obsidian](https://img.shields.io/badge/Obsidian-Vault_Native-7C3AED?style=flat-square)](https://obsidian.md)
 [![Core: Markdown + Shell](https://img.shields.io/badge/Core-Markdown_%2B_Shell-00d4aa?style=flat-square)](#-quick-start)
+[![CI](https://img.shields.io/github/actions/workflow/status/wrg32786/aigent-os/ci.yml?branch=master&style=flat-square&label=CI)](https://github.com/wrg32786/aigent-os/actions/workflows/ci.yml)
+[![Security Policy](https://img.shields.io/badge/Security-Policy-informational?style=flat-square)](SECURITY.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen?style=flat-square)](#-contributing)
 
 **The personal operating system that operates itself.**
@@ -24,9 +26,9 @@
 
 Every priority. Every decision. Every conversation thread left open from last week. What if it knew exactly what it was allowed to decide on its own — and what to bring to you? What if it could delegate to faster, cheaper agents for grunt work while it stayed focused on strategy?
 
-That's aigent-OS. **A 15-document kernel (plus extended specs) that turns Claude Code into a persistent operating system.**
+That's aigent-OS. **A 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system.**
 
-No database. No server. No build step. Drop the files in, open a session, and your AI boots up knowing who it is, what it's working on, and what matters today. The system is also recursive — aigent-OS uses its own skills to maintain and publish itself. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
+No database. No server. No build step. Drop the files in, open a session, and your AI boots up knowing who it is, what it's working on, and what matters today. And this repo ships itself: aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. That's the category claim. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
 > **Dependency model:** The core kernel is markdown + shell — no build step, no database, no server. Optional features (semantic search, hooks automation) require Node.js 18+ and are installed automatically by the installer if Node is present. Obsidian is optional for visual vault navigation.
 
@@ -38,7 +40,7 @@ aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending re
 
 ---
 
-> **v0.9 (2026-07-17):** The two-verb lifecycle — automatic capsule + resume supersedes manual `/open` + `/close`; the OS now checkpoints and resumes itself across sessions, compaction, and clears. Adds a statusline context writer and zero-leak flush legs. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
+> **v0.9 (2026-07-17):** The two-verb lifecycle — automatic capsule + resume supersedes manual `/open` + `/close`; the OS now checkpoints itself whenever a session ends, compacts, or is cleared, and resumes itself on the next boot. Adds a statusline context writer and zero-leak flush legs. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
 
 > **v0.7 (2026-05-09):** Cognitive architecture shipped — runtime consciousness (ACTIVE_STATE computed on every /open and /close), persistent self-model (capabilities, limitations, failure modes), goal stack with success criteria, belief tracking with confidence scores, operational lessons + procedures, /dream offline consolidation, /reconcile cross-system consistency checks, /meta-improve constrained self-modification, eval harness. aigent-OS now models itself, tracks what it believes, detects drift, and proposes its own improvements. See [The Cognitive Architecture](#-the-cognitive-architecture) below.
 
@@ -63,11 +65,15 @@ That's it. aigent-OS installs into whatever directory you're in — your existin
 The installer handles everything automatically: copies the kernel files, creates `.claude/settings.json` with your actual paths substituted, and installs semantic search if Node.js is available.
 
 > **Optional `--no-deps`:** If you want to skip the Node.js semantic-search install, run `bash install.sh --no-deps` instead.
+>
+> **Other installer flags:** `--target <dir>` installs into a different project instead of the current one, and `--dry-run` previews every change without writing anything. See [Advanced Setup](docs/advanced-setup.md) for the full flag reference.
 
 **Start a new Claude Code conversation** in the same directory. aigent-OS is live.
 
+**Prefer an app to a terminal?** Run `launcher/install.sh` (or `install.ps1` on Windows) once, then double-click the AIgent icon whenever you want a session — first launch walks you through setup, every launch after is warm-resumed via `claude --continue`, no `cd` and no cold start. See [`launcher/README.md`](launcher/README.md).
+
 Every session works like this:
-- **Start:** aigent-OS resumes itself — loads the last capsule, re-grounds against what's actually changed, and greets you with full context. No `/open` to type.
+- **Start:** aigent-OS resumes itself, automatically, with no supervisor and nothing to configure — a plain restart surfaces a pointer to your last capsule so you're never starting cold; after `/clear`, it walks the full re-grounding procedure and re-checks what's actually changed. No `/open` to type either way.
 - **Work:** Just talk. aigent-OS handles routing, memory, delegation.
 - **End:** aigent-OS checkpoints itself — reconciles live state and writes a resume-ready capsule when the session ends, compacts, or clears. No `/close` to type.
 - **Manual override:** `/context-capsule` and `/resume` are still real commands — force a checkpoint or reload mid-session whenever you want one on demand.
@@ -81,7 +87,7 @@ Full setup walkthrough: [Getting Started](docs/getting-started.md) · Advanced c
 ## 🗂 Repo Map
 
 ```
-system/                            The 15-document operating kernel (00_identity → 15_somatic_layer)
+system/                            The 16-document operating kernel (00_identity → 15_somatic_layer)
 vault/                             Persistent memory and knowledge graph (markdown, Obsidian-native)
 vault/agents/                      Instrument roster — 9 named sub-agents (Pantheon Round 4)
 skills/                            Claude Code slash-command skills (60+ source templates)
@@ -110,6 +116,42 @@ daemons/agent-fitness-report.py    Per-agent calibration report
 ---
 
 ## 👀 What a session actually looks like
+
+### Day one — the it-remembers-me moment
+
+```text
+[first Claude Code session after install]
+
+AI:  I'm your AIgent operator. Let's get you one real win in the next few minutes.
+     In a sentence or two, what's your business, or the work you want help running?
+
+You: I run a bookkeeping practice for trades — electricians, plumbers, HVAC.
+
+AI:  Got it. What's the one outcome that would make this month a win?
+
+You: Five new clients, without working weekends.
+
+AI:  And what do you spend the most time on that you wish just ran itself?
+
+You: Chasing leads. I'm always the one following up.
+
+AI:  Here's what I know about you: you run a bookkeeping practice for trades, you
+     want five new clients this month without working weekends, and chasing leads
+     eats your time.
+
+     Three things I'd do first:
+     1. Draft a week of outreach to local trade businesses, so lead-chasing
+        runs without you.
+     2. Build a "new client" intake that collects everything you need before
+        the first call.
+     3. Turn last month's finished jobs into three referral asks.
+
+     Pick one and we'll do it right now.
+```
+
+That's `/operator-setup` — three plain questions, on first run only, and the answers are written to memory so every session after opens already oriented around *your* business, not a generic template. Nothing here is invented; it only reflects what you actually said.
+
+### Every session after — resumes itself
 
 ```text
 [new Claude Code session — nothing typed]
@@ -173,6 +215,8 @@ If you've ever closed your laptop on Friday and opened it Monday wondering what 
 
 If you're building an agent framework for end-users to consume, you probably want LangChain or CrewAI instead. aigent-OS optimizes for **one principal, many threads, persistent context.**
 
+That's also why the [branded desktop launcher](launcher/README.md) exists: a principal isn't a developer who wants a terminal workflow. Install it once, and every session after starts from a double-clicked icon, not a `cd` and a remembered command.
+
 ---
 
 ## 🆚 Compared to alternatives
@@ -215,7 +259,7 @@ Released 2026-05-08. The self-learning engine makes aigent-OS a system that expa
 
 | Capability | What it does | How it fires |
 |---|---|---|
-| **Skill Recall** | Searches 64 skills by taxonomy when you describe a task | Caddy auto-fires on every prompt |
+| **Skill Recall** | Searches 60+ skills by taxonomy when you describe a task | Caddy auto-fires on every prompt |
 | **Skill Hunt** | Searches GitHub and skill marketplaces for missing capabilities | Auto-fires when recall finds no match |
 | **Solution Hunt** | Finds 3 alternate routes when blocked (direct fix, workaround, replace) | Caddy fires on "stuck", "blocked", "can't do" |
 | **Learn from Failure** | Classifies failures, checks repetition, produces durable artifacts | Caddy fires on "happened again", "same issue" |
@@ -311,13 +355,38 @@ See [docs/meta-aigent-doctrine.md](docs/meta-aigent-doctrine.md) for the full sa
 
 ---
 
+## 🫁 The Self-Refresh Reflex
+
+Released 2026-07-17 as part of the v0.9 two-verb lifecycle. Session boundaries used to depend on the operator remembering to type `/open` or `/close`, and a session running long could quietly burn through its context window with no warning. This layer removes both dependencies: eight daemons watch context pressure and every session boundary, write state continuously instead of only at the end, and nudge — never force — a refresh before it costs you anything.
+
+### Core capabilities
+
+| Capability | What it does | How it fires |
+|---|---|---|
+| **Context-pressure sensor** | Watches context usage against the live percentage from your statusline | `PreToolUse` hook, checked on every tool call |
+| **60% nudge** | Injects a self-refresh instruction: finalize the active capsule, then route to `/compact` (mid-task) or `/clear` (pause point) depending on where the session actually is | Fires once per crossing; re-alerts every +5 points if usage keeps climbing |
+| **75% mandatory escalation** | Same finalize step, but the routing instruction stops offering `/compact` — `/clear` only | Fires at the hard line; also fires early if a `/compact` already ran and didn't recover real headroom |
+| **Write-ahead journal** | Captures live capsule state on every prompt submitted, not just at session end | `UserPromptSubmit` hook |
+| **PreCompact flush** | Flushes state and re-injects the capsule pointer table before compaction runs, so nothing is lost mid-compact | `PreCompact` hook |
+| **SessionEnd flush** | Reconciles live state and writes the resume-ready capsule the moment a session actually ends | `SessionEnd` hook |
+| **Boot-evidence stamp** | Records session id, source, and timestamp on every boot, so the OS can tell a fresh session apart from a post-clear one | `SessionStart` hook |
+| **Statusline context writer** | Feeds the sensor its ground-truth context percentage each render | `daemons/statusline-ctx.sh` |
+
+### What it doesn't do
+
+The sensor advises — it does not execute `/clear` or `/compact` on its own. Every threshold crossing writes a plain-text instruction into context; the session still runs the command itself, at a clean pause point, on its own judgment. This is a warning system, not an autopilot: it exists so a long session never hits a context wall by surprise, not so the OS silently clears state out from under work in progress.
+
+Full mechanism and hook wiring: [docs/two-verb-lifecycle.md](docs/two-verb-lifecycle.md).
+
+---
+
 ## 🏗 Architecture
 
 <div align="center">
 <img src="assets/architecture.svg" alt="aigent-OS Architecture — Principal to the AIgent to Sub-agents to Vault to Hooks" width="100%"/>
 </div>
 
-### 15 System Documents — The Operating Kernel
+### 16 System Documents — The Operating Kernel
 
 These aren't prompts. They're a **complete operating manual** that tells the AI how to think, decide, delegate, remember, and manage your time.
 
@@ -518,7 +587,7 @@ This is the most credible single claim aigent-OS can make versus other personal-
 
 **Not a chatbot skin.** No personality prompts. No "you are a helpful assistant." This is operational infrastructure.
 
-**Not a code framework.** No `npm install`. No Python environment. No build step. The kernel is 15 markdown documents (plus a handful of extended specs).
+**Not a code framework.** No `npm install`. No Python environment. No build step. The kernel is 16 markdown documents (plus a handful of extended specs).
 
 **Not a RAG system.** The vault is human-readable by design. You don't need an AI to search your AI's memory — just open Obsidian.
 
