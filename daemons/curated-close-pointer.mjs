@@ -50,7 +50,7 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { memRoot, seatOf } from './lifecycle-common.mjs';
+import { memRoot, seatOf, CLOSE_KINDS } from './lifecycle-common.mjs';
 
 function fail(msg) {
   console.error(`[curated-close-pointer] REFUSED: ${msg}`);
@@ -102,7 +102,9 @@ if (ctoRaw !== null) {
 
 // close_kind is a CLOSED enum (unlike the free-form fields above) — refuse loudly on
 // an unrecognized value rather than stamping something no downstream reader expects.
-const CLOSE_KINDS = new Set(['checkpoint', 'completion', 'handoff']);
+// CLOSE_KINDS is single-sourced in lifecycle-common.mjs (gate round-2 advisory: three
+// unconnected literals across two repos) so this validation can never drift from
+// whatever set every production caller was written against.
 const closeKind = flagVal('--close-kind');
 if (closeKind !== null && !CLOSE_KINDS.has(closeKind)) {
   fail(`--close-kind must be one of ${[...CLOSE_KINDS].join('|')}, got: ${closeKind}`);

@@ -106,6 +106,16 @@ try {
   try { gate = await import('./capsule-content-gate.mjs'); }
   catch (e) { logErr(root, `content-gate import failed (gate skipped): ${e?.message || e}`); }
 
+  // R2-2 (gate round-2, board c1f777e9): same lazy + fail-open discipline as the
+  // content gate above — capsuleLeftSkeleton is the SAME predicate capsule-verb
+  // and ctx-refresh-sensor already gate finalize-readiness on; reusing it (not
+  // re-parsing frontmatter by hand) means this gate can never disagree with
+  // theirs about the same bytes. Import failure degrades to pre-gate behavior
+  // (old merge-in-place; logged, never blocks a turn).
+  let leftSkeleton = null;
+  try { ({ capsuleLeftSkeleton: leftSkeleton } = await import('./capsule-verb.mjs')); }
+  catch (e) { logErr(root, `capsule-verb import failed (finalize-freeze gate skipped): ${e?.message || e}`); }
+
   const MEM = memRoot(root);
   const RUNTIME = path.join(MEM, 'runtime', 'stop-writer');
   mkdirSync(RUNTIME, { recursive: true });
@@ -349,7 +359,35 @@ ${ANCHORS.rows}
 `;
   }
 
-  let doc = existsSync(capPath) ? readFileSync(capPath, 'utf8') : skeleton();
+  const capExisted = existsSync(capPath);
+  const originalCapPath = capPath;
+  const originalDoc = capExisted ? readFileSync(capPath, 'utf8') : skeleton();
+  let doc = originalDoc;
+
+  // R2-2 (gate round-2, board c1f777e9) FINALIZE-FREEZE: the documented recovery
+  // play "finalize the rolling capsule in place" turns THIS file into a curated
+  // close without ever repointing state.capsule_path — so without this gate the
+  // merge below would reopen a byte-frozen, already-hashed capsule and mutate
+  // it (capsule-verb's write-once sha256, capsule-verb.mjs:587, can never be
+  // re-stamped -> permanent capsule_invalid abort). A capsule that has left
+  // skeleton (real waiting_on) is finalized and stays byte-frozen from here on:
+  // this turn's delta rolls a FRESH auto-capsule instead, using the exact same
+  // path convention the "no capsule yet" branch above uses, disambiguated by
+  // this turn's own deltaSig (content-addressed, so it can never collide with
+  // the file being frozen). writeState() below persists this reroute for free
+  // — it always writes whatever capPath currently is.
+  //
+  // originalCapPath/originalDoc are kept SEPARATE from capPath/doc on purpose:
+  // the finalize-ADVANCE contract (below, thisFinalized) must keep judging THIS
+  // session's own identity against the capsule it actually finalized — the
+  // fresh companion file is a skeleton and would read as never-finalized,
+  // wrongly re-freezing the pointer on a stale target. Freezing the BYTES is
+  // orthogonal to advancing the POINTER.
+  const frozen = capExisted && leftSkeleton && leftSkeleton(originalDoc);
+  if (frozen) {
+    capPath = path.join(capDir, `${dateStr}-auto-${sid.slice(0, 8)}-${deltaSig}.md`);
+    doc = skeleton();
+  }
 
   // A bullet minus its `- ` prefix and volatile HH:MM stamp — dedup must not be
   // defeated by re-processing a span at a different wall-clock minute (a
@@ -496,9 +534,14 @@ ${ANCHORS.rows}
       return true;
     } catch { return false; }
   }
+  // R2-2: the pointer's IDENTITY is this session's designated capsule as it
+  // stood BEFORE any finalize-freeze reroute — a frozen capsule is still this
+  // session's own legitimate finalize; only its bytes stop being touched. Using
+  // the fresh companion skeleton here would read as never-finalized and wrongly
+  // re-freeze the pointer on a stale target (see frozen comment above).
   const pointer = {
-    id: path.basename(capPath, '.md'),
-    path: path.relative(root, capPath).replace(/\\/g, '/'),
+    id: path.basename(originalCapPath, '.md'),
+    path: path.relative(root, originalCapPath).replace(/\\/g, '/'),
     objective,
     status: 'active',
     created_at: new Date().toISOString(),
@@ -513,7 +556,7 @@ ${ANCHORS.rows}
   // until a human advances it by hand. Allow the repoint when this session's
   // capsule (the `doc` just written) is itself finalize-live — same
   // status:active + real-waiting_on predicate the guard uses.
-  const thisFm = doc.split(/^---\s*$/m)[1] || '';
+  const thisFm = originalDoc.split(/^---\s*$/m)[1] || '';
   const thisStatus = (thisFm.match(/^status:\s*(\S+)/m) || [])[1]?.trim() || '';
   const thisW = ((thisFm.match(/^waiting_on:\s*(.+)\s*$/m) || [])[1] || '').trim().toLowerCase();
   const thisFinalized = thisStatus === 'active' && !!thisW && thisW !== 'null' && thisW !== '~' && thisW !== '""' && thisW !== "''";

@@ -281,6 +281,10 @@ test('full trusted stamp round-trips proofs and later no-flag stamp clears them'
   assert.equal(pointer.captured_through_event_id, 'evt-73');
   assert.equal(pointer.captured_through_offset, null, 'non-cycle stamp: lone event id keeps legacy semantics, offset stays null');
   assert.equal(pointer.cycle_token, null);
+  // R2-1(a) (gate round-2): the REAL writerArgs path (capsule-verb.mjs:691-706,
+  // not a hand-typed CLI flag) must itself stamp close_kind — a legacy/non-cycle
+  // machinery capture is checkpoint-class, unconditionally, by construction.
+  assert.equal(pointer.close_kind, 'checkpoint', 'the trusted writer stamps close_kind through its own writerArgs, not just when a caller passes the flag by hand');
 
   execFileSync(process.execPath, [CCP, capsule], {
     cwd: seat.root,
@@ -296,6 +300,8 @@ test('full trusted stamp round-trips proofs and later no-flag stamp clears them'
   assert.equal(restamped.captured_through_offset, null);
   assert.equal(restamped.capsule_sha256, null);
   assert.equal(restamped.reconcile_digest, null);
+  assert.equal(restamped.close_kind, null,
+    'freshness-overwrite: a bare CLI restamp with no --close-kind clears the verb-stamped checkpoint (no replay)');
 });
 
 test('close_kind stamps verbatim, defaults null, freshness-overwrites, and refuses an unrecognized value', async (t) => {
