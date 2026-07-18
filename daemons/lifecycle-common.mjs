@@ -7,7 +7,7 @@
 // single 'operator' identity via AIGENT_SEAT_ID (or the default). Keep this file
 // dependency-free and side-effect-free — everything downstream imports from here.
 
-import { readFileSync, writeFileSync, existsSync, appendFileSync, writeSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, writeSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 // seatId resolution: env override first (multi-instance forks), else the fixed
@@ -101,6 +101,11 @@ export function logErr(root, tag, msg) {
 // a delimiter line's line ending.
 const FRONTMATTER_RE = /^(---[ \t]*\r?\n)([\s\S]*?)(^---[ \t]*(?:\r?\n|$))/m;
 
+// The consumed-status signal (status: resumed). ONE owner — the flip writes it,
+// the flip's steady-state check reads it, and crossSessionCuratedAllowed gates on
+// it; drifting copies of this regex would silently split those three.
+const CONSUMED_STATUS_RE = /^status:[ \t]*['"]?resumed['"]?[ \t]*$/m;
+
 export function flipCapsuleToResumed(capsulePath, sessionId, { readFile = readFileSync, writeFile = writeFileSync } = {}) {
   let doc;
   try {
@@ -123,7 +128,7 @@ export function flipCapsuleToResumed(capsulePath, sessionId, { readFile = readFi
   // trailing terminator of its own, orphaning that \n with no \r partner. A
   // trailing value can only legitimately carry spaces/tabs, never a line
   // terminator, so [ \t]* can never consume across the CRLF boundary.
-  if (/^status:[ \t]*['"]?resumed['"]?[ \t]*$/m.test(block)) {
+  if (CONSUMED_STATUS_RE.test(block)) {
     return { outcome: 'steady_state', detail: 'capsule frontmatter already reads status: resumed' };
   }
   if (!/^status:[ \t]*['"]?active['"]?[ \t]*$/m.test(block)) {
@@ -150,4 +155,96 @@ export function flipCapsuleToResumed(capsulePath, sessionId, { readFile = readFi
     return { outcome: 'error', detail: `write failed: ${e?.message || e}` };
   }
   return { outcome: 'flipped', detail: 'status flipped active -> resumed, stamps written, any duplicate placeholder removed' };
+}
+
+// stampBootEvidence — board c1f777e9 (the two-verb refresh livelock).
+//
+// The ONE ground-truth record of how the CURRENT session booted:
+// <memRoot>/runtime/boot-evidence.json = { sid, source, ts }. Called from
+// sessionstart-reinject.mjs, which in aigent-OS already fires on EVERY source
+// (startup | resume | clear | compact — see docs/two-verb-lifecycle.md, "A note
+// on the merged SessionStart hook"), so existing installs get the stamp on a
+// plain git pull with no settings migration. crossSessionCuratedAllowed below
+// reads it as the Case-A discriminator. Non-seat children (headless workers,
+// judges spawned in the seat cwd) self-identify via SEAT_BOOT_EVIDENCE_SKIP=1 so
+// they never overwrite the seat's own record. Fail-open: stamping must never
+// break a session start — callers already run inside a try that exits 0.
+export function stampBootEvidence(memoryRoot, sid, source) {
+  if (process.env.SEAT_BOOT_EVIDENCE_SKIP === '1') return;
+  const runtime = path.join(String(memoryRoot), 'runtime');
+  const file = path.join(runtime, 'boot-evidence.json');
+  const doc = JSON.stringify({ sid: String(sid || ''), source: String(source || 'startup'), nonce: process.env.SEAT_BOOT_NONCE || null, ts: Date.now() }, null, 1);
+  mkdirSync(runtime, { recursive: true });
+  // Per-pid tmp + atomic rename so a racing sibling SessionStart never interleaves.
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, doc);
+  try { renameSync(tmp, file); } catch {
+    try { rmSync(file, { force: true }); renameSync(tmp, file); } catch {
+      writeFileSync(file, doc);
+      try { rmSync(tmp, { force: true }); } catch { /* orphan tmp is harmless */ }
+    }
+  }
+}
+
+// crossSessionCuratedAllowed — board c1f777e9 (the two-verb refresh livelock).
+//
+// Whether a curated-close pointer stamped by a DIFFERENT session than the live one
+// is still authoritative. Raw session_id equality livelocked a seat overnight: the
+// session rotated WITHOUT a clear, the valid finalized close became invisible to
+// both the stop-writer's clobber protection (curatedPointerWins) and the autofire's
+// curated preference (readCuratedPointer), the rolling skeleton won the pointer
+// every turn, and the sealer deferred forever (skipped_skeleton on every poll).
+//
+// The equality gate's REAL job was Case-A: exclude a stale PRIOR-session close
+// after a /clear. boot-evidence.json (stamped above on EVERY SessionStart)
+// discriminates exactly that: a live session whose own boot record reads
+// source=clear was born from a clear — the rotation crossed a clear, exclude the
+// close. Any other fresh record (startup / resume / compact) proves
+// rotation-without-clear — the close stays authoritative.
+//
+// FAIL CLOSED everywhere: stale evidence (sid mismatch — the stamp failed for this
+// boot), absent/unreadable evidence, or an unreadable capsule all return false,
+// which IS the pre-fix cross-session behavior. A status:resumed capsule is
+// CONSUMED (a post-clear resume already used it) and is never re-armed — this also
+// covers clears older than the single-record boot evidence can see: the resume
+// verb's own flip (flipCapsuleToResumed above) leaves the durable trace.
+//
+// Callers keep their own freshness window (SCW_CURATED_WIN_MS) — this function
+// judges only the clear/consumed axes.
+export function crossSessionCuratedAllowed(memoryRoot, liveSid, capsulePathAbs) {
+  try {
+    const boot = JSON.parse(readFileSync(path.join(String(memoryRoot), 'runtime', 'boot-evidence.json'), 'utf8'));
+    if (String(boot?.sid || '') !== String(liveSid || '')) return false;
+    if (String(boot?.source || '') === 'clear') return false;
+  } catch { return false; }
+  try {
+    const doc = readFileSync(String(capsulePathAbs), 'utf8');
+    const block = doc.match(FRONTMATTER_RE)?.[2];
+    if (!block) return false;
+    if (CONSUMED_STATUS_RE.test(block)) return false;
+  } catch { return false; }
+  return true;
+}
+
+// curatedWindowMs — the ONE owner of the curated freshness window.
+// SCW_CURATED_WIN_MS (ms) when set to a positive number, else 45 min.
+export function curatedWindowMs() {
+  return Number(process.env.SCW_CURATED_WIN_MS) > 0
+    ? Number(process.env.SCW_CURATED_WIN_MS) : 45 * 60 * 1000;
+}
+
+// resumeFlipShouldDefer — the boot-native resume-flip consumed curated closes on
+// NON-CLEAR rotation boots, flipping the exact status:active signal
+// crossSessionCuratedAllowed needs, before the first autofire poll — re-creating
+// the livelock end-to-end. A curated close still inside its seal window, observed
+// by a rotation boot that did NOT cross a clear, is AWAITING SEAL — nobody
+// resumed it; consuming it is wrong. The flip defers. On source=clear the flip
+// always fires: that boot-native consumption closes the Case-A single-record
+// blind spot and must be preserved. A lapsed close flips as before.
+export function resumeFlipShouldDefer(pointer, source) {
+  if (String(source || '') === 'clear') return false;
+  if (pointer?.trigger !== 'curated-close' && pointer?.trigger !== 'manual-close') return false;
+  const fin = Date.parse(String(pointer?.finalized_at || ''));
+  if (!Number.isFinite(fin)) return false;
+  return (Date.now() - fin) < curatedWindowMs();
 }

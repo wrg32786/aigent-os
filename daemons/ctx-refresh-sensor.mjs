@@ -38,6 +38,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { crossSessionCuratedAllowed, curatedWindowMs } from './lifecycle-common.mjs';
 
 const FIRE_AT = 60;       // raise to 75-80 ONLY after reinject is proven on one
                           // live compaction — this is an early-warning threshold.
@@ -83,7 +84,6 @@ function readCuratedPointer(root, memory, sid) {
       ?.state?.last_capsule ?? null;
     const finalizedAtMs = Date.parse(pointer?.finalized_at);
     if (pointer?.trigger !== 'curated-close'
-      || pointer.session_id !== sid
       || !Number.isFinite(finalizedAtMs)
       || typeof pointer.path !== 'string'
       || pointer.path.trim() === '') return null;
@@ -91,6 +91,19 @@ function readCuratedPointer(root, memory, sid) {
       ? pointer.path
       : path.resolve(root, pointer.path);
     if (!fs.existsSync(capsulePath)) return null;
+    if (pointer.session_id !== sid) {
+      // A curated close whose stamping session rotated away WITHOUT a clear is
+      // still THE close to seal — raw equality sent the autofire to the rolling
+      // skeleton instead, which defers forever. The cross-session path is
+      // window-bounded (curatedWindowMs — a curated close is a fresh close
+      // awaiting seal, not an ancient anchor) and fails closed on clear-born
+      // sessions, stale/absent boot evidence, consumed (status:resumed) capsules,
+      // and falsy pointer sids (the stamper's no-sid branch — never cross-session
+      // eligible). The same-session fast path above is untouched.
+      if (!pointer.session_id) return null;
+      if ((Date.now() - finalizedAtMs) >= curatedWindowMs()) return null;
+      if (!crossSessionCuratedAllowed(memory, sid, capsulePath)) return null;
+    }
     return { capsulePath, finalizedAtMs };
   } catch {
     return null;
