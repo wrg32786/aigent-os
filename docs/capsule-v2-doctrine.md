@@ -7,6 +7,9 @@ created: 2026-05-08
 
 # Capsule v2 Doctrine
 
+> [!info] Superseded by the two-verb lifecycle
+> `/open` and `/close` are deprecated — see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]]. `/resume` absorbs `/open`, `/context-capsule` absorbs `/close`. The v2 schema below (waiting_on, resume_trigger, next_valid_action, success_criteria) is unchanged and still the capsule's field contract; the two-verb doc adds the trusted-writer gate (`daemons/capsule-verb.mjs`), `definition_hash`, and the pointer schema on top of it.
+
 > [!abstract] Key insight
 > Capsules are resumable execution state, not summaries. (12-Factor Agents: unify execution state and business state.)
 

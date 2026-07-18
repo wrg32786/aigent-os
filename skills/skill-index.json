@@ -9,7 +9,7 @@
     {
       "id": "sk_open",
       "name": "open",
-      "description": "Session open protocol \u2014 load vault context, check comms, orient the session",
+      "description": "DEPRECATED by the two-verb lifecycle \u2014 /resume now absorbs open (the post-clear boot runs it automatically; the router should route open-shaped intent to resume). Kept for manual invocation during the transition.",
       "triggers": [
         "open",
         "start session",
@@ -24,12 +24,12 @@
       "lifecycle": "open",
       "path": "~/.claude/skills/open",
       "pantheon_agent": null,
-      "active": true
+      "active": false
     },
     {
       "id": "sk_close",
       "name": "close",
-      "description": "Session close \u2014 commit memory, write session log, capsule state",
+      "description": "DEPRECATED by the two-verb lifecycle \u2014 /context-capsule now absorbs close (there is no separate close ceremony; the capsule verb reconciles, writes, and stops). Kept for manual invocation during the transition.",
       "triggers": [
         "close",
         "end session",
@@ -44,7 +44,7 @@
       "lifecycle": "close",
       "path": "~/.claude/skills/close",
       "pantheon_agent": null,
-      "active": true
+      "active": false
     },
     {
       "id": "sk_comms",
@@ -243,20 +243,49 @@
     {
       "id": "sk_context_capsule",
       "name": "context-capsule",
-      "description": "Structured state preservation when context pressure rises or task completes",
+      "description": "The capsule verb — reconcile from the live memory, write a resume-ready capsule, stop. Absorbs /close: there is no separate close ceremony. Threshold-triggered refreshes run the same contract automatically.",
       "triggers": [
         "capsule",
         "save state",
         "preserve context",
-        "checkpoint"
+        "checkpoint",
+        "close",
+        "wrap up",
+        "task done",
+        "milestone shipped"
       ],
       "intent_patterns": [
         "context window is getting full",
-        "user wants to save progress for resume"
+        "user wants to save progress for resume",
+        "user wants to end the session",
+        "a task or thread just shipped"
       ],
       "model_preference": "opus",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/context-capsule",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_resume",
+      "name": "resume",
+      "description": "The resume verb — load the latest capsule, validate definition_hash, re-ground against live memory, then ACT on waiting_on. Absorbs /open: there is no separate open ceremony. The post-clear boot runs the same contract automatically via daemons/resume-verb.mjs.",
+      "triggers": [
+        "resume",
+        "open",
+        "start session",
+        "good morning",
+        "let's go",
+        "pick up where we left off"
+      ],
+      "intent_patterns": [
+        "user starts a new session",
+        "user wants to pick up where we left off",
+        "a session just cleared and needs to re-ground"
+      ],
+      "model_preference": "opus",
+      "lifecycle": "open",
+      "path": "~/.claude/skills/resume",
       "pantheon_agent": null,
       "active": true
     },

@@ -4,6 +4,28 @@
     "AIGENT_VAULT": "__AIGENT_ROOT__"
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/sessionstart-reinject.mjs\"",
+            "timeout": 3000
+          }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/resume-verb.mjs\"",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -12,6 +34,18 @@
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/daemons/caddy.sh\"",
             "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/ctx-refresh-sensor.mjs\"",
+            "timeout": 3000
           }
         ]
       }
@@ -53,6 +87,18 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/daemons/caddy-detect-new-skill.sh\"",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/stop-capsule-writer.mjs\"",
             "timeout": 2000
           }
         ]
