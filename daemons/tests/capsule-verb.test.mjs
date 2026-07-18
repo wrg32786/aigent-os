@@ -298,6 +298,48 @@ test('full trusted stamp round-trips proofs and later no-flag stamp clears them'
   assert.equal(restamped.reconcile_digest, null);
 });
 
+test('close_kind stamps verbatim, defaults null, freshness-overwrites, and refuses an unrecognized value', async (t) => {
+  // board c1f777e9 gate round-1 F1 fix direction: "thread close intent through the
+  // pointer, e.g. close_kind: checkpoint|completion stamped by the verb." Same
+  // freshness-overwrite discipline the cycle_token/cycle_id fields already prove
+  // above: additive, default null, a fresh stamp with no flag OVERWRITES any prior
+  // value. Unlike those free-form fields, close_kind is a CLOSED enum — an
+  // unrecognized value is refused loudly rather than silently accepted.
+  const seat = mkSeat(os.tmpdir());
+  t.after(seat.cleanup);
+  const capsule = writeCapsule(seat, validCapsule('capsule-close-kind'));
+  const bsPath = path.join(seat.memory, 'BODY_STATE.json');
+  const readPointer = () => JSON.parse(readFileSync(bsPath, 'utf8')).state.last_capsule;
+  const stamp = (...extraArgs) => execFileSync(process.execPath, [CCP, capsule, ...extraArgs], {
+    cwd: seat.root,
+    env: { ...process.env, AIGENT_ROOT: seat.root },
+    encoding: 'utf8',
+  });
+
+  stamp();
+  assert.equal(readPointer().close_kind, null, 'default: close_kind stamped null with no flag');
+
+  for (const kind of ['checkpoint', 'completion', 'handoff']) {
+    stamp('--close-kind', kind);
+    assert.equal(readPointer().close_kind, kind, `round-trip: --close-kind ${kind} stamped verbatim`);
+  }
+
+  stamp();
+  assert.equal(readPointer().close_kind, null,
+    'freshness-overwrite: fresh no-flag stamp clears the prior close_kind (no replay)');
+
+  let invalidError = null;
+  try {
+    stamp('--close-kind', 'bogus');
+  } catch (e) {
+    invalidError = e;
+  }
+  assert.ok(invalidError, 'invalid --close-kind refused loudly (non-zero exit)');
+  assert.match(String(invalidError.stderr || ''), /REFUSED/);
+  assert.equal(readPointer().close_kind, null,
+    'invalid --close-kind never reaches disk (pointer unchanged from freshness-overwrite step)');
+});
+
 test('cycle stores only challenge digest and walks requested→capsuling→prepared', async (t) => {
   const seat = mkSeat(os.tmpdir(), { git: true });
   t.after(seat.cleanup);
