@@ -224,7 +224,7 @@ trap cleanup EXIT INT TERM
 BACKUP_DIR="$TARGET/.aigent/backups"
 safe_mkdir_p "$BACKUP_DIR" || fail "cannot create $BACKUP_DIR (see symlink warning above)"
 QUARANTINE_DIR="$TARGET/.aigent/quarantine"
-# AIGENT_INSTALL_STAMP override exists only so tests/test-installer.sh can
+# AIGENT_INSTALL_STAMP override exists only so tests/test-installer-fast.sh can
 # predict the exact backup/quarantine filename to pre-plant a symlink at
 # (mirrors the AIGENT_SRC / AIGENT_OS_DIR / AIGENT_OS_REPO_URL test seams
 # elsewhere in this repo). Same caveat as those: an attacker who already
