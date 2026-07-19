@@ -42,7 +42,7 @@ aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending re
 
 > **v0.9 (2026-07-17):** The two-verb lifecycle — automatic capsule + resume supersedes manual `/open` + `/close`; the OS now checkpoints itself whenever a session ends, compacts, or is cleared, and resumes itself on the next boot. Adds a statusline context writer and zero-leak flush legs. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
 
-> **v0.7 (2026-05-09):** Cognitive architecture shipped — runtime consciousness (ACTIVE_STATE computed on every /open and /close), persistent self-model (capabilities, limitations, failure modes), goal stack with success criteria, belief tracking with confidence scores, operational lessons + procedures, /dream offline consolidation, /reconcile cross-system consistency checks, /meta-improve constrained self-modification, eval harness. aigent-OS now models itself, tracks what it believes, detects drift, and proposes its own improvements. See [The Cognitive Architecture](#-the-cognitive-architecture) below.
+> **v0.7 (2026-05-09):** Cognitive architecture shipped — runtime consciousness (ACTIVE_STATE computed at session boundaries; the `/open`+`/close` triggers of the time are now the auto-firing two-verb lifecycle — see v0.9), persistent self-model (capabilities, limitations, failure modes), goal stack with success criteria, belief tracking with confidence scores, operational lessons + procedures, /dream offline consolidation, /reconcile cross-system consistency checks, /meta-improve constrained self-modification, eval harness. aigent-OS now models itself, tracks what it believes, detects drift, and proposes its own improvements. See [The Cognitive Architecture](#-the-cognitive-architecture) below.
 
 > **v0.6 (2026-05-08):** Self-learning engine — skill recall + taxonomy search, capability expansion, capsule v2, temporal fact ledger, failure-to-artifact pipeline. See [The Self-Learning Engine](#-the-self-learning-engine) below.
 
@@ -102,9 +102,9 @@ evals/                             Evaluation test definitions (skill-recall, co
 install.sh                         One-line installer
 
 system/15_somatic_layer.md         Somatic doctrine (body state, lazy compute, organs)
-memory/BODY_STATE.json             Current internal-state snapshot
-memory/AGENT_FITNESS.md            Per-dispatch fitness ledger
-memory/MEMORY_CANDIDATES.md        Staged auto-capture queue
+vault/memory/BODY_STATE.json       Current internal-state snapshot
+vault/memory/AGENT_FITNESS.md      Per-dispatch fitness ledger
+vault/memory/MEMORY_CANDIDATES.md  Staged auto-capture queue
 daemons/system-check.sh            Smoke test for skills, daemons, state files
 daemons/capsule-compact.py         Chain compaction
 daemons/agent-fitness-extract.py   JSONL transcript → fitness classifier
@@ -349,7 +349,7 @@ Released 2026-05-09. The cognitive architecture gives aigent-OS a persistent sel
 
 ### Safety Boundary
 
-> `/dream` proposes. `/meta-improve` implements on a branch. **Only Will approves merges.** aigent-OS may never self-approve, self-merge, or expand its own authority.
+> `/dream` proposes. `/meta-improve` implements on a branch. **Only the operator approves merges.** aigent-OS may never self-approve, self-merge, or expand its own authority.
 
 See [docs/meta-aigent-doctrine.md](docs/meta-aigent-doctrine.md) for the full safety framework.
 

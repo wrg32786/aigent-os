@@ -16,13 +16,13 @@ Create a Capsule v2 with `status: paused` capturing full execution state for lat
    - Open questions and blockers
 
 2. **Determine waiting_on** — from argument or ask:
-   - `will` — needs Will's decision or input
+   - `will` — needs the operator's decision or input
    - `agent` — waiting on a sub-agent to complete
    - `tool` — waiting on external tool/API/deploy
    - `external` — waiting on someone outside the system (a colleague, a client, etc.)
 
 3. **Set resume_trigger**:
-   - `will` → `manual` (Will decides when to resume)
+   - `will` → `manual` (the operator decides when to resume)
    - `agent` → `open` (next /open checks agent status)
    - `tool` → `manual` (check tool status on resume)
    - `external` → `open` (next /open surfaces the wait)

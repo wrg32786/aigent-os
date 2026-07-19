@@ -101,7 +101,7 @@ What the somatic skills may do **without approval**:
 - Surface recommended reflex as a suggestion (not a command)
 - Write capsule files to `memory/capsules/`
 
-What requires **Will's explicit word**:
+What requires **the operator's explicit word**:
 
 - Promote a candidate to a vault note (via /digest)
 - Supersede an existing vault entry

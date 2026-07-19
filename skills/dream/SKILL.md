@@ -7,7 +7,7 @@ created: 2026-05-08
 
 # /dream — Offline Consolidation
 
-> [!danger] CRITICAL SAFETY RULE: /dream PROPOSES. It does NOT auto-apply. Every candidate requires Will's explicit approval before becoming a real change. This boundary is non-negotiable.
+> [!danger] CRITICAL SAFETY RULE: /dream PROPOSES. It does NOT auto-apply. Every candidate requires the operator's explicit approval before becoming a real change. This boundary is non-negotiable.
 
 The frontier piece of the cognitive architecture. Simulates the consolidation function of sleep — scanning recent experience for patterns, extracting durable improvements, surfacing them for review.
 
@@ -128,7 +128,7 @@ Print to console:
 /dream complete — {N} improvement candidates from {M} sessions reviewed.
 Types: {skill: X, rule: Y, procedure: Z, doctrine: W, other: V}
 Confidence distribution: high(>=0.9): A | mid(0.7-0.89): B | low(0.5-0.69): C
-See DREAM_LOG.md for full candidates. No changes applied — Will's approval required.
+See DREAM_LOG.md for full candidates. No changes applied — the operator's approval required.
 ```
 
 ---

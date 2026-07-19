@@ -7,9 +7,9 @@ created: 2026-05-08
 
 # Dream Log
 
-Improvement candidates proposed by /dream. Each candidate requires Will's explicit approval before implementation. This file is append-only — /dream adds new dated sections, never overwrites.
+Improvement candidates proposed by /dream. Each candidate requires the operator's explicit approval before implementation. This file is append-only — /dream adds new dated sections, never overwrites.
 
-> [!danger] NO AUTO-APPLY. Every candidate here is a proposal. Nothing changes until Will approves it.
+> [!danger] NO AUTO-APPLY. Every candidate here is a proposal. Nothing changes until the operator approves it.
 
 See [[concepts/Cognitive Architecture Roadmap]] for context. See [[memory/runtime/LEARNING_SCORECARD]] for adoption rate tracking.
 

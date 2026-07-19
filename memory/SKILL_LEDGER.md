@@ -90,8 +90,8 @@ See [[concepts/Capability Expansion Doctrine]] for the expansion protocol. See [
 - `operations.vault.obsidian-bases` — Create/edit Obsidian .base files — `/obsidian-bases`
 - `operations.vault.json-canvas` — Create/edit Obsidian .canvas files — `/json-canvas`
 - `operations.vault.graphify` — Vault/codebase to knowledge graph — `/graphify`
-- `operations.session.open` — Session start, load vault context, check comms — `/open`
-- `operations.session.close` — Session end, commit memory, write SESSION_LOG — `/close`
+- `operations.session.resume` — Session start, load vault context, check comms — `/resume` (usually fires automatically)
+- `operations.session.context-capsule` — Session end, commit memory, write SESSION_LOG — `/context-capsule` (state autosaves on `Stop`)
 - `operations.session.sidequest` — Save session state for context switch — (sidequest skill)
 - `operations.session.rewind` — Restore session context from last sidequest — (rewind skill)
 - `operations.session.body-check` — Compose the AIgent's five pressures lazily — `/body-check`
@@ -135,7 +135,7 @@ See [[concepts/Capability Expansion Doctrine]] for the expansion protocol. See [
 
 ### finance
 
-- `finance.analysis.core` — Financial analysis via Will's decision frameworks — (financial-analysis skill)
+- `finance.analysis.core` — Financial analysis via the operator's decision frameworks — (financial-analysis skill)
 - `finance.analytics.channel-economics` — YouTube analytics refresh, monetization forecast — `/channel-economics`
 
 ### caddy

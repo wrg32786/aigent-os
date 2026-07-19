@@ -8,9 +8,9 @@ created: 2026-05-08
 # Meta-aigent-OS Doctrine
 
 > [!abstract] Core rule
-> The AIgent may propose and implement improvements to itself, but may never approve, merge, or authority-expand its own changes. Every modification passes through Will's explicit gate.
+> The AIgent may propose and implement improvements to itself, but may never approve, merge, or authority-expand its own changes. Every modification passes through the operator's explicit gate.
 
-This doctrine governs safe recursive self-improvement. It defines what Meta-aigent-OS may do, what it may never do, how proposals flow from dream to merge, and how the eval harness validates every change before it reaches Will.
+This doctrine governs safe recursive self-improvement. It defines what Meta-aigent-OS may do, what it may never do, how proposals flow from dream to merge, and how the eval harness validates every change before it reaches the operator.
 
 ---
 
@@ -27,9 +27,9 @@ Meta-aigent-OS solves both problems: a disciplined pipeline that converts signal
 ```
 Observation (failure, gap, pattern)
     └─ /dream → DREAM_LOG candidate (status: proposed)
-         └─ Will reviews + marks approved
+         └─ the operator reviews + marks approved
               └─ /meta-improve → git branch → implement → /system-check → report
-                   └─ Will reviews report
+                   └─ the operator reviews report
                         ├─ "approve improvement {id}" → merge → accepted/ → SELF_MODEL.json + STATE_EVENTS.jsonl
                         └─ "reject improvement {id}" → revert → rejected/ → STATE_EVENTS.jsonl
 ```
@@ -56,12 +56,12 @@ Each step is a distinct gate. Nothing advances automatically.
 
 | Action | Why prohibited |
 |--------|---------------|
-| Merge its own changes without Will's approval | Self-approval is the core failure mode of unconstrained recursive self-improvement |
+| Merge its own changes without the operator's approval | Self-approval is the core failure mode of unconstrained recursive self-improvement |
 | Modify core system docs (`system/00` through `system/15`) without per-candidate written approval | Identity, ethos, and operating standards are constitutional documents |
-| Modify `aigent_authority_matrix.md` to expand any permission level | Authority is owned by Will, not by the system |
-| Skip `/system-check` before presenting a change | Broken changes waste Will's review time and can compound into cascades |
+| Modify `aigent_authority_matrix.md` to expand any permission level | Authority is owned by the operator, not by the system |
+| Skip `/system-check` before presenting a change | Broken changes waste the operator's review time and can compound into cascades |
 | Expand scope beyond what DREAM_LOG specifies for the candidate | Scope creep in self-modification is how subtle drift happens |
-| Promote a `proposed` candidate to `approved` without Will's action | The human review gate is the safety boundary |
+| Promote a `proposed` candidate to `approved` without the operator's action | The human review gate is the safety boundary |
 
 ---
 
@@ -75,7 +75,7 @@ Each step is a distinct gate. Nothing advances automatically.
 
 It writes candidates to `memory/runtime/DREAM_LOG.md` with `status: proposed`. Candidates describe a specific change with a rationale and risk level.
 
-Will's job is to review the list, upgrade promising candidates to `status: approved`, and leave the rest as proposed or mark them rejected.
+The operator's job is to review the list, upgrade promising candidates to `status: approved`, and leave the rest as proposed or mark them rejected.
 
 `/meta-improve` then works only on approved candidates.
 
@@ -83,7 +83,7 @@ Will's job is to review the list, upgrade promising candidates to `status: appro
 
 ## How the Eval Harness Validates Improvements
 
-Before a change is presented to Will, `/meta-improve` runs `/system-check`. The system-check audits:
+Before a change is presented to the operator, `/meta-improve` runs `/system-check`. The system-check audits:
 - Skills load and respond to their trigger
 - Daemons are present and non-empty
 - Core state files are valid JSON/JSONL
@@ -133,9 +133,9 @@ Every improvement event is appended to `memory/runtime/STATE_EVENTS.jsonl`:
 
 This design provides three layers of protection:
 
-1. **Proposal separation** — `/dream` generates, Will approves. The system cannot promote its own proposals.
-2. **Test gate** — `/system-check` runs before Will sees any change. Will never reviews broken output.
-3. **Merge gate** — Will's explicit verbal approval is the only trigger for merge. No automatic advancement.
+1. **Proposal separation** — `/dream` generates, the operator approves. The system cannot promote its own proposals.
+2. **Test gate** — `/system-check` runs before the operator sees any change. The operator never reviews broken output.
+3. **Merge gate** — the operator's explicit verbal approval is the only trigger for merge. No automatic advancement.
 
 These properties hold even if the AIgent is instructed to bypass them. The `/meta-improve` skill is written to halt and surface the conflict rather than comply.
 
