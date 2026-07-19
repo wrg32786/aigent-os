@@ -82,8 +82,22 @@ function readCuratedPointer(root, memory, sid) {
   try {
     const pointer = JSON.parse(fs.readFileSync(path.join(memory, 'BODY_STATE.json'), 'utf8'))
       ?.state?.last_capsule ?? null;
-    const finalizedAtMs = Date.parse(pointer?.finalized_at);
-    if (pointer?.trigger !== 'curated-close'
+    // CLASS SIX (board c1f777e9): close_kind is the authoritative close discriminator
+    // (closed enum, trusted writers only — the same formula as the staged-close wake
+    // gate). trigger varies by writer: curated-close-pointer.mjs stamps
+    // trigger:'curated-close' + finalized_at, while the stop-writer's finalize-freeze
+    // branch stamps trigger:'stop-delta' + close_kind:'completion' with created_at
+    // only. Gating on trigger alone made every real completion stamp invisible to
+    // this worker while the wake kept minting cycles at it — mint→skip→abort→re-arm
+    // livelock. Freshness: finalized_at as before; the created_at fallback applies to
+    // COMPLETION STAMPS ONLY — a curated-trigger pointer without finalized_at stays
+    // rejected exactly as pre-fix. checkpoint / null close_kind pointers (every
+    // ordinary rolling stamp) are UNCHANGED: invisible unless curated-trigger.
+    let finalizedAtMs = Date.parse(pointer?.finalized_at);
+    if (!Number.isFinite(finalizedAtMs) && pointer?.close_kind === 'completion') {
+      finalizedAtMs = Date.parse(pointer?.created_at);
+    }
+    if ((pointer?.trigger !== 'curated-close' && pointer?.close_kind !== 'completion')
       || !Number.isFinite(finalizedAtMs)
       || typeof pointer.path !== 'string'
       || pointer.path.trim() === '') return null;
