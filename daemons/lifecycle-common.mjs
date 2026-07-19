@@ -249,8 +249,21 @@ export function curatedWindowMs() {
 // blind spot and must be preserved. A lapsed close flips as before.
 export function resumeFlipShouldDefer(pointer, source) {
   if (String(source || '') === 'clear') return false;
-  if (pointer?.trigger !== 'curated-close' && pointer?.trigger !== 'manual-close') return false;
-  const fin = Date.parse(String(pointer?.finalized_at || ''));
+  // CLASS SIX (board c1f777e9, third reader of the close discriminator): the
+  // stop-writer's finalize-freeze branch stamps close_kind:'completion' with
+  // trigger:'stop-delta' and created_at only — that IS a close awaiting seal, and a
+  // rotation boot consuming it re-creates F1 for freeze-branch seats. Same
+  // discriminator as the wake gate and readCuratedPointer: close_kind completion
+  // counts regardless of trigger. Freshness: finalized_at as before; the created_at
+  // fallback applies to COMPLETION STAMPS ONLY — a curated-trigger pointer without
+  // finalized_at still never defers (the orient flip contract: real stampers always
+  // write finalized_at, so that shape means synthetic/legacy and the flip proceeds).
+  // checkpoint / null close_kind stamps (every ordinary rolling pointer) never defer.
+  const isCompletionStamp = pointer?.close_kind === 'completion';
+  if (pointer?.trigger !== 'curated-close' && pointer?.trigger !== 'manual-close'
+    && !isCompletionStamp) return false;
+  let fin = Date.parse(String(pointer?.finalized_at || ''));
+  if (!Number.isFinite(fin) && isCompletionStamp) fin = Date.parse(String(pointer?.created_at || ''));
   if (!Number.isFinite(fin)) return false;
   return (Date.now() - fin) < curatedWindowMs();
 }
