@@ -21,7 +21,7 @@ Output: `vault/memory/HEAT_INDEX.json`
 
 ## When it runs
 
-- **Automatically on `/close`** — the session close skill invokes this at the end so the next `/open` has a fresh prioritization signal.
+- **On demand only** — heat is not wired to a session hook. (Earlier builds invoked it from a `/close` skill; `/close` and `/open` are retired, so run it yourself when you want a fresh prioritization signal.)
 - **Manually** — run the command above any time after a big vault reorg or to test pin changes.
 
 ## Pinning
