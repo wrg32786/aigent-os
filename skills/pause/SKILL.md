@@ -23,9 +23,9 @@ Create a Capsule v2 with `status: paused` capturing full execution state for lat
 
 3. **Set resume_trigger**:
    - `will` → `manual` (the operator decides when to resume)
-   - `agent` → `open` (next /open checks agent status)
+   - `agent` → `open` (resumes at next session boot, which checks agent status)
    - `tool` → `manual` (check tool status on resume)
-   - `external` → `open` (next /open surfaces the wait)
+   - `external` → `open` (resumes at next session boot, surfacing the wait)
 
 4. **Write capsule** — use `/context-capsule` schema with `status: paused`
 
@@ -37,7 +37,7 @@ Create a Capsule v2 with `status: paused` capturing full execution state for lat
    Waiting on: {waiting_on}
    Resume trigger: {resume_trigger}
    Next action: {next_valid_action}
-   Resume with /resume or next /open will offer it.
+   Resume with /resume (offered automatically at next session boot).
    ```
 
 ## Related

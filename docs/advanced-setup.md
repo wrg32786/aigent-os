@@ -32,7 +32,7 @@ grep -c "__AIGENT_ROOT__" .claude/settings.json  # should print 0
 | `hooks/auto-capture.sh` | PostToolUse | Logs actions to daily note automatically |
 | `daemons/caddy-detect-new-skill.sh` | PostToolUse (Write/Edit) | Detects new skill files, prompts `/caddy-enroll` |
 | `hooks/session-capture-summary.sh` | Stop | Writes session summary at conversation end |
-| `hooks/session-end-check.sh` | Stop | Legacy end-of-session check — superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
+| `hooks/session-end-check.sh` | — (not wired) | Legacy end-of-session check — present in the tree but NOT registered by the installer; superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
 | `hooks/log-token-usage.sh` | Stop | Logs token cost to vault |
 
 ---

@@ -15,7 +15,7 @@ Skills are slash commands that trigger predefined workflows. Type the command an
 ## How Skills Work
 
 Each skill is a `SKILL.md` file in `skills/<name>/`. The file contains:
-- **Frontmatter** — name, description, trigger command
+- **Frontmatter** — `name`, `description`, a `triggers` list (plural), and `user-invocable`
 - **Protocol** — Step-by-step instructions for what the skill does
 - **Rules** — Constraints and guardrails
 
@@ -41,7 +41,10 @@ Then copy it to `.claude/skills/my-skill/SKILL.md` for runtime, or run `/caddy-e
 ---
 name: my-skill
 description: What this skill does in one sentence
-trigger: /my-skill
+triggers:
+  - /my-skill
+  - natural-language phrase that should fire it
+user-invocable: true
 ---
 
 # Skill Name
