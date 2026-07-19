@@ -18,6 +18,10 @@ related:
 
 The threshold-triggered refresh does NOT need this skill — if a fork wires a controller, it injects a RefreshRequest carrying cycle + challenge, and the autofire worker consumes your capsule when the transcript falls still. Invoke `/context-capsule` for the explicit cases: a mid-session checkpoint before risky work, a completion capsule when a thread ships, or a handoff.
 
+## The completion signal (you never stamp it — finalizing IS it)
+
+Whether this capsule reads as a *checkpoint* or a *completion* downstream is decided entirely by what you write in `waiting_on`, not by anything you invoke. Write a real `waiting_on` (a thread genuinely closing, a handoff) and the very next `Stop` hook's trusted stop-writer sees this session's own capsule has left skeleton, advances the pointer to it, and stamps `close_kind: completion` automatically — no `cycle_id`, because a voluntary close is not a cycle receipt. A mid-session checkpoint before risky work is the same STEP 2 write; it just isn't the session's final word, so nothing downstream reads it as completion. Full mechanics: docs/two-verb-lifecycle.md, "Completion signal vs. checkpoint (close_kind)". This does not loosen the fence below — you still never touch the pointer, digest, or cycle_token yourself.
+
 ## Operator sovereignty (never violate)
 
 - The capsule is **best-effort autosave, never a gate**. An operator `/clear` passes through whether or not a capsule landed; never tell the operator to wait on capsule machinery.
