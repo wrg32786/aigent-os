@@ -14,7 +14,7 @@ phase: 4
 
 ## Design invariant
 
-**Nothing promotes to vault without Will's explicit decision.** Every operation either stages (tentative), surfaces for curation, writes to vault with principal approval, queries without modifying, or manages metadata. Auto-promotion is not a feature — it is a failure mode.
+**Nothing promotes to vault without the operator's explicit decision.** Every operation either stages (tentative), surfaces for curation, writes to vault with principal approval, queries without modifying, or manages metadata. Auto-promotion is not a feature — it is a failure mode.
 
 ---
 
@@ -22,7 +22,7 @@ phase: 4
 
 ### 1. `stage(candidate)` — Candidate Capture
 
-**What it does:** Intercepts memory-authoring phrases from Will's input and appends a candidate row to `memory/MEMORY_CANDIDATES.md` for later review.
+**What it does:** Intercepts memory-authoring phrases from the operator's input and appends a candidate row to `memory/MEMORY_CANDIDATES.md` for later review.
 
 **Current implementation:** `daemons/memory-capture.sh` — a Python script invoked from `daemons/caddy.sh` on every UserPromptSubmit hook. Uses two-tier regex matching.
 
@@ -31,7 +31,7 @@ phase: 4
 | Tier 1 | `remember that X`, `from now on X`, `new rule: X`, `rule: X`, `we decided X`, `going forward X` | high | Stable — high precision |
 | Tier 2 | AI-tell corrections, `never use X`, placement rules (`shouldn't live in X`), calibration corrections (`divide X by N`), explicit disagreements | medium | Calibrated — `correction_actually` and `correction_drop` removed after 100% false-positive rate |
 
-**Input sanitizer (added this session):** strips XML/HTML tags, fenced code blocks, inline code, JSON fragments, and markdown table rows before pattern matching. These are agent output, not Will's words. Without this, Tier 2 fired on agent responses and tool results.
+**Input sanitizer (added this session):** strips XML/HTML tags, fenced code blocks, inline code, JSON fragments, and markdown table rows before pattern matching. These are agent output, not the operator's words. Without this, Tier 2 fired on agent responses and tool results.
 
 **Operational constraints:**
 - Hard cap: 50 staged rows. At cap, skip new captures and emit `[CADDY:memory] CAP` hint. Forces a `/digest` before more accumulate.
@@ -39,10 +39,10 @@ phase: 4
 - Best-effort: capture failure MUST NOT block Caddy hint output. Errors route to `memory/.daemon-errors.log`.
 - Excluded phrases: `/digest`, `review candidates`, `stage memory`, `promote candidate` — these are skill invocations, not memory-authoring.
 
-**Known failure mode (fixed):** Tier 2 `correction_actually` matched any sentence containing "actually" followed by 10+ characters. Same problem with `correction_drop`. Both removed. The insight: real corrections from Will are short imperative sentences that Tier 1 patterns already catch. Tier 2 should only add recall for signals Tier 1 structurally can't reach (e.g., AI-tell language without a trigger keyword).
+**Known failure mode (fixed):** Tier 2 `correction_actually` matched any sentence containing "actually" followed by 10+ characters. Same problem with `correction_drop`. Both removed. The insight: real corrections from the operator are short imperative sentences that Tier 1 patterns already catch. Tier 2 should only add recall for signals Tier 1 structurally can't reach (e.g., AI-tell language without a trigger keyword).
 
 > [!info] Upgrade path (Phase 5+)
-> Replace regex with LLM classification: send the sanitized input to a haiku sub-call with the prompt "Is this a real directive from Will that should be remembered? Return YES/NO + extracted content." This eliminates false positives structurally rather than through pattern pruning. Threshold: only implement when false-positive rate from Tier 2 proves unacceptable in production. Current Tier 2 observability log (`memory/.tier2-observations.log`) accumulates signal for this decision.
+> Replace regex with LLM classification: send the sanitized input to a haiku sub-call with the prompt "Is this a real directive from the operator that should be remembered? Return YES/NO + extracted content." This eliminates false positives structurally rather than through pattern pruning. Threshold: only implement when false-positive rate from Tier 2 proves unacceptable in production. Current Tier 2 observability log (`memory/.tier2-observations.log`) accumulates signal for this decision.
 
 **Candidate row schema:**
 
@@ -56,11 +56,11 @@ phase: 4
 
 ### 2. `digest()` — Candidate Review
 
-**What it does:** Surfaces each staged candidate to Will one at a time with three choices: promote, skip, or supersede an existing rule.
+**What it does:** Surfaces each staged candidate to the operator one at a time with three choices: promote, skip, or supersede an existing rule.
 
 **Current implementation:** `/digest` skill. As of Phase 3 work, wired into `/close` — it runs automatically at session close rather than only on explicit invocation.
 
-**Invariant:** Never auto-promotes. Will makes every call. The skill presents the candidate, suggests a destination, and waits for a decision. This is non-negotiable — see [[concepts/Somatic v0.4.2 Memory Capture]] for why staged-with-curation beats auto-promote.
+**Invariant:** Never auto-promotes. The operator makes every call. The skill presents the candidate, suggests a destination, and waits for a decision. This is non-negotiable — see [[concepts/Somatic v0.4.2 Memory Capture]] for why staged-with-curation beats auto-promote.
 
 **Decision options per candidate:**
 
@@ -70,7 +70,7 @@ phase: 4
 | Skip | Updates status to `skipped`, candidate archived in-place |
 | Supersede | Marks which existing rule this replaces, triggers update to that note |
 
-**When it runs:** Automatically at `/close` if staged candidates exist. Also available on-demand via `/digest`. The on-demand path is the escape hatch for heavy memory-authoring sessions where Will wants to curate before the session ends.
+**When it runs:** Automatically at `/close` if staged candidates exist. Also available on-demand via `/digest`. The on-demand path is the escape hatch for heavy memory-authoring sessions where the operator wants to curate before the session ends.
 
 ---
 
@@ -214,7 +214,7 @@ Per [[memory/DELEGATION_TRACKER.md]]: items older than defined thresholds surfac
 The Memory Engine sits on two complementary substrates. They serve different audiences and must not be conflated.
 
 ```
-Will (human)
+Operator (human)
   └─ Obsidian vault (<vault>/)
        └─ Human-readable markdown notes, wikilinks, Obsidian graph
        └─ Source of truth. Edited by Write/Edit tools.
@@ -237,7 +237,7 @@ Agents (programmatic)
 
 | Failure | Prevention |
 |---------|------------|
-| Auto-promote without Will's decision | `digest()` is the only promotion path; staging never writes to vault |
+| Auto-promote without the operator's decision | `digest()` is the only promotion path; staging never writes to vault |
 | Orphan vault notes (no wikilinks) | Every `promote()` must wire at least one backlink; Hestia catches stragglers |
 | MEMORY.md index bloat | 200-line hard cap; Archive section for shipped/killed items |
 | remindb cache drift | 5-min auto-rescan; fallback to `Read` when freshness required |

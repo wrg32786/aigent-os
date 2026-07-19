@@ -34,18 +34,18 @@ The cognitive data layer — files that encode what the AIgent knows about itsel
 | `memory/runtime/LESSONS.jsonl` | Positive learnings — what worked and when to apply it |
 | `memory/runtime/PROCEDURES.jsonl` | Reusable step-by-step workflows crystallized from experience |
 
-These files are **computed, not hand-authored** going forward. /open reads them; /close updates them. Manual pre-population provides the seed state — battle testing fills them out.
+These files are **computed, not hand-authored** going forward. `/resume` reads them; `/context-capsule` updates them (both usually fire automatically — see [[docs/two-verb-lifecycle]]). Manual pre-population provides the seed state — battle testing fills them out.
 
 ## S41 Deliverables (Next Session)
 
 The active reconciliation and dreaming layer:
 
 - **`/reconcile` skill** — diff GOAL_STACK against SESSION_LOG + ACTIVE_PRIORITIES. Surface stale goals, completed goals not yet closed, new goals implied by recent sessions. Output: suggested edits to GOAL_STACK.
-- **`/dream` skill** — reads SELF_MODEL + LESSONS + FAILURE_MODES + BELIEF_STATE, generates 3–5 ranked improvement candidates. Each candidate: what to improve, how confident, what evidence, proposed experiment. Feeds into Will's review queue before any action.
+- **`/dream` skill** — reads SELF_MODEL + LESSONS + FAILURE_MODES + BELIEF_STATE, generates 3–5 ranked improvement candidates. Each candidate: what to improve, how confident, what evidence, proposed experiment. Feeds into the operator's review queue before any action.
 - **Learning scorecard** — `/agent-fitness`-style ledger but for the AIgent's own self-improvement loop. Tracks: beliefs updated, lessons added, procedures crystallized, failures captured, skill recalls fired. Rolling 30-day window.
 
 > [!info] Design constraint
-> /dream is generative, not executive. It proposes; Will approves. No self-modification without human gate. This is the Level 2 authority boundary applied to the AIgent's own capability surface.
+> /dream is generative, not executive. It proposes; the operator approves. No self-modification without human gate. This is the Level 2 authority boundary applied to the AIgent's own capability surface.
 
 ## S42 Deliverables (Two Sessions Out)
 
@@ -53,7 +53,7 @@ The meta layer — the AIgent reflecting on its own improvement process:
 
 - **Meta-aigent-OS review** — quarterly (or triggered) audit of the self-improvement loop itself. Is /dream generating good candidates? Are LESSONS actually reducing failure recurrence? Is BELIEF_STATE converging or drifting?
 - **Improvement candidate eval harness** — lightweight framework to run proposed improvements as experiments and measure outcome. Based on [[concepts/Self-Learning Doctrine]] failure/success classification.
-- **SELF_MODEL auto-update** — on /close, diff recent session for new capabilities demonstrated, new failure modes encountered, authority boundary tests. Append to SELF_MODEL with session provenance.
+- **SELF_MODEL auto-update** — on `/context-capsule`, diff recent session for new capabilities demonstrated, new failure modes encountered, authority boundary tests. Append to SELF_MODEL with session provenance.
 
 ## The 4-Level Learning Stack
 
@@ -68,7 +68,7 @@ Level 4: Self-mod       — /dream + /reconcile    How to improve the system its
 
 Each level feeds up. Repeated facts become procedure candidates. Repeated procedures become strategies. Strategies that work become self-model entries. Strategies that fail go to FAILURE_MODES.
 
-The `/learn-from-failure` skill operates at Level 1–2. `/dream` operates at Level 3–4. Manual /close captures are the primary input to Level 1.
+The `/learn-from-failure` skill operates at Level 1–2. `/dream` operates at Level 3–4. Manual `/context-capsule` captures are the primary input to Level 1.
 
 ## Banked Concepts (Not Building Yet)
 

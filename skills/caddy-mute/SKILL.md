@@ -52,7 +52,7 @@ Compute `muted_until` and Edit `memory/CADDY_MUTES.json`:
 }
 ```
 
-For `--forever`: set `muted_until` to `9999-12-31T23:59:59Z`. Surface to Will when setting forever ("muted memory class indefinitely — confirm?") so it doesn't drift into permanent silence by accident.
+For `--forever`: set `muted_until` to `9999-12-31T23:59:59Z`. Surface to the operator when setting forever ("muted memory class indefinitely — confirm?") so it doesn't drift into permanent silence by accident.
 
 For `--class all`: write a single `all` block; caddy.sh `class_muted` checks `all` in addition to the requested class.
 

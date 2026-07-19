@@ -6,8 +6,8 @@ Skills are slash commands that trigger predefined workflows. Type the command an
 
 | Command | What It Does |
 |---------|-------------|
-| `/open` | Boot the session — load vault context, surface what matters |
-| `/close` | End the session — commit memory, write daily note, update logs |
+| `/resume` | Boot the session — load the last capsule, re-ground, act on the next step (auto-fires on `SessionStart(clear)`; `/open` is retired) |
+| `/context-capsule` | Bank a resume-ready capsule (a rolling best-effort autosave also runs on every `Stop`; `/close` is retired) |
 | `/brief` | Generate a structured delegation brief for any task |
 | `/decide` | Run a decision through the 12-lens evaluation framework |
 | `/search` | Semantic search over the vault by meaning (local, private) |
@@ -19,17 +19,21 @@ Each skill is a `SKILL.md` file in `skills/<name>/`. The file contains:
 - **Protocol** — Step-by-step instructions for what the skill does
 - **Rules** — Constraints and guardrails
 
-When you type `/open`, Claude Code loads the SKILL.md and follows its protocol.
+When you type a skill command, Claude Code loads its `SKILL.md` and follows the protocol.
 
 ## Creating Custom Skills
 
-Make a new directory in `skills/` with a `SKILL.md` inside:
+Skills live in two places: `skills/` is the versioned **source** tree in this repo, and `.claude/skills/` is the **runtime** location Claude Code actually reads. Creating a file under `skills/` alone does NOT make the command work — you must also place it in `.claude/skills/` (or re-run the installer, or run `/caddy-enroll`).
+
+Make a new directory in `skills/` with a `SKILL.md` inside for versioning:
 
 ```
 skills/
   my-skill/
     SKILL.md
 ```
+
+Then copy it to `.claude/skills/my-skill/SKILL.md` for runtime, or run `/caddy-enroll` to register it. See [Advanced Setup → Skills: source vs runtime](advanced-setup.md#skills-source-vs-runtime).
 
 ### SKILL.md Template
 

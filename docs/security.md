@@ -70,18 +70,20 @@ Wire it into your Claude Code settings:
 {
   "PostToolUse": [
     {
-      "matcher": "Read|WebFetch|Bash|Grep",
+      "matcher": "Read|WebFetch|Bash|Grep|WebSearch",
       "hooks": [
         {
           "type": "command",
-          "command": "bash AIGENT_ROOT/hooks/security-scan.sh",
-          "timeout": 3000
+          "command": "bash \"__AIGENT_ROOT__/hooks/security-scan.sh\"",
+          "timeout": 2000
         }
       ]
     }
   ]
 }
 ```
+
+Replace `__AIGENT_ROOT__` with your absolute install path (the installer does this automatically; hand-wiring, substitute it yourself — see [Advanced Setup](advanced-setup.md#hook-configuration)). A bare `AIGENT_ROOT` resolves to a nonexistent relative path and the hook silently never fires.
 
 ### What It Catches
 

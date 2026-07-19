@@ -7,13 +7,15 @@ created: 2026-05-11
 
 # Session Engine
 
-> Phase 3 of the [[concepts/aigent-OS Refactor Spec|aigent-OS Refactor]]. Breaks `/open` and `/close` from monolithic prompt blobs into discrete, named steps. Each step is independently testable and replaceable.
+> [!warning] SUPERSEDED — historical design artifact
+> This spec decomposes the **retired** `/open` and `/close` commands. The shipped lifecycle is the two-verb model — `/resume` + `/context-capsule`, auto-firing on `SessionStart`/`Stop`; see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]]. The decomposition below is kept as design history and does NOT describe current shipped behavior. The command files it references (`.claude/commands/open.md`, `.claude/commands/close.md`) do not exist in the current tree.
+
+> Phase 3 of the [[concepts/aigent-OS Refactor Spec|aigent-OS Refactor]]. Broke `/open` and `/close` from monolithic prompt blobs into discrete, named steps.
 
 ## Relationship to Current Commands
 
-- `/open` lives at `.claude/commands/open.md`
-- `/close` lives at `.claude/commands/close.md`
-- This spec defines the **logical step decomposition** — the command files are the current implementation. When the Skill Router is built (Phase 2), these steps become the Session Engine module at `~/.claude/skills/session/`.
+- `/open` and `/close` are retired. The skill files `skills/open/` and `skills/close/` remain on disk but are deprecated; there are no `.claude/commands/*.md` files in the current tree.
+- This spec is the **logical step decomposition** of that retired flow, kept as design history. The shipped lifecycle replaced it with the two-verb model — see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]].
 
 ---
 
@@ -60,7 +62,7 @@ created: 2026-05-11
 **Inputs:** `memory/MEMORY_CANDIDATES.md` filtered to `status: staged`
 **Outputs:** Per-candidate actions applied; `status` + `digested_on` updated
 **Trigger condition:** Only if staged candidates exist
-**Current impl:** NEW — added to /open per Will's request (S41d). Mirrors /close Step 0.5 behavior on session start so backlog doesn't accumulate between sessions.
+**Current impl:** NEW — added to /open per the operator's request (S41d). Mirrors /close Step 0.5 behavior on session start so backlog doesn't accumulate between sessions.
 **Dependency:** Runs AFTER `offerCapsuleResume()` so capsule context is available during promotion decisions.
 
 ### Step 7: `syncUsage()`
@@ -122,7 +124,7 @@ created: 2026-05-11
 **What:** Somatic stack smoke test
 **Agent:** the AIgent inline (bash, capture exit code)
 **Inputs:** None
-**Outputs:** PASS/FAIL lines in commit summary; surfaces FAILs to Will
+**Outputs:** PASS/FAIL lines in commit summary; surfaces FAILs to the operator
 **Current impl:** `/close` Step 7.5
 
 ### Step 7: `updateCognitiveRuntime()`

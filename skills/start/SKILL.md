@@ -34,7 +34,7 @@ For compatibility with installations before v0.9, `.aigent/first-run-done` is al
 3. Run `/operator-setup`, one question at a time.
 4. When the operator chooses an action from the personal briefing, run `/first-win` and produce a usable artifact.
 5. Teach the operating loop once:
-   > Start later sessions with `/open`. When you are done, say "close up" or run `/close` so the work is banked. Run `/statusline` once in Claude Code to show context usage.
+   > Later sessions pick up on their own via `/resume`. When you are done, say "close up" or run `/context-capsule` so the work is banked (it also autosaves as you go). Run `/statusline` once in Claude Code to show context usage.
 6. Only after setup memory and the first artifact are successfully written:
    - Set `.aigent/state.json` to `status: ready` with an ISO-8601 `completedAt` value.
    - Write `.aigent/first-run-done` for backward compatibility.

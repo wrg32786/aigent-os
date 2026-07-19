@@ -124,7 +124,7 @@ This skill surfaces issues and proposes resolutions. It does not:
 - Update ACTIVE_STATE or GOAL_STACK
 - Revise beliefs or facts
 
-Will or the AIgent decides which resolutions to apply. Each fix should be deliberate.
+The operator or the AIgent decides which resolutions to apply. Each fix should be deliberate.
 
 ---
 

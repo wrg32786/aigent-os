@@ -13,13 +13,13 @@ This directory manages the full lifecycle of proposed system improvements — fr
 ```
 /dream
   └─ generates candidates → DREAM_LOG.md (status: proposed)
-       └─ Will reviews + marks approved
+       └─ The operator reviews + marks approved
             └─ /meta-improve
                  └─ creates branch
                       └─ implements change
                            └─ runs /system-check
                                 └─ writes report → candidates/
-                                     └─ surfaces to Will
+                                     └─ surfaces to the operator
                                           ├─ APPROVED → merge branch → accepted/
                                           └─ REJECTED → revert → rejected/
 ```
@@ -28,7 +28,7 @@ This directory manages the full lifecycle of proposed system improvements — fr
 
 | Directory | Contents |
 |-----------|----------|
-| `candidates/` | Reports for changes awaiting Will's approval. One file per candidate-id. |
+| `candidates/` | Reports for changes awaiting the operator's approval. One file per candidate-id. |
 | `accepted/` | Reports for approved and merged improvements. Permanent record. |
 | `rejected/` | Reports for rejected improvements, with rejection reason prepended. |
 
@@ -40,7 +40,7 @@ Example: `candidates/dream-2026-05-08-skill-recall-fuzzy.md`
 
 ## Hard rules (summary)
 
-- `/meta-improve` may NOT merge without Will's explicit approval.
+- `/meta-improve` may NOT merge without the operator's explicit approval.
 - `/meta-improve` may NOT modify core system docs (00–15) without per-candidate written approval.
 - Every change must pass `/system-check` before being presented.
 - Every merge is logged to `STATE_EVENTS.jsonl` and `SELF_MODEL.json`.
