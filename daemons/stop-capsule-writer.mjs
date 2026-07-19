@@ -106,6 +106,16 @@ try {
   try { gate = await import('./capsule-content-gate.mjs'); }
   catch (e) { logErr(root, `content-gate import failed (gate skipped): ${e?.message || e}`); }
 
+  // R2-2 (gate round-2, board c1f777e9): same lazy + fail-open discipline as the
+  // content gate above — capsuleLeftSkeleton is the SAME predicate capsule-verb
+  // and ctx-refresh-sensor already gate finalize-readiness on; reusing it (not
+  // re-parsing frontmatter by hand) means this gate can never disagree with
+  // theirs about the same bytes. Import failure degrades to pre-gate behavior
+  // (old merge-in-place; logged, never blocks a turn).
+  let leftSkeleton = null;
+  try { ({ capsuleLeftSkeleton: leftSkeleton } = await import('./capsule-verb.mjs')); }
+  catch (e) { logErr(root, `capsule-verb import failed (finalize-freeze gate skipped): ${e?.message || e}`); }
+
   const MEM = memRoot(root);
   const RUNTIME = path.join(MEM, 'runtime', 'stop-writer');
   mkdirSync(RUNTIME, { recursive: true });
@@ -349,7 +359,56 @@ ${ANCHORS.rows}
 `;
   }
 
-  let doc = existsSync(capPath) ? readFileSync(capPath, 'utf8') : skeleton();
+  const capExisted = existsSync(capPath);
+  const originalCapPath = capPath;
+  const originalDoc = capExisted ? readFileSync(capPath, 'utf8') : skeleton();
+  let doc = originalDoc;
+
+  // R2-2 (gate round-2, board c1f777e9) FINALIZE-FREEZE: the documented recovery
+  // play "finalize the rolling capsule in place" turns THIS file into a curated
+  // close without ever repointing state.capsule_path — so without this gate the
+  // merge below would reopen a byte-frozen, already-hashed capsule and mutate
+  // it (capsule-verb's write-once sha256, capsule-verb.mjs:587, can never be
+  // re-stamped -> permanent capsule_invalid abort). A capsule that has left
+  // skeleton (real waiting_on) is finalized and stays byte-frozen from here on:
+  // this turn's delta rolls a FRESH auto-capsule instead, using the exact same
+  // path convention the "no capsule yet" branch above uses, disambiguated by
+  // this turn's own deltaSig. writeState() below persists this reroute for
+  // free — it always writes whatever capPath currently is.
+  //
+  // originalCapPath/originalDoc are kept SEPARATE from capPath/doc on purpose:
+  // the finalize-ADVANCE contract (below, thisFinalized) must keep judging THIS
+  // session's own identity against the capsule it actually finalized — the
+  // fresh companion file is a skeleton and would read as never-finalized,
+  // wrongly re-freezing the pointer on a stale target. Freezing the BYTES is
+  // orthogonal to advancing the POINTER.
+  //
+  // GUARDRAIL (Titus ruling, gate round-2 fold-in): fail-safe ordering. deltaSig
+  // content-addresses only THIS turn's delta — it is not scoped across every
+  // historical reroute this session may have made, so a recurring delta shape
+  // (the same files/errors/assistant text landing again on a later, non-
+  // consecutive turn) CAN reproduce the same fresh path. A pre-existing file
+  // there is a genuine collision: silently overwriting it would destroy
+  // whatever an earlier reroute already committed. The only safe move is to
+  // SKIP the merge entirely and leave the delta for a retry next turn — NEVER
+  // fall back to writing into the frozen file itself (that is exactly the bug
+  // this gate exists to prevent). Write failures on the fresh path are already
+  // fail-safe by construction below: capPath fully replaces the write target,
+  // so the tmp+rename fallback chain and its `outcome:'error:write-failed'`
+  // exit never reference originalCapPath, and state.capsule_path is only
+  // persisted after a committed write — an exhausted write retries fresh
+  // next turn, same as a collision.
+  const frozen = capExisted && leftSkeleton && leftSkeleton(originalDoc);
+  if (frozen) {
+    const freshPath = path.join(capDir, `${dateStr}-auto-${sid.slice(0, 8)}-${deltaSig}.md`);
+    if (existsSync(freshPath)) {
+      logErr(root, `finalize-freeze: fresh-roll path collision at ${freshPath} — merge skipped this turn (frozen file never touched), will retry`);
+      outcome = 'noop:fresh-roll-collision';
+      process.exit(0);
+    }
+    capPath = freshPath;
+    doc = skeleton();
+  }
 
   // A bullet minus its `- ` prefix and volatile HH:MM stamp — dedup must not be
   // defeated by re-processing a span at a different wall-clock minute (a
@@ -496,9 +555,14 @@ ${ANCHORS.rows}
       return true;
     } catch { return false; }
   }
+  // R2-2: the pointer's IDENTITY is this session's designated capsule as it
+  // stood BEFORE any finalize-freeze reroute — a frozen capsule is still this
+  // session's own legitimate finalize; only its bytes stop being touched. Using
+  // the fresh companion skeleton here would read as never-finalized and wrongly
+  // re-freeze the pointer on a stale target (see frozen comment above).
   const pointer = {
-    id: path.basename(capPath, '.md'),
-    path: path.relative(root, capPath).replace(/\\/g, '/'),
+    id: path.basename(originalCapPath, '.md'),
+    path: path.relative(root, originalCapPath).replace(/\\/g, '/'),
     objective,
     status: 'active',
     created_at: new Date().toISOString(),
@@ -513,10 +577,26 @@ ${ANCHORS.rows}
   // until a human advances it by hand. Allow the repoint when this session's
   // capsule (the `doc` just written) is itself finalize-live — same
   // status:active + real-waiting_on predicate the guard uses.
-  const thisFm = doc.split(/^---\s*$/m)[1] || '';
+  const thisFm = originalDoc.split(/^---\s*$/m)[1] || '';
   const thisStatus = (thisFm.match(/^status:\s*(\S+)/m) || [])[1]?.trim() || '';
   const thisW = ((thisFm.match(/^waiting_on:\s*(.+)\s*$/m) || [])[1] || '').trim().toLowerCase();
   const thisFinalized = thisStatus === 'active' && !!thisW && thisW !== 'null' && thisW !== '~' && thisW !== '""' && thisW !== "''";
+  // Completion stamp (Titus ruling, gate round-2 fold-in): thisFinalized IS the
+  // finalize-ADVANCE moment — this session's own designated capsule just left
+  // skeleton for real, whether written directly or reached via the R2-2 freeze
+  // reroute above. That is a voluntary completion close, not a cycle receipt —
+  // no cycle_id belongs on this stamp (this object never carries one). Explicit
+  // null when not finalizing (not merely omitted) so a spread-merge
+  // freshness-overwrites any stale value rather than leaking it through.
+  //
+  // ONE stamp per freeze episode falls out of the EXISTING guard below for
+  // free: once this write lands, state.capsule_path repoints to a fresh
+  // skeleton (R2-2), so the NEXT turn's thisFinalized is false (the fresh
+  // capsule is unfinalized) and pointerLockedByFinalize() holds the pointer on
+  // THIS now-finalized capsule (the "HELD" branch) — the pointer write is
+  // skipped entirely on every subsequent turn, so close_kind is never
+  // recomputed or re-stamped until a genuinely new finalize happens.
+  pointer.close_kind = thisFinalized ? 'completion' : null;
   if (curatedPointerWins()) {
     // this session was curated-closed inside the race window — pointer stays on
     // the curated capsule; the rolling auto-capsule content above is still saved

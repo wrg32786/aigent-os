@@ -82,11 +82,20 @@ This reflex depends on one integration: something must write `~/.claude/ctx-refr
 
 Behind an opt-in flag (`CAPSULE_VERB_AUTOFIRE=1`), the sensor can also drive the trusted writer automatically: it waits for the transcript to fall genuinely still (two identical capture-cursor reads separated by an age floor, guarding against reading mid-flush), then calls `runCapsuleVerb()` in dry-run mode by default. A real, request-gated cycle (`daemons/refresh-request.mjs` + `daemons/refresh-cycle.mjs`) exists for a controller that wants to mint a nonce-bound refresh challenge and verify the receipt — none of that fires unless something writes a `RefreshRequest` file, which, like the board adapter, ships as a seam rather than a default behavior.
 
+## Completion signal vs. checkpoint (close_kind)
+
+Two distinct wake-relevant signals exist, and it is easy to conflate them because both eventually touch the same pointer field (`close_kind`, at `state.last_capsule`).
+
+- **Checkpoint (machinery).** The autofire sensor's stillness-seal is a *checkpoint*, never a completion. When it drives the trusted writer (`runCapsuleVerb()` → `curated-close-pointer.mjs`), the writer's own `writerArgs` unconditionally stamp `close_kind: 'checkpoint'` — a cycle-driven capture and a legacy non-cycle capture are both machinery, regardless of the transcript-stillness mechanics that triggered them. A checkpoint stamp never, by itself, wakes anything downstream.
+- **Completion (voluntary close).** Finalizing the rolling capsule — the operator (or `/context-capsule`) writes a real `waiting_on` into the file `state.capsule_path` already points at — *is* the completion signal. The very next `Stop` hook's `stop-capsule-writer.mjs` observes that this session's own designated capsule has left skeleton (`capsuleLeftSkeleton()`), advances the pointer to it, and stamps `close_kind: 'completion'` with no `cycle_id` (a voluntary close is not a cycle receipt — the two are kept intentionally distinguishable so a downstream wake discriminator can require `close_kind === 'completion'` without ever matching a checkpoint). This stamp happens automatically, from the trusted stop-writer, not from the skill or the agent — the fence below still holds.
+- **One stamp per freeze episode.** Once the stop-writer stamps completion, it also reroutes `state.capsule_path` to a fresh, unfinalized companion capsule (the R2-2 byte-freeze: a finalized capsule's bytes are never touched again). Every subsequent `Stop` hook in the same session merges into that fresh skeleton — never finalized, never advancing the pointer — so the pointer, and its `close_kind: 'completion'` stamp, stay untouched until a genuinely new finalize happens. A session cannot double-fire its own completion signal by continuing to work after closing.
+- **Agents still never stamp anything themselves.** None of the above changes `/context-capsule`'s own fence (`Do NOT stamp digests, pointer, or cycle_token — trusted-writer territory`). The skill's whole job is still: reconcile, write the capsule with a real `waiting_on`, then stop. Finalizing the capsule *is* the completion signal — the stop-writer's automatic stamp is what turns that fact into machinery the rest of the system can key on.
+
 ## Operator sovereignty (never violate)
 
 - **The capsule is best-effort autosave, never a gate.** An operator `/clear` passes through whether or not a capsule landed. Nothing in this system should ever tell the operator to wait on capsule machinery.
 - **A session rotation satisfies any pending refresh cycle** — never re-arm or service a stale cycle against a fresh session.
-- **`/context-capsule` goes quiet after writing.** If an automated refresh cycle is active, the seal fires on transcript stillness; every extra tool call after the write resets that clock.
+- **`/context-capsule` goes quiet after writing.** If an automated refresh cycle is active, the seal fires on transcript stillness (the checkpoint path above); every extra tool call after the write resets that clock. Finalizing the capsule is a separate, immediate completion signal (previous section) and does not depend on stillness at all.
 
 ## Known issue (documented, not fixed here)
 

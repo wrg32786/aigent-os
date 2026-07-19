@@ -281,6 +281,10 @@ test('full trusted stamp round-trips proofs and later no-flag stamp clears them'
   assert.equal(pointer.captured_through_event_id, 'evt-73');
   assert.equal(pointer.captured_through_offset, null, 'non-cycle stamp: lone event id keeps legacy semantics, offset stays null');
   assert.equal(pointer.cycle_token, null);
+  // R2-1(a) (gate round-2): the REAL writerArgs path (capsule-verb.mjs:691-706,
+  // not a hand-typed CLI flag) must itself stamp close_kind — a legacy/non-cycle
+  // machinery capture is checkpoint-class, unconditionally, by construction.
+  assert.equal(pointer.close_kind, 'checkpoint', 'the trusted writer stamps close_kind through its own writerArgs, not just when a caller passes the flag by hand');
 
   execFileSync(process.execPath, [CCP, capsule], {
     cwd: seat.root,
@@ -296,6 +300,50 @@ test('full trusted stamp round-trips proofs and later no-flag stamp clears them'
   assert.equal(restamped.captured_through_offset, null);
   assert.equal(restamped.capsule_sha256, null);
   assert.equal(restamped.reconcile_digest, null);
+  assert.equal(restamped.close_kind, null,
+    'freshness-overwrite: a bare CLI restamp with no --close-kind clears the verb-stamped checkpoint (no replay)');
+});
+
+test('close_kind stamps verbatim, defaults null, freshness-overwrites, and refuses an unrecognized value', async (t) => {
+  // board c1f777e9 gate round-1 F1 fix direction: "thread close intent through the
+  // pointer, e.g. close_kind: checkpoint|completion stamped by the verb." Same
+  // freshness-overwrite discipline the cycle_token/cycle_id fields already prove
+  // above: additive, default null, a fresh stamp with no flag OVERWRITES any prior
+  // value. Unlike those free-form fields, close_kind is a CLOSED enum — an
+  // unrecognized value is refused loudly rather than silently accepted.
+  const seat = mkSeat(os.tmpdir());
+  t.after(seat.cleanup);
+  const capsule = writeCapsule(seat, validCapsule('capsule-close-kind'));
+  const bsPath = path.join(seat.memory, 'BODY_STATE.json');
+  const readPointer = () => JSON.parse(readFileSync(bsPath, 'utf8')).state.last_capsule;
+  const stamp = (...extraArgs) => execFileSync(process.execPath, [CCP, capsule, ...extraArgs], {
+    cwd: seat.root,
+    env: { ...process.env, AIGENT_ROOT: seat.root },
+    encoding: 'utf8',
+  });
+
+  stamp();
+  assert.equal(readPointer().close_kind, null, 'default: close_kind stamped null with no flag');
+
+  for (const kind of ['checkpoint', 'completion', 'handoff']) {
+    stamp('--close-kind', kind);
+    assert.equal(readPointer().close_kind, kind, `round-trip: --close-kind ${kind} stamped verbatim`);
+  }
+
+  stamp();
+  assert.equal(readPointer().close_kind, null,
+    'freshness-overwrite: fresh no-flag stamp clears the prior close_kind (no replay)');
+
+  let invalidError = null;
+  try {
+    stamp('--close-kind', 'bogus');
+  } catch (e) {
+    invalidError = e;
+  }
+  assert.ok(invalidError, 'invalid --close-kind refused loudly (non-zero exit)');
+  assert.match(String(invalidError.stderr || ''), /REFUSED/);
+  assert.equal(readPointer().close_kind, null,
+    'invalid --close-kind never reaches disk (pointer unchanged from freshness-overwrite step)');
 });
 
 test('cycle stores only challenge digest and walks requested→capsuling→prepared', async (t) => {

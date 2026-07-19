@@ -100,9 +100,17 @@ console.log(`── capsule content gate — daemon: ${DAEMON} ──`);
 }
 
 // 4. OWNERSHIP: a capsule WITHOUT the autosave tag keeps its contract fields even
-//    when the writer merges delta bullets into it.
+//    when the writer merges delta bullets into it. waiting_on is null-family
+//    here on purpose (R2-2, gate round-2): a REAL waiting_on now means the
+//    writer freezes this file's bytes and reroutes the merge to a fresh
+//    companion capsule entirely (see stop-capsule-writer.pointer-advance.test.mjs's
+//    R2-2 cases) — that is a SEPARATE, orthogonal axis from the one this test
+//    targets (the autosave-tag ownership gate). A deliberate capsule with
+//    waiting_on:null (nothing blocks resume yet — the same shape the
+//    DELIB-NULL case uses) still isolates "no autosave tag -> frontmatter
+//    untouched" cleanly.
 {
-  const curated = `---\nid: curated-x\nstatus: active\nobjective: "continuation: coverage net at gate"\nwaiting_on: gates\nresume_trigger: open\ndefinition_hash: abc123\nnext_valid_action: "On resume: re-ground and act on the verdict"\ntags: [capsule, refresh-cycle]\n---\n\n## Done (don't redo)\n<!-- swe:done -->\n\n## Historical-Errors → Resolutions\n<!-- swe:errors -->\n\n## Historical-Rejected-Approaches\n<!-- swe:rejected -->\n\n## Files-Read / Files-Modified\n<!-- swe:files -->\n\n## Operating-Facts\n<!-- swe:facts -->\n\n## Pending-Gates\n<!-- swe:gates -->\n\n## Claimed-Rows\n<!-- swe:rows -->\n`;
+  const curated = `---\nid: curated-x\nstatus: active\nobjective: "continuation: coverage net at gate"\nwaiting_on: null\nresume_trigger: open\ndefinition_hash: abc123\nnext_valid_action: "On resume: re-ground and act on the verdict"\ntags: [capsule, refresh-cycle]\n---\n\n## Done (don't redo)\n<!-- swe:done -->\n\n## Historical-Errors → Resolutions\n<!-- swe:errors -->\n\n## Historical-Rejected-Approaches\n<!-- swe:rejected -->\n\n## Files-Read / Files-Modified\n<!-- swe:files -->\n\n## Operating-Facts\n<!-- swe:facts -->\n\n## Pending-Gates\n<!-- swe:gates -->\n\n## Claimed-Rows\n<!-- swe:rows -->\n`;
   const { doc } = runWriter({ sid: 'own-44444444', userText: REFRESH_CYCLE_INJECTION, existingCapsule: curated });
   ok(fm(doc, 'objective').includes('continuation'),
     'ownership: non-autosave capsule keeps its objective');
