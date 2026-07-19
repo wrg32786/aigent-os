@@ -8,7 +8,8 @@
 //   node curated-close-pointer.mjs <capsule-path> [--session <sid>] \
 //        [--cycle-token <tok>] [--reconciled <json>] \
 //        [--cycle-id <uuid>] [--context-epoch <n>] [--captured-through-event <id>] \
-//        [--capsule-sha256 <hex>] [--reconcile-digest <hex>]
+//        [--capsule-sha256 <hex>] [--reconcile-digest <hex>] \
+//        [--close-kind <checkpoint|completion|handoff>]
 //   (capsule-path is POSITIONAL and must come FIRST; flags follow.)
 //
 // Pointer schema (v3): additive, default-null fields — no behavior change when
@@ -26,6 +27,15 @@
 //   --reconcile-digest <hex>      → reconcile_digest: canonical evidence-object digest.
 // Nothing gates on any of these fields yet — this module only stamps schema.
 //
+// close_kind (board c1f777e9 gate round-1 F1 fix direction): an additional additive,
+// default-null field, but UNLIKE the fields above it is a CLOSED enum, not a
+// free-form value — an unrecognized --close-kind is refused loudly (fail()) rather
+// than silently accepted. Same freshness-overwrite invariant: a fresh stamp without
+// the flag OVERWRITES any prior close_kind. Absent/null close_kind is the fail-safe
+// default downstream (non-waking) — shipping this field alone changes no behavior.
+//   --close-kind <checkpoint|completion|handoff> → close_kind: the caller's stated
+//                                    intent for THIS close. Nothing gates on it yet.
+//
 // Pointer shape: aigent-OS is single-operator, so the pointer always lives at
 // <memRoot>/BODY_STATE.json's state.last_capsule — the same convention the
 // context-capsule skill already documents. Session id: --session wins; else the
@@ -40,7 +50,7 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { memRoot, seatOf } from './lifecycle-common.mjs';
+import { memRoot, seatOf, CLOSE_KINDS } from './lifecycle-common.mjs';
 
 function fail(msg) {
   console.error(`[curated-close-pointer] REFUSED: ${msg}`);
@@ -90,7 +100,17 @@ if (ctoRaw !== null) {
   capturedThroughOffset = n;
 }
 
-if (!capArg) fail('usage: curated-close-pointer.mjs <capsule-path> [--session <sid>] [--cycle-token <tok>] [--reconciled <json>] [--cycle-id <uuid>] [--context-epoch <n>] [--captured-through-event <id>] [--captured-through-offset <n>] [--capsule-sha256 <hex>] [--reconcile-digest <hex>]');
+// close_kind is a CLOSED enum (unlike the free-form fields above) — refuse loudly on
+// an unrecognized value rather than stamping something no downstream reader expects.
+// CLOSE_KINDS is single-sourced in lifecycle-common.mjs (gate round-2 advisory: three
+// unconnected literals across two repos) so this validation can never drift from
+// whatever set every production caller was written against.
+const closeKind = flagVal('--close-kind');
+if (closeKind !== null && !CLOSE_KINDS.has(closeKind)) {
+  fail(`--close-kind must be one of ${[...CLOSE_KINDS].join('|')}, got: ${closeKind}`);
+}
+
+if (!capArg) fail('usage: curated-close-pointer.mjs <capsule-path> [--session <sid>] [--cycle-token <tok>] [--reconciled <json>] [--cycle-id <uuid>] [--context-epoch <n>] [--captured-through-event <id>] [--captured-through-offset <n>] [--capsule-sha256 <hex>] [--reconcile-digest <hex>] [--close-kind <checkpoint|completion|handoff>]');
 
 const root = String(process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || process.cwd());
 const seat = seatOf(root);
@@ -141,6 +161,9 @@ const pointer = {
   captured_through_offset: capturedThroughOffset,
   capsule_sha256: capsuleSha256,
   reconcile_digest: reconcileDigest,
+  // close_kind (board c1f777e9 F1): additive, default null, freshness-overwrite —
+  // same discipline as the fields above, but CLOSED enum (validated pre-write).
+  close_kind: closeKind,
 };
 
 const bsPath = path.join(MEM, 'BODY_STATE.json');
@@ -150,4 +173,4 @@ if (!bs?.state) fail('BODY_STATE.json has no .state — pointer not stamped');
 bs.state.last_capsule = { ...bs.state.last_capsule, ...pointer };
 writeFileSync(bsPath, JSON.stringify(bs, null, 2));
 
-console.log(`[curated-close-pointer] STAMPED ${seat}: ${id} (session ${sid ?? 'null'}, finalized ${pointer.finalized_at}, cycle_token ${cycleToken ?? 'null'}, cycle_id ${cycleId ?? 'null'}, context_epoch ${contextEpoch ?? 'null'}, captured_through_event_id ${capturedThroughEventId ?? 'null'}, captured_through_offset ${capturedThroughOffset ?? 'null'}, capsule_sha256 ${capsuleSha256 ?? 'null'}, reconcile_digest ${reconcileDigest ?? 'null'})`);
+console.log(`[curated-close-pointer] STAMPED ${seat}: ${id} (session ${sid ?? 'null'}, finalized ${pointer.finalized_at}, cycle_token ${cycleToken ?? 'null'}, cycle_id ${cycleId ?? 'null'}, context_epoch ${contextEpoch ?? 'null'}, captured_through_event_id ${capturedThroughEventId ?? 'null'}, captured_through_offset ${capturedThroughOffset ?? 'null'}, capsule_sha256 ${capsuleSha256 ?? 'null'}, reconcile_digest ${reconcileDigest ?? 'null'}, close_kind ${closeKind ?? 'null'})`);

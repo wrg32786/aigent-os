@@ -694,6 +694,18 @@ export async function runCapsuleVerb({
     '--reconciled', JSON.stringify(reconciled),
     '--reconcile-digest', digests.reconcile_digest,
     '--capsule-sha256', digests.capsule_sha256,
+    // R2-1(a) (gate round-2, board c1f777e9): every capture this verb makes —
+    // cycle-driven (RefreshRequest-gated autofire) or legacy non-cycle — is a
+    // MACHINERY capture, never an operator-authored session-completion close.
+    // Both are checkpoint-class by construction (see the capture-mode findings
+    // in davinci-vault handoff/livelock-fix-c1f777e9/): this verb has exactly
+    // one caller (ctx-refresh-sensor.mjs) and neither of its two call sites
+    // represents a completion close. Unconditional, not read from any input
+    // here — inventing a completion signal this verb doesn't actually have
+    // would be a guess. Non-waking regardless: the staged-close wake
+    // discriminator requires close_kind==='completion', so 'checkpoint' here
+    // can never fire it.
+    '--close-kind', 'checkpoint',
   ];
   if (cursor !== null) writerArgs.push('--captured-through-event', cursor);
   if (cursorOffset !== null) writerArgs.push('--captured-through-offset', String(cursorOffset));

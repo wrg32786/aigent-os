@@ -10,6 +10,12 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync, writeSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
+// CLOSE_KINDS (gate round-1/2 F1/R2-1) — the ONE owner of the close_kind enum.
+// curated-close-pointer.mjs's --close-kind validation and every production
+// caller import this instead of re-typing the three literals (the gate's own
+// advisory: three unconnected literals across two repos).
+export const CLOSE_KINDS = new Set(['checkpoint', 'completion', 'handoff']);
+
 // seatId resolution: env override first (multi-instance forks), else the fixed
 // single-operator default. No path-based regex table — a single vault has nothing
 // to disambiguate.
