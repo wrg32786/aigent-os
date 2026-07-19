@@ -68,3 +68,7 @@ jobs:
       - name: Installer regression suite
         shell: bash
         run: bash tests/test-installer.sh
+
+      - name: Web-install regression suite
+        shell: bash
+        run: bash tests/test-web-install.sh

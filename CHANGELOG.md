@@ -8,6 +8,15 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
 
 ## [Unreleased]
 
+### Security
+- **Install-path hardening** — closes five install-surface findings from an external review.
+  - `install.sh` refuses to write through a symlink anywhere inside the target directory (a pre-seeded `CLAUDE.md -> ~/.bashrc` style link can no longer redirect a write outside the install boundary). Single-critical-file writes (`CLAUDE.md`, `.claude/settings.json`, `.gitignore`, `.aigent/state.json`) abort the whole install with an actionable error; many-file copy sites (framework trees, skills, agents) skip just the affected entry and continue.
+  - `install.sh` quarantines a pre-existing file under `hooks/` or `daemons/` that differs from the framework's version instead of silently keeping it — those directories become trusted executables on the next Claude Code lifecycle event, so a planted file there is now moved to `.aigent/quarantine/` and replaced with the trusted copy by default. New flag `--trust-existing-hooks` opts back into the old keep-as-is behavior.
+  - `install.sh`'s optional `npm ci`/`npm install` for `daemons/semantic-search/` now runs with `--ignore-scripts`, so a compromised transitive dependency (or a pre-existing malicious `package.json` in the target) cannot execute a lifecycle script during install.
+  - `scripts/web-install.sh` / `scripts/web-install.ps1` now fetch + fast-forward-merge the current branch explicitly by name from the repinned `origin` remote, instead of a bare `git pull --ff-only` that follows whatever `branch.<name>.remote`/`branch.<name>.merge` ambient git config says — closing a path where a rogue tracking-config remote could serve unexpected content even after `origin`'s URL is repinned to the canonical repo.
+  - `INSTALL.md` / `docs/install-security.md` document a checksum-pinned bootstrap install (fetches the bootstrap script and a `scripts/*.sha256` sidecar from GitHub at a pinned commit, verifies before running) as the recommended alternative to the unauthenticated `curl | sh` / `irm | iex` one-liners. `scripts/gen-web-install-checksums.sh` regenerates the sidecars; `tests/test-web-install.sh` fails CI if they drift out of sync.
+  - New tests: `tests/test-web-install.sh` (rogue-remote pull, detached-HEAD refusal, checksum drift); `tests/test-installer.sh` gained symlink-escape and hooks-quarantine regression cases.
+
 ### Added
 - **Two-verb lifecycle** — `/context-capsule` and `/resume` replace `/open`/`/close`/`/pause` as the session-continuity model. See `docs/two-verb-lifecycle.md` for the full design.
   - `daemons/lifecycle-common.mjs` — shared identity/vault resolution, CRLF-safe frontmatter flip (`flipCapsuleToResumed`) with dedupe of a pre-seeded null-stamp placeholder.

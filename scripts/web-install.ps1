@@ -2,6 +2,11 @@
 # Fetches aigent-OS onto disk. Run via:
 #   irm https://tools.theaigent.xyz/os/install.ps1 | iex
 #
+# For a checksum-verified variant (recommended -- fetches this script and
+# its checksum from GitHub at a pinned commit instead of trusting whatever
+# the domain above currently serves), see:
+#   docs/install-security.md#checksum-pinned-install
+#
 # This script only clones/updates the aigent-OS checkout. It does not run
 # the framework installer itself -- that stays a separate, inspectable local
 # step (bash install.sh), per docs/install-security.md's "no remote-fetch-
@@ -23,7 +28,17 @@
 # dot-sourcing a saved copy if you want exit codes to never touch your shell.
 
 function Invoke-AigentOSInstall {
-    $repoUrl = 'https://github.com/wrg32786/aigent-os.git'
+    # $env:AIGENT_OS_REPO_URL exists only so tests/test-web-install.sh can
+    # point this script at a local fixture remote instead of the real GitHub
+    # repo (mirrors the existing $env:AIGENT_OS_DIR override below). If an
+    # attacker already controls your environment variables they already have
+    # code execution, so this override is not a new trust boundary -- same
+    # caveat the $env:AIGENT_OS_DIR comment below makes for the target
+    # directory.
+    $repoUrl = $env:AIGENT_OS_REPO_URL
+    if ([string]::IsNullOrWhiteSpace($repoUrl)) {
+        $repoUrl = 'https://github.com/wrg32786/aigent-os.git'
+    }
 
     function TrimGitSuffix([string]$url) {
         if ($url -and $url.EndsWith('.git')) { return $url.Substring(0, $url.Length - 4) }
@@ -116,7 +131,7 @@ function Invoke-AigentOSInstall {
     }
 
     if ($isOurRepo) {
-        Write-Host "Existing aigent-OS checkout found at $targetDir. Pulling latest..."
+        Write-Host "Existing aigent-OS checkout found at $targetDir. Updating..."
         # Pin origin to the canonical URL before pulling. The gate check above
         # decides whether this looks like our checkout, but the actual fetch
         # never relies on trusting whatever the local git config had
@@ -129,10 +144,35 @@ function Invoke-AigentOSInstall {
             Write-Host ""
             return 1
         }
-        & git -C $targetDir pull --ff-only
+        # Fetch + merge the CURRENT branch by name explicitly, rather than a
+        # bare "git pull --ff-only" (finding #21). A bare pull follows
+        # branch.<name>.remote / branch.<name>.merge from local git config,
+        # which is independent of origin's URL: if that tracking config
+        # points somewhere else (a remote named e.g. "upstream" added by a
+        # prior compromise, or by the operator themselves for development),
+        # repinning origin's URL above does not stop the pull from fetching
+        # from wherever tracking config says. Naming both the remote and the
+        # branch explicitly bypasses that ambient config entirely.
+        $currentBranch = & git -C $targetDir rev-parse --abbrev-ref HEAD 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($currentBranch) -or $currentBranch -eq 'HEAD') {
+            Write-Host ""
+            Write-Host "[aigent-OS installer] ERROR: $targetDir has a detached HEAD, not a branch checkout."
+            Write-Host "Resolve manually, then re-run."
+            Write-Host ""
+            return 1
+        }
+        & git -C $targetDir fetch origin $currentBranch
         if ($LASTEXITCODE -ne 0) {
             Write-Host ""
-            Write-Host "[aigent-OS installer] ERROR: git pull failed in $targetDir."
+            Write-Host "[aigent-OS installer] ERROR: git fetch from the canonical origin failed in $targetDir."
+            Write-Host "Check your network connection and try again."
+            Write-Host ""
+            return 1
+        }
+        & git -C $targetDir merge --ff-only "origin/$currentBranch"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "[aigent-OS installer] ERROR: fast-forward merge failed in $targetDir."
             Write-Host "Check for local changes or a diverged branch, resolve manually, then re-run."
             Write-Host ""
             return 1

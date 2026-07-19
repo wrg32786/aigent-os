@@ -30,6 +30,7 @@ make_fixture() {
 JSON
   printf '[]\n' > "$source/.claude/skill-index.json"
   printf '{"name":"semantic-search","version":"1.0.0"}\n' > "$source/daemons/semantic-search/package.json"
+  printf '#!/bin/sh\necho "trusted"\n' > "$source/hooks/example-hook.sh"
 }
 
 FIXTURE="$WORK/source"
@@ -108,5 +109,78 @@ test ! -e "$DRY_TARGET"
 REAL_TARGET="$WORK/real-target"
 bash "$ROOT/install.sh" --target "$REAL_TARGET" --no-deps >/dev/null
 bash "$REAL_TARGET/scripts/doctor.sh" "$REAL_TARGET" >/dev/null
+
+# ── Symlink-escape guard (Codex finding #22) ─────────────────────────────────
+# make_symlink: plain `ln -s` on Windows silently falls back to COPYING the
+# target instead of erroring when the process lacks symlink privilege
+# (Developer Mode / SeCreateSymbolicLinkPrivilege) -- which GitHub's
+# windows-latest runners do not have by default. That would make these
+# assertions pass or fail for the wrong reason without ever exercising the
+# guard they're meant to test. MSYS=winsymlinks makes Git Bash create an
+# MSYS-emulated symlink instead (still real per -L/readlink, still the exact
+# form Git Bash on Windows produces in the wild) when the native path fails.
+make_symlink() {
+  local dest="$1" link="$2"
+  # `|| true` on both attempts: under set -e a bare failing statement here
+  # would abort this whole test script before ever reaching the fallback
+  # (or the final diagnostic) below -- exactly the bug this suite's own
+  # symlink-guard tests exist to catch elsewhere, reintroduced by accident.
+  ln -s "$dest" "$link" 2>/dev/null || true
+  if [[ ! -L "$link" ]]; then
+    rm -f "$link"
+    MSYS=winsymlinks ln -s "$dest" "$link" || true
+  fi
+  [[ -L "$link" ]] || { printf 'FAIL: could not create a real symlink at %s (even with MSYS=winsymlinks)\n' "$link" >&2; exit 1; }
+}
+
+# A single-critical-file write (CLAUDE.md) refuses through a pre-seeded
+# symlink and aborts the whole install with an actionable error, rather than
+# following the link and overwriting whatever it points at.
+SYMLINK_TARGET="$WORK/symlink-target"
+mkdir -p "$SYMLINK_TARGET"
+SENTINEL="$WORK/sentinel.txt"
+printf 'do not touch\n' > "$SENTINEL"
+make_symlink "$SENTINEL" "$SYMLINK_TARGET/CLAUDE.md"
+set +e
+SYMLINK_OUT="$(cd "$FIXTURE" && bash install.sh --target "$SYMLINK_TARGET" --no-deps 2>&1)"
+SYMLINK_RC=$?
+set -e
+test "$SYMLINK_RC" -ne 0
+printf '%s\n' "$SYMLINK_OUT" | grep -qi "refusing to write through symlink"
+test "$(cat "$SENTINEL")" = "do not touch"
+printf 'symlink escape (critical file): refused, sentinel untouched\n'
+
+# A many-file copy site (the .claude/skills/<name> install loop) skips just
+# the affected entry with a warning and lets the rest of the install finish,
+# rather than aborting entirely.
+SKIP_TARGET="$WORK/skip-target"
+mkdir -p "$SKIP_TARGET/.claude/skills"
+make_symlink "$WORK/nonexistent-escape-target" "$SKIP_TARGET/.claude/skills/demo"
+SKIP_OUT="$(cd "$FIXTURE" && bash install.sh --target "$SKIP_TARGET" --no-deps 2>&1)"
+test -f "$SKIP_TARGET/.claude/settings.json"
+printf '%s\n' "$SKIP_OUT" | grep -qi "\[skip\] refusing to write through symlink"
+test ! -e "$WORK/nonexistent-escape-target"
+printf 'symlink escape (many-file site): skipped with warning, install completed\n'
+
+# ── Hooks/daemons quarantine (Codex finding #19) ─────────────────────────────
+# A pre-existing file at a path the installer would place a framework hook
+# is quarantined (moved aside, framework version installed) by default.
+QUARANTINE_TARGET="$WORK/quarantine-target"
+mkdir -p "$QUARANTINE_TARGET/hooks"
+printf '#!/bin/sh\necho "MALICIOUS"\n' > "$QUARANTINE_TARGET/hooks/example-hook.sh"
+QUARANTINE_OUT="$(cd "$FIXTURE" && bash install.sh --target "$QUARANTINE_TARGET" --no-deps 2>&1)"
+printf '%s\n' "$QUARANTINE_OUT" | grep -qi "\[quarantine\]"
+grep -q "trusted" "$QUARANTINE_TARGET/hooks/example-hook.sh"
+grep -rq "MALICIOUS" "$QUARANTINE_TARGET/.aigent/quarantine/"
+printf 'hooks quarantine: planted file moved aside, trusted version installed\n'
+
+# --trust-existing-hooks keeps the pre-existing file instead of quarantining it.
+TRUST_TARGET="$WORK/trust-target"
+mkdir -p "$TRUST_TARGET/hooks"
+printf '#!/bin/sh\necho "CUSTOM"\n' > "$TRUST_TARGET/hooks/example-hook.sh"
+TRUST_OUT="$(cd "$FIXTURE" && bash install.sh --target "$TRUST_TARGET" --trust-existing-hooks --no-deps 2>&1)"
+grep -q "CUSTOM" "$TRUST_TARGET/hooks/example-hook.sh"
+! printf '%s\n' "$TRUST_OUT" | grep -qi "\[quarantine\]"
+printf 'trust-existing-hooks: pre-existing file kept, no quarantine\n'
 
 printf 'installer regression tests passed\n'

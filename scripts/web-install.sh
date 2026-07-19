@@ -3,6 +3,11 @@
 # Fetches aigent-OS onto disk. Run via:
 #   curl -fsSL https://tools.theaigent.xyz/os/install | sh
 #
+# For a checksum-verified variant (recommended -- fetches this script and
+# its checksum from GitHub at a pinned commit instead of trusting whatever
+# the domain above currently serves), see:
+#   docs/install-security.md#checksum-pinned-install
+#
 # This script only clones/updates the aigent-OS checkout. It does not run
 # the framework installer itself -- that stays a separate, inspectable local
 # step (bash install.sh), per docs/install-security.md's "no remote-fetch-
@@ -20,7 +25,13 @@
 
 set -eu
 
-REPO_URL="https://github.com/wrg32786/aigent-os.git"
+# AIGENT_OS_REPO_URL exists only so tests/test-web-install.sh can point this
+# script at a local fixture remote instead of the real GitHub repo (mirrors
+# the existing AIGENT_OS_DIR override below). If an attacker already
+# controls your environment variables they already have code execution, so
+# this override is not a new trust boundary -- same caveat the AIGENT_OS_DIR
+# comment below makes for the target directory.
+REPO_URL="${AIGENT_OS_REPO_URL:-https://github.com/wrg32786/aigent-os.git}"
 REPO_MATCH="wrg32786/aigent-os"
 
 fail() {
@@ -101,7 +112,7 @@ Nothing was changed. Point somewhere else with:
   fi
 
   if [ "$IS_OUR_REPO" -eq 1 ]; then
-    printf 'Existing aigent-OS checkout found at %s. Pulling latest...\n' "$TARGET_DIR"
+    printf 'Existing aigent-OS checkout found at %s. Updating...\n' "$TARGET_DIR"
     # Pin origin to the canonical URL before pulling. The gate check above
     # decides whether this looks like our checkout, but the actual fetch
     # never relies on trusting whatever the local git config had configured
@@ -109,8 +120,26 @@ Nothing was changed. Point somewhere else with:
     if ! git -C "$TARGET_DIR" remote set-url origin "$REPO_URL"; then
       fail "could not set the origin remote in $TARGET_DIR. Resolve manually, then re-run."
     fi
-    if ! git -C "$TARGET_DIR" pull --ff-only; then
-      fail "git pull failed in $TARGET_DIR.
+    # Fetch + merge the CURRENT branch by name explicitly, rather than a
+    # bare "git pull --ff-only" (finding #21). A bare pull follows
+    # branch.<name>.remote / branch.<name>.merge from local git config,
+    # which is independent of origin's URL: if that tracking config points
+    # somewhere else (a remote named e.g. "upstream" added by a prior
+    # compromise, or by the operator themselves for development), repinning
+    # origin's URL above does not stop the pull from fetching from wherever
+    # tracking config says. Naming both the remote and the branch on the
+    # command line bypasses that ambient config entirely.
+    CURRENT_BRANCH="$(git -C "$TARGET_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" || CURRENT_BRANCH=""
+    if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "HEAD" ]; then
+      fail "$TARGET_DIR has a detached HEAD, not a branch checkout.
+Resolve manually, then re-run."
+    fi
+    if ! git -C "$TARGET_DIR" fetch origin "$CURRENT_BRANCH"; then
+      fail "git fetch from the canonical origin failed in $TARGET_DIR.
+Check your network connection and try again."
+    fi
+    if ! git -C "$TARGET_DIR" merge --ff-only "origin/$CURRENT_BRANCH"; then
+      fail "fast-forward merge failed in $TARGET_DIR.
 Check for local changes or a diverged branch, resolve manually, then re-run."
     fi
   else
