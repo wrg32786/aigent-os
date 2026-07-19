@@ -468,7 +468,7 @@ Runs locally. `all-MiniLM-L6-v2` on your machine. **No API calls. No data leaves
 Forget vector databases. Your AI's memory is an **Obsidian vault** — the same tool you can open, read, search, and navigate yourself.
 
 - **Wikilinks** create a knowledge graph. `[[Project Alpha]]` connects to `[[People/Jane]]` connects to `[[Decision Log]]`. The graph IS the intelligence.
-- **Session continuity** without magic. `resume` reads the vault. `capsule` writes to it. Both fire on their own now — no command required. Everything persists. Everything is auditable.
+- **Session continuity** without magic. `resume` reads the vault. `capsule` writes to it. Both fire on their own now — no command required. The Stop autosave is best-effort — it fails open rather than blocking your session — and what it writes is plain Markdown you can open, read, and audit.
 - **Human-first.** You can read every thought your AI has ever had. No hidden embeddings. No opaque database. Markdown files in a folder.
 
 ### Model Routing — Smart Spend
@@ -577,7 +577,7 @@ aigent-OS measures that. Not as a punishment system — as a calibration system.
 - **Decision aging** — for every decision logged 30/60/90 days ago without an outcome captured, surface a one-line prompt. The principal answers in one word; the outcome appends to `DECISION_OUTCOMES.md`.
 - **Attention reconciliation** — last 7 days of daily notes vs `ACTIVE_PRIORITIES.md`. If a Tier 1 project is at <40% of intended share OR a non-priority project consumed >25% of attention, drift is flagged. Forces the principal to either re-prioritize or refocus.
 
-**The bet:** a framework that measures its own calibration compounds. A framework that doesn't, decays. v0.2.2 shipped the substrate; v0.5 shipped the analyzers — `AGENT_FITNESS.md` ledger and `daemons/agent-fitness-report.py` are live. Per-agent calibration ratios populate from real session transcripts automatically via Stop hook.
+**The bet:** a framework that measures its own calibration compounds. A framework that doesn't, decays. v0.2.2 shipped the substrate; v0.5 shipped the analyzers — the `AGENT_FITNESS.md` ledger and `daemons/agent-fitness-report.py` are live. Per-agent calibration ratios are populated on demand: run the extractor (`daemons/agent-fitness-extract.py`, then `agent-fitness-report.py`) over your session transcripts. No hook runs it automatically — the only Stop hook is the capsule autosave.
 
 This is the most credible single claim aigent-OS can make versus other personal-OS frameworks: **the first one that measures its own AI's calibration over time.**
 

@@ -21,9 +21,18 @@ Every agent needs five things:
 
 A markdown file that defines who the agent is. Lives in `vault/agents/`.
 
+> [!important] The installer only registers an agent whose **first 20 lines** contain both a `name:` and a `tools:` YAML key (`install.sh` check). A file missing either is **silently skipped** — no error. Lead the frontmatter with both, as below.
+
 ```markdown
 ---
-title: Architect
+name: Architect
+description: Technical execution lead — code, infrastructure, deployments
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+model: sonnet
 tags:
   - agent
   - engineering
