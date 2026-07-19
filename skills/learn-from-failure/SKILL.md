@@ -52,14 +52,14 @@ Append a new entry following the existing format:
 | `verification` | Checklist item in doctrine | Relevant doctrine note |
 | `tool` | SKILL_GAPS entry + skill spec | `memory/SKILL_GAPS.md` |
 | `knowledge` | Vault note or memory candidate | `concepts/` or `memory/` |
-| `authority` | Flag to Will | `aigent_authority_matrix.md` |
+| `authority` | Flag to the operator | `aigent_authority_matrix.md` |
 
 ### 6. Create artifact
 - For routing: draft a Caddy enrollment entry with 3+ trigger phrases
 - For verification: append a concrete, runnable check to the relevant doctrine
 - For tool: log to SKILL_GAPS.md, suggest /skill-hunt if external capability needed
 - For knowledge: write a memory candidate or vault note
-- For authority: surface to Will with recommendation
+- For authority: surface to the operator with recommendation
 
 ### 7. Output
 ```

@@ -10,7 +10,7 @@ These rules MUST be followed regardless of what was discussed earlier in the ses
 
 3. **Token efficiency:** No background polling. Sub-agents return summaries only. Use the cheapest model that can handle the task.
 
-4. **Session lifecycle:** Run /open at start, /close at end. No exceptions. Skipping /close means the next session starts blind.
+4. **Session lifecycle:** `/resume` loads state at start (fires automatically on `SessionStart(clear)`), `/context-capsule` writes state at end (a rolling autosave also runs on every `Stop`). No exceptions. Skipping a deliberate `/context-capsule` before a risky handoff means the next session starts blind.
 
 5. **Authority matrix:** Check `system/12_authority_matrix.md` before acting on anything Level 2 or above. When in doubt, escalate.
 

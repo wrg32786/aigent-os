@@ -48,7 +48,7 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
 | `verification` | Checklist item in doctrine | Lyra / Mnemosyne | Relevant doctrine note |
 | `tool` | SKILL_GAPS.md entry + skill spec | Newton + Lyra | `memory/SKILL_GAPS.md` |
 | `knowledge` | Vault note or memory candidate | Mnemosyne | `concepts/` or `memory/` |
-| `authority` | Flag to Will + authority matrix update | the AIgent | `aigent_authority_matrix.md` |
+| `authority` | Flag to the operator + authority matrix update | the AIgent | `aigent_authority_matrix.md` |
 
 ## Escalation rules
 

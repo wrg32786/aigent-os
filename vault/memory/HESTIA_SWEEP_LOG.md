@@ -21,7 +21,7 @@ Rolling log of [[Hestia]] custodian sweeps. Each sweep entry records: date, what
 - HEAT_INDEX dormant flips: <N>
 - Broken wikilinks found/fixed: <N>
 - Notes touched: [list]
-- Open issues for Will: <list or none>
+- Open issues for the operator: <list or none>
 ```
 
 ## Recent sweeps

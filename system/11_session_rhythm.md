@@ -2,13 +2,14 @@
 
 Every session follows this structure. No exceptions.
 
-## /open — Session Start
+## `/resume` — Session Start
 
-1. **Load context** — Read the latest daily note, session log, and active priorities from the vault
-2. **Surface what matters** — Unread comms, stale items, open threads from last session
-3. **Set the objective** — What is this session for? If the principal doesn't state one, ask.
+1. **Load** — resolve the pointer at `vault/memory/BODY_STATE.json`'s `state.last_capsule` (or a named capsule, if one was requested), and pull its `waiting_on`, `next_valid_action`, and `definition_hash`.
+2. **Validate** — recompute the hash from the live frontmatter. A mismatch means the capsule drifted from reality — re-derive from memory instead of trusting it.
+3. **Re-ground** — re-read the session log and active priorities. Live memory wins over anything the capsule says.
+4. **Act** — take the one next step from `waiting_on`/`next_valid_action`. Resumption is proven by the action taken, not by the pointer table showing up in context.
 
-The /open protocol should take under 60 seconds. It's a context load, not a briefing. Only surface things that need action — not a full status report.
+This runs automatically: the full procedure fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`, and a lighter warm pointer-reinject runs on every other session start via `daemons/sessionstart-reinject.mjs`. It should read as fast and action-oriented — not a status briefing.
 
 ## During the Session
 
@@ -18,39 +19,36 @@ The /open protocol should take under 60 seconds. It's a context load, not a brie
 - **Surface blockers** — If something is blocked, say so immediately. Don't wait to be asked.
 - **Keep the conversation anchored** — Challenge drift. Reduce ambiguity. Force prioritization. Maintain practical realism.
 
-## /close — Session End
+## `/context-capsule` — Checkpoint or Close
 
-1. **Commit memory** — Update any vault files that changed during the session
-2. **Write the daily note** — What was accomplished, what was decided, what's still open
-3. **Update the session log** — Next action, open threads, what to pick up next time
-4. **Mark delegation status** — Update any delegation tracker entries
-5. **Summarize decisions** — List action items, assign ownership, state what happens next
+1. **Reconcile** — re-read the session log, active priorities, and this session's git commits. Record what happened, not what was said. Budget: 2–4 reads, no more.
+2. **Write** the capsule — `vault/memory/capsules/<YYYY-MM-DD>-<slug>.md`, with `id`, `objective`, `waiting_on`, and `next_valid_action` all non-empty, plus the reference-only body sections (`Done`, `Historical-Errors → Resolutions`, `Files-Read / Files-Modified`, etc.).
+3. **Stop** — one line naming the capsule path, then silence. No pointer stamping, no digest — that's the trusted writer's job (`daemons/capsule-verb.mjs`), and it refuses loudly if the content fails its gate.
 
-The /close protocol ensures the next session picks up seamlessly. Skipping /close means the next /open starts with stale context.
+A rolling, best-effort version of this already runs on every `Stop` event (`daemons/stop-capsule-writer.mjs`), so nothing is lost if a session just ends without a deliberate checkpoint. Invoke `/context-capsule` explicitly when a thread is genuinely wrapping, a handoff is happening, or you want a clean checkpoint before something risky — not as a ceremony owed at the end of every session.
 
 ## Session Commands
 
-Run `/open` at the start of every session.
-Run `/close` at the end of every session.
+`/resume` and `/context-capsule` are the two lifecycle verbs — Claude Code slash commands defined under `.claude/skills/`. Both fire automatically at their hook points (see above), so invoking them by name is for the explicit cases: a named-capsule resume, a deliberate mid-session checkpoint, or a handoff.
 
-These are Claude Code slash commands defined in `.claude/skills/`. They execute the full session start and end protocols automatically.
+`/open` and `/close` are **retired**. The skill files still exist for compatibility but are deprecated — never present them as live commands.
 
 ## Session Hygiene
 
 - **One objective per session.** Multi-objective sessions produce shallow work on everything and depth on nothing.
 - **Time-box sessions.** Open-ended sessions drift. Set an expected duration.
-- **Close before switching topics.** If the principal wants to change direction mid-session, do a lightweight close on the current thread first.
-- **Don't skip /close.** This is the single most important habit. Sessions without /close leak context.
+- **Checkpoint before switching topics.** If the principal wants to change direction mid-session, run `/context-capsule` on the current thread first so its `waiting_on` is real instead of a stale rolling snapshot.
+- **The autosave already has you covered.** The every-`Stop` capsule write means nothing depends on remembering to bank state — it's best-effort autosave, never a gate. Explicit checkpoints exist to leave a *clean* `waiting_on` for a specific handoff, not to prevent loss.
 
 ## Between Sessions
 
 The vault maintains continuity. Between sessions:
-- The daily note captures what happened
-- The session log captures what to do next
+- The capsule's `waiting_on` and `next_valid_action` carry the concrete next step
+- The session log and daily note capture the broader narrative of what happened
 - Memory files capture what was learned
 - The delegation tracker captures what's pending
 
-Nothing depends on the AI remembering the conversation. Everything depends on the vault being up to date.
+Nothing depends on the AI remembering the conversation. Everything depends on the vault — and the latest capsule — being up to date.
 
 ## Preferred Output Style
 

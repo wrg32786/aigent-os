@@ -9,18 +9,19 @@ For users who want manual control, optional features, or deeper configuration be
 Hooks run silently in the background on every Claude Code event. The installer creates `.claude/settings.json` with paths pre-resolved. If you installed manually or need to reconfigure:
 
 1. Copy `.claude/settings.json.template` to `.claude/settings.json`
-2. Replace every occurrence of `AIGENT_ROOT` with your actual install path:
+2. Replace every occurrence of the placeholder `__AIGENT_ROOT__` with your actual install path. Note the double underscores: `__AIGENT_ROOT__` is the substitutable placeholder, while the bare `AIGENT_ROOT` (and `AIGENT_VAULT`) env-key names must stay literal — the installer only rewrites `__AIGENT_ROOT__`.
 
 ```bash
 # From your aigent-OS directory:
-sed -i "s|AIGENT_ROOT|$(pwd)|g" .claude/settings.json
+sed -i "s|__AIGENT_ROOT__|$(pwd)|g" .claude/settings.json
 ```
 
-3. Verify no literal `AIGENT_ROOT` remains:
+3. Verify no unrendered placeholder remains:
 
 ```bash
-grep -c "AIGENT_ROOT" .claude/settings.json  # should print 0
+grep -c "__AIGENT_ROOT__" .claude/settings.json  # should print 0
 ```
+(Do not grep for bare `AIGENT_ROOT` — a correctly-rendered file still contains it as an env-key name, so it will never be 0.)
 
 ### What each hook does
 
@@ -31,7 +32,7 @@ grep -c "AIGENT_ROOT" .claude/settings.json  # should print 0
 | `hooks/auto-capture.sh` | PostToolUse | Logs actions to daily note automatically |
 | `daemons/caddy-detect-new-skill.sh` | PostToolUse (Write/Edit) | Detects new skill files, prompts `/caddy-enroll` |
 | `hooks/session-capture-summary.sh` | Stop | Writes session summary at conversation end |
-| `hooks/session-end-check.sh` | Stop | Reminds to `/close` if not yet run |
+| `hooks/session-end-check.sh` | Stop | Legacy end-of-session check — superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
 | `hooks/log-token-usage.sh` | Stop | Logs token cost to vault |
 
 ---
@@ -124,7 +125,7 @@ cat .claude/skill-index.json | python3 -m json.tool | grep '"name"'
 
 ## Memory-heat daemon
 
-The memory-heat daemon ranks vault notes by recency + frequency of access, so `/open` knows what to surface. Output lives at `vault/memory/HEAT_INDEX.json`.
+The memory-heat daemon ranks vault notes by recency + frequency of access, so a resume knows what to surface. Output lives at `vault/memory/HEAT_INDEX.json`.
 
 **Run manually:**
 ```bash
@@ -149,10 +150,10 @@ Checks: kernel files, vault, CLAUDE.md, skills, hooks, settings.json path resolu
 
 ### Common issues
 
-**`AIGENT_ROOT` literal in settings.json:**
+**`__AIGENT_ROOT__` literal in settings.json:**
 The installer didn't run path substitution. Fix:
 ```bash
-sed -i "s|AIGENT_ROOT|$(pwd)|g" .claude/settings.json
+sed -i "s|__AIGENT_ROOT__|$(pwd)|g" .claude/settings.json
 ```
 
 **Skills not showing as slash commands:**
