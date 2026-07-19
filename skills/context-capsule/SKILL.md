@@ -26,7 +26,7 @@ Whether this capsule reads as a *checkpoint* or a *completion* downstream is dec
 
 - The capsule is **best-effort autosave, never a gate**. An operator `/clear` passes through whether or not a capsule landed; never tell the operator to wait on capsule machinery.
 - A session rotation satisfies the cycle — never re-arm or service a refresh cycle against a fresh session.
-- If a RefreshRequest is active: author the capsule, then **go quiet** — the seal fires on transcript stillness. Every extra tool call resets the clock.
+- If a RefreshRequest is active: author your close **into the rolling capsule file the pointer already targets** (finalize its `waiting_on`), then **go quiet**. The seal needs a cycle-bound receipt from the trusted writer — a hand-written side-file is invisible to the machinery, and stillness alone seals nothing.
 
 ## Fences (never cross)
 
