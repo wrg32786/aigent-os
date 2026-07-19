@@ -16,6 +16,31 @@ Paste `https://github.com/wrg32786/aigent-os` into any Claude Code session and s
 
 ## Fastest: one-line bootstrap
 
+**Checksum-verified (recommended):** downloads the bootstrap script from GitHub at a commit you pick and verifies it against a checksum recorded in this repo's git history -- over a different domain/TLS chain than the convenience URL below -- before running anything.
+
+First, get a commit SHA that contains `scripts/web-install.sh.sha256`: use the latest commit from [the commit history](https://github.com/wrg32786/aigent-os/commits/master), or a tagged release from [the tags page](https://github.com/wrg32786/aigent-os/tags) -- check the tag actually includes that file, since older tags predate it.
+
+```bash
+COMMIT=<paste-a-commit-sha-here>
+curl -fsSL "https://raw.githubusercontent.com/wrg32786/aigent-os/$COMMIT/scripts/web-install.sh" -o /tmp/aigent-os-install.sh
+curl -fsSL "https://raw.githubusercontent.com/wrg32786/aigent-os/$COMMIT/scripts/web-install.sh.sha256" -o /tmp/aigent-os-install.sh.sha256
+(cd /tmp && sha256sum -c aigent-os-install.sh.sha256) && sh /tmp/aigent-os-install.sh
+```
+
+```powershell
+$commit = "<paste-a-commit-sha-here>"
+Invoke-WebRequest "https://raw.githubusercontent.com/wrg32786/aigent-os/$commit/scripts/web-install.ps1" -OutFile "$env:TEMP\aigent-os-install.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/wrg32786/aigent-os/$commit/scripts/web-install.ps1.sha256" -OutFile "$env:TEMP\aigent-os-install.ps1.sha256"
+$expected = (Get-Content "$env:TEMP\aigent-os-install.ps1.sha256").Split(' ')[0]
+$actual = (Get-FileHash "$env:TEMP\aigent-os-install.ps1" -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw "checksum mismatch -- do not run this script" }
+& "$env:TEMP\aigent-os-install.ps1"
+```
+
+See [`docs/install-security.md`](docs/install-security.md#checksum-pinned-install) for exactly what this does and does not protect against.
+
+**Quick (convenience, unverified):** always runs whatever `tools.theaigent.xyz` currently serves, piped straight into your shell -- no checksum, no pin. Faster to type, but a compromise of that domain, its DNS, or a MITM position would run arbitrary code before any of the script's own checks fire.
+
 ```bash
 curl -fsSL https://tools.theaigent.xyz/os/install | sh
 ```
@@ -24,7 +49,7 @@ curl -fsSL https://tools.theaigent.xyz/os/install | sh
 irm https://tools.theaigent.xyz/os/install.ps1 | iex
 ```
 
-This clones aigent-OS to `~/aigent-os` and prints the next steps: `cd` into it, run `bash install.sh`, then open Claude Code there.
+Either variant clones aigent-OS to `~/aigent-os` and prints the next steps: `cd` into it, run `bash install.sh`, then open Claude Code there.
 
 ---
 

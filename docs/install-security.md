@@ -32,14 +32,31 @@ The installer does not:
 - Use `sudo`.
 - Modify shell startup files, `PATH`, global Git configuration, or files outside the target.
 - Fetch and execute an installer script from a remote URL.
-- Replace same-named files inside copied framework trees.
+- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below).
 - Replace an invalid existing `.claude/settings.json`.
+- Write through a symlink anywhere inside the target (see "Symlinks" below).
 
 ## Existing-file behavior
 
 ### Framework trees
 
 Files copied from framework directories use no-clobber behavior. Existing destination files remain untouched. This protects user customizations but also means rerunning the installer is not a blind upgrade mechanism for modified framework files.
+
+### Trusted-content trees (hooks, daemons, skills, agents, rules, skill-index)
+
+`hooks/`, `daemons/`, `.claude/skills/<name>/`, `.claude/agents/*.md`, `.claude/rules/`, and `.claude/skill-index.json` are all treated differently from every other framework tree, because their content becomes trusted the next time Claude Code touches it: hooks and daemons run on a lifecycle event, skills and agents are read and dispatched as slash commands/subagents, rules are read as agent instructions every session, and skill-index.json drives which skill gets auto-invoked. If a file already exists at a path the installer would otherwise place trusted content at, and its content differs from the framework's version, the installer quarantines the existing file (moves it to `.aigent/quarantine/<path>.<timestamp>`) and installs the trusted framework copy instead, printing a `[quarantine]` line naming both paths. A pre-existing file whose content is byte-identical to the framework's is left alone (no-op, same as any rerun).
+
+This exists so that installing into an existing project directory -- one that might already contain a planted file at, say, `hooks/security-scan.sh` or `.claude/skills/open/SKILL.md` -- cannot silently leave that planted file in place to be wired up as trusted content. If you intentionally maintain your own customizations at any of these paths, pass `--trust-existing` to keep them instead of quarantining:
+
+```bash
+bash install.sh --target /path/to/project --trust-existing
+```
+
+`.claude/settings.json.template` is exempt from this treatment for a different reason: it is unconditionally regenerated from the framework's copy on every run (never gated on "already exists"), so it can never silently keep a planted or stale template in the first place.
+
+### Symlinks
+
+Every write inside the target -- creating a directory, copying a framework file, writing `CLAUDE.md`/`settings.json`/`.gitignore`/`.aigent/state.json`, and the `.aigent/backups/`/`.aigent/quarantine/` copies those two make of a pre-existing file before overwriting it -- is checked first: if any path component from the target root down to (and including) the destination is already a symlink, the write is refused rather than followed. Without this, a pre-seeded symlink such as a file named `CLAUDE.md` that actually points at `~/.bashrc` would let a write we believe lands on `$TARGET/CLAUDE.md` land wherever the link points instead, since both `cp` and shell redirection follow symlinks by default. Single critical writes (`CLAUDE.md`, `.gitignore`, `.claude/settings.json`, and their `.aigent/backups/` copies) abort the whole install with an actionable error; copies of many files (framework trees, skills, agents, and their `.aigent/quarantine/` copies) skip just the affected file with a `[skip]` warning and continue.
 
 ### CLAUDE.md
 
@@ -69,16 +86,16 @@ The core copy and configuration steps use local files only.
 Unless `--no-deps` is supplied, the installer may run:
 
 ```bash
-npm ci --silent
+npm ci --silent --ignore-scripts
 ```
 
 or:
 
 ```bash
-npm install --silent
+npm install --silent --ignore-scripts
 ```
 
-inside `daemons/semantic-search/`. npm may contact configured registries and execute package lifecycle behavior according to the dependency lock and npm configuration. Review `package.json` and the lock file before enabling this step in a high-trust environment.
+inside `daemons/semantic-search/`. npm may contact configured registries and resolve the dependency lock. `--ignore-scripts` disables lifecycle scripts (`preinstall`/`install`/`postinstall`) for this package and every transitive dependency, so a compromised transitive dependency -- or a `daemons/semantic-search/package.json` that already existed in the target before this install ran -- cannot execute arbitrary code as a side effect of dependency resolution. The bundled semantic-search package has no lifecycle scripts of its own, so this changes nothing for a normal install. Review `package.json` and the lock file before enabling this step in a high-trust environment regardless.
 
 Skip it with:
 
@@ -106,7 +123,39 @@ git rev-parse HEAD
 git status --short
 ```
 
-When release checksums are published, verify the downloaded archive with the platform's SHA-256 tool before extraction. Tagged releases are not a substitute for signed provenance; consult `SECURITY.md` for the current signing status.
+Tagged releases are not a substitute for signed provenance; consult `SECURITY.md` for the current signing status.
+
+### Checksum-pinned install
+
+`INSTALL.md`'s one-line bootstrap (`curl | sh` / `irm | iex`) always fetches whatever `tools.theaigent.xyz` currently serves and executes it immediately -- convenient, but a compromise of that domain, its DNS, or a MITM position between you and it would run arbitrary code before any check in the fetched script itself has a chance to fire.
+
+The checksum-pinned variant instead fetches both the bootstrap script AND its checksum from `raw.githubusercontent.com` at a commit you pick -- a different domain and TLS chain than `tools.theaigent.xyz` -- and verifies the download before running anything.
+
+Pick a commit that contains `scripts/web-install.sh.sha256`: the latest commit from [the commit history](https://github.com/wrg32786/aigent-os/commits/master), or a tagged release from [the tags page](https://github.com/wrg32786/aigent-os/tags) -- older tags predate this file, so confirm the tag you pick actually includes it (`git ls-tree -r <tag> --name-only | grep web-install.sh.sha256` against a local clone, or browse the tag on GitHub).
+
+```bash
+COMMIT=<paste-a-commit-sha-here>
+curl -fsSL "https://raw.githubusercontent.com/wrg32786/aigent-os/$COMMIT/scripts/web-install.sh" -o /tmp/aigent-os-install.sh
+curl -fsSL "https://raw.githubusercontent.com/wrg32786/aigent-os/$COMMIT/scripts/web-install.sh.sha256" -o /tmp/aigent-os-install.sh.sha256
+(cd /tmp && sha256sum -c aigent-os-install.sh.sha256) && sh /tmp/aigent-os-install.sh
+```
+
+```powershell
+$commit = "<paste-a-commit-sha-here>"
+Invoke-WebRequest "https://raw.githubusercontent.com/wrg32786/aigent-os/$commit/scripts/web-install.ps1" -OutFile "$env:TEMP\aigent-os-install.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/wrg32786/aigent-os/$commit/scripts/web-install.ps1.sha256" -OutFile "$env:TEMP\aigent-os-install.ps1.sha256"
+$expected = (Get-Content "$env:TEMP\aigent-os-install.ps1.sha256").Split(' ')[0]
+$actual = (Get-FileHash "$env:TEMP\aigent-os-install.ps1" -Algorithm SHA256).Hash.ToLower()
+if ($actual -ne $expected) { throw "checksum mismatch -- do not run this script" }
+& "$env:TEMP\aigent-os-install.ps1"
+```
+
+What this does and does not protect against:
+
+- **Protects against**: a compromise of `tools.theaigent.xyz`, its DNS, or a MITM position targeting that CDN specifically -- the executed bytes are verified against a checksum recorded in this repo's git history at a commit you chose, over a completely separate domain and trust chain.
+- **Does not protect against**: a compromise of the maintainer's GitHub account or of GitHub itself (the checksum and the script both ultimately come from this repo), or trusting a stale/malicious commit if you pin one you haven't reviewed. Cryptographic release signing is on the roadmap (see `SECURITY.md`); until then, pinning to a commit you can read the diff of is the strongest guarantee available.
+
+`scripts/web-install.sh.sha256` and `scripts/web-install.ps1.sha256` are regenerated with `bash scripts/gen-web-install-checksums.sh` whenever the corresponding script changes; `tests/test-web-install.sh` fails CI if they ever drift out of sync with the scripts they checksum.
 
 Search the installer for unexpected capabilities:
 

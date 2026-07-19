@@ -65,6 +65,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Installer regression suite
+      - name: Installer regression suite (fast)
         shell: bash
-        run: bash tests/test-installer.sh
+        run: bash tests/test-installer-fast.sh
+
+      - name: Installer regression suite (slow smoke, real repo tree)
+        shell: bash
+        run: bash tests/test-installer-slow-smoke.sh
+
+      - name: Web-install regression suite
+        shell: bash
+        run: bash tests/test-web-install.sh
