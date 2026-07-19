@@ -32,7 +32,7 @@ The installer does not:
 - Use `sudo`.
 - Modify shell startup files, `PATH`, global Git configuration, or files outside the target.
 - Fetch and execute an installer script from a remote URL.
-- Replace same-named files inside copied framework trees, with one exception: `hooks/` and `daemons/` quarantine a differing pre-existing file instead of silently keeping it (see below).
+- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below).
 - Replace an invalid existing `.claude/settings.json`.
 - Write through a symlink anywhere inside the target (see "Symlinks" below).
 
@@ -42,19 +42,21 @@ The installer does not:
 
 Files copied from framework directories use no-clobber behavior. Existing destination files remain untouched. This protects user customizations but also means rerunning the installer is not a blind upgrade mechanism for modified framework files.
 
-### Hooks and daemons
+### Trusted-content trees (hooks, daemons, skills, agents, rules, skill-index)
 
-`hooks/` and `daemons/` are treated differently from every other framework tree, because files there become trusted executables that Claude Code runs on the next matching lifecycle event, per `.claude/settings.json`'s hook wiring. If a file already exists at a path the installer would otherwise place a framework hook/daemon at, and its content differs from the framework's version, the installer quarantines the existing file (moves it to `.aigent/quarantine/<path>.<timestamp>`) and installs the trusted framework copy instead, printing a `[quarantine]` line naming both paths. A pre-existing file whose content is byte-identical to the framework's is left alone (no-op, same as any rerun).
+`hooks/`, `daemons/`, `.claude/skills/<name>/`, `.claude/agents/*.md`, `.claude/rules/`, and `.claude/skill-index.json` are all treated differently from every other framework tree, because their content becomes trusted the next time Claude Code touches it: hooks and daemons run on a lifecycle event, skills and agents are read and dispatched as slash commands/subagents, rules are read as agent instructions every session, and skill-index.json drives which skill gets auto-invoked. If a file already exists at a path the installer would otherwise place trusted content at, and its content differs from the framework's version, the installer quarantines the existing file (moves it to `.aigent/quarantine/<path>.<timestamp>`) and installs the trusted framework copy instead, printing a `[quarantine]` line naming both paths. A pre-existing file whose content is byte-identical to the framework's is left alone (no-op, same as any rerun).
 
-This exists so that installing into an existing project directory -- one that might already contain a planted file at, say, `hooks/security-scan.sh` -- cannot silently leave that planted file in place to be wired up as a trusted hook. If you intentionally maintain your own customized hooks or daemons at these paths, pass `--trust-existing-hooks` to keep them instead of quarantining:
+This exists so that installing into an existing project directory -- one that might already contain a planted file at, say, `hooks/security-scan.sh` or `.claude/skills/open/SKILL.md` -- cannot silently leave that planted file in place to be wired up as trusted content. If you intentionally maintain your own customizations at any of these paths, pass `--trust-existing` to keep them instead of quarantining:
 
 ```bash
-bash install.sh --target /path/to/project --trust-existing-hooks
+bash install.sh --target /path/to/project --trust-existing
 ```
+
+`.claude/settings.json.template` is exempt from this treatment for a different reason: it is unconditionally regenerated from the framework's copy on every run (never gated on "already exists"), so it can never silently keep a planted or stale template in the first place.
 
 ### Symlinks
 
-Every write inside the target -- creating a directory, copying a framework file, writing `CLAUDE.md`/`settings.json`/`.gitignore`/`.aigent/state.json` -- is checked first: if any path component from the target root down to (and including) the destination is already a symlink, the write is refused rather than followed. Without this, a pre-seeded symlink such as a file named `CLAUDE.md` that actually points at `~/.bashrc` would let a write we believe lands on `$TARGET/CLAUDE.md` land wherever the link points instead, since both `cp` and shell redirection follow symlinks by default. Single critical writes (`CLAUDE.md`, `.gitignore`, `.claude/settings.json`) abort the whole install with an actionable error; copies of many files (framework trees, skills, agents) skip just the affected file with a `[skip]` warning and continue.
+Every write inside the target -- creating a directory, copying a framework file, writing `CLAUDE.md`/`settings.json`/`.gitignore`/`.aigent/state.json`, and the `.aigent/backups/`/`.aigent/quarantine/` copies those two make of a pre-existing file before overwriting it -- is checked first: if any path component from the target root down to (and including) the destination is already a symlink, the write is refused rather than followed. Without this, a pre-seeded symlink such as a file named `CLAUDE.md` that actually points at `~/.bashrc` would let a write we believe lands on `$TARGET/CLAUDE.md` land wherever the link points instead, since both `cp` and shell redirection follow symlinks by default. Single critical writes (`CLAUDE.md`, `.gitignore`, `.claude/settings.json`, and their `.aigent/backups/` copies) abort the whole install with an actionable error; copies of many files (framework trees, skills, agents, and their `.aigent/quarantine/` copies) skip just the affected file with a `[skip]` warning and continue.
 
 ### CLAUDE.md
 

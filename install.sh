@@ -16,10 +16,11 @@ Options:
   --target DIR          Install into DIR instead of the current directory
   --no-deps             Skip optional Node.js dependency installation
   --dry-run             Print the planned changes without modifying files
-  --trust-existing-hooks
-                        Keep pre-existing files under hooks/ and daemons/ even
-                        when they differ from the framework version, instead
-                        of quarantining them (see docs/install-security.md)
+  --trust-existing      Keep pre-existing files under hooks/, daemons/,
+                        .claude/skills/, .claude/agents/, .claude/rules/, and
+                        skill-index.json even when they differ from the
+                        framework version, instead of quarantining them
+                        (see docs/install-security.md)
   -h, --help            Show this help
 
 Examples:
@@ -38,7 +39,7 @@ fail() {
 TARGET=""
 NO_DEPS=0
 DRY_RUN=0
-TRUST_EXISTING_HOOKS=0
+TRUST_EXISTING=0
 
 while (($#)); do
   case "$1" in
@@ -56,8 +57,8 @@ while (($#)); do
       DRY_RUN=1
       shift
       ;;
-    --trust-existing-hooks)
-      TRUST_EXISTING_HOOKS=1
+    --trust-existing)
+      TRUST_EXISTING=1
       shift
       ;;
     -h|--help)
@@ -223,16 +224,67 @@ trap cleanup EXIT INT TERM
 BACKUP_DIR="$TARGET/.aigent/backups"
 safe_mkdir_p "$BACKUP_DIR" || fail "cannot create $BACKUP_DIR (see symlink warning above)"
 QUARANTINE_DIR="$TARGET/.aigent/quarantine"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+# AIGENT_INSTALL_STAMP override exists only so tests/test-installer.sh can
+# predict the exact backup/quarantine filename to pre-plant a symlink at
+# (mirrors the AIGENT_SRC / AIGENT_OS_DIR / AIGENT_OS_REPO_URL test seams
+# elsewhere in this repo). Same caveat as those: an attacker who already
+# controls your environment variables has code execution regardless.
+STAMP="${AIGENT_INSTALL_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
+
+# Single-file counterpart to copy_missing_tree's per-file handling, factored
+# out so every standalone sensitive single-file site (.claude/rules,
+# skill-index.json, .claude/agents/*.md) shares one implementation with the
+# tree walk below instead of a second hand-copy of the quarantine/symlink
+# logic that could drift out of sync.
+#
+# sensitive=1 marks files that become trusted -- read as agent instructions,
+# wired as slash commands/subagents, or run as hooks/daemons -- the next
+# time Claude Code touches them (Codex finding #19). For those, a
+# pre-existing file that differs from the framework's copy is quarantined
+# instead of silently kept, unless --trust-existing was passed. Byte-
+# identical files (e.g. a prior run's own copy) pass through with no action.
+copy_missing_file() {
+  local source_file="$1" dest_file="$2" sensitive="${3:-0}"
+  if [[ ! -e "$dest_file" ]]; then
+    if path_is_symlink_safe "$dest_file"; then
+      cp "$source_file" "$dest_file"
+    else
+      warn_symlink_escape "$dest_file"
+    fi
+    return 0
+  fi
+  [[ "$sensitive" -eq 1 && "$TRUST_EXISTING" -eq 0 ]] || return 0
+  cmp -s "$source_file" "$dest_file" 2>/dev/null && return 0
+
+  # A file already sits where this installer would otherwise place trusted
+  # content, and its content differs from what the framework ships.
+  # Silently keeping it (the no-clobber behavior non-sensitive sites use)
+  # would let a planted file quietly become trusted the next time it's
+  # read/run. Quarantine it and install the framework's version instead.
+  if ! path_is_symlink_safe "$dest_file"; then
+    warn_symlink_escape "$dest_file"
+    return 0
+  fi
+  local quarantine_rel="${dest_file#"$TARGET"/}"
+  local quarantine_dest="$QUARANTINE_DIR/$quarantine_rel.$STAMP"
+  safe_mkdir_p "$QUARANTINE_DIR/$(dirname -- "$quarantine_rel")" || return 0
+  if ! path_is_symlink_safe "$quarantine_dest"; then
+    # The quarantine slot itself is unsafe (Codex finding #22's item-2 case):
+    # rather than quarantine into or through a symlink, leave the
+    # pre-existing file exactly where it was and say so loudly.
+    warn_symlink_escape "$quarantine_dest"
+    printf '  [skip] could not quarantine %s -- leaving pre-existing file in place\n' "$dest_file"
+    return 0
+  fi
+  cp "$dest_file" "$quarantine_dest"
+  cp "$source_file" "$dest_file"
+  printf '  [quarantine] %s differed from the framework copy; original saved to %s\n' \
+    "$dest_file" "$quarantine_dest"
+}
 
 copy_missing_tree() {
   local source="$1"
   local destination="$2"
-  # sensitive=1 marks trees whose files become trusted executables on the
-  # next Claude Code lifecycle event (hooks/, daemons/ -- Codex finding #19).
-  # For those, a pre-existing file that differs from the framework's copy is
-  # quarantined instead of silently kept, unless --trust-existing-hooks was
-  # passed. Every other tree keeps the original no-clobber behavior.
   local sensitive="${3:-0}"
   [[ -d "$source" ]] || return 0
   safe_mkdir_p "$destination" || return 0
@@ -260,33 +312,11 @@ copy_missing_tree() {
 
   while IFS= read -r -d '' rel; do
     rel="${rel#./}"
-    local dest_file="$destination/$rel"
-    if [[ ! -e "$dest_file" ]]; then
-      if path_is_symlink_safe "$dest_file"; then
-        cp "$source/$rel" "$dest_file"
-      else
-        warn_symlink_escape "$dest_file"
-      fi
-    elif [[ "$sensitive" -eq 1 && "$TRUST_EXISTING_HOOKS" -eq 0 ]] \
-      && ! cmp -s "$source/$rel" "$dest_file" 2>/dev/null; then
-      # A file already sits where this installer would otherwise place a
-      # trusted hook/daemon, and its content differs from what the framework
-      # ships. Silently keeping it (the no-clobber behavior every other
-      # COPY_DIRS entry uses) would let a planted file quietly become a
-      # trusted executable the next time a lifecycle event fires. Quarantine
-      # the existing file and install the framework's version instead.
-      if path_is_symlink_safe "$dest_file"; then
-        # `|| continue`: skip just this file (safe_mkdir_p already warned)
-        # rather than aborting the whole install via set -e.
-        safe_mkdir_p "$QUARANTINE_DIR/$(dirname -- "$rel")" || continue
-        cp "$dest_file" "$QUARANTINE_DIR/$rel.$STAMP"
-        cp "$source/$rel" "$dest_file"
-        printf '  [quarantine] %s differed from the framework copy; original saved to %s\n' \
-          "$dest_file" "$QUARANTINE_DIR/$rel.$STAMP"
-      else
-        warn_symlink_escape "$dest_file"
-      fi
-    fi
+    # `|| true`: copy_missing_file's return value is not meaningful success/
+    # failure signaling here (it handles and reports its own outcomes), so a
+    # non-zero return must never be allowed to trip set -e and abort the
+    # whole tree copy over one file.
+    copy_missing_file "$source/$rel" "$destination/$rel" "$sensitive" || true
   done < <(cd "$source" && find . -type f -print0)
 }
 
@@ -326,6 +356,11 @@ else
     cp "$MANAGED_BLOCK" "$TARGET/CLAUDE.md"
     printf '  [ok] CLAUDE.md created with managed aigent-OS block\n'
   else
+    # Backup leaf write (Codex finding #22 item 2): STAMP's second-precision
+    # makes the exact backup filename hard but not impossible to predict, so
+    # this gets the same abort-on-symlink treatment as the primary write
+    # above rather than assuming a fresh name can't collide with a plant.
+    require_symlink_safe "$BACKUP_DIR/CLAUDE.md.$STAMP"
     cp "$TARGET/CLAUDE.md" "$BACKUP_DIR/CLAUDE.md.$STAMP"
     CLEAN_CLAUDE="$AIGENT_TMP/CLAUDE.clean.md"
     awk -v start="$START_MARKER" -v end="$END_MARKER" '
@@ -345,6 +380,10 @@ fi
 safe_mkdir_p "$TARGET/.claude/rules" || fail "cannot create $TARGET/.claude/rules (see symlink warning above)"
 safe_mkdir_p "$TARGET/.claude/skills" || fail "cannot create $TARGET/.claude/skills (see symlink warning above)"
 safe_mkdir_p "$TARGET/.claude/agents" || fail "cannot create $TARGET/.claude/agents (see symlink warning above)"
+# .claude/rules is read as agent instructions on every session -- a planted
+# file here that differs from the framework's is as much a trust-surface
+# concern as a hook script (Codex finding #19's "same bug class one
+# directory over"), so it goes through copy_missing_file(sensitive=1) too.
 RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
 RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then
@@ -352,43 +391,38 @@ if [[ -f "$RULES_SRC" ]]; then
   # in-place mode SRC and TARGET canonicalize to the same directory, so a
   # blind cp here would target itself and fail hard on BSD/Windows cp.
   if [[ "$(abspath "$RULES_SRC")" != "$(abspath "$RULES_DST")" ]]; then
-    # Check existence ourselves rather than relying on cp -n's exit code for
-    # a declined overwrite: BSD cp (macOS) exits 1 in that case, GNU cp
-    # exits 0, which is exactly the platform split copy_missing_tree() had.
-    # Explicit if-form for the same reason as copy_missing_tree() above.
-    if [[ ! -e "$RULES_DST" ]]; then
-      if path_is_symlink_safe "$RULES_DST"; then
-        cp "$RULES_SRC" "$RULES_DST"
-      else
-        warn_symlink_escape "$RULES_DST"
-      fi
-    fi
+    copy_missing_file "$RULES_SRC" "$RULES_DST" 1 || true
   fi
 fi
 
+# .claude/skills/<name>/ is a directory tree (SKILL.md plus whatever else
+# the skill ships), so it reuses copy_missing_tree(sensitive=1) rather than
+# copy_missing_file -- same per-file quarantine/symlink handling, walked
+# recursively. This is the runtime location Claude Code actually resolves
+# slash commands from; the plain top-level skills/ COPY_DIRS entry above is
+# just the inert framework-source mirror and stays non-sensitive.
 skills_new=0
-skills_kept=0
+skills_existing=0
 if [[ -d "$SRC/skills" ]]; then
   shopt -s nullglob
   for skill_dir in "$SRC/skills"/*/; do
     [[ -f "$skill_dir/SKILL.md" ]] || continue
     skill_name="$(basename "$skill_dir")"
     skill_dst="$TARGET/.claude/skills/$skill_name"
-    if [[ ! -d "$skill_dst" ]]; then
-      if path_is_symlink_safe "$skill_dst"; then
-        cp -R "$skill_dir" "$skill_dst"
-        ((skills_new += 1))
-      else
-        warn_symlink_escape "$skill_dst"
-      fi
+    if [[ -d "$skill_dst" ]]; then
+      ((skills_existing += 1))
     else
-      ((skills_kept += 1))
+      ((skills_new += 1))
     fi
+    copy_missing_tree "$skill_dir" "$skill_dst" 1
   done
   shopt -u nullglob
 fi
-printf '  [ok] Skills: %d installed, %d existing copies preserved\n' "$skills_new" "$skills_kept"
+printf '  [ok] Skills: %d new, %d existing directories processed\n' "$skills_new" "$skills_existing"
 
+# .claude/agents/*.md are the dispatchable subagent definitions Claude Code
+# loads directly (vault/agents/ is just the docs source) -- trusted content
+# exactly like a hook, so sensitive=1 here too.
 agents_new=0
 if [[ -d "$SRC/vault/agents" ]]; then
   shopt -s nullglob
@@ -396,19 +430,13 @@ if [[ -d "$SRC/vault/agents" ]]; then
     [[ -f "$agent_file" ]] || continue
     if head -20 "$agent_file" | grep -q '^name:' && head -20 "$agent_file" | grep -q '^tools:'; then
       destination="$TARGET/.claude/agents/$(basename "$agent_file")"
-      if [[ ! -f "$destination" ]]; then
-        if path_is_symlink_safe "$destination"; then
-          cp "$agent_file" "$destination"
-          ((agents_new += 1))
-        else
-          warn_symlink_escape "$destination"
-        fi
-      fi
+      [[ -f "$destination" ]] || ((agents_new += 1))
+      copy_missing_file "$agent_file" "$destination" 1 || true
     fi
   done
   shopt -u nullglob
 fi
-printf '  [ok] Agents: %d registered, existing definitions preserved\n' "$agents_new"
+printf '  [ok] Agents: %d new, existing definitions processed\n' "$agents_new"
 
 SETTINGS_SRC="$SRC/.claude/settings.json.template"
 SETTINGS_DST="$TARGET/.claude/settings.json"
@@ -426,6 +454,9 @@ if [[ ! -f "$SETTINGS_DST" ]]; then
   cp "$RENDERED_TMPL" "$SETTINGS_DST"
   printf '  [ok] .claude/settings.json created\n'
 else
+  # Backup leaf write (Codex finding #22 item 2) -- same reasoning as the
+  # CLAUDE.md backup above.
+  require_symlink_safe "$BACKUP_DIR/settings.json.$STAMP"
   cp "$SETTINGS_DST" "$BACKUP_DIR/settings.json.$STAMP"
   MERGED="$AIGENT_TMP/settings.merged.json"
   MERGE_OK=0
@@ -525,17 +556,20 @@ JS
     printf '         It was left untouched. Merge .claude/settings.aigent.json manually.\n'
   fi
 fi
+# settings.json.template is unconditionally regenerated here (not gated on
+# `! -e`, unlike every sensitive site above) -- every install run overwrites
+# it with SRC's trusted copy, so unlike hooks/skills/agents/rules it can
+# never silently keep a planted or stale template. No quarantine logic
+# needed; the existing require_symlink_safe guard is sufficient.
 if [[ "$(abspath "$SETTINGS_SRC")" != "$(abspath "$TARGET/.claude/settings.json.template")" ]]; then
   require_symlink_safe "$TARGET/.claude/settings.json.template"
   cp "$SETTINGS_SRC" "$TARGET/.claude/settings.json.template"
 fi
 
-if [[ -f "$SRC/.claude/skill-index.json" && ! -f "$TARGET/.claude/skill-index.json" ]]; then
-  if path_is_symlink_safe "$TARGET/.claude/skill-index.json"; then
-    cp "$SRC/.claude/skill-index.json" "$TARGET/.claude/skill-index.json"
-  else
-    warn_symlink_escape "$TARGET/.claude/skill-index.json"
-  fi
+# skill-index.json drives Caddy's skill auto-invoke hints (rule 12) --
+# trusted routing metadata, same sensitivity class as a hook.
+if [[ -f "$SRC/.claude/skill-index.json" ]]; then
+  copy_missing_file "$SRC/.claude/skill-index.json" "$TARGET/.claude/skill-index.json" 1 || true
 fi
 
 safe_mkdir_p "$TARGET/vault/daily" || fail "cannot create $TARGET/vault/daily (see symlink warning above)"

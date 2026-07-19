@@ -162,7 +162,7 @@ printf '%s\n' "$SKIP_OUT" | grep -qi "\[skip\] refusing to write through symlink
 test ! -e "$WORK/nonexistent-escape-target"
 printf 'symlink escape (many-file site): skipped with warning, install completed\n'
 
-# ── Hooks/daemons quarantine (Codex finding #19) ─────────────────────────────
+# ── Sensitive-tree quarantine (Codex finding #19) ────────────────────────────
 # A pre-existing file at a path the installer would place a framework hook
 # is quarantined (moved aside, framework version installed) by default.
 QUARANTINE_TARGET="$WORK/quarantine-target"
@@ -174,13 +174,63 @@ grep -q "trusted" "$QUARANTINE_TARGET/hooks/example-hook.sh"
 grep -rq "MALICIOUS" "$QUARANTINE_TARGET/.aigent/quarantine/"
 printf 'hooks quarantine: planted file moved aside, trusted version installed\n'
 
-# --trust-existing-hooks keeps the pre-existing file instead of quarantining it.
+# Same bug class, one directory over: .claude/skills/<name>/SKILL.md is a
+# dispatchable slash command Claude Code reads directly, so a planted,
+# differing SKILL.md must quarantine exactly like a hook.
+SKILLS_QUAR_TARGET="$WORK/skills-quarantine-target"
+mkdir -p "$SKILLS_QUAR_TARGET/.claude/skills/demo"
+printf '%s\n' '---' 'name: demo' 'MALICIOUS' '---' > "$SKILLS_QUAR_TARGET/.claude/skills/demo/SKILL.md"
+SKILLS_QUAR_OUT="$(cd "$FIXTURE" && bash install.sh --target "$SKILLS_QUAR_TARGET" --no-deps 2>&1)"
+printf '%s\n' "$SKILLS_QUAR_OUT" | grep -qi "\[quarantine\]"
+! grep -q "MALICIOUS" "$SKILLS_QUAR_TARGET/.claude/skills/demo/SKILL.md"
+grep -rq "MALICIOUS" "$SKILLS_QUAR_TARGET/.aigent/quarantine/"
+printf 'skills quarantine: planted SKILL.md moved aside, trusted version installed\n'
+
+# .claude/agents/<name>.md is a dispatchable subagent definition -- same
+# treatment.
+AGENTS_QUAR_TARGET="$WORK/agents-quarantine-target"
+mkdir -p "$AGENTS_QUAR_TARGET/.claude/agents"
+printf '%s\n' '---' 'name: scout' 'tools: [Read]' 'MALICIOUS' '---' > "$AGENTS_QUAR_TARGET/.claude/agents/scout.md"
+AGENTS_QUAR_OUT="$(cd "$FIXTURE" && bash install.sh --target "$AGENTS_QUAR_TARGET" --no-deps 2>&1)"
+printf '%s\n' "$AGENTS_QUAR_OUT" | grep -qi "\[quarantine\]"
+! grep -q "MALICIOUS" "$AGENTS_QUAR_TARGET/.claude/agents/scout.md"
+grep -rq "MALICIOUS" "$AGENTS_QUAR_TARGET/.aigent/quarantine/"
+printf 'agents quarantine: planted scout.md moved aside, trusted version installed\n'
+
+# --trust-existing keeps pre-existing hooks/skills/agents instead of
+# quarantining them, across all three sensitive trees at once.
 TRUST_TARGET="$WORK/trust-target"
-mkdir -p "$TRUST_TARGET/hooks"
+mkdir -p "$TRUST_TARGET/hooks" "$TRUST_TARGET/.claude/skills/demo" "$TRUST_TARGET/.claude/agents"
 printf '#!/bin/sh\necho "CUSTOM"\n' > "$TRUST_TARGET/hooks/example-hook.sh"
-TRUST_OUT="$(cd "$FIXTURE" && bash install.sh --target "$TRUST_TARGET" --trust-existing-hooks --no-deps 2>&1)"
+printf '%s\n' '---' 'name: demo' 'CUSTOM' '---' > "$TRUST_TARGET/.claude/skills/demo/SKILL.md"
+printf '%s\n' '---' 'name: scout' 'tools: [Read]' 'CUSTOM' '---' > "$TRUST_TARGET/.claude/agents/scout.md"
+TRUST_OUT="$(cd "$FIXTURE" && bash install.sh --target "$TRUST_TARGET" --trust-existing --no-deps 2>&1)"
 grep -q "CUSTOM" "$TRUST_TARGET/hooks/example-hook.sh"
+grep -q "CUSTOM" "$TRUST_TARGET/.claude/skills/demo/SKILL.md"
+grep -q "CUSTOM" "$TRUST_TARGET/.claude/agents/scout.md"
 ! printf '%s\n' "$TRUST_OUT" | grep -qi "\[quarantine\]"
-printf 'trust-existing-hooks: pre-existing file kept, no quarantine\n'
+printf 'trust-existing: pre-existing hooks/skills/agents kept, no quarantine\n'
+
+# ── Backup-leaf symlink guard (Codex finding #22 item 2) ─────────────────────
+# STAMP is normally date -u at runtime, so a test can't predict the backup
+# filename to pre-plant a symlink at. AIGENT_INSTALL_STAMP (test-only, see
+# install.sh) pins it so the exact path is known before the second run.
+BACKUP_STAMP="20260101T000000Z"
+BACKUP_TARGET="$WORK/backup-symlink-target"
+(
+  cd "$FIXTURE"
+  AIGENT_INSTALL_STAMP="$BACKUP_STAMP" bash install.sh --target "$BACKUP_TARGET" --no-deps >/dev/null
+)
+BACKUP_SENTINEL="$WORK/backup-sentinel.txt"
+printf 'do not touch\n' > "$BACKUP_SENTINEL"
+make_symlink "$BACKUP_SENTINEL" "$BACKUP_TARGET/.aigent/backups/CLAUDE.md.$BACKUP_STAMP"
+set +e
+BACKUP_OUT="$(cd "$FIXTURE" && AIGENT_INSTALL_STAMP="$BACKUP_STAMP" bash install.sh --target "$BACKUP_TARGET" --no-deps 2>&1)"
+BACKUP_RC=$?
+set -e
+test "$BACKUP_RC" -ne 0
+printf '%s\n' "$BACKUP_OUT" | grep -qi "refusing to write through symlink"
+test "$(cat "$BACKUP_SENTINEL")" = "do not touch"
+printf 'backup leaf symlink guard: refused, sentinel untouched\n'
 
 printf 'installer regression tests passed\n'
