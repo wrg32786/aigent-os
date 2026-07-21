@@ -8,7 +8,7 @@ created: 2026-05-11
 # Session Engine
 
 > [!warning] SUPERSEDED — historical design artifact
-> This spec decomposes the **retired** `/open` and `/close` commands. The shipped lifecycle is the two-verb model — `/resume` + `/context-capsule`, auto-firing on `SessionStart`/`Stop`; see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]]. The decomposition below is kept as design history and does NOT describe current shipped behavior. The command files it references (`.claude/commands/open.md`, `.claude/commands/close.md`) do not exist in the current tree.
+> This spec decomposes the **retired** `/open` and `/close` commands. The shipped lifecycle is the two-verb model — `/resume` + `/context-capsule`, auto-firing on `SessionStart`/`Stop`; see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]] — current contract, beta (v0.9.0), see its known-issues note. The decomposition below is kept as design history and does NOT describe current shipped behavior. The command files it references (`.claude/commands/open.md`, `.claude/commands/close.md`) do not exist in the current tree.
 
 > Phase 3 of the [[concepts/aigent-OS Refactor Spec|aigent-OS Refactor]]. Broke `/open` and `/close` from monolithic prompt blobs into discrete, named steps.
 
