@@ -7,6 +7,9 @@ created: 2026-07-17
 
 # Two-Verb Lifecycle
 
+> [!warning] Beta (v0.9.0) — known issue, fix in progress
+> This lifecycle ships as **v0.9.0, BETA**. Known issue, currently being fixed: capsule/resume selection can, in some cases, resume a stale or already-consumed capsule — the "newest valid capsule" check does not yet reject a spent capsule. Separately, auto-commit of the vault to git is not yet wired safely. A fix is in progress and will be ported here once verified; this doc will be updated when it lands. Until then, treat capsule/resume selection as best-effort, not a hard guarantee.
+
 > [!abstract] Core idea
 > Session continuity collapses to exactly two verbs — `/context-capsule` (write state, then stop) and `/resume` (load state, re-ground, act). `/open` and `/close` are retired: resume absorbs open, the capsule verb absorbs close. Both verbs also fire automatically at the right SessionStart/Stop hook points, so the operator rarely needs to invoke them by name.
 
