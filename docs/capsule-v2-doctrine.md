@@ -8,7 +8,7 @@ created: 2026-05-08
 # Capsule v2 Doctrine
 
 > [!info] Superseded by the two-verb lifecycle
-> `/open` and `/close` are retired — see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]]. `/resume` absorbs `/open`, `/context-capsule` absorbs `/close`. **The field contract narrowed:** the trusted writer (`daemons/capsule-verb.mjs`, `validateCapsuleText`) requires and validates only four fields — `id`, `objective`, `waiting_on`, `next_valid_action`. The extended v2 fields tabled below (`resume_trigger`, `success_criteria`, `open_questions`, `last_verified_state`, etc.) are optional, advisory prose the writer neither requires nor enforces. Treat [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]] — not this historical note — as the current contract.
+> `/open` and `/close` are retired — see [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]]. `/resume` absorbs `/open`, `/context-capsule` absorbs `/close`. **The field contract narrowed:** the trusted writer (`daemons/capsule-verb.mjs`, `validateCapsuleText`) requires and validates only four fields — `id`, `objective`, `waiting_on`, `next_valid_action`. The extended v2 fields tabled below (`resume_trigger`, `success_criteria`, `open_questions`, `last_verified_state`, etc.) are optional, advisory prose the writer neither requires nor enforces. Treat [[../docs/two-verb-lifecycle.md|Two-Verb Lifecycle]] — not this historical note — as the current contract, beta (v0.9.0) — see its known-issues note.
 
 > [!abstract] Key insight
 > Capsules are resumable execution state, not summaries. (12-Factor Agents: unify execution state and business state.)
