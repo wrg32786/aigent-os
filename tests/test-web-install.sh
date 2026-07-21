@@ -24,6 +24,18 @@ git config --global user.email "test@example.invalid" >/dev/null 2>&1 || true
 git config --global user.name "test" >/dev/null 2>&1 || true
 git config --global init.defaultBranch main >/dev/null 2>&1 || true
 
+# ── Test shim: web-install.sh requires `claude` on PATH (a real, user-facing
+# precondition unrelated to the git-plumbing this test exercises). CI runners
+# have git but not Claude Code, so stub a no-op `claude` on PATH for the test.
+# This does NOT weaken the shipped precondition -- it only satisfies it here so
+# the fresh-clone / update / detached-HEAD assertions below can actually run.
+SHIM_BIN="$WORK/shim-bin"
+mkdir -p "$SHIM_BIN"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM_BIN/claude"
+chmod +x "$SHIM_BIN/claude"
+PATH="$SHIM_BIN:$PATH"
+export PATH
+
 # ── Fixture: canonical "origin" and a "rogue" remote with different content ──
 UPSTREAM="$WORK/upstream.git"
 git init -q --bare "$UPSTREAM"
