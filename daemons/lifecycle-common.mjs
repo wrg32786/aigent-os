@@ -38,6 +38,17 @@ export function memRoot(root) {
   return path.join(String(root), 'vault', 'memory');
 }
 
+// Hand-authored capsules carry objective / waiting_on / next_valid_action as
+// `## <key>` body sections instead of frontmatter scalars; both shapes are valid
+// capsule fields. Captures until the next heading of any level.
+export function bodySection(doc, key) {
+  const match = String(doc).match(
+    new RegExp(`^#{1,6}[ \\t]+${key}[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,6}[ \\t]|(?![\\s\\S]))`, 'mi'),
+  );
+  const value = match?.[1]?.trim();
+  return value || null;
+}
+
 // Resume has one selector: the valid active capsule with the newest frontmatter
 // created_at. Any unreadable or malformed candidate is ignored; hook callers
 // degrade without throwing when no valid capsule exists.
@@ -74,8 +85,8 @@ export function newestValidCapsule(memoryRoot) {
     const createdRaw = scalar('created_at');
     const created = Date.parse(String(createdRaw));
     const status = scalar('status');
-    const objective = scalar('objective');
-    const nextAction = scalar('next_valid_action');
+    const objective = scalar('objective') || bodySection(doc, 'objective');
+    const nextAction = scalar('next_valid_action') || bodySection(doc, 'next_valid_action');
     if (status !== 'active' || !id || !Number.isFinite(created)) continue;
     if (!objective || !nextAction) continue;
     if (!best || created > best.created) {

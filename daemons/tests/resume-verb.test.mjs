@@ -117,6 +117,27 @@ test('newest active valid capsule wins solely by created_at', () => {
   }
 });
 
+test('hand-authored capsule keeping fields as body sections is valid and wins by created_at', () => {
+  const fixture = mkFixture();
+  try {
+    writeFileSync(path.join(fixture.capsules, '2026-07-22-hand-authored.md'),
+      '---\nid: 2026-07-22-hand-authored\nstatus: active\ntrigger: auto-refresh\n'
+      + 'created_at: 2026-07-22T18:57:00Z\ntags: [capsule]\n---\n\n'
+      + '## objective\nKeep the pipeline healthy.\n\n'
+      + '## waiting_on\n1. the next watchdog catch\n\n'
+      + '## next_valid_action\nRead the watchdog log and compare snapshots.\n\n'
+      + '## session state\nnot a slot binding\n');
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-x' });
+    assert.equal(result.loaded.id, '2026-07-22-hand-authored');
+    assert.equal(result.loaded.objective, 'Keep the pipeline healthy.');
+    assert.match(result.loaded.waiting_on, /watchdog catch/);
+    assert.equal(result.loaded.next_valid_action, 'Read the watchdog log and compare snapshots.');
+    assert.ok(result.prompt.includes('2026-07-22-hand-authored'));
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
 test('newer resolved or torn capsules cannot hijack resume selection', () => {
   const fixture = mkFixture();
   try {

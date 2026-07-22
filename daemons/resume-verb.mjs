@@ -26,7 +26,7 @@
 // own SessionStart(clear) hook must no-op rather than double-inject the procedure.
 
 import { readFileSync } from 'node:fs';
-import { memRoot, logErr, newestValidCapsule } from './lifecycle-common.mjs';
+import { memRoot, logErr, newestValidCapsule, bodySection } from './lifecycle-common.mjs';
 
 function frontmatterScalar(doc, key) {
   const fmMatch = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
@@ -51,9 +51,9 @@ function loadCapsule(projectRoot) {
   return {
     id: frontmatterScalar(doc, 'id') ?? newest.id,
     path: newest.path,
-    objective: frontmatterScalar(doc, 'objective'),
-    waiting_on: frontmatterScalar(doc, 'waiting_on'),
-    next_valid_action: frontmatterScalar(doc, 'next_valid_action'),
+    objective: frontmatterScalar(doc, 'objective') || bodySection(doc, 'objective'),
+    waiting_on: frontmatterScalar(doc, 'waiting_on') || bodySection(doc, 'waiting_on'),
+    next_valid_action: frontmatterScalar(doc, 'next_valid_action') || bodySection(doc, 'next_valid_action'),
   };
 }
 
