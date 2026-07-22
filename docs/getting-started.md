@@ -95,7 +95,7 @@ Use `/setup` later for deeper configuration or to revise identity, priorities, a
 
 The lifecycle is two verbs, and both fire automatically at their hook points — you rarely invoke them by name. See [`two-verb-lifecycle.md`](two-verb-lifecycle.md).
 
-1. **`/resume`** loads the last capsule, recomputes its `definition_hash` to detect drift, re-grounds on recent context and open threads, and acts on `next_valid_action`. It auto-fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`; a warm pointer-reinject runs on every other SessionStart source.
+1. **`/resume`** loads the newest valid capsule by `created_at`, re-grounds on recent context and open threads, and acts on `next_valid_action`. It auto-fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`; a warm reinject (showing the newest active capsule) runs on every other SessionStart source.
 2. **Work normally.** Skills and hooks route tasks, capture privacy-safe action metadata, and update durable notes when appropriate. A rolling, best-effort capsule autosave runs on every `Stop` (`daemons/stop-capsule-writer.mjs`).
 3. **`/context-capsule`** reconciles and writes a resume-ready capsule, then stops — invoke it for a deliberate mid-session checkpoint or a clean end-of-thread finalize. The autosave already covers the case where you just walk away.
 

@@ -46,7 +46,7 @@ Without these fields, resuming a capsule required re-reading the full context an
 ## How it connects
 
 - `/context-capsule` — reconciles, writes a capsule with the four required fields (plus any advisory prose), then stops. It stamps nothing itself; the trusted writer (`daemons/capsule-verb.mjs`) validates and the pointer machinery records it.
-- `/resume` — reads the capsule, recomputes `definition_hash` to detect drift, re-grounds, and executes `next_valid_action`. It does NOT write the status flip: the `active → resumed` transition is performed by `daemons/sessionstart-reinject.mjs` (via `flipCapsuleToResumed`), not by `/resume`.
+- `/resume` — selects the newest valid capsule by `created_at`, re-grounds, and executes `next_valid_action`. There is no automatic `active → resumed` status flip in the current architecture — resumption is proven by the action taken, not by a frontmatter status change.
 - **Auto-fire** — a rolling, best-effort capsule write runs on every `Stop` (`daemons/stop-capsule-writer.mjs`); resume runs on `SessionStart(clear)` (`daemons/resume-verb.mjs`). The explicit verbs exist for deliberate mid-session checkpoints and named-capsule resumes.
 - The retired `/open`, `/close`, and `/pause` skills still exist on disk but are deprecated — do not document them as live paths.
 

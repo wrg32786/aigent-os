@@ -40,7 +40,7 @@ aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending re
 
 ---
 
-> **v0.9 (2026-07-17):** The two-verb lifecycle — automatic capsule + resume supersedes manual `/open` + `/close`; the OS now checkpoints itself whenever a session ends, compacts, or is cleared, and resumes itself on the next boot. Adds a statusline context writer and zero-leak flush legs. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
+> **v0.9 (2026-07-21):** The two-verb lifecycle — **`/context-capsule`** (write state, then stop) + **`/resume`** (load the newest capsule, re-ground, act) supersede manual `/open` + `/close`. Continuity collapses to a minimal flow: the **capsule** verb writes a resume-ready snapshot, and **resume** loads the **newest capsule by date** on the next boot — no nonce/receipt/pointer machinery and no polling cycle. See [What a session actually looks like](#-what-a-session-actually-looks-like) below.
 
 > **v0.7 (2026-05-09):** Cognitive architecture shipped — runtime consciousness (ACTIVE_STATE computed at session boundaries; the `/open`+`/close` triggers of the time are now the auto-firing two-verb lifecycle — see v0.9), persistent self-model (capabilities, limitations, failure modes), goal stack with success criteria, belief tracking with confidence scores, operational lessons + procedures, /dream offline consolidation, /reconcile cross-system consistency checks, /meta-improve constrained self-modification, eval harness. aigent-OS now models itself, tracks what it believes, detects drift, and proposes its own improvements. See [The Cognitive Architecture](#-the-cognitive-architecture) below.
 
@@ -357,26 +357,18 @@ See [docs/meta-aigent-doctrine.md](docs/meta-aigent-doctrine.md) for the full sa
 
 ## 🫁 The Self-Refresh Reflex
 
-Released 2026-07-17 as part of the v0.9 two-verb lifecycle. Session boundaries used to depend on the operator remembering to type `/open` or `/close`, and a session running long could quietly burn through its context window with no warning. This layer removes both dependencies: eight daemons watch context pressure and every session boundary, write state continuously instead of only at the end, and nudge — never force — a refresh before it costs you anything.
+Released as part of the v0.9 two-verb lifecycle. Session continuity is two verbs and nothing else:
 
-### Core capabilities
+- **`/context-capsule`** writes a resume-ready snapshot — on demand for a deliberate checkpoint, and in a rolling, best-effort form on every `Stop` event, so state is never more than a turn stale.
+- **`/resume`** loads the **newest capsule by date**, re-grounds against it, and acts — on demand, and automatically on `SessionStart(clear)`, so a fresh session picks up exactly where the last one left off without the operator typing anything.
 
-| Capability | What it does | How it fires |
-|---|---|---|
-| **Context-pressure sensor** | Watches context usage against the live percentage from your statusline | `PreToolUse` hook, checked on every tool call |
-| **60% nudge** | Injects a self-refresh instruction: finalize the active capsule, then route to `/compact` (mid-task) or `/clear` (pause point) depending on where the session actually is | Fires once per crossing; re-alerts every +5 points if usage keeps climbing |
-| **75% mandatory escalation** | Same finalize step, but the routing instruction stops offering `/compact` — `/clear` only | Fires at the hard line; also fires early if a `/compact` already ran and didn't recover real headroom |
-| **Write-ahead journal** | Captures live capsule state on every prompt submitted, not just at session end | `UserPromptSubmit` hook |
-| **PreCompact flush** | Flushes state and re-injects the capsule pointer table before compaction runs, so nothing is lost mid-compact | `PreCompact` hook |
-| **SessionEnd flush** | Reconciles live state and writes the resume-ready capsule the moment a session actually ends | `SessionEnd` hook |
-| **Boot-evidence stamp** | Records session id, source, and timestamp on every boot, so the OS can tell a fresh session apart from a post-clear one | `SessionStart` hook |
-| **Statusline context writer** | Feeds the sensor its ground-truth context percentage each render | `daemons/statusline-ctx.sh` |
+That's the whole mechanism — no nonce/receipt handshake, no pointer bookkeeping, no polling cycle-driver. An earlier beta grew that scaffolding trying to guarantee freshness explicitly; v0.9 removed it in favor of the simpler guarantee newest-by-date already gives you. Two companion legs still guard against losing a turn's state to a crash: a write-ahead journal on every prompt (`UserPromptSubmit`) and a final flush on `SessionEnd`/`PreCompact`.
 
-### What it doesn't do
+### Context nudge (retired)
 
-The sensor advises — it does not execute `/clear` or `/compact` on its own. Every threshold crossing writes a plain-text instruction into context; the session still runs the command itself, at a clean pause point, on its own judgment. This is a warning system, not an autopilot: it exists so a long session never hits a context wall by surprise, not so the OS silently clears state out from under work in progress.
+An earlier v0.9 beta shipped a context-pressure sensor (`daemons/ctx-refresh-sensor.mjs`) that advised — never forced — a refresh as a session's context filled up: a ~60% nudge, escalating at ~75%. It's now a compatibility stub that does nothing when invoked; the mechanism it drove (autofire, the refresh-cycle tower) was removed along with the beta's pointer bookkeeping. `daemons/statusline-ctx.sh` still writes the session's live context percentage to disk, but nothing in the box currently reads it.
 
-Full mechanism and hook wiring: [docs/two-verb-lifecycle.md](docs/two-verb-lifecycle.md).
+Full mechanism: [docs/two-verb-lifecycle.md](docs/two-verb-lifecycle.md).
 
 ---
 

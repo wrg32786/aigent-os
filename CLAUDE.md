@@ -70,7 +70,7 @@ The lifecycle is two verbs, and both fire automatically at their hook points —
 
 | Command | When to use | What it does |
 |---------|-------------|--------------|
-| `/resume` | Start of a session (auto-fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`) | Loads the last capsule, recomputes `definition_hash` to detect drift, re-grounds, and acts on `next_valid_action` |
+| `/resume` | Start of a session (auto-fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`) | Loads the newest valid capsule by `created_at`, re-grounds, and acts on `next_valid_action` |
 | `/context-capsule` | Checkpoint or end of a thread (a rolling best-effort version auto-fires on every `Stop` via `daemons/stop-capsule-writer.mjs`) | Reconciles, writes a resume-ready capsule (`id`, `objective`, `waiting_on`, `next_valid_action`), then stops. Stamps nothing itself — the trusted writer validates |
 
 ## Key Files
