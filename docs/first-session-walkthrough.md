@@ -71,7 +71,7 @@ When you want a clean, deliberate checkpoint instead — a thread genuinely wrap
 
 1. **Reconciles** from the live session log, active priorities, and this session's git commits (2–4 reads, not a transcript re-read).
 2. **Writes** a capsule to `vault/memory/capsules/<YYYY-MM-DD>-<slug>.md` with the fields a fresh session needs to act on: `id`, `objective`, `waiting_on`, `next_valid_action`.
-3. **Stops.** One line acknowledging the capsule path, then silence — it doesn't stamp the pointer or digest itself; a trusted writer (`daemons/capsule-verb.mjs`) validates the content separately and refuses loudly if anything required is missing.
+3. **Stops.** One line acknowledging the capsule path, then silence — it doesn't stamp a pointer or digest — there is none; `validateCapsuleText()` (`daemons/capsule-verb.mjs`) can check the required fields and reports problems if anything is missing.
 
 A typical explicit checkpoint looks like:
 
@@ -91,7 +91,7 @@ The capsule is best-effort autosave, never a gate — you never wait on it, and 
 | Command | When | What it does |
 |---------|------|-------------|
 | `/resume` | Start of a session — auto-fires on `SessionStart(clear)`; run it by name for a named-capsule pickup | Loads the newest valid capsule by `created_at`, re-grounds against the session log and priorities, acts on `next_valid_action` |
-| `/context-capsule` | Checkpoint or end of a thread — a rolling autosave version auto-fires on every `Stop`; run it by name for a deliberate checkpoint or handoff | Reconciles, writes a resume-ready capsule, then stops. Stamps nothing itself — a trusted writer validates |
+| `/context-capsule` | Checkpoint or end of a thread — a rolling autosave version auto-fires on every `Stop`; run it by name for a deliberate checkpoint or handoff | Reconciles, writes a resume-ready capsule, then stops. Stamps nothing itself — `validateCapsuleText()` is the self-check |
 
 `/open` and `/close` are retired — the skill files still exist for compatibility but are deprecated. You'll never be asked to run them.
 
