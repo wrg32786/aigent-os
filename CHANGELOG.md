@@ -18,22 +18,6 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
   - New tests: `tests/test-web-install.sh` (rogue-remote pull, detached-HEAD refusal, checksum drift); `tests/test-installer-fast.sh` gained symlink-escape and sensitive-tree-quarantine regression cases (skills/agents/rules/skill-index, `--trust-existing` opt-out, backup-leaf symlink refusal). Split out of the original `tests/test-installer.sh` into `test-installer-fast.sh` + `test-installer-slow-smoke.sh` (the real-repo-tree install + doctor.sh pass) so the fast suite -- the CI/review gate signal -- never has to pay the slow pass's wall-clock cost, and every scenario now prints a numbered progress line instead of running silent.
 
 ### Added
-- **Two-verb lifecycle** — `/context-capsule` and `/resume` replace `/open`/`/close`/`/pause` as the session-continuity model. See `docs/two-verb-lifecycle.md` for the full design.
-  - `daemons/lifecycle-common.mjs` — shared identity/vault resolution, CRLF-safe frontmatter flip (`flipCapsuleToResumed`) with dedupe of a pre-seeded null-stamp placeholder.
-  - `daemons/capsule-content-gate.mjs` — shared injection-echo / ceremony-action content gate.
-  - `daemons/capsule-verb.mjs` + `daemons/curated-close-pointer.mjs` — the trusted-writer path: validates capsule content, collects deterministic evidence (git always, board pluggable via `AIGENT_BOARD_ADAPTER`), stamps the one pointer at `BODY_STATE.json`'s `state.last_capsule`, verifies the stamp read-back.
-  - `daemons/reconcile-collector.mjs` + `daemons/effect-receipts.mjs` — deterministic, model-free evidence collection; the effect-receipt ledger is a business-OS seam, unwired by default.
-  - `daemons/refresh-cycle.mjs`, `daemons/refresh-request.mjs`, `daemons/refresh-cursor.mjs` — the transactional cycle record, the controller→session challenge-crossing request, and the byte-exact transcript capture-cursor primitive.
-  - `daemons/resume-verb.mjs` — the resume verb's runtime container, a new `SessionStart(clear)` hook.
-  - `daemons/sessionstart-reinject.mjs` — warm-start pointer-table reinject, a new `SessionStart` hook covering every source (startup/resume/clear/compact) in one merged file.
-  - `daemons/stop-capsule-writer.mjs` — every-turn rolling capsule delta writer, a new `Stop` hook. Includes a speaker-tag classifier (`OPERATOR`/`RELAY:x`/`PEER:x`/`INJECT:harness`) so injected instructions and cross-session relay text never masquerade as the operator's own objective.
-  - `daemons/ctx-refresh-sensor.mjs` — optional context-pressure self-refresh reflex, a new `PreToolUse` hook. Silently inert unless a statusline integration writes `~/.claude/ctx-refresh/<sid>.json`.
-  - `daemons/statusline-ctx.sh` — the statusline integration that writes it: a `statusLine` wrapper (wired in `settings.json.template`) persisting `{"used_percentage": N, "ts": "..."}` per session (atomic tmp+rename, 7-day stale-file pruning), then delegating the visible line to `~/.claude/statusline-command.sh` when present (override: `AIGENT_STATUSLINE_DELEGATE`) or a minimal model + ctx-% fallback. No-op without `jq`. Test: `daemons/tests/statusline-ctx.test.mjs`.
-  - `.claude/settings.json.template` — wires the four new hooks above.
-  - `skills/context-capsule/SKILL.md`, `skills/resume/SKILL.md` — rewritten to the two-verb contract.
-  - `skill-index.json` — added `sk_resume`; `sk_open`/`sk_close` marked `active: false` (deprecated, not removed).
-  - `docs/two-verb-lifecycle.md` — the design doc.
-  - Test suite: `daemons/tests/*.test.mjs` (8 files) — content gate, trusted writer, resume verb, the CRLF-safe flip, the pointer clobber-guard, the challenge-crossing request, the capture-cursor primitive, and the speaker-tag classifier.
 - **Zero-leak flush legs** — three companion hooks that close the crash windows the Stop-hook capsule writer alone cannot cover. See `docs/zero-leak-flush.md` for the design.
   - `daemons/userpromptsubmit-journal.mjs` — write-ahead utterance journal, a new `UserPromptSubmit` hook: the raw prompt is on disk at `vault/memory/runtime/utterance-journal.jsonl` before the model sees it, so a crash between prompt-submit and Stop never loses the operator's words. Size-capped with dated-sidecar rotation (`LIFECYCLE_JOURNAL_MAX_BYTES`, default 16 MiB); kill-switch `LIFECYCLE_KILL_JOURNAL=1`.
   - `daemons/sessionend-flush.mjs` — final capsule flush, a new `SessionEnd` hook: SessionEnd fires on clear/logout/exit paths where Stop does not, so without it a session's last delta dies with the process. Runs the stop-capsule-writer worker synchronously (the per-session lock serializes them), then journals a `session-end` event line recording the reason and the flush's fate.
@@ -42,12 +26,20 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
   - Tests: `daemons/tests/userpromptsubmit-journal.test.mjs`, `daemons/tests/sessionend-flush.test.mjs`, `daemons/tests/precompact-flush.test.mjs` — the WAL contract, the session-end crash window, and the full flush-outcome/ToC matrix including the fail-soft-vs-strict split.
   - `docs/zero-leak-flush.md` — the design doc.
 
-### Known issue
-- Fresh autosave capsules seed `waiting_on: null`, which the content gate correctly refuses as non-resumable — an automated refresh cycle can be refused against a just-created autosave capsule until a later turn fills in a real `waiting_on`. Documented in `docs/two-verb-lifecycle.md`; the fix is planned as a follow-up commit on this branch, not bundled into this port.
-
 ### Changed
 - `docs/capsule-v2-doctrine.md` — added a forward pointer to the two-verb lifecycle doc; the v2 field schema is unchanged and still current.
 - `skills/open/SKILL.md`, `skills/close/SKILL.md` — marked deprecated in favor of `/resume` and `/context-capsule`; kept for manual invocation during the transition, not deleted.
+
+## [0.9.0] — 2026-07-21 — "Two-verb lifecycle"
+
+### Added
+- **Two-verb lifecycle** — `/context-capsule` and `/resume` replace `/open`/`/close`/`/pause` as the session-continuity model. `/context-capsule` writes a resume-ready snapshot — on demand for a deliberate checkpoint, and in a rolling, best-effort form on every `Stop` event. `/resume` loads the **newest capsule by date**, re-grounds against it, and acts — on demand, and automatically on `SessionStart(clear)`. The beta's nonce/receipt handshake, curated-vs-rolling pointer bookkeeping, `definition_hash` drift check, and polling cycle-driver are all removed — newest-by-date selection replaces the guarantee they existed to provide. See `docs/two-verb-lifecycle.md` for the full design.
+
+### Removed
+- **The refresh-cycle tower** — `daemons/refresh-cursor.mjs`, `daemons/refresh-cycle.mjs`, `daemons/refresh-request.mjs`, `daemons/reconcile-collector.mjs`, and their tests. `daemons/capsule-verb.mjs` no longer stamps a pointer or a digest (`runCapsuleVerb`/`CapsuleVerbRefusal` removed) — it now exports only `validateCapsuleText()`, the required-field + content-gate check. `daemons/curated-close-pointer.mjs` is reduced to a compatibility, audit-hint-only pointer writer. `daemons/ctx-refresh-sensor.mjs` is now a 4-line compatibility stub — the 60%/75% self-refresh reflex and its `CAPSULE_VERB_AUTOFIRE` autofire path are retired along with the tower they drove. `close_kind` (checkpoint/completion/handoff) is retired with the pointer bookkeeping it distinguished.
+
+### Resolved
+- The beta's stale/spent-capsule selection issue (a fresh autosave capsule seeding `waiting_on: null` could leave an automated refresh cycle refused against it until a later turn filled in a real value) is designed out by the newest-capsule-by-date model — there is no separate pointer or cycle bookkeeping left to go stale. See `docs/two-verb-lifecycle.md`.
 
 ## [0.8.0] — 2026-07-07 — "Public readiness pass"
 

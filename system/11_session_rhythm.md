@@ -4,12 +4,11 @@ Every session follows this structure. No exceptions.
 
 ## `/resume` — Session Start
 
-1. **Load** — resolve the pointer at `vault/memory/BODY_STATE.json`'s `state.last_capsule` (or a named capsule, if one was requested), and pull its `waiting_on`, `next_valid_action`, and `definition_hash`.
-2. **Validate** — recompute the hash from the live frontmatter. A mismatch means the capsule drifted from reality — re-derive from memory instead of trusting it.
-3. **Re-ground** — re-read the session log and active priorities. Live memory wins over anything the capsule says.
-4. **Act** — take the one next step from `waiting_on`/`next_valid_action`. Resumption is proven by the action taken, not by the pointer table showing up in context.
+1. **Load** — select the valid capsule with the newest frontmatter `created_at` (or a named capsule, if one was requested), and pull its `waiting_on` and `next_valid_action`. There is no pointer to resolve.
+2. **Re-ground** — re-read the session log and active priorities. Live memory wins over anything the capsule says.
+3. **Act** — take the one next step from `waiting_on`/`next_valid_action`. Resumption is proven by the action taken, not by capsule text showing up in context.
 
-This runs automatically: the full procedure fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`, and a lighter warm pointer-reinject runs on every other session start via `daemons/sessionstart-reinject.mjs`. It should read as fast and action-oriented — not a status briefing.
+This runs automatically: the full procedure fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`, and a lighter warm reinject (showing the newest active capsule) runs on every other session start via `daemons/sessionstart-reinject.mjs`. It should read as fast and action-oriented — not a status briefing.
 
 ## During the Session
 
@@ -23,7 +22,7 @@ This runs automatically: the full procedure fires on `SessionStart(clear)` via `
 
 1. **Reconcile** — re-read the session log, active priorities, and this session's git commits. Record what happened, not what was said. Budget: 2–4 reads, no more.
 2. **Write** the capsule — `vault/memory/capsules/<YYYY-MM-DD>-<slug>.md`, with `id`, `objective`, `waiting_on`, and `next_valid_action` all non-empty, plus the reference-only body sections (`Done`, `Historical-Errors → Resolutions`, `Files-Read / Files-Modified`, etc.).
-3. **Stop** — one line naming the capsule path, then silence. No pointer stamping, no digest — that's the trusted writer's job (`daemons/capsule-verb.mjs`), and it refuses loudly if the content fails its gate.
+3. **Stop** — one line naming the capsule path, then silence. There's no separate stamping step: `daemons/capsule-verb.mjs` exports `validateCapsuleText()` as a content-gate check available for a self-check or a test, not a trusted writer that stamps a pointer or a digest.
 
 A rolling, best-effort version of this already runs on every `Stop` event (`daemons/stop-capsule-writer.mjs`), so nothing is lost if a session just ends without a deliberate checkpoint. Invoke `/context-capsule` explicitly when a thread is genuinely wrapping, a handoff is happening, or you want a clean checkpoint before something risky — not as a ceremony owed at the end of every session.
 
