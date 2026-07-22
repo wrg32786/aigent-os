@@ -7,8 +7,8 @@ created: 2026-07-17
 
 # Two-Verb Lifecycle
 
-> [!note] v0.9.0 — minimal model
-> v0.9.0 ships the minimal two-verb model: `/resume` selects the **newest capsule by date** — the earlier beta's "stale/spent capsule" bug is designed out, not patched around. The nonce/receipt handshake, pointer bookkeeping, and polling cycle-driver from that beta are removed entirely; newest-by-date selection replaces the guarantee they existed to provide.
+> [!note] v0.9.1 — minimal model
+> v0.9.1 ships the minimal two-verb model: `/resume` selects the **newest capsule by date** — the earlier beta's "stale/spent capsule" bug is designed out, not patched around. The nonce/receipt handshake, pointer bookkeeping, and polling cycle-driver from that beta are removed entirely; newest-by-date selection replaces the guarantee they existed to provide.
 
 > [!abstract] Core idea
 > Session continuity collapses to exactly two verbs — `/context-capsule` (write state, then stop) and `/resume` (load state, re-ground, act). `/open` and `/close` are retired: resume absorbs open, the capsule verb absorbs close. Both verbs also fire automatically at the right SessionStart/Stop hook points, so the operator rarely needs to invoke them by name.
@@ -56,7 +56,7 @@ Both patterns are START-ANCHORED: a capsule that legitimately *references* the c
 
 If a fork wires multiple agents/sessions that need to pause for a conducted, multi-party lifecycle event (a coordinated clear across several concurrent sessions, for example), point `AIGENT_COORDINATION_STATE` at a JSON file carrying a `phase` field. While `phase` is non-terminal (anything other than `done`/`cancelled`/`closed`/`complete`/`aborted`), `sessionstart-reinject.mjs` defers to the external conductor instead of running its own warm-start orientation or resume-verb procedure — this guard is checked before the `source==='clear'` branch, so a live coordinator wins even across a clear. Unset by default — a single-operator install never touches this seam.
 
-## Context-pressure self-refresh (retired in v0.9.0)
+## Context-pressure self-refresh (retired in v0.9.1)
 
 `daemons/ctx-refresh-sensor.mjs` is now a compatibility stub (`process.exit(0)`) — the 60%/75% self-refresh reflex, the `CAPSULE_VERB_AUTOFIRE` autofire path, and the request-gated refresh cycle it depended on (`refresh-request.mjs`, `refresh-cycle.mjs`, `refresh-cursor.mjs`) are removed along with the rest of the tower. The file is kept only because an existing `settings.json` may still name it as a `PreToolUse` hook; it does nothing when invoked. `daemons/statusline-ctx.sh` still writes `~/.claude/ctx-refresh/<session-id>.json` — nothing in the box currently reads that file, but a fork is free to re-wire its own sensor against it.
 
@@ -66,7 +66,7 @@ If a fork wires multiple agents/sessions that need to pause for a conducted, mul
 
 ## Known issue — resolved by removal
 
-The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a fresh, still-`waiting_on: null` autosave capsule and be refused) no longer applies: v0.9.0 minimal removes the automated stamping path entirely (see "Context-pressure self-refresh" above). `validateCapsuleText()` still treats a bare `waiting_on: null` as not-yet-resumable — that check is correct and unchanged — but nothing calls it against an in-flight autosave capsule anymore. It only matters when a skill or test explicitly validates a capsule that's meant to be a resume source.
+The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a fresh, still-`waiting_on: null` autosave capsule and be refused) no longer applies: v0.9.1 removes the automated stamping path entirely (see "Context-pressure self-refresh" above). `validateCapsuleText()` still treats a bare `waiting_on: null` as not-yet-resumable — that check is correct and unchanged — but nothing calls it against an in-flight autosave capsule anymore. It only matters when a skill or test explicitly validates a capsule that's meant to be a resume source.
 
 ## File map
 

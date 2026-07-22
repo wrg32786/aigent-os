@@ -30,7 +30,9 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
 - `docs/capsule-v2-doctrine.md` — added a forward pointer to the two-verb lifecycle doc; the v2 field schema is unchanged and still current.
 - `skills/open/SKILL.md`, `skills/close/SKILL.md` — marked deprecated in favor of `/resume` and `/context-capsule`; kept for manual invocation during the transition, not deleted.
 
-## [0.9.0] — 2026-07-21 — "Two-verb lifecycle"
+## [0.9.1] — 2026-07-21 — "Two-verb lifecycle — minimal model"
+
+> The `v0.9.0` tag marks the earlier two-verb **beta** (nonce/receipt/pointer scaffolding); this release supersedes it with the minimal model.
 
 ### Added
 - **Two-verb lifecycle** — `/context-capsule` and `/resume` replace `/open`/`/close`/`/pause` as the session-continuity model. `/context-capsule` writes a resume-ready snapshot — on demand for a deliberate checkpoint, and in a rolling, best-effort form on every `Stop` event. `/resume` loads the **newest capsule by date**, re-grounds against it, and acts — on demand, and automatically on `SessionStart(clear)`. The beta's nonce/receipt handshake, curated-vs-rolling pointer bookkeeping, `definition_hash` drift check, and polling cycle-driver are all removed — newest-by-date selection replaces the guarantee they existed to provide. See `docs/two-verb-lifecycle.md` for the full design.
