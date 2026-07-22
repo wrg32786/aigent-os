@@ -38,7 +38,7 @@ The AI walks through identity, decision framework, authority levels, and active 
 You don't run anything to pick up where you left off. Continuity is two pieces, both automatic:
 
 - **A warm pointer-reinject** runs on every session start (`daemons/sessionstart-reinject.mjs`) — a lightweight touch that keeps the last capsule's pointer live in context.
-- **`/resume`** runs the full procedure whenever a session starts from a `/clear` (`daemons/resume-verb.mjs`): it loads the last capsule, recomputes its `definition_hash` to catch drift, re-reads the session log and active priorities to re-ground, and then acts on the capsule's `next_valid_action` — not just summarizes it.
+- **`/resume`** runs the full procedure whenever a session starts from a `/clear` (`daemons/resume-verb.mjs`): it loads the newest valid capsule by `created_at`, re-reads the session log and active priorities to re-ground, and then acts on the capsule's `next_valid_action` — not just summarizes it.
 
 A typical resume looks like:
 
@@ -90,7 +90,7 @@ The capsule is best-effort autosave, never a gate — you never wait on it, and 
 
 | Command | When | What it does |
 |---------|------|-------------|
-| `/resume` | Start of a session — auto-fires on `SessionStart(clear)`; run it by name for a named-capsule pickup | Loads the last capsule, recomputes `definition_hash` to catch drift, re-grounds against the session log and priorities, acts on `next_valid_action` |
+| `/resume` | Start of a session — auto-fires on `SessionStart(clear)`; run it by name for a named-capsule pickup | Loads the newest valid capsule by `created_at`, re-grounds against the session log and priorities, acts on `next_valid_action` |
 | `/context-capsule` | Checkpoint or end of a thread — a rolling autosave version auto-fires on every `Stop`; run it by name for a deliberate checkpoint or handoff | Reconciles, writes a resume-ready capsule, then stops. Stamps nothing itself — a trusted writer validates |
 
 `/open` and `/close` are retired — the skill files still exist for compatibility but are deprecated. You'll never be asked to run them.

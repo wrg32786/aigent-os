@@ -269,7 +269,7 @@
     {
       "id": "sk_resume",
       "name": "resume",
-      "description": "The resume verb — load the latest capsule, validate definition_hash, re-ground against live memory, then ACT on waiting_on. Absorbs /open: there is no separate open ceremony. The post-clear boot runs the same contract automatically via daemons/resume-verb.mjs.",
+      "description": "The resume verb — load the newest valid capsule by created_at, re-ground against live memory, then ACT on waiting_on. Absorbs /open: there is no separate open ceremony. The post-clear boot runs the same contract automatically via daemons/resume-verb.mjs.",
       "triggers": [
         "resume",
         "open",
