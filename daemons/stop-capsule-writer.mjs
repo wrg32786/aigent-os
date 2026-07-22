@@ -17,6 +17,13 @@
 // Kill-switch: LIFECYCLE_KILL_STOP_WRITER=1 disables (test runners + emergencies).
 // INVARIANT: fail open — any error exits 0. Never blocks a turn. Never silent:
 // real failures append to <memRoot>/.daemon-errors.log.
+//
+// v0.9.0 minimal model: the pointer this worker stamps at BODY_STATE.json's
+// state.last_capsule is a COMPATIBILITY hint only — orientation/audit tooling may
+// read it, but resume-verb.mjs never does (it selects the newest valid capsule by
+// created_at). That drops the finalize-freeze byte-lock, the curated-vs-rolling
+// pointer race guard, and close_kind stamping the refresh-cycle tower needed —
+// there is exactly one writer of exactly one pointer now, unconditionally.
 
 import {
   readFileSync, writeFileSync, mkdirSync, existsSync, openSync, readSync,
@@ -26,7 +33,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { memRoot as resolveMemRoot, crossSessionCuratedAllowed, curatedWindowMs } from './lifecycle-common.mjs';
+import { memRoot as resolveMemRoot } from './lifecycle-common.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -105,16 +112,6 @@ try {
   let gate = null;
   try { gate = await import('./capsule-content-gate.mjs'); }
   catch (e) { logErr(root, `content-gate import failed (gate skipped): ${e?.message || e}`); }
-
-  // R2-2 (gate round-2, board c1f777e9): same lazy + fail-open discipline as the
-  // content gate above — capsuleLeftSkeleton is the SAME predicate capsule-verb
-  // and ctx-refresh-sensor already gate finalize-readiness on; reusing it (not
-  // re-parsing frontmatter by hand) means this gate can never disagree with
-  // theirs about the same bytes. Import failure degrades to pre-gate behavior
-  // (old merge-in-place; logged, never blocks a turn).
-  let leftSkeleton = null;
-  try { ({ capsuleLeftSkeleton: leftSkeleton } = await import('./capsule-verb.mjs')); }
-  catch (e) { logErr(root, `capsule-verb import failed (finalize-freeze gate skipped): ${e?.message || e}`); }
 
   const MEM = memRoot(root);
   const RUNTIME = path.join(MEM, 'runtime', 'stop-writer');
@@ -326,7 +323,6 @@ waiting_on: null
 resume_trigger: compact
 expires: null
 trigger: stop-delta
-definition_hash: ${sha12(objective + nextValid)}
 next_valid_action: ${JSON.stringify(nextValid)}
 success_criteria: []
 tags: [capsule, autosave]
@@ -359,56 +355,7 @@ ${ANCHORS.rows}
 `;
   }
 
-  const capExisted = existsSync(capPath);
-  const originalCapPath = capPath;
-  const originalDoc = capExisted ? readFileSync(capPath, 'utf8') : skeleton();
-  let doc = originalDoc;
-
-  // R2-2 (gate round-2, board c1f777e9) FINALIZE-FREEZE: the documented recovery
-  // play "finalize the rolling capsule in place" turns THIS file into a curated
-  // close without ever repointing state.capsule_path — so without this gate the
-  // merge below would reopen a byte-frozen, already-hashed capsule and mutate
-  // it (capsule-verb's write-once sha256, capsule-verb.mjs:587, can never be
-  // re-stamped -> permanent capsule_invalid abort). A capsule that has left
-  // skeleton (real waiting_on) is finalized and stays byte-frozen from here on:
-  // this turn's delta rolls a FRESH auto-capsule instead, using the exact same
-  // path convention the "no capsule yet" branch above uses, disambiguated by
-  // this turn's own deltaSig. writeState() below persists this reroute for
-  // free — it always writes whatever capPath currently is.
-  //
-  // originalCapPath/originalDoc are kept SEPARATE from capPath/doc on purpose:
-  // the finalize-ADVANCE contract (below, thisFinalized) must keep judging THIS
-  // session's own identity against the capsule it actually finalized — the
-  // fresh companion file is a skeleton and would read as never-finalized,
-  // wrongly re-freezing the pointer on a stale target. Freezing the BYTES is
-  // orthogonal to advancing the POINTER.
-  //
-  // GUARDRAIL (Titus ruling, gate round-2 fold-in): fail-safe ordering. deltaSig
-  // content-addresses only THIS turn's delta — it is not scoped across every
-  // historical reroute this session may have made, so a recurring delta shape
-  // (the same files/errors/assistant text landing again on a later, non-
-  // consecutive turn) CAN reproduce the same fresh path. A pre-existing file
-  // there is a genuine collision: silently overwriting it would destroy
-  // whatever an earlier reroute already committed. The only safe move is to
-  // SKIP the merge entirely and leave the delta for a retry next turn — NEVER
-  // fall back to writing into the frozen file itself (that is exactly the bug
-  // this gate exists to prevent). Write failures on the fresh path are already
-  // fail-safe by construction below: capPath fully replaces the write target,
-  // so the tmp+rename fallback chain and its `outcome:'error:write-failed'`
-  // exit never reference originalCapPath, and state.capsule_path is only
-  // persisted after a committed write — an exhausted write retries fresh
-  // next turn, same as a collision.
-  const frozen = capExisted && leftSkeleton && leftSkeleton(originalDoc);
-  if (frozen) {
-    const freshPath = path.join(capDir, `${dateStr}-auto-${sid.slice(0, 8)}-${deltaSig}.md`);
-    if (existsSync(freshPath)) {
-      logErr(root, `finalize-freeze: fresh-roll path collision at ${freshPath} — merge skipped this turn (frozen file never touched), will retry`);
-      outcome = 'noop:fresh-roll-collision';
-      process.exit(0);
-    }
-    capPath = freshPath;
-    doc = skeleton();
-  }
+  let doc = existsSync(capPath) ? readFileSync(capPath, 'utf8') : skeleton();
 
   // A bullet minus its `- ` prefix and volatile HH:MM stamp — dedup must not be
   // defeated by re-processing a span at a different wall-clock minute (a
@@ -459,16 +406,10 @@ ${ANCHORS.rows}
   // leftmost-first so frontmatter wins.
   const docTags = ((doc.match(/^tags:\s*(.+)\s*$/m) || [])[1] || '').toLowerCase();
   if (/\bautosave\b/.test(docTags)) {
-    let effObjective = objective;
     if (humanRequest) {
       doc = doc.replace(/^objective: .*$/m, `objective: ${JSON.stringify(objective)}`);
-    } else {
-      const m = doc.match(/^objective: (.*)$/m);
-      if (m) { try { effObjective = JSON.parse(m[1]); } catch { effObjective = m[1]; } }
     }
-    doc = doc
-      .replace(/^next_valid_action: .*$/m, `next_valid_action: ${JSON.stringify(nextValid)}`)
-      .replace(/^definition_hash: .*$/m, `definition_hash: ${sha12(effObjective + nextValid)}`);
+    doc = doc.replace(/^next_valid_action: .*$/m, `next_valid_action: ${JSON.stringify(nextValid)}`);
   }
 
   // Write the capsule. tmp+rename first; if rename can't land (AV lock etc.),
@@ -487,135 +428,30 @@ ${ANCHORS.rows}
   if (!committed) { outcome = 'error:write-failed'; process.exit(0); }
 
   // Pointer: aigent-OS is single-operator, so the pointer always lives at
-  // BODY_STATE.json's state.last_capsule.
-  //
-  // FINALIZE-GUARD: if the pointer already aims at a DIFFERENT capsule that is
-  // finalize-live (status: active + real waiting_on — the exact predicate an
-  // auto-refresh watcher would gate on), the operator deliberately finalized and
-  // the pointer must NOT be re-pointed at this session's auto-capsule (whose
-  // skeleton waiting_on is null) — that swap strands the session: a watcher reads
-  // "not finalized" and refuses to auto-clear forever. The auto-capsule content
-  // above still lands; only the pointer move is skipped. The lock self-releases
-  // when the fresh session marks the capsule resumed (status != active). Fail-open:
-  // any read/parse error falls back to the old re-point behavior.
-  function pointerLockedByFinalize() {
-    try {
-      const cur = JSON.parse(readFileSync(path.join(MEM, 'BODY_STATE.json'), 'utf8'))?.state?.last_capsule;
-      if (!cur?.path) return false;
-      const curAbs = path.resolve(root, cur.path);
-      if (curAbs === path.resolve(capPath)) return false; // same file — frontmatter refresh never touches waiting_on
-      const fm = readFileSync(curAbs, 'utf8').split(/^---\s*$/m)[1] || '';
-      const status = (fm.match(/^status:\s*(\S+)/m) || [])[1]?.trim() || '';
-      const w = ((fm.match(/^waiting_on:\s*(.+)\s*$/m) || [])[1] || '').trim().toLowerCase();
-      const waitingReal = !!w && w !== 'null' && w !== '~' && w !== '""' && w !== "''";
-      // A deliberate /context-capsule READY capsule can carry waiting_on:null
-      // (nothing blocks its resume) yet must NOT be clobbered. Discriminate the
-      // disposable auto-writers by the `autosave` TAG: only skeleton() here (and
-      // any other auto-writer a fork adds) emits it — hand/close/context-capsule
-      // capsules never do. Tag-based covers every future auto-writer by
-      // construction; a literal-trigger allowlist would blindside the next one.
-      const tags = ((fm.match(/^tags:\s*(.+)\s*$/m) || [])[1] || '').toLowerCase();
-      const isAutoSkeleton = /\bautosave\b/.test(tags);
-      return status === 'active' && (waitingReal || !isAutoSkeleton);
-    } catch { return false; }
-  }
-  // CURATED-CLOSE PRECEDENCE (the two-writer pointer race): a curated close
-  // (trigger curated-close; manual-close accepted as the legacy spelling) stamped
-  // for THIS session and finalized inside the race window ALWAYS keeps the
-  // pointer — the stop-delta tail of a close sequence (the close-summary turn's
-  // own Stop hook, post-close "anything to add" chatter) must never clobber it.
-  // WINDOW-BOUNDED (SCW_CURATED_WIN_MS, default 45 min): a session that genuinely
-  // RESUMES work after a curated close re-earns its rolling anchor once the
-  // window lapses — an unbounded curated freeze would strand the resumed work on
-  // a "session complete" anchor. Fail-open on any read/parse error, like every
-  // guard in this daemon.
-  function curatedPointerWins() {
-    try {
-      const cur = JSON.parse(readFileSync(path.join(MEM, 'BODY_STATE.json'), 'utf8'))?.state?.last_capsule;
-      if (!cur) return false;
-      if (cur.trigger !== 'curated-close' && cur.trigger !== 'manual-close') return false;
-      const fin = Date.parse(String(cur.finalized_at || ''));
-      if (!Number.isFinite(fin)) return false;
-      if ((Date.now() - fin) >= curatedWindowMs()) return false;
-      if (String(cur.session_id || '') !== sid) {
-        // A session that rotated WITHOUT a clear keeps its curated close
-        // authoritative — raw equality made the close invisible after rotation and
-        // the stop-delta clobbered it every turn. Case-A stays safe: a clear-born
-        // session, stale/absent boot evidence, or a consumed (status:resumed)
-        // capsule all fall back to the old exclusion. A falsy session_id (the
-        // stamper's own no-sid-resolvable branch) is never cross-session eligible —
-        // hard reject, as raw !== always did. Window checked above (cheap) before
-        // the helper's file reads.
-        if (!cur.session_id) return false;
-        const capAbs = typeof cur.path === 'string' && cur.path.trim() !== ''
-          ? (path.isAbsolute(cur.path) ? cur.path : path.resolve(root, cur.path))
-          : null;
-        if (!capAbs || !crossSessionCuratedAllowed(MEM, sid, capAbs)) return false;
-      }
-      return true;
-    } catch { return false; }
-  }
-  // R2-2: the pointer's IDENTITY is this session's designated capsule as it
-  // stood BEFORE any finalize-freeze reroute — a frozen capsule is still this
-  // session's own legitimate finalize; only its bytes stop being touched. Using
-  // the fresh companion skeleton here would read as never-finalized and wrongly
-  // re-freeze the pointer on a stale target (see frozen comment above).
+  // BODY_STATE.json's state.last_capsule — a COMPATIBILITY hint for orientation
+  // tooling only. Resume itself reads the newest valid capsule by date and never
+  // relies on this file, so there is no guard to reconcile here: every worker
+  // that wins the lock above simply stamps its own capsule, unconditionally.
   const pointer = {
-    id: path.basename(originalCapPath, '.md'),
-    path: path.relative(root, originalCapPath).replace(/\\/g, '/'),
+    id: path.basename(capPath, '.md'),
+    path: path.relative(root, capPath).replace(/\\/g, '/'),
     objective,
     status: 'active',
     created_at: new Date().toISOString(),
     trigger: 'stop-delta',
     session_id: sid,
   };
-  // Distinguish a CLOBBER (this session's skeleton auto-capsule, waiting_on:null —
-  // repointing to it would strand a deliberately-finalized pointer) from a
-  // legitimate FINALIZE-ADVANCE (the operator finalized THIS session's OWN
-  // capsule — waiting_on real — and the pointer SHOULD move to it). The base
-  // guard blocks BOTH, freezing the pointer on the previous finalized capsule
-  // until a human advances it by hand. Allow the repoint when this session's
-  // capsule (the `doc` just written) is itself finalize-live — same
-  // status:active + real-waiting_on predicate the guard uses.
-  const thisFm = originalDoc.split(/^---\s*$/m)[1] || '';
-  const thisStatus = (thisFm.match(/^status:\s*(\S+)/m) || [])[1]?.trim() || '';
-  const thisW = ((thisFm.match(/^waiting_on:\s*(.+)\s*$/m) || [])[1] || '').trim().toLowerCase();
-  const thisFinalized = thisStatus === 'active' && !!thisW && thisW !== 'null' && thisW !== '~' && thisW !== '""' && thisW !== "''";
-  // Completion stamp (Titus ruling, gate round-2 fold-in): thisFinalized IS the
-  // finalize-ADVANCE moment — this session's own designated capsule just left
-  // skeleton for real, whether written directly or reached via the R2-2 freeze
-  // reroute above. That is a voluntary completion close, not a cycle receipt —
-  // no cycle_id belongs on this stamp (this object never carries one). Explicit
-  // null when not finalizing (not merely omitted) so a spread-merge
-  // freshness-overwrites any stale value rather than leaking it through.
-  //
-  // ONE stamp per freeze episode falls out of the EXISTING guard below for
-  // free: once this write lands, state.capsule_path repoints to a fresh
-  // skeleton (R2-2), so the NEXT turn's thisFinalized is false (the fresh
-  // capsule is unfinalized) and pointerLockedByFinalize() holds the pointer on
-  // THIS now-finalized capsule (the "HELD" branch) — the pointer write is
-  // skipped entirely on every subsequent turn, so close_kind is never
-  // recomputed or re-stamped until a genuinely new finalize happens.
-  pointer.close_kind = thisFinalized ? 'completion' : null;
-  if (curatedPointerWins()) {
-    // this session was curated-closed inside the race window — pointer stays on
-    // the curated capsule; the rolling auto-capsule content above is still saved
-  } else if (pointerLockedByFinalize() && !thisFinalized) {
-    // a DIFFERENT capsule is deliberately finalized and this session has NOT
-    // finalized its own yet — pointer stays; auto-capsule content already saved
-  } else {
-    try {
-      const bsPath = path.join(MEM, 'BODY_STATE.json');
-      const bs = JSON.parse(readFileSync(bsPath, 'utf8'));
-      if (bs?.state) {
-        bs.state.last_capsule = { ...bs.state.last_capsule, ...pointer };
-        writeFileSync(bsPath, JSON.stringify(bs, null, 2));
-      } else {
-        logErr(root, 'BODY_STATE.json has no .state — capsule pointer not updated (reinject will miss it)');
-      }
-    } catch (e) {
-      logErr(root, `BODY_STATE pointer update failed: ${e?.message || e}`);
+  try {
+    const bsPath = path.join(MEM, 'BODY_STATE.json');
+    const bs = JSON.parse(readFileSync(bsPath, 'utf8'));
+    if (bs?.state) {
+      bs.state.last_capsule = { ...bs.state.last_capsule, ...pointer };
+      writeFileSync(bsPath, JSON.stringify(bs, null, 2));
+    } else {
+      logErr(root, 'BODY_STATE.json has no .state — capsule pointer not updated (compat hint only; resume is unaffected)');
     }
+  } catch (e) {
+    logErr(root, `BODY_STATE pointer update failed: ${e?.message || e}`);
   }
 
   writeState(stateFile, { offset: size, capsule_path: capPath, last_delta_sha: deltaSig });
@@ -627,7 +463,6 @@ ${ANCHORS.rows}
   if (lockFd !== null) { try { closeSync(lockFd); } catch {} }
   if (lockPath) { try { rmSync(lockPath, { force: true }); } catch {} }
 }
-if (outcome === 'flushed') await launchStopAutofire();
 process.exit(0);
 }
 
@@ -640,124 +475,5 @@ function writeState(file, obj) {
     try { rmSync(file, { force: true }); renameSync(tmp, file); } catch {
       try { writeFileSync(file, JSON.stringify(obj, null, 1)); rmSync(tmp, { force: true }); } catch { /* next read falls back to defaults */ }
     }
-  }
-}
-
-async function launchStopAutofire() {
-  let root = '';
-  let sid = '';
-  let lockFd = null;
-  let lockFile = null;
-  // FAIL-OPEN: the writer contract is fail-open, so this optional tail launch is
-  // contained and reports failures through the writer's existing error sink.
-  try {
-    if (process.env.CAPSULE_VERB_AUTOFIRE !== '1') return;
-    const payload = JSON.parse(process.argv[3] || '{}');
-    root = String(payload.__root || '');
-    sid = String(payload.session_id || '');
-    if (!root || !sid) return;
-
-    const memory = memRoot(root);
-    const requestFile = path.join(memory, 'runtime', `refresh-request-${sid}.json`);
-    if (!existsSync(requestFile)) return;
-    const { readRequest } = await import('./refresh-request.mjs');
-    const request = readRequest(memory, sid);
-    if (!request) throw new Error('refresh request present but unreadable or invalid');
-    const expiresMs = Date.parse(request.expires_at);
-    if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) return;
-
-    const { homedir } = await import('node:os');
-    const home = homedir();
-    const stateDir = path.join(home, '.claude', 'ctx-refresh');
-    mkdirSync(stateDir, { recursive: true });
-    const launchStateFile = path.join(stateDir, `${sid}.state`);
-    lockFile = `${launchStateFile}.autofire.lock`;
-    const lockDeadline = Date.now() + 1_000;
-    while (existsSync(lockFile)) {
-      if (Date.now() - statSync(lockFile).mtimeMs > 30_000) {
-        rmSync(lockFile, { force: true });
-        break;
-      }
-      if (Date.now() >= lockDeadline) {
-        throw new Error('timed out waiting for autofire state lock');
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    lockFd = openSync(lockFile, 'wx');
-
-    const launchState = existsSync(launchStateFile)
-      ? JSON.parse(readFileSync(launchStateFile, 'utf8'))
-      : {};
-    if (!launchState || typeof launchState !== 'object' || Array.isArray(launchState)) {
-      throw new Error('launch state is not an object');
-    }
-
-    let shouldLaunch = request.cycle_id !== launchState.last_autofire_cycle_id;
-    if (!shouldLaunch) {
-      const pointer = JSON.parse(readFileSync(path.join(memory, 'BODY_STATE.json'), 'utf8'))
-        ?.state?.last_capsule ?? null;
-      const finalizedAtMs = Date.parse(pointer?.finalized_at);
-      const launchedAt = launchState.last_autofire_launched_at;
-      const capsulePath = typeof pointer?.path === 'string' && pointer.path.trim() !== ''
-        ? (path.isAbsolute(pointer.path) ? pointer.path : path.resolve(root, pointer.path))
-        : null;
-      shouldLaunch = pointer?.trigger === 'curated-close'
-        && Number.isFinite(finalizedAtMs)
-        && capsulePath !== null
-        && existsSync(capsulePath)
-        && typeof launchedAt === 'number'
-        && Number.isFinite(launchedAt)
-        && finalizedAtMs > launchedAt
-        // Same cross-session acceptance as curatedPointerWins / readCuratedPointer —
-        // a rotated-but-not-cleared close re-launches the autofire too, instead of
-        // waiting out request.expires_at.
-        && (pointer.session_id === sid
-          || (Boolean(pointer.session_id)
-            && (Date.now() - finalizedAtMs) < curatedWindowMs()
-            && crossSessionCuratedAllowed(memory, sid, capsulePath)));
-    }
-    if (!shouldLaunch) return;
-
-    const launchedAt = Date.now();
-    const nextState = {
-      ...launchState,
-      last_autofire_cycle_id: request.cycle_id,
-      last_autofire_launched_at: launchedAt,
-    };
-    writeState(launchStateFile, nextState);
-    const recorded = JSON.parse(readFileSync(launchStateFile, 'utf8'));
-    if (recorded?.last_autofire_cycle_id !== request.cycle_id
-      || recorded.last_autofire_launched_at !== launchedAt) {
-      throw new Error('launch state did not persist before spawn');
-    }
-
-    const normalizedRoot = path.resolve(root).replace(/\\/g, '/');
-    const projectSlug = normalizedRoot.replace(/[^A-Za-z0-9]/g, '-');
-    const transcriptPath = String(payload.transcript_path || '')
-      || path.join(home, '.claude', 'projects', projectSlug, `${sid}.jsonl`);
-    const workerPayload = Buffer.from(JSON.stringify({
-      root,
-      sid,
-      eventId: null,
-      transcriptPath,
-    }), 'utf8').toString('base64url');
-    const sensorPath = path.resolve(path.dirname(SELF), 'ctx-refresh-sensor.mjs');
-    const child = spawn(process.execPath, [sensorPath, '--autofire-worker', workerPayload], {
-      detached: true,
-      env: process.env,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    if (!child.pid) throw new Error('autofire worker did not receive a process id');
-    child.once('error', (error) => {
-      logErr(root, `autofire worker error sid=${sid}: ${error?.message || error}`);
-    });
-    child.unref();
-    await new Promise((resolve) => setImmediate(resolve));
-  } catch (e) {
-    logErr(root, `autofire tail failed sid=${sid}: ${e?.message || e}`);
-  } finally {
-    if (lockFd !== null) { try { closeSync(lockFd); } catch {} }
-    if (lockFd !== null && lockFile) { try { rmSync(lockFile, { force: true }); } catch {} }
   }
 }
