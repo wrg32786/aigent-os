@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=13
+TOTAL=16
 
 json_valid() {
   local file="$1"
@@ -251,5 +251,65 @@ test "$BACKUP_RC" -ne 0
 printf '%s\n' "$BACKUP_OUT" | grep -qi "refusing to write through symlink"
 test "$(cat "$BACKUP_SENTINEL")" = "do not touch"
 printf '[13/%d] backup-leaf symlink guard: refused, sentinel untouched\n' "$TOTAL"
+
+# ── 14. Complete external-target ignore set (Codex finding #39) ─────────────
+# The managed .gitignore block used to omit the prompt journal, the
+# semantic-search node_modules/ the deps step can install, an Obsidian
+# .obsidian/ workspace dir, and Claude Code's own settings.local.json.
+IGNORE_TARGET="$WORK/ignore-target"
+(
+  cd "$FIXTURE"
+  bash install.sh --target "$IGNORE_TARGET" --no-deps >/dev/null
+)
+for pattern in '.claude/settings.local.json' '**/runtime/utterance-journal*.jsonl' 'node_modules/' '.obsidian/'; do
+  grep -qF -- "$pattern" "$IGNORE_TARGET/.gitignore" || {
+    printf 'FAIL: managed .gitignore block missing pattern: %s\n' "$pattern" >&2
+    exit 1
+  }
+done
+printf '[14/%d] external-target .gitignore carries the complete managed ignore set\n' "$TOTAL"
+
+# ── 15. Malformed gitignore marker aborts before any surgery (Codex #38) ────
+# A stray/unbalanced managed-block marker (here: a start marker with no
+# matching end, as a bad hand-edit or merge would leave behind) must not let
+# the awk strip below treat "managed" as stuck on for the rest of the file --
+# that would silently delete the user's own rules after the stray marker.
+# Refuse and leave the file untouched instead of guessing.
+MARKER_TARGET="$WORK/malformed-marker-target"
+mkdir -p "$MARKER_TARGET"
+cat > "$MARKER_TARGET/.gitignore" <<'GI'
+my-own-rule.txt
+# aigent-os:generated-state:start
+stale-entry/
+GI
+set +e
+MARKER_OUT="$(cd "$FIXTURE" && bash install.sh --target "$MARKER_TARGET" --no-deps 2>&1)"
+MARKER_RC=$?
+set -e
+test "$MARKER_RC" -ne 0
+printf '%s\n' "$MARKER_OUT" | grep -qi "malformed aigent-os managed block"
+grep -qF "my-own-rule.txt" "$MARKER_TARGET/.gitignore"
+grep -qF "stale-entry/" "$MARKER_TARGET/.gitignore"
+printf '[15/%d] malformed gitignore marker: install aborts, hand-written rules survive\n' "$TOTAL"
+
+# ── 16. Gitignore backed up before managed-block surgery (Codex #38) ────────
+# Mirrors the CLAUDE.md / settings.json backup-before-overwrite treatment:
+# a pre-existing .gitignore (even one that never had aigent-os markers) gets
+# a timestamped backup before the strip/rewrite touches it.
+GI_BACKUP_TARGET="$WORK/gitignore-backup-target"
+mkdir -p "$GI_BACKUP_TARGET"
+cat > "$GI_BACKUP_TARGET/.gitignore" <<'GI'
+my-own-rule.txt
+GI
+(
+  cd "$FIXTURE"
+  bash install.sh --target "$GI_BACKUP_TARGET" --no-deps >/dev/null
+)
+test -d "$GI_BACKUP_TARGET/.aigent/backups"
+GI_BACKUPS="$(find "$GI_BACKUP_TARGET/.aigent/backups" -maxdepth 1 -name '.gitignore.*' 2>/dev/null)"
+test -n "$GI_BACKUPS"
+grep -qF "my-own-rule.txt" "$(printf '%s\n' "$GI_BACKUPS" | head -1)"
+grep -qF "my-own-rule.txt" "$GI_BACKUP_TARGET/.gitignore"
+printf '[16/%d] gitignore managed-block refresh: backup saved, hand-written rule survives\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"
