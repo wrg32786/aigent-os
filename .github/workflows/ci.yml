@@ -60,6 +60,9 @@ jobs:
       - name: Onboarding-guide start-over regression test
         run: bash tests/test-onboarding-start-over.sh
 
+      - name: Vault-sync regression tests
+        run: bash tests/test-vault-sync.sh
+
   installer:
     name: Installer (${{ matrix.os }})
     strategy:
