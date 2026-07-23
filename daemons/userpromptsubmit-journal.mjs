@@ -14,7 +14,7 @@
 // LIFECYCLE_JOURNAL_MAX_BYTES (default 16 MiB) rolls to a dated sidecar first —
 // the journal is append-only forever otherwise.
 
-import { appendFileSync, mkdirSync, statSync, renameSync, existsSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, renameSync, existsSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import { seatOf, memRoot, logErr, readStdin } from './lifecycle-common.mjs';
 
@@ -46,16 +46,27 @@ try {
     : ('prompt' in payload && payload.prompt != null ? JSON.stringify(payload.prompt) : '');
   if (!prompt) process.exit(0); // no prompt key at all — benign hook noise
 
+  // Codex finding #23: raw prompts are as sensitive as anything in the vault —
+  // the journal directory and file get owner-only mode, not whatever the
+  // ambient umask leaves them at. mode on mkdirSync/appendFileSync only takes
+  // effect when the path is CREATED, so an already-existing dir/file (e.g. one
+  // written before this fix shipped) is chmod'd unconditionally below too —
+  // self-healing on the next hook firing instead of staying insecure forever.
+  // Best-effort: chmod has no real analog on Windows/NTFS, so failures there
+  // are swallowed rather than losing a prompt over a permissions no-op.
   const dir = path.join(memRoot(root), 'runtime');
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { chmodSync(dir, 0o700); } catch { /* e.g. Windows: no POSIX mode bits */ }
   const file = path.join(dir, 'utterance-journal.jsonl');
   // Rotation: only the missing-file case is silent; a rename that fails on an
   // oversize journal is a real signal (unbounded growth otherwise).
   if (existsSync(file)) {
     try {
       if (statSync(file).size > MAX_BYTES) {
-        renameSync(file, path.join(dir,
-          `utterance-journal-${new Date().toISOString().slice(0, 10)}-${process.pid}.jsonl`));
+        const rotated = path.join(dir,
+          `utterance-journal-${new Date().toISOString().slice(0, 10)}-${process.pid}.jsonl`);
+        renameSync(file, rotated);
+        try { chmodSync(rotated, 0o600); } catch { /* best-effort, see above */ }
       }
     } catch (e) {
       logErr(root, 'userpromptsubmit-journal', `rotation failed (${e?.message || e}) — journal will keep growing; prompt still appended`);
@@ -70,7 +81,8 @@ try {
     seat,
     source: 'prompt',
     prompt,
-  }) + '\n');
+  }) + '\n', { mode: 0o600 });
+  try { chmodSync(file, 0o600); } catch { /* best-effort, see above */ }
 } catch (e) {
   logErr(process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || '', 'userpromptsubmit-journal', `${e?.stack || e}`);
 }

@@ -1053,7 +1053,17 @@ bash install.sh</code>
             <svg class="summary-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
           </summary>
           <div class="trouble-body">
-            Safe to re-run the Step 4 block. To wipe and redo cleanly: <code>rm -rf ~/aigent</code> then re-run Step 4.
+            <p>Safe to re-run the Step 4 block anytime. To clear the installer's generated state and redo cleanly, run this from the folder Step 4 used — it checks for the install marker first and only ever clears <code>~/aigent-os/.aigent</code>, never anything else:</p>
+            <div class="cmd-block">
+              <div class="cmd-bar">
+                <div class="cmd-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+                <button class="copy-btn" data-copy="test -f ~/aigent-os/.aigent/state.json && rm -rf ~/aigent-os/.aigent && echo 'cleared -- re-run Step 4' || echo 'no aigent-os install found at ~/aigent-os -- check the path'" aria-label="Copy command">Copy</button>
+              </div>
+              <div class="cmd-content">
+                <code>test -f ~/aigent-os/.aigent/state.json && rm -rf ~/aigent-os/.aigent && echo 'cleared -- re-run Step 4' || echo 'no aigent-os install found at ~/aigent-os -- check the path'</code>
+              </div>
+            </div>
+            <p class="cmd-caption">Replace <code>~/aigent-os</code> if you installed somewhere else. This never deletes the checkout itself — just the state the installer created inside it — and refuses instead of touching anything if that folder was never actually installed into.</p>
           </div>
         </details>
       </div>
