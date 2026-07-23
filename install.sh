@@ -596,6 +596,13 @@ GITIGNORE="$TARGET/.gitignore"
 GI_START='# aigent-os:generated-state:start'
 GI_END='# aigent-os:generated-state:end'
 GI_BLOCK="$AIGENT_TMP/gitignore.block"
+# Managed ignore set (Codex finding #39): every path a fresh install or normal
+# session can generate under TARGET needs an entry here, not just the .aigent/
+# state directory -- the prompt journal (utterance-journal*.jsonl, rotated
+# sidecars included), the semantic-search node_modules/ the deps step below
+# can npm-install, an Obsidian .obsidian/ workspace dir once TARGET's vault/
+# is opened as a vault, and the settings.local.json Claude Code itself writes
+# for machine-local overrides.
 cat > "$GI_BLOCK" <<EOF_GI
 $GI_START
 .aigent/
@@ -603,10 +610,39 @@ vault/memory/embeddings.json
 vault/memory/HEAT_INDEX.json
 memory/.daemon-errors.log
 .claude/settings.aigent.json
+.claude/settings.local.json
+**/runtime/utterance-journal*.jsonl
+node_modules/
+.obsidian/
 $GI_END
 EOF_GI
 require_symlink_safe "$GITIGNORE"
 if [[ -f "$GITIGNORE" ]]; then
+  # Marker validation (Codex finding #38): the awk strip below turns "managed"
+  # on at the first start marker and off at the first end marker, printing
+  # everything else. A malformed marker pair -- a stray extra start/end line
+  # from a hand edit or a bad merge, or the two out of order -- makes that
+  # toggle land wrong for the rest of the file, silently deleting whatever
+  # hand-written rules follow. Refuse to touch the file rather than guess.
+  start_count="$(grep -c -F -x "$GI_START" "$GITIGNORE" || true)"
+  end_count="$(grep -c -F -x "$GI_END" "$GITIGNORE" || true)"
+  if [[ "$start_count" -gt 1 || "$end_count" -gt 1 || "$start_count" != "$end_count" ]]; then
+    fail "$GITIGNORE has a malformed aigent-os managed block (found $start_count start marker(s), $end_count end marker(s)) -- refusing to edit it automatically. Remove the stray '$GI_START' / '$GI_END' line(s) by hand, then re-run."
+  fi
+  if [[ "$start_count" -eq 1 ]]; then
+    start_line="$(grep -n -F -x "$GI_START" "$GITIGNORE" | head -1 | cut -d: -f1)"
+    end_line="$(grep -n -F -x "$GI_END" "$GITIGNORE" | head -1 | cut -d: -f1)"
+    if [[ "$start_line" -gt "$end_line" ]]; then
+      fail "$GITIGNORE has an aigent-os managed block with the end marker before the start marker -- refusing to edit it automatically. Fix the marker order by hand, then re-run."
+    fi
+  fi
+
+  # Backup leaf write (Codex finding #22 item 2 / #38): same reasoning as the
+  # CLAUDE.md and settings.json backups above -- a validated block still gets
+  # backed up before the strip/rewrite, so the edit is always recoverable.
+  require_symlink_safe "$BACKUP_DIR/.gitignore.$STAMP"
+  cp "$GITIGNORE" "$BACKUP_DIR/.gitignore.$STAMP"
+
   GI_CLEAN="$AIGENT_TMP/gitignore.clean"
   awk -v start="$GI_START" -v end="$GI_END" '
     $0 == start { managed = 1; next }

@@ -13,7 +13,7 @@
 // Run: node daemons/tests/userpromptsubmit-journal.test.mjs (exit 0 = PASS)
 
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -95,6 +95,40 @@ for (const f of ['lifecycle-common.mjs', 'userpromptsubmit-journal.mjs']) {
   check('rotation: dated sidecar created', r.status === 0 && sidecars.length === 1, JSON.stringify(sidecars));
   const lines = journalLines();
   check('rotation: fresh journal carries ONLY the new prompt', lines.length === 1 && lines[0]?.prompt === 'first line after rotation');
+}
+
+// ── restrictive file mode (Codex finding #23) ────────────────────────────────
+// Raw prompts are as sensitive as anything else in the vault -- the journal
+// dir/file must not be left at whatever the ambient umask allows. chmod has
+// no real POSIX-mode analog on Windows/NTFS, so the bit-level assertions only
+// run where they mean something; the daemon's chmodSync calls are wrapped in
+// try/catch specifically so this is a skip, not a failure, elsewhere.
+{
+  run(JSON.stringify({ session_id: 'j7', cwd: SANDBOX, prompt: 'mode check' }));
+  if (process.platform !== 'win32') {
+    const dirMode = statSync(path.join(MEM, 'runtime')).mode & 0o777;
+    const fileMode = statSync(JOURNAL).mode & 0o777;
+    check('journal directory is owner-only (0700)', dirMode === 0o700, `mode=${dirMode.toString(8)}`);
+    check('journal file is owner-only (0600)', fileMode === 0o600, `mode=${fileMode.toString(8)}`);
+  } else {
+    check('journal mode check: skipped on win32 (no POSIX mode bits)', true);
+  }
+}
+
+// ── pre-existing insecure journal is tightened on next write (self-healing) ─
+{
+  const dir = path.join(MEM, 'runtime');
+  chmodSync(dir, 0o777);
+  chmodSync(JOURNAL, 0o666);
+  run(JSON.stringify({ session_id: 'j8', cwd: SANDBOX, prompt: 'tighten on next write' }));
+  if (process.platform !== 'win32') {
+    const dirMode = statSync(dir).mode & 0o777;
+    const fileMode = statSync(JOURNAL).mode & 0o777;
+    check('pre-existing loose dir mode tightened to 0700 on next hook run', dirMode === 0o700, `mode=${dirMode.toString(8)}`);
+    check('pre-existing loose file mode tightened to 0600 on next hook run', fileMode === 0o600, `mode=${fileMode.toString(8)}`);
+  } else {
+    check('self-healing mode check: skipped on win32 (no POSIX mode bits)', true);
+  }
 }
 
 rmSync(TMP, { recursive: true, force: true });
