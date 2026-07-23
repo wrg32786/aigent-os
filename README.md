@@ -461,6 +461,8 @@ Forget vector databases. Your AI's memory is an **Obsidian vault** — the same 
 
 - **Wikilinks** create a knowledge graph. `[[Project Alpha]]` connects to `[[People/Jane]]` connects to `[[Decision Log]]`. The graph IS the intelligence.
 - **Session continuity** without magic. `resume` reads the vault. `capsule` writes to it. Both fire on their own now — no command required. The Stop autosave is best-effort — it fails open rather than blocking your session — and what it writes is plain Markdown you can open, read, and audit.
+
+When a deliberate `/context-capsule` cycle closes, aigent-OS stages only changed durable capsule and memory files under the install root identified by `.aigent/state.json` (not daemon logs or per-session writer offsets), creates a `vault sync:` commit when that memory scope changed, and pushes the current branch to its configured Git remote; rolling per-turn Stop autosaves remain local between closes, and any older unpushed commits already on that branch travel with the push. With no remote, sync is a silent no-op that leaves the memory changes local. If a push or network error occurs, the local commit remains for a later close to retry, one line is appended to `vault/memory/.daemon-errors.log`, and the lifecycle continues without prompting.
 - **Human-first.** You can read every thought your AI has ever had. No hidden embeddings. No opaque database. Markdown files in a folder.
 
 ### Model Routing — Smart Spend

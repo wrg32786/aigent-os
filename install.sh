@@ -608,10 +608,12 @@ $GI_START
 .aigent/
 vault/memory/embeddings.json
 vault/memory/HEAT_INDEX.json
+vault/memory/.daemon-errors.log
 memory/.daemon-errors.log
 .claude/settings.aigent.json
 .claude/settings.local.json
 **/runtime/utterance-journal*.jsonl
+**/runtime/stop-writer/
 node_modules/
 .obsidian/
 $GI_END
