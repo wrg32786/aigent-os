@@ -6,6 +6,10 @@ Thumbs.db
 STRIP-REPORT.md
 *.tmp
 
+# Codex finding #23: the write-ahead prompt journal is never committable, even
+# in this dev checkout -- covers the live file and rotated dated sidecars.
+**/runtime/utterance-journal*.jsonl
+
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json

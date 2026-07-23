@@ -54,6 +54,12 @@ jobs:
       - name: Caddy router tests
         run: bash tests/test-caddy.sh
 
+      - name: Session-capture-summary hook tests
+        run: bash tests/test-session-capture-summary.sh
+
+      - name: Onboarding-guide start-over regression test
+        run: bash tests/test-onboarding-start-over.sh
+
   installer:
     name: Installer (${{ matrix.os }})
     strategy:
