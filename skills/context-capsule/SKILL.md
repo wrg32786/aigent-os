@@ -12,7 +12,7 @@ related:
 
 # /context-capsule — the capsule verb
 
-**The entire job: reconcile → write the capsule → STOP.** The capsule absorbs `/close`: there is no separate close ceremony, and no separate stamping step — writing a valid capsule (content gate passes, required fields non-empty) is the whole contract.
+**The entire job: reconcile → write the capsule → sync the vault → STOP.** The capsule absorbs `/close`: there is no separate close ceremony, and no separate stamping step — writing a valid capsule (content gate passes, required fields non-empty) is the capsule contract.
 
 ## When this skill fires vs the automatic verb
 
@@ -33,7 +33,8 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
    - Frontmatter — all four REQUIRED fields non-empty, no inline `#` comments on them, `waiting_on` quoted (never bare `null`): `id`, `objective`, `waiting_on`, `next_valid_action`; plus `parent_capsule_id`, `status: active`, `trigger`, `expires`, `tags`, `created_at`. `resume_trigger` and `success_criteria` are OPTIONAL — include them when they add real signal, omit otherwise.
    - Body — `[REFERENCE ONLY]` banner, then: `Done (don't redo)` · `Historical-Errors → Resolutions` · `Historical-Rejected-Approaches` · `Files-Read / Files-Modified` · `Operating-Facts` · `Pending-Gates` · `Claimed-Rows`. Historical- prefixes and latest-wins stay (anti-zombie).
    - `waiting_on` is the resume contract: write it so a fresh session can act from it alone — concrete items, owners, gates.
-3. **STOP.** One line acknowledging the capsule path, then silence. Self-check the frontmatter against the field list and the content gate (injection echo / ceremony action, `daemons/capsule-content-gate.mjs`) before writing — there is no separate trusted-writer pass to catch a mistake after the fact.
+3. **SYNC fail-soft.** After the capsule and any memory edits land, run `node daemons/vault-sync.mjs`. It resolves the installed root from `.aigent/state.json`, stages only capsule/memory changes, and handles no-remote or push-failure outcomes without prompting or gating the lifecycle.
+4. **STOP.** One line acknowledging the capsule path, then silence. Self-check the frontmatter against the field list and the content gate (injection echo / ceremony action, `daemons/capsule-content-gate.mjs`) before writing — there is no separate trusted-writer pass to catch a mistake after the fact.
 
 ## Lifecycle
 

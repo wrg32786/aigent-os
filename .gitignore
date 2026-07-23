@@ -9,11 +9,13 @@ STRIP-REPORT.md
 # Codex finding #23: the write-ahead prompt journal is never committable, even
 # in this dev checkout -- covers the live file and rotated dated sidecars.
 **/runtime/utterance-journal*.jsonl
+**/runtime/stop-writer/
 
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json
 vault/memory/HEAT_INDEX.json
+vault/memory/.daemon-errors.log
 memory/.daemon-errors.log
 .claude/settings.aigent.json
 # aigent-os:generated-state:end
