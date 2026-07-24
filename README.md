@@ -12,9 +12,9 @@
 [![Security Policy](https://img.shields.io/badge/Security-Policy-informational?style=flat-square)](SECURITY.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen?style=flat-square)](#-contributing)
 
-**The personal operating system that operates itself.**
+**The AI that remembers everything — because it operates itself.**
 
-*An AI that operates on itself — and a toolbox that manages itself, on top of it.*
+*One operator, one Claude, one vault. No cold starts, no re-explaining yourself, ever.*
 
 [Quick Start](#-quick-start) · [Architecture](#-architecture) · [Key Concepts](#-key-concepts) · [Customize](#-make-it-yours) · [Docs](docs/getting-started.md)
 
@@ -24,11 +24,11 @@
 
 ## What if your AI remembered everything?
 
-Every priority. Every decision. Every conversation thread left open from last week. What if it knew exactly what it was allowed to decide on its own — and what to bring to you? What if it could delegate to faster, cheaper agents for grunt work while it stayed focused on strategy?
+Every priority. Every decision. Every thread left open since last week. What if your AI knew exactly what it could decide on its own — and what to bring to you first? What if it delegated the grunt work to faster, cheaper agents, and stayed focused on strategy itself?
 
-That's aigent-OS. **A 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system** — for one operator, one Claude, running on your own machine.
+That's aigent-OS. **A 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system** — one operator, one Claude, running on your own machine, remembering everything in between.
 
-No database. No server. No build step. Drop the files in, open a session, and your AI boots up knowing who it is, what it's working on, and what matters today. And this repo ships itself: aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. That's the category claim. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
+No database. No server. No build step. Drop the files in, open a session, and your AI already knows who it is, what it's working on, and what matters today. This repo even ships itself: aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. That's the category claim. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
 > **Dependency model:** The core kernel is markdown + shell — no build step, no database, no server. Optional features (semantic search, hooks automation) require Node.js 18+ and are installed automatically by the installer if Node is present. Obsidian is optional for visual vault navigation.
 
@@ -49,6 +49,8 @@ aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending re
 
 ## 🆚 Compared to the field
 
+Every framework claims to be different. Here's exactly where that's true for aigent-OS — and where it isn't, yet.
+
 | | aigent-OS | claude-mem | SuperClaude Framework | Claude-Claw | Native Auto-Memory/Dream |
 |---|:---:|:---:|:---:|:---:|:---:|
 | Persistent cross-session memory | ✅ | ✅ | ❌ | ✅ | ✅ (first-party) |
@@ -59,7 +61,7 @@ aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending re
 | Model-tier routing across sub-agents, enforced | ✅ | ❌ | ✅ (behavioral config) | ❌ | n/a |
 | Non-Claude execution (Codex, others) | ✅ (single task class) | ❌ | ❌ | ❌ | n/a |
 
-**The honest framing:** compaction-survival and cross-session memory are populated categories now — several projects do them well. Git-native auditability of that memory is where this repo is currently ahead. Model-tier routing and non-Claude execution used to be the claim this repo made without the code behind it — both now have a real, tested mechanism (below), scoped honestly to what's actually shipped.
+**The honest framing:** compaction-survival and cross-session memory are populated categories now — several projects do them well. Git-native auditability is where this repo is currently ahead. Routing and non-Claude execution used to be claims this repo made without the code behind them. Both now have a real, tested mechanism — scoped honestly to what's actually shipped, not what's aspirational.
 
 ---
 
