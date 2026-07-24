@@ -4,46 +4,41 @@
 
 <br/>
 
+[![GitHub stars](https://img.shields.io/github/stars/wrg32786/aigent-os?style=flat-square)](https://github.com/wrg32786/aigent-os/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Compatible-blueviolet?style=flat-square)](https://claude.ai/code)
 [![Obsidian](https://img.shields.io/badge/Obsidian-Vault_Native-7C3AED?style=flat-square)](https://obsidian.md)
-[![Core: Markdown + Shell](https://img.shields.io/badge/Core-Markdown_%2B_Shell-00d4aa?style=flat-square)](#-quick-start)
 [![CI](https://img.shields.io/github/actions/workflow/status/wrg32786/aigent-os/ci.yml?branch=master&style=flat-square&label=CI)](https://github.com/wrg32786/aigent-os/actions/workflows/ci.yml)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-informational?style=flat-square)](SECURITY.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen?style=flat-square)](#-contributing)
 
-**The AI that remembers everything — because it operates itself.**
+**Stop re-briefing your AI every morning.**
 
-*One operator, one Claude, one vault. No cold starts, no re-explaining yourself, ever.*
+*aigent-OS gives Claude Code permanent memory, self-checkpointing, and judgment about what to decide alone — a free, open-source operator layer, not a chat wrapper.*
 
-[Quick Start](#-quick-start) · [Architecture](#-architecture) · [Key Concepts](#-key-concepts) · [Customize](#-make-it-yours) · [Docs](docs/getting-started.md)
+From the team behind [The AIgent](https://theaigent.xyz) — a free media project for people building with AI.
+
+[Quick Start](#-quick-start) · [Auto-Refresh](#-auto-refresh) · [Architecture](#-architecture) · [Key Concepts](#-key-concepts) · [Customize](#-make-it-yours) · [Docs](docs/getting-started.md)
 
 </div>
 
 ---
 
-## What if your AI remembered everything?
+## See it resume itself
 
-Every priority. Every decision. Every thread left open since last week. What if your AI knew exactly what it could decide on its own — and what to bring to you first? What if it delegated the grunt work to faster, cheaper agents, and stayed focused on strategy itself?
+<div align="center">
+<img src="assets/demo-session-resume.svg" alt="A later session: aigent-OS resumes with open threads, then checkpoints itself automatically" width="100%"/>
+</div>
 
-That's aigent-OS. **A 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system** — one operator, one Claude, running on your own machine, remembering everything in between.
+Nothing above was typed. A session ends, the terminal closes, and the next one opens already knowing the open threads, the active priorities, and the one next step — because the capsule from last time loaded itself the moment the window reopened after `/clear`. That's [Auto-Refresh](#-auto-refresh): the mechanism behind it, not a slogan, with the exact files that do it.
 
-No database. No server. No build step. Drop the files in, open a session, and your AI already knows who it is, what it's working on, and what matters today. This repo even ships itself: aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. That's the category claim. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
+**aigent-OS is a 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system** — one operator, one Claude, running on your own machine. No database, no server, no build step: drop the files in, run `bash install.sh`, and the next session already knows who it is and what it's working on. This repo even ships itself — aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
-> **Dependency model:** The core kernel is markdown + shell — no build step, no database, no server. Optional features (semantic search, hooks automation) require Node.js 18+ and are installed automatically by the installer if Node is present. Obsidian is optional for visual vault navigation.
+> **Dependency model:** the core kernel is markdown + shell — no build step, no database, no server. Optional features (semantic search, hooks automation) need Node.js 18+ and install automatically if Node is present. Obsidian is optional, for browsing the vault visually.
 
-<details>
-<summary>Text version of the demo below (nothing typed, aigent-OS surfaces open threads on its own)</summary>
+Unlike memory add-ons that keep state in an opaque database, every checkpoint here is a real git commit — readable with plain `git log`, not a query against someone else's schema. That's the strongest gap the research behind this README could confirm; where the claims used to outrun the code (routing, non-Claude execution) is in the table right below, scored honestly against real rivals, not strawmen.
 
-```
-[new Claude Code session — nothing typed]
-aigent: 3 open threads from yesterday. Delegation tracker has 2 items pending review.
-       Priority 1 is blocked — surfacing now. What do you want to hit?
-```
-
-</details>
-
-> **Recent:** the v0.9 two-verb lifecycle (`/context-capsule` + `/resume`, superseding manual `/open`/`/close`), the cognitive architecture, the self-learning engine, and the somatic layer all shipped between v0.5 and v0.9 — see [`CHANGELOG.md`](CHANGELOG.md) for dates and detail.
+> **Recent:** the Auto-Refresh two-verb lifecycle, model-tier dispatch enforcement, and the Codex adapter all shipped this cycle — see [`CHANGELOG.md`](CHANGELOG.md) for dates and detail.
 
 ---
 
@@ -71,7 +66,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 
 | Capability | Mechanism | Ships today? |
 |---|---|---|
-| Auto-firing two-verb lifecycle | Session end writes a resume-ready capsule; next boot loads the newest one and re-grounds fully after `/clear` — no `/open`/`/close` typing required | ✅ shipped |
+| **Auto-Refresh** (two-verb lifecycle) | Session end writes a resume-ready capsule; next boot loads the newest one and re-grounds fully after `/clear` — no `/open`/`/close` typing required | ✅ shipped — [details](#-auto-refresh) |
 | Git-native vault memory | Every closed capsule cycle is a real commit, pushed to your configured remote — auditable with plain `git log`, not an opaque DB | ✅ shipped |
 | Somatic layer | Five lazy-computed pressure gauges (context, memory backlog, decision pressure, token usage, drift) read before acting, no daemon polling | ✅ shipped |
 | Self-learning engine | Skill recall → skill hunt → solution hunt escalation chain; every failure becomes a durable artifact | ✅ shipped |
@@ -91,11 +86,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 <img src="assets/demo-day-one.svg" alt="Day one: aigent-OS asks three plain questions and hands back a first plan" width="100%"/>
 </div>
 
-<div align="center">
-<img src="assets/demo-session-resume.svg" alt="A later session: aigent-OS resumes with open threads, then checkpoints itself automatically" width="100%"/>
-</div>
-
-Both clips are the real dialogue from [What a session actually looks like](#-what-a-session-actually-looks-like) below, rendered as self-contained animated SVGs — no video, no external assets. Generator: [`assets/build-terminal-demo.mjs`](assets/build-terminal-demo.mjs).
+The first-run onboarding — three plain questions, then a first plan. (The resume/checkpoint side of the loop is the clip at the top of this README.) Both are the real dialogue from [What a session actually looks like](#-what-a-session-actually-looks-like) below, rendered as self-contained animated SVGs — no video, no external assets. Generator: [`assets/build-terminal-demo.mjs`](assets/build-terminal-demo.mjs).
 
 ---
 
@@ -156,6 +147,21 @@ install.sh                         One-line installer
 ```
 
 > **Skills path note:** `skills/` contains source templates; the installer copies them to `.claude/skills/`, where Claude Code looks for slash commands at runtime. Manually added skills go in `.claude/skills/<name>/SKILL.md`.
+
+---
+
+## 🔄 Auto-Refresh
+
+*(Some earlier docs called this the self-refresh reflex — Auto-Refresh is the name going forward.)*
+
+Four things happen without you typing a command:
+
+1. **The capsule verb** — every turn, `daemons/stop-capsule-writer.mjs` folds the transcript delta into your one active capsule (`vault/memory/capsules/<date>-<slug>.md`), so disk state is never more than one turn stale. A capsule only counts once it carries a non-empty `id`, `objective`, `waiting_on`, and `next_valid_action` — `daemons/capsule-verb.mjs`'s `validateCapsuleText()` is the content-gate check for that.
+2. **`/clear`** — you (or Claude Code) clear the context window. Nothing has to be saved first; the rolling autosave from step 1 already has you covered.
+3. **The resume verb** — on the next session start where Claude Code reports `source: clear`, `daemons/resume-verb.mjs` loads the newest valid capsule **by `created_at`** — no pointer, no cycle token to resolve — and hands back a load → re-ground → act procedure. Every other session start (a fresh terminal, a compaction) gets a lighter warm reinject via `daemons/sessionstart-reinject.mjs` instead of the full procedure.
+4. **Git commit + push** — when a capsule cycle closes deliberately, `daemons/vault-sync.mjs` stages only the changed durable-memory paths, commits them as `vault sync: <reason> (<timestamp>)`, and pushes to whatever remote your repo has configured — a silent no-op if none is set.
+
+**What this doesn't do:** `resume-verb.mjs` loads the newest capsule; it does not independently verify that a `/clear` actually happened — it trusts the hook payload's `source` field. If you're scripting sessions and need that guarantee, don't treat this as an attested or verified resume token — it isn't one today.
 
 ---
 
@@ -299,7 +305,7 @@ If you're building an agent framework for end-users to consume, you probably wan
 <img src="assets/self-learning-loop.svg" alt="Self-Learning Loop — failure to artifact pipeline" width="49%"/>
 </div>
 
-**Vault as brain.** Your AI's memory is an Obsidian vault, not a vector database — the same files you can open, read, search, and navigate yourself. Wikilinks (`[[Project Alpha]]`) build the knowledge graph; the graph IS the intelligence. `resume` reads it, `capsule` writes to it, both fire on their own. When a deliberate close happens, aigent-OS stages only the changed durable memory files, commits (`vault sync:`), and pushes to your configured remote — a silent no-op with no remote configured. See the [two-verb lifecycle doc](docs/two-verb-lifecycle.md) for the full write-ahead/flush contract.
+**Vault as brain.** Your AI's memory is an Obsidian vault, not a vector database — the same files you can open, read, search, and navigate yourself. Wikilinks (`[[Project Alpha]]`) build the knowledge graph; the graph IS the intelligence. `resume` reads it, `capsule` writes to it, both fire on their own — see [Auto-Refresh](#-auto-refresh) above for exactly what gets committed and when. See the [two-verb lifecycle doc](docs/two-verb-lifecycle.md) for the full write-ahead/flush contract.
 
 > **Testing isolation:** scripting `claude` child sessions inside your vault directory means their Stop autosaves write *real* capsules into your *real* vault. Point automated children at a scratch root via `AIGENT_ROOT`.
 
@@ -361,6 +367,12 @@ One structural note, since it comes up: everything in this repo is scoped to a s
 PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for what lands well and how to write rules that fit the existing style. Highest-value areas: decision framework lenses for new domains, hook scripts for additional Claude Code events, vault templates, integration guides, sanitized examples for [`vault/examples/`](vault/examples/).
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+---
+
+## 🌐 The AIgent
+
+aigent-OS is the free, open-source front door of [The AIgent](https://theaigent.xyz) — a media project for people building with AI. The rest of what's free to take lives at the [public tools & repo library](https://tools.theaigent.xyz/repos).
 
 ---
 
