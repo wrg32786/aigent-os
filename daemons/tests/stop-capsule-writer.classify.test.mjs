@@ -83,6 +83,38 @@ writeFileSync(transcript, [
   check('objective is the human utterance, not a peer envelope', /^objective: "Genuine operator directive/m.test(cap), JSON.stringify(cap.match(/^objective: .*/m)?.[0]?.slice(0, 60)));
 }
 
+// ── MIXED utterance: human text + embedded relay span in ONE user string ────
+// Live-observed defect shape: a relay injected into the same user turn the
+// human typed in. The whole string used to classify OPERATOR, so relay text
+// rode into the objective verbatim.
+{
+  const tMix = path.join(SANDBOX, 'zlmix.jsonl');
+  writeFileSync(tMix, [
+    JSON.stringify({ type: 'user', message: { content: 'get to 60% they should  [room from agent-a] agent start — do the ritual [end room from agent-a]' } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'starting' }] } }),
+  ].join('\n') + '\n');
+  run('stop-capsule-writer.mjs', ['--worker', JSON.stringify({ __root: SANDBOX, session_id: 'zlmix', transcript_path: tMix })]);
+  const cap = readFileSync(path.join(SANDBOX, readPointer().path), 'utf8');
+  check('mixed: human remainder tagged [OPERATOR] alone', /\[OPERATOR\] get to 60% they should$/m.test(cap), JSON.stringify(cap.match(/\[OPERATOR\][^\n]*/)?.[0]));
+  check('mixed: embedded relay span tagged [RELAY:agent-a]', /\[RELAY:agent-a\] agent start — do the ritual/.test(cap));
+  check('mixed: no bullet carries the relay text as [OPERATOR]', !/\[OPERATOR\][^\n]*room from/.test(cap) && !/\[OPERATOR\][^\n]*do the ritual/.test(cap));
+  check('mixed: objective is ONLY the human remainder', /^objective: "get to 60% they should"/m.test(cap), JSON.stringify(cap.match(/^objective: .*/m)?.[0]?.slice(0, 80)));
+}
+
+// ── MIXED utterance, no end-marker: relay owns the tail ─────────────────────
+{
+  const tMix2 = path.join(SANDBOX, 'zlmix2.jsonl');
+  writeFileSync(tMix2, [
+    JSON.stringify({ type: 'user', message: { content: 'ship the fix today [room from agent-b @ Thu 7/2] URGENT: stand down lane two' } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }),
+  ].join('\n') + '\n');
+  run('stop-capsule-writer.mjs', ['--worker', JSON.stringify({ __root: SANDBOX, session_id: 'zlmix2', transcript_path: tMix2 })]);
+  const cap = readFileSync(path.join(SANDBOX, readPointer().path), 'utf8');
+  check('mixed/no-end: human head tagged [OPERATOR]', /\[OPERATOR\] ship the fix today$/m.test(cap));
+  check('mixed/no-end: unterminated relay owns the tail as [RELAY:agent-b]', /\[RELAY:agent-b\] URGENT: stand down lane two/.test(cap) && !/\[OPERATOR\][^\n]*stand down/.test(cap));
+  check('mixed/no-end: objective is the human head', /^objective: "ship the fix today"/m.test(cap));
+}
+
 // ── a human message quoting teammate_id="x" stays [OPERATOR] (anchored) ─────
 {
   const tHuman = path.join(SANDBOX, 'zlhuman.jsonl');

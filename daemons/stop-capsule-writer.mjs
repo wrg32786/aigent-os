@@ -206,6 +206,43 @@ try {
     utterances.push(`[${cl.who}] ${cl.t.slice(0, 240)}`);
   };
 
+  // One user string can carry BOTH a human utterance and an embedded relay span
+  // ("human words … [room from x] … [end room from x]") — a relay injected into
+  // the same user turn the human typed in. The START-anchored classifier sees
+  // only the leading human text and tags the WHOLE string OPERATOR, so relay
+  // text rides into the objective as if the human typed it (observed live: an
+  // objective of `human words [room from mike] metis start`). Split embedded
+  // spans out first; each segment then classifies alone under the existing
+  // anchored rules. A span with no [end room from x] terminator runs to end of
+  // string — an injected relay owns the tail. Known tradeoff: a human QUOTING
+  // "[room from x]" mid-sentence gets that quoted span tagged RELAY — but their
+  // own words still classify OPERATOR and still set the objective, which is the
+  // property the [OPERATOR] sweep needs (same call as the teammate_id anchor,
+  // resolved in the same direction: protect the objective).
+  const EMBEDDED_RELAY = /\[room from ([\w-]+)[^\]]*\][\s\S]*?(?:\[end room from \1[^\]]*\]|$)/gi;
+  const segments = (s) => {
+    const out = [];
+    let last = 0;
+    for (const m of s.matchAll(EMBEDDED_RELAY)) {
+      if (m.index > last) out.push(s.slice(last, m.index));
+      out.push(m[0]);
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) out.push(s.slice(last));
+    return out.map((seg) => seg.trim()).filter(Boolean);
+  };
+  // Classify every segment of a cleaned user string; latestRequest gets ONLY the
+  // human segments (joined), never relay/inject text.
+  const classifySegments = (clean) => {
+    const humanParts = [];
+    for (const seg of segments(clean)) {
+      const cl = classify(seg);
+      if (cl.human) humanParts.push(cl.t);
+      tagUtterance(cl);
+    }
+    return humanParts.length ? humanParts.join(' ') : null;
+  };
+
   // Harness wrapper blocks pollute the objective if left in (reminders are
   // frequently APPENDED after real user text, not prepended).
   const stripMeta = (s) => s
@@ -223,12 +260,12 @@ try {
       const c = ev.message?.content;
       if (typeof c === 'string') {
         const clean = stripMeta(c);
-        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
+        if (clean && !clean.startsWith('<')) { const human = classifySegments(clean); if (human) latestRequest = human.slice(0, 300); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (b.type === 'text' && b.text) {
             const clean = stripMeta(b.text);
-            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
+            if (clean && !clean.startsWith('<')) { const human = classifySegments(clean); if (human) latestRequest = human.slice(0, 300); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = typeof b.content === 'string'
