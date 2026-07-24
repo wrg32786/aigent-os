@@ -14,7 +14,7 @@
 
 **Stop re-briefing your AI every morning.**
 
-*aigent-OS gives Claude Code permanent memory, self-checkpointing, and judgment about what to decide alone — a free, open-source operator layer, not a chat wrapper.*
+*aigent-OS gives Claude Code fully autonomous memory and context management — it remembers across sessions, checkpoints itself, and manages its own context window so you never re-brief it. A free, open-source operator layer, not a chat wrapper.*
 
 From the team behind [The AIgent](https://theaigent.xyz) — a free media project for people building with AI.
 
@@ -27,10 +27,10 @@ From the team behind [The AIgent](https://theaigent.xyz) — a free media projec
 ## See it resume itself
 
 <div align="center">
-<img src="assets/demo-session-resume.svg" alt="A later session: aigent-OS resumes with open threads, then checkpoints itself automatically" width="100%"/>
+<img src="assets/demo-session-resume.svg" alt="A session hits 60% context, auto-writes its capsule, gets /clear injected, runs resume, and comes back at 10% context knowing exactly where it left off" width="100%"/>
 </div>
 
-Nothing above was typed. A session ends, the terminal closes, and the next one opens already knowing the open threads, the active priorities, and the one next step — because the capsule from last time loaded itself the moment the window reopened after `/clear`. That's [Auto-Refresh](#-auto-refresh): the mechanism behind it, not a slogan, with the exact files that do it.
+Nothing above was typed. The session hits 60% context, writes its own capsule, gets `/clear`ed, and the fresh context comes back at 10% — already knowing the objective, what it's waiting on, and the exact next step, with room to keep working. That's [Auto-Refresh](#-auto-refresh): the context window managing itself, the mechanism below, with the exact files that do it.
 
 **aigent-OS is a 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system** — one operator, one Claude, running on your own machine. No database, no server, no build step: drop the files in, run `bash install.sh`, and the next session already knows who it is and what it's working on. This repo even ships itself — aigent-OS uses its own skills to decide what it's learned is worth publishing, sanitize it, and open the pull request. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
@@ -66,7 +66,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 
 | Capability | Mechanism | Ships today? |
 |---|---|---|
-| **Auto-Refresh** (two-verb lifecycle) | Session end writes a resume-ready capsule; next boot loads the newest one and re-grounds fully after `/clear` — no `/open`/`/close` typing required | ✅ shipped — [details](#-auto-refresh) |
+| **Auto-Refresh** (autonomous memory + context) | With `claude --continue` as the warm-resume transport, the session manages its own memory *and* context: every turn autosaves a capsule, the window re-grounds itself after a compaction or `/clear`, and nothing is typed — no `/open`/`/close` | ✅ shipped — [details](#-auto-refresh) |
 | Git-native vault memory | Every closed capsule cycle is a real commit, pushed to your configured remote — auditable with plain `git log`, not an opaque DB | ✅ shipped |
 | Somatic layer | Five lazy-computed pressure gauges (context, memory backlog, decision pressure, token usage, drift) read before acting, no daemon polling | ✅ shipped |
 | Self-learning engine | Skill recall → skill hunt → solution hunt escalation chain; every failure becomes a durable artifact | ✅ shipped |
@@ -114,7 +114,7 @@ That's it. aigent-OS installs into whatever directory you're in — your existin
 
 > **Optional `--no-deps`:** skips the Node.js semantic-search install. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change. See [Advanced Setup](docs/advanced-setup.md).
 
-**Start a new Claude Code conversation** in the same directory. aigent-OS is live: it resumes itself on start, handles routing/memory/delegation while you work, and checkpoints itself when the session ends, compacts, or clears — no `/open` or `/close` to type. `/context-capsule` and `/resume` remain available on demand.
+**Start a new Claude Code conversation** in the same directory. aigent-OS is live: it resumes itself on start, manages its own memory and context while you work — routing, delegation, per-turn capsule autosave — and checkpoints itself when the session ends, compacts, or clears. Nothing typed: no `/open` or `/close`. Warm-resume the exact conversation any time with `claude --continue`; `/context-capsule` and `/resume` remain available on demand.
 
 **Prefer an app to a terminal?** Run `launcher/install.sh` (or `install.ps1` on Windows) once, then double-click the AIgent icon — warm-resumed via `claude --continue`, no `cd` and no cold start. See [`launcher/README.md`](launcher/README.md).
 
@@ -150,14 +150,21 @@ install.sh                         One-line installer
 
 ---
 
-## 🔄 Auto-Refresh
+## 🔄 Auto-Refresh — autonomous memory and context management
 
 *(Some earlier docs called this the self-refresh reflex — Auto-Refresh is the name going forward.)*
 
-Four things happen without you typing a command:
+Auto-Refresh is what manages your AI's memory **and** its context for you — both, automatically, with nothing typed. Paired with `claude --continue` as the warm-resume transport, a session carries its own context and its own memory across every boundary Claude Code has: a closed terminal, a compaction, a `/clear`. You stop being the thing that remembers where you were.
+
+Two halves, both automatic:
+
+- **Context — the live window.** `claude --continue` reopens the exact conversation with its full history, so nothing is lost between sittings. When the window compacts or you `/clear` it, the resume verb re-grounds the fresh context from the newest capsule — you never re-explain what you were in the middle of. The session's working context is kept current without you managing it.
+- **Memory — the durable vault.** Every turn, the session delta is folded to disk; on a deliberate close it becomes a real git commit, pushed to your remote. The vault is the long-term brain that outlives any single session — and it's plain files you can read, not an opaque store.
+
+Under the hood, four things happen without a command:
 
 1. **The capsule verb** — every turn, `daemons/stop-capsule-writer.mjs` folds the transcript delta into your one active capsule (`vault/memory/capsules/<date>-<slug>.md`), so disk state is never more than one turn stale. A capsule only counts once it carries a non-empty `id`, `objective`, `waiting_on`, and `next_valid_action` — `daemons/capsule-verb.mjs`'s `validateCapsuleText()` is the content-gate check for that.
-2. **`/clear`** — you (or Claude Code) clear the context window. Nothing has to be saved first; the rolling autosave from step 1 already has you covered.
+2. **Warm resume (`--continue`) or `/clear`** — reopening with `claude --continue` restores the live conversation directly, full history intact. When you (or Claude Code) instead `/clear` the window, nothing has to be saved first; the rolling autosave from step 1 already has you covered.
 3. **The resume verb** — on the next session start where Claude Code reports `source: clear`, `daemons/resume-verb.mjs` loads the newest valid capsule **by `created_at`** — no pointer, no cycle token to resolve — and hands back a load → re-ground → act procedure. Every other session start (a fresh terminal, a compaction) gets a lighter warm reinject via `daemons/sessionstart-reinject.mjs` instead of the full procedure.
 4. **Git commit + push** — when a capsule cycle closes deliberately, `daemons/vault-sync.mjs` stages only the changed durable-memory paths, commits them as `vault sync: <reason> (<timestamp>)`, and pushes to whatever remote your repo has configured — a silent no-op if none is set.
 
