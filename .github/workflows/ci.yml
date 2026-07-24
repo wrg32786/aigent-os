@@ -63,9 +63,6 @@ jobs:
       - name: Terminal-demo asset drift guard
         run: bash tests/test-build-terminal-demo.sh
 
-      - name: Terminal-demo asset drift guard
-        run: bash tests/test-build-terminal-demo.sh
-
       - name: Session-capture-summary hook tests
         run: bash tests/test-session-capture-summary.sh
 
