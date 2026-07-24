@@ -57,6 +57,9 @@ jobs:
       - name: Model-tier routing-guard tests
         run: node daemons/tests/model-tier-guard.test.mjs
 
+      - name: Codex adapter tests
+        run: bash tests/test-codex-adapter.sh
+
       - name: Session-capture-summary hook tests
         run: bash tests/test-session-capture-summary.sh
 
