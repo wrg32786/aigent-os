@@ -8,6 +8,9 @@ For changes to the kernel itself (the 15 numbered system documents and extended 
 
 ## [Unreleased]
 
+### Added
+- **Model-tier routing enforcement** — `daemons/model-tier-guard.mjs`, a new `PreToolUse` (matcher `Agent`) hook that resolves a sub-agent dispatch's `subagent_type` against its installed agent definition (`.claude/agents/<name>.md`, or `vault/agents/<name>.md` for this source tree) and checks the dispatch's `model` against that definition's declared `model:` tier. `system/09_subagent_manifest.md`'s "Model: Fast/Mid/Frontier" field has always been a convention for the operating Claude to follow — this is the first code that reads it at dispatch time. Default posture is advisory (prints a named correction, never blocks) matching this repo's existing suggest-don't-block hook doctrine; `AIGENT_MODEL_GUARD=enforce` opts into a hard `decision:block` gate, mirroring `precompact-flush.mjs`'s `LIFECYCLE_PRECOMPACT_STRICT` precedent. See `docs/model-routing-enforcement.md`. Tests: `daemons/tests/model-tier-guard.test.mjs`, wired into CI.
+
 ### Security
 - **Install-path hardening** — closes five install-surface findings from an external review.
   - `install.sh` refuses to write through a symlink anywhere inside the target directory (a pre-seeded `CLAUDE.md -> ~/.bashrc` style link can no longer redirect a write outside the install boundary). Single-critical-file writes (`CLAUDE.md`, `.claude/settings.json`, `.gitignore`, `.aigent/state.json`) abort the whole install with an actionable error; many-file copy sites (framework trees, skills, agents) skip just the affected entry and continue.

@@ -54,6 +54,9 @@ jobs:
       - name: Caddy router tests
         run: bash tests/test-caddy.sh
 
+      - name: Model-tier routing-guard tests
+        run: node daemons/tests/model-tier-guard.test.mjs
+
       - name: Session-capture-summary hook tests
         run: bash tests/test-session-capture-summary.sh
 
