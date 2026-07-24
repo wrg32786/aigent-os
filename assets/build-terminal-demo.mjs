@@ -19,12 +19,13 @@
 //
 // Usage: node assets/build-terminal-demo.mjs <script.json> [--out <file.svg>]
 //
-// Why per-line fade-reveal instead of per-character typewriter: a typewriter
-// effect needs precise per-glyph timing math for zero payoff here -- the
-// point of this asset is "prove the product actually talks like this," not
-// win a motion-design award. Per-line fade-in is the boring path that still
-// reads as "a live terminal," at a fraction of the SMIL complexity and with
-// zero risk of drifting out of sync with re-wrapped text.
+// Reveal model:
+//   - ai / sys turns fade in a line at a time -- that reads as a reply
+//     streaming in as one message, which is how the model actually talks.
+//   - `you` turns TYPE OUT character by character with a moving caret -- the
+//     human input is the part a viewer expects to watch being written, so it
+//     gets a real typewriter effect (discrete per-glyph reveal + a caret that
+//     advances with it), not a fade.
 //
 // Looping: every reveal is expressed as a keyTimes/values animation over the
 // SAME total cycle length T with repeatCount="indefinite" -- there is no
@@ -42,9 +43,17 @@ const PAD_TOP = 46; // chrome header height
 const PAD_BOTTOM = 20;
 const WIDTH = 860;
 const CHAR_W = 8.4; // approximate monospace advance at FONT_SIZE 14
-const REVEAL_FADE_S = 0.35;
-const GAP_AFTER_TURN_S = 0.55;
-const HOLD_TAIL_S = 3.5; // how long the finished screen sits before looping
+
+// Pacing (deliberately unhurried -- the point is legibility, not speed).
+const REVEAL_FADE_S = 0.45;      // how long a streamed (ai/sys) line takes to fade in
+const DWELL_PER_ROW_S = 0.42;    // extra hold per row of a streamed turn, so long replies linger
+const DWELL_CAP_S = 3.2;         // ceiling on that per-turn hold
+const GAP_AFTER_TURN_S = 0.9;    // beat of stillness between turns
+const CHAR_TYPE_S = 0.058;       // per-character type speed for `you` lines
+const TYPE_LEAD_S = 0.35;        // the label fades in, then typing starts
+const GAP_AFTER_TYPE_S = 0.95;   // hold after a typed line finishes
+const LEAD_IN_S = 0.7;           // small lead-in before the first beat
+const HOLD_TAIL_S = 4.0;         // how long the finished screen sits before looping
 const CURSOR_BLINK_S = 0.9;
 
 const COLORS = {
@@ -58,6 +67,7 @@ const COLORS = {
   sys: '#5b6472',
   text: '#c9d1d9',
   cursor: '#10b981',
+  caret: '#6366f1', // typing caret on `you` lines, matches the `you` color
 };
 
 function wrap(line, cols) {
@@ -96,64 +106,140 @@ function build(script) {
   const prefixCols = 5; // "AI:  " / "You: " column width
   const bodyCols = COLS - prefixCols;
 
-  // Flatten turns into rendered rows, tracking which row starts a new turn
-  // (for the reveal beat) and which turn/beat index each row belongs to.
-  const rows = []; // { text, speaker, beat, isFirstOfBeat }
+  // Flatten turns into rendered rows, keeping prefix and body separate so a
+  // `you` row can fade its label in and then type its body out independently.
+  const rows = []; // { prefix, body, speaker, beat, isFirstOfBeat }
   let beat = 0;
   for (const turn of script.turns) {
     let firstRow = true;
     for (const raw of turn.lines) {
       const wrapped = wrap(raw, bodyCols);
       for (const w of wrapped) {
-        const prefix = firstRow ? speakerLabel(turn.speaker).padEnd(prefixCols) : ''.padEnd(prefixCols);
-        rows.push({ text: prefix + w, speaker: turn.speaker, beat, isFirstOfBeat: firstRow });
+        const prefix = firstRow ? speakerLabel(turn.speaker).padEnd(prefixCols) : '';
+        rows.push({ prefix, body: w, speaker: turn.speaker, beat, isFirstOfBeat: firstRow });
         firstRow = false;
       }
     }
     beat += 1;
   }
   const totalBeats = beat;
-
   const height = PAD_TOP + rows.length * LINE_HEIGHT + PAD_BOTTOM;
 
-  // Timing: each beat reveals all its rows together (a "turn" appears at
-  // once, matching how a real reply streams in as one message).
-  const beatStart = [];
-  let t = 0.6; // small lead-in before the first beat
+  // ---- Timing walk (seconds). Produces a timing descriptor per row. ----
+  const timing = rows.map(() => null);
+  let t = LEAD_IN_S;
   for (let b = 0; b < totalBeats; b++) {
-    beatStart.push(t);
-    const rowsInBeat = rows.filter((r) => r.beat === b).length;
-    // Longer turns hold the eye a little longer before the next one lands.
-    t += REVEAL_FADE_S + Math.min(rowsInBeat * 0.28, 2.2) + GAP_AFTER_TURN_S;
+    const idxs = rows.map((_, i) => i).filter((i) => rows[i].beat === b);
+    const speaker = rows[idxs[0]].speaker;
+
+    if (speaker === 'you') {
+      // Type row by row, character by character.
+      let clock = t;
+      for (const i of idxs) {
+        const chars = [...rows[i].body];
+        const labelStart = clock;
+        const typeStart = clock + TYPE_LEAD_S;
+        const charTimes = chars.map((_, k) => typeStart + k * CHAR_TYPE_S);
+        const rowEnd = typeStart + chars.length * CHAR_TYPE_S;
+        timing[i] = { kind: 'type', labelStart, typeStart, charTimes, rowEnd };
+        clock = rowEnd;
+      }
+      t = clock + GAP_AFTER_TYPE_S;
+    } else {
+      const start = t;
+      for (const i of idxs) timing[i] = { kind: 'fade', start };
+      const dwell = Math.min(idxs.length * DWELL_PER_ROW_S, DWELL_CAP_S);
+      t = start + REVEAL_FADE_S + dwell + GAP_AFTER_TURN_S;
+    }
   }
-  const lastReveal = beatStart[totalBeats - 1] ?? 0.6;
-  const total = lastReveal + REVEAL_FADE_S + HOLD_TAIL_S;
+
+  // Total cycle length: last visible moment + tail hold.
+  let lastReveal = LEAD_IN_S;
+  for (let i = 0; i < rows.length; i++) {
+    const rt = timing[i];
+    lastReveal = Math.max(lastReveal, rt.kind === 'fade' ? rt.start + REVEAL_FADE_S : rt.rowEnd);
+  }
+  const total = lastReveal + HOLD_TAIL_S;
+  const F = (s) => Math.min(Math.max(s / total, 0), 0.999999).toFixed(6);
+  const DUR = total.toFixed(2);
+
+  // ---- Render ----
+  const bodyX = PAD_X + prefixCols * CHAR_W;
 
   const rowSvgs = rows.map((r, i) => {
     const y = PAD_TOP + i * LINE_HEIGHT;
-    const start = beatStart[r.beat];
-    const fadeFrac = (REVEAL_FADE_S / total).toFixed(6);
-    const startFrac = (start / total).toFixed(6);
-    const endFrac = Math.min(Number(startFrac) + Number(fadeFrac), 0.999999).toFixed(6);
-    const color = COLORS[r.speaker] ?? COLORS.text;
-    const weight = r.isFirstOfBeat && r.speaker !== 'sys' ? '600' : '400';
-    const style = r.speaker === 'sys' ? ' font-style="italic"' : '';
-    return `    <text x="${PAD_X}" y="${y}" fill="${color}" font-weight="${weight}"${style} xml:space="preserve">${esc(r.text)}` +
-      `<animate attributeName="opacity" dur="${total.toFixed(2)}s" repeatCount="indefinite" calcMode="linear" ` +
-      `keyTimes="0;${startFrac};${endFrac};1" values="0;0;1;1"/></text>`;
+    const rt = timing[i];
+
+    if (rt.kind === 'fade') {
+      const color = COLORS[r.speaker] ?? COLORS.text;
+      const weight = r.isFirstOfBeat && r.speaker !== 'sys' ? '600' : '400';
+      const style = r.speaker === 'sys' ? ' font-style="italic"' : '';
+      const s = F(rt.start);
+      const e = F(rt.start + REVEAL_FADE_S);
+      const txt = r.prefix + r.body;
+      return `    <text x="${PAD_X}" y="${y}" fill="${color}" font-weight="${weight}"${style} xml:space="preserve">${esc(txt)}` +
+        `<animate attributeName="opacity" dur="${DUR}s" repeatCount="indefinite" calcMode="linear" ` +
+        `keyTimes="0;${s};${e};1" values="0;0;1;1"/></text>`;
+    }
+
+    // `you` typewriter row.
+    const chars = [...r.body];
+    let out = '';
+
+    // Label ("You: ") fades in just before typing begins.
+    if (r.prefix.trim()) {
+      const ls = F(rt.labelStart);
+      const le = F(rt.labelStart + TYPE_LEAD_S);
+      out += `    <text x="${PAD_X}" y="${y}" fill="${COLORS.you}" font-weight="600" xml:space="preserve">${esc(r.prefix)}` +
+        `<animate attributeName="opacity" dur="${DUR}s" repeatCount="indefinite" calcMode="linear" ` +
+        `keyTimes="0;${ls};${le};1" values="0;0;1;1"/></text>\n`;
+    }
+
+    // Body: one <tspan> per glyph, revealed discretely at its type time.
+    // Opacity does not affect layout, so glyphs hold their monospace slot from
+    // the start -- no reflow as the line types.
+    const tspans = chars.map((ch, k) => {
+      const cs = F(rt.charTimes[k]);
+      return `<tspan opacity="0">${esc(ch)}<animate attributeName="opacity" dur="${DUR}s" ` +
+        `repeatCount="indefinite" calcMode="discrete" keyTimes="0;${cs};1" values="0;1;1"/></tspan>`;
+    }).join('');
+    out += `    <text x="${bodyX}" y="${y}" fill="${COLORS.text}" xml:space="preserve">${tspans}</text>`;
+
+    // Moving caret: visible only while this row types, stepping one glyph at a
+    // time. x steps discretely with each character; opacity gates the window.
+    if (chars.length) {
+      const caretY = y - FONT_SIZE + 2;
+      const xKeyTimes = ['0'];
+      const xValues = [String(bodyX)];
+      for (let k = 0; k <= chars.length; k++) {
+        xKeyTimes.push(F(rt.typeStart + k * CHAR_TYPE_S));
+        xValues.push((bodyX + k * CHAR_W).toFixed(1));
+      }
+      xKeyTimes.push('1');
+      xValues.push((bodyX + chars.length * CHAR_W).toFixed(1));
+      const onS = F(rt.typeStart);
+      const offS = F(rt.rowEnd + 0.06);
+      out += `\n    <rect y="${caretY}" width="8" height="${FONT_SIZE}" fill="${COLORS.caret}" opacity="0">` +
+        `<animate attributeName="opacity" dur="${DUR}s" repeatCount="indefinite" calcMode="discrete" ` +
+        `keyTimes="0;${onS};${offS};1" values="0;1;0;0"/>` +
+        `<animate attributeName="x" dur="${DUR}s" repeatCount="indefinite" calcMode="discrete" ` +
+        `keyTimes="${xKeyTimes.join(';')}" values="${xValues.join(';')}"/></rect>`;
+    }
+    return out;
   }).join('\n');
 
-  // Blinking cursor: idle-blinks after the last line finishes, until the loop resets.
+  // Resting cursor: blinks at the end of the last row once everything is shown.
   const cursorRow = rows.length - 1;
-  const cursorX = PAD_X + (rows[cursorRow]?.text.length ?? 0) * CHAR_W + 4;
+  const lastLen = (rows[cursorRow].prefix + rows[cursorRow].body).length;
+  const cursorX = PAD_X + lastLen * CHAR_W + 4;
   const cursorY = PAD_TOP + cursorRow * LINE_HEIGHT - FONT_SIZE + 2;
-  const cursorOnFrac = ((lastReveal + REVEAL_FADE_S) / total).toFixed(6);
-  const blinkCount = Math.max(1, Math.floor((total - (lastReveal + REVEAL_FADE_S)) / CURSOR_BLINK_S));
-  const blinkKeyTimes = ['0', cursorOnFrac];
+  const cursorOnFrac = Number(F(lastReveal));
+  const blinkKeyTimes = ['0', cursorOnFrac.toFixed(6)];
   const blinkValues = ['0', '0'];
+  const blinkCount = Math.max(1, Math.floor((total - lastReveal) / CURSOR_BLINK_S));
   for (let i = 0; i < blinkCount; i++) {
-    const on = Number(cursorOnFrac) + ((i + 0.5) * CURSOR_BLINK_S) / total;
-    const off = Number(cursorOnFrac) + ((i + 1) * CURSOR_BLINK_S) / total;
+    const on = cursorOnFrac + ((i + 0.5) * CURSOR_BLINK_S) / total;
+    const off = cursorOnFrac + ((i + 1) * CURSOR_BLINK_S) / total;
     if (off >= 1) break;
     blinkKeyTimes.push(on.toFixed(6), off.toFixed(6));
     blinkValues.push('1', '0');
@@ -177,7 +263,7 @@ function build(script) {
   <text x="${WIDTH / 2}" y="${PAD_TOP - 22}" fill="${COLORS.title}" text-anchor="middle" font-size="12">${esc(script.title || '')}</text>
 ${rowSvgs}
   <rect x="${cursorX}" y="${cursorY}" width="8" height="${FONT_SIZE}" fill="${COLORS.cursor}">
-    <animate attributeName="opacity" dur="${total.toFixed(2)}s" repeatCount="indefinite" calcMode="discrete" keyTimes="${blinkKeyTimes.join(';')}" values="${blinkValues.join(';')}"/>
+    <animate attributeName="opacity" dur="${DUR}s" repeatCount="indefinite" calcMode="discrete" keyTimes="${blinkKeyTimes.join(';')}" values="${blinkValues.join(';')}"/>
   </rect>
 </svg>
 `;
