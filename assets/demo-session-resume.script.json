@@ -1,0 +1,67 @@
+{
+  "title": "aigent-OS — every session after",
+  "ariaLabel": "A later Claude Code session: nothing typed, aigent-OS resumes with open threads and priorities, then checkpoints itself automatically when the session ends.",
+  "turns": [
+    {
+      "speaker": "ai",
+      "lines": [
+        "3 open threads from yesterday.",
+        "- Pricing decision pending (you said you'd think on it overnight)",
+        "- Engineering brief for the auth refactor needs your sign-off",
+        "- Onboarding flow draft ready for your review",
+        "",
+        "Active priorities:",
+        "1. Close the bridge round (blocked on legal review)",
+        "2. Ship onboarding v2 (in progress, ~70% done)",
+        "3. Hire #5 engineer (interviews scheduled this week)",
+        "",
+        "Last session you were heads-down on the onboarding flow.",
+        "Want to pick that up, or hit one of the open threads first?"
+      ]
+    },
+    {
+      "speaker": "you",
+      "lines": ["pricing first. Going with $49 annual, $59 monthly."]
+    },
+    {
+      "speaker": "ai",
+      "lines": [
+        "Locked. I'm writing it to vault/concepts/Pricing Strategy.md and logging the decision in DECISION_LOG. Reasoning captured: 17% monthly premium is standard SaaS, annual-pre-pay customers churn 4x less. Want me to also draft the pricing-page copy change for engineering, or is that part of onboarding v2?"
+      ]
+    },
+    {
+      "speaker": "you",
+      "lines": ["part of v2."]
+    },
+    {
+      "speaker": "ai",
+      "lines": ["Got it. Updating the Onboarding v2 project note. Anything else before we move on?"]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[... 90 minutes of work ...]"]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[you close the terminal — nothing typed]"]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[capsule fires automatically: reconciles the session, writes to vault/daily/2026-04-25.md]"]
+    },
+    {
+      "speaker": "ai",
+      "lines": [
+        "What got decided today:",
+        "- Pricing: $49/$59 split. Logged.",
+        "- Onboarding v2: ship Friday, no further scope additions.",
+        "",
+        "Open threads carrying to next session:",
+        "- Engineering brief still pending sign-off",
+        "- Hire #5 — call back to candidate B by Tuesday",
+        "",
+        "See you tomorrow."
+      ]
+    }
+  ]
+}
