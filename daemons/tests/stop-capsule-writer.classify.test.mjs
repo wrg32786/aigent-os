@@ -141,6 +141,23 @@ writeFileSync(transcript, [
   check('injection does not become the objective', !/^objective: "\[refresh-cycle\]/m.test(cap));
 }
 
+// ── local-command block CONTENT stripped (not just the opening tag) ─────────
+// Observed live: a model-switch echo (ANSI codes and all) leaked into an
+// [OPERATOR] bullet and a capsule objective because only the tag was stripped.
+{
+  const tLc = path.join(SANDBOX, 'zllc.jsonl');
+  writeFileSync(tLc, [
+    JSON.stringify({ type: 'user', message: { content: '<local-command-stdout>Set model to [1mBig Model X[22m and saved as your default</local-command-stdout>' } }),
+    JSON.stringify({ type: 'user', message: { content: 'real human words after the echo' } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }),
+  ].join('\n') + '\n');
+  run('stop-capsule-writer.mjs', ['--worker', JSON.stringify({ __root: SANDBOX, session_id: 'zllc', transcript_path: tLc })]);
+  const cap = readFileSync(path.join(SANDBOX, readPointer().path), 'utf8');
+  check('local-command stdout content never becomes a bullet', !/Set model to/.test(cap));
+  check('local-command stdout never becomes the objective', !/^objective: .*Set model/m.test(cap));
+  check('human text after the echo still tags [OPERATOR] + owns objective', /\[OPERATOR\] real human words after the echo/.test(cap) && /^objective: "real human words after the echo"/m.test(cap));
+}
+
 // ── embedded newlines collapsed (no section corruption) ─────────────────────
 {
   const t5 = path.join(SANDBOX, 'zl6.jsonl');

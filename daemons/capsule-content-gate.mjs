@@ -31,6 +31,16 @@ export const INJECTION_TEMPLATES = Object.freeze([
   /^Autonomous loop tick/i,
   /^<task-notification>/i,
   /^\[SYSTEM NOTIFICATION/i,
+  // Fleet-deployment markers (measured on a live 5-seat fleet, 2026-07-24: of
+  // ~360 autosave capsules on one seat, 63 objectives were the launchd wake
+  // preamble and 63 were the supervisor's liveness probe — injected traffic
+  // outnumbering every real operator objective). A seat-start ritual phrase is
+  // gated even when a human types it: it is a trigger, never the work objective.
+  /^Reply with the single word: READY\b/i,        // supervisor liveness probe
+  /^You are \w+ — read CLAUDE\.md/i,              // legacy kickstart wake preamble
+  /^(atlas|socrates|mads|metis|rev) start\b/i,    // restart/wake verb ("Metis start …")
+  /^Bank your capsule now and end this turn\b/i,  // auto-clear supervisor order (retiring machinery)
+  /^\[Request interrupted by user/i,              // harness interruption marker
 ]);
 
 // Resume-ceremony openers — the stop-writer's own historical templates plus the

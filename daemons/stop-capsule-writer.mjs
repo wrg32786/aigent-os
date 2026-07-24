@@ -247,6 +247,11 @@ try {
   // frequently APPENDED after real user text, not prepended).
   const stripMeta = (s) => s
     .replace(/<system-reminder>[\s\S]*?(<\/system-reminder>|$)/gi, '')
+    // Whole block first: the tag-only pattern below strips just the opening tag,
+    // leaving the command's stdout/stderr CONTENT to leak into [OPERATOR] bullets
+    // and even the objective (observed live: a model-switch echo, ANSI codes and
+    // all, as a capsule objective). Unterminated block = content runs to end.
+    .replace(/<local-command-[a-z-]*>[\s\S]*?(<\/local-command-[a-z-]*>|$)/gi, '')
     .replace(/<local-command-[\s\S]*?>/gi, '')
     .trim();
 

@@ -152,5 +152,15 @@ ok(gate.isInjectionEcho(SUPERVISOR_RESUME_INJECTION), 'gate: supervisor-resume d
 ok(gate.isCeremonyAction('Resume from the latest session log entry.'), 'gate: old writer fallback detected');
 ok(!gate.isCeremonyAction('Fix the ghost overlap, then re-read the design doc'), 'gate: mid-text mention passes (anchored)');
 
+// Fleet-deployment markers (measured leak shapes — 63+63 objectives on one live
+// seat were the wake preamble and the liveness probe).
+ok(gate.isInjectionEcho('Reply with the single word: READY'), 'gate: liveness probe detected');
+ok(gate.isInjectionEcho('You are Metis — read CLAUDE.md in this directory first; it is your constitution. Run ONE bounded pass.'), 'gate: kickstart wake preamble detected');
+ok(gate.isInjectionEcho('Metis start — v2 fresh-tank restart (conducted)'), 'gate: seat-start wake verb detected');
+ok(gate.isInjectionEcho('Bank your capsule now and end this turn.'), 'gate: auto-clear supervisor order detected');
+ok(gate.isInjectionEcho('[Request interrupted by user for tool use]'), 'gate: harness interruption marker detected');
+ok(!gate.isInjectionEcho('metis started the groom pass late'), 'gate: prose containing a seat name + "start" mid-word passes (anchored, word-bounded)');
+ok(!gate.isInjectionEcho('Ready when you are — ship it'), 'gate: human "ready" phrasing passes');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
