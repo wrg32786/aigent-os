@@ -51,7 +51,12 @@ never creates. Assert this at soak: capsules land only in the canary's own vault
   `AIGENT_FLEET_RULES_INJECT=0`) is how doctrine reaches every seat at SessionStart.
   Flipping the SessionStart hook (step 3) to the fork daemon WITHOUT porting that block
   ships doctrine-propagation silently dark and the kill-switch env gates nothing.
-  The block must be ported into the fork's reinject BEFORE the settings edit lands.
+  **PORTED (this branch, both boot paths — warm-start AND source=clear resume):** the
+  fork's block reads `AIGENT_FLEET_RULES_PATH` (it ships no doctrine of its own), so the
+  SessionStart hook command's env prefix at flip time MUST carry
+  `AIGENT_FLEET_RULES_PATH=<canonical FLEET_RULES.md>` alongside `AIGENT_ROOT`; an armed
+  gate with the path unset logs a loud [EVER-623] line and injects nothing. Awaiting
+  non-author T1.
 - **P1-verify (boot-time, checked not assumed):** the FIRST canary boot after the flip
   must SHOW the FLEET_RULES block in its SessionStart output — read the actual boot
   banner/transcript, never infer from the code being present. Same check repeats as

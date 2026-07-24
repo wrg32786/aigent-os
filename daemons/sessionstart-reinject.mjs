@@ -82,6 +82,37 @@ function frontmatterScalar(doc, field) {
   return value.replace(/^['"]|['"]$/g, '');
 }
 
+// ── EVER-623 port: canonical fleet-rules injection (env-gated) ────────────────
+// Gate is byte-identical to the fleet-port original: AIGENT_FLEET_RULES_INJECT
+// must be EXACTLY '1' (explicit opt-in); unset/'0'/anything else skips the block
+// entirely — output byte-identical to pre-EVER-623. KILL-SWITCH: flip the env to
+// 0/unset OR revert this commit; next SessionStart picks either up.
+// SOURCE FILE: AIGENT_FLEET_RULES_PATH — this repo ships no doctrine of its own,
+// so the install's hook command names the canonical file (a fleet install points
+// it at its committed doctrine copy). Armed gate + unset/unreadable path is a
+// LOUD logErr, never a silent skip: the operator armed a gate that would
+// otherwise inject nothing — exactly the silently-dark failure the gate exists
+// to prevent.
+// TRUNCATION GUARD: a doctrine block ending mid-sentence still reads as complete
+// (the artifact-asserting-an-unearned-state class) — if the full text won't fit
+// the budget this fire, inject the POINTER line instead, never a truncated copy.
+function fleetRulesBlock(root, soFar, cap = 7800) {
+  if (process.env.AIGENT_FLEET_RULES_INJECT !== '1') return null;
+  const src = process.env.AIGENT_FLEET_RULES_PATH || '';
+  try {
+    if (!src) throw new Error('AIGENT_FLEET_RULES_INJECT=1 but AIGENT_FLEET_RULES_PATH is unset');
+    const frText = readFileSync(src, 'utf8').trim();
+    if (soFar + frText.length + 2 <= cap) return { text: frText, ref: 'full' };
+    return {
+      text: `📜 FLEET_RULES (canonical cross-seat doctrine — too large to inject this fire): read ${src} before acting on any clear/save/restart/T1/escalation question.`,
+      ref: 'pointer',
+    };
+  } catch (e) {
+    logErr(root, `[EVER-623] FLEET_RULES injection failed (non-fatal): ${e?.message || e}`);
+    return null;
+  }
+}
+
 try {
   let payload = {};
   try { payload = JSON.parse(readStdin() || '{}'); } catch { /* non-JSON */ }
@@ -108,7 +139,13 @@ try {
   // procedure; nothing else in this file runs for this source.
   if (source === 'clear') {
     const result = runResumeVerb({ projectRoot: root, source, sessionId: payload.session_id });
-    process.stdout.write(result.prompt + '\n');
+    // EVER-623: doctrine rides post-clear boots too — a fresh context is exactly
+    // when the fleet rules must be present, so the block appends to the resume
+    // procedure under the same gate/budget as the warm-start path.
+    let prompt = result.prompt;
+    const frClear = fleetRulesBlock(root, prompt.length);
+    if (frClear) prompt += '\n\n' + frClear.text;
+    process.stdout.write(prompt + '\n');
     process.exit(0);
   }
 
@@ -175,6 +212,12 @@ try {
       }
     }
   } catch { /* no session log yet — fine */ }
+
+  // EVER-623: fleet-rules block last, under the same 8000-char final cap — the
+  // 7800 budget inside fleetRulesBlock keeps the full-text branch clear of the
+  // slice below, so a truncated doctrine copy is unrepresentable here.
+  const fr = fleetRulesBlock(root, out.join('\n').length);
+  if (fr) { out.push(''); out.push(fr.text); }
 
   process.stdout.write(out.join('\n').slice(0, 8000) + '\n');
 } catch (e) {
