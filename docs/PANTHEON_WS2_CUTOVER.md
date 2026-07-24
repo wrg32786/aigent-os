@@ -42,6 +42,26 @@ never creates. Assert this at soak: capsules land only in the canary's own vault
    in the canary vault; `[OPERATOR]`-sweep spot-check confirms the two branch fixes
    hold on live traffic (no injected objective, no relay-as-OPERATOR).
 
+## Named preconditions — BEFORE any flip (canary included)
+
+- **P1 — reinject FLEET_RULES parity (EVER-623 gap, atlas-verified 2026-07-24 own-hand
+  msg a7c8ce8e):** the fork/v2 copies of `sessionstart-reinject.mjs` are the 176-line
+  pre-EVER-623 vintage with ZERO FLEET_RULES references; production runs the 301-line
+  copy whose env-gated injection block (`:244-260`, kill-switch
+  `AIGENT_FLEET_RULES_INJECT=0`) is how doctrine reaches every seat at SessionStart.
+  Flipping the SessionStart hook (step 3) to the fork daemon WITHOUT porting that block
+  ships doctrine-propagation silently dark and the kill-switch env gates nothing.
+  The block must be ported into the fork's reinject BEFORE the settings edit lands.
+- **P1-verify (boot-time, checked not assumed):** the FIRST canary boot after the flip
+  must SHOW the FLEET_RULES block in its SessionStart output — read the actual boot
+  banner/transcript, never infer from the code being present. Same check repeats as
+  each seat flips at fleet cutover.
+- **P2 — rev's flip only (REV-744):** the finalize-lock age-out (fix-2) is LANDED
+  (`9b8767d92`, pantheon-mac PR #6) and rev's runtime pointer verified ADVANCED to a
+  same-day capsule (his own note 9d50a24c) — at his flip, re-verify the pointer is
+  still current before capsule-based resume goes live; a re-frozen pointer resumes
+  days-stale state on day one.
+
 ## Kill-switch (named, two levels)
 
 - **Soft (runtime):** `LIFECYCLE_KILL_STOP_WRITER=1` on the Stop hook command —
