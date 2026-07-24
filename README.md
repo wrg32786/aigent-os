@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="aigent-OS — AI Operating System" width="100%"/>
+<img src="assets/hero.png" alt="aigent-OS — The Claude Operating System" width="100%"/>
 
 <br/>
 
