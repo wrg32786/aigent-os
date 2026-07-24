@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>aigent-OS — Architecture Graph</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+  html, body { margin:0; padding:0; background:#0b0f16; overflow:hidden; height:100%; }
+  canvas { display:block; }
+  #hint {
+    position:fixed; left:14px; bottom:12px; z-index:5;
+    font:12px/1.4 -apple-system, "Segoe UI", sans-serif; color:#5b6472;
+    pointer-events:none; opacity:.7;
+  }
+</style>
+</head>
+<body>
+<div id="hint">aigent-OS — architecture graph (auto-orbit)</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+/* ---------------------------------------------------------------------
+   aigent-OS architecture — "Obsidian graph" style 3D visualization.
+   Deterministic capture contract:
+     ?frame=K&total=N  -> camera orbit angle = 2*PI*K/N, one render, then
+     window.__frameReady = true. No params -> live slow auto-orbit.
+--------------------------------------------------------------------- */
+
+const WIDTH = 1000, HEIGHT = 625;
+const BG = 0x0b0f16;
+
+const COLOR = {
+  indigo:  0x6366f1, // YOU / Caddy
+  emerald: 0x10b981, // AIgent core / Vault / Pantheon agents
+  emeraldBright: 0x34d399, // Auto-Refresh (same family, headline treatment)
+  amber:   0xf59e0b, // Self-Learning / Routing
+  slate:   0x5b6472, // Somatic / Hooks
+};
+
+// ---- URL params / deterministic mode -----------------------------------
+const params = new URLSearchParams(location.search);
+const frameParam = params.get('frame');
+const totalParam = params.get('total');
+const DETERMINISTIC = frameParam !== null && totalParam !== null;
+const FRAME_K = DETERMINISTIC ? parseInt(frameParam, 10) : 0;
+const FRAME_N = DETERMINISTIC ? parseInt(totalParam, 10) : 600;
+
+// ---- renderer / scene ----------------------------------------------------
+const canvas = document.createElement('canvas');
+document.body.appendChild(canvas);
+if (DETERMINISTIC) document.getElementById('hint').style.display = 'none';
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(WIDTH, HEIGHT, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.setClearColor(BG, 1);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(BG);
+scene.fog = new THREE.FogExp2(BG, 0.028);
+
+const camera = new THREE.PerspectiveCamera(42, WIDTH / HEIGHT, 0.1, 100);
+
+const ambient = new THREE.AmbientLight(0x8890a8, 0.55);
+scene.add(ambient);
+const key = new THREE.PointLight(0xffffff, 1.1, 40, 2);
+key.position.set(6, 8, 8);
+scene.add(key);
+const rim = new THREE.PointLight(0x6366f1, 0.6, 40, 2);
+rim.position.set(-8, -4, -6);
+scene.add(rim);
+
+// ---- starfield backdrop ---------------------------------------------------
+(function addStars() {
+  let s = 0x9e3779b9;
+  const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const N = 700;
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const r = 28 + rnd() * 26;
+    const theta = rnd() * Math.PI * 2;
+    const phi = Math.acos(2 * rnd() - 1);
+    pos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+    pos[i * 3 + 1] = r * Math.cos(phi) * 0.6;
+    pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const m = new THREE.PointsMaterial({ color: 0x3a4256, size: 0.06, transparent: true, opacity: 0.55, sizeAttenuation: true });
+  scene.add(new THREE.Points(g, m));
+})();
+
+// ---- text sprite helper ----------------------------------------------------
+function makeLabel(text, sub, color) {
+  const pad = 18;
+  const cw = 512, ch = sub ? 128 : 88;
+  const cvs = document.createElement('canvas');
+  cvs.width = cw; cvs.height = ch;
+  const ctx = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cw, ch);
+  const hex = '#' + color.toString(16).padStart(6, '0');
+  ctx.font = '600 40px -apple-system, Segoe UI, Arial, sans-serif';
+  ctx.textBaseline = 'top';
+  ctx.shadowColor = hex;
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#f5f7fb';
+  ctx.fillText(text, pad, 6);
+  if (sub) {
+    ctx.shadowBlur = 0;
+    ctx.font = '400 22px -apple-system, Segoe UI, Arial, sans-serif';
+    ctx.fillStyle = '#9aa3b6';
+    wrapText(ctx, sub, pad, 60, cw - pad * 2, 26);
+  }
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(cw * 0.0072, ch * 0.0072, 1);
+  return sprite;
+}
+function wrapText(ctx, text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '', ly = y;
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, x, ly);
+      line = w; ly += lh;
+    } else { line = test; }
+  }
+  if (line) ctx.fillText(line, x, ly);
+}
+
+// ---- node + edge builders ---------------------------------------------------
+const nodeGroup = new THREE.Group();
+const edgeGroup = new THREE.Group();
+scene.add(edgeGroup, nodeGroup);
+const registry = new Map();
+
+function addNode({ id, label, sub, pos, r, color, headline }) {
+  const geo = new THREE.SphereGeometry(r, 32, 32);
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: headline ? 1.15 : 0.8,
+    roughness: 0.35, metalness: 0.15,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(...pos);
+  nodeGroup.add(mesh);
+
+  // soft glow halo (additive, billboard-independent — simple bigger sphere)
+  const haloGeo = new THREE.SphereGeometry(r * 1.4, 16, 16);
+  const haloMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: headline ? 0.12 : 0.07, blending: THREE.AdditiveBlending, depthWrite: false });
+  const halo = new THREE.Mesh(haloGeo, haloMat);
+  halo.position.copy(mesh.position);
+  nodeGroup.add(halo);
+
+  const label3d = makeLabel(label, sub, color);
+  label3d.position.set(pos[0], pos[1] + r + 0.55, pos[2]);
+  nodeGroup.add(label3d);
+
+  registry.set(id, { pos: new THREE.Vector3(...pos), r, color });
+  return mesh;
+}
+
+function addEdge(fromId, toId, opts = {}) {
+  const a = registry.get(fromId), b = registry.get(toId);
+  if (!a || !b) return;
+  const mid = a.pos.clone().lerp(b.pos, 0.5);
+  const dir = b.pos.clone().sub(a.pos);
+  const perp = new THREE.Vector3(-dir.z, dir.y * 0.15, dir.x).normalize();
+  const bow = opts.bow ?? 0.55;
+  mid.addScaledVector(perp, dir.length() * bow * 0.25);
+  mid.y += dir.length() * 0.06;
+  const curve = new THREE.QuadraticBezierCurve3(a.pos, mid, b.pos);
+  const tubeR = opts.thin ? 0.02 : 0.045;
+  const geo = new THREE.TubeGeometry(curve, 48, tubeR, 8, false);
+  const mat = new THREE.MeshBasicMaterial({
+    color: a.color, transparent: true, opacity: opts.thin ? 0.5 : 0.75,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  edgeGroup.add(new THREE.Mesh(geo, mat));
+}
+
+function ring(center, count, radius, colorTilt = 0) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + colorTilt;
+    out.push([
+      center[0] + Math.cos(a) * radius,
+      center[1] + Math.sin(a) * radius * 0.55,
+      center[2] + Math.sin(a * 1.7) * radius * 0.6,
+    ]);
+  }
+  return out;
+}
+
+// ---- graph data (ground truth: README Architecture / Auto-Refresh / Routing / Key Concepts) ----
+const PANTHEON_HUB = [6.4, 0.6, 0.8];
+const SOMATIC_HUB = [0, -6.6, 0];
+
+addNode({ id: 'you', label: 'YOU', sub: 'Principal', pos: [0, 6.2, 0], r: 1.05, color: COLOR.indigo, headline: true });
+addNode({ id: 'aigent', label: 'AIGENT', sub: 'Operator — strategy · routing · synthesis', pos: [0, 3.2, 0], r: 1.2, color: COLOR.emerald, headline: true });
+addNode({ id: 'auto-refresh', label: 'AUTO-REFRESH', sub: 'capsule -> /clear -> resume', pos: [2.9, 1.5, 2.8], r: 0.85, color: COLOR.emeraldBright, headline: true });
+addNode({ id: 'pantheon', label: 'PANTHEON AGENTS', sub: '9 instruments', pos: PANTHEON_HUB, r: 0.75, color: COLOR.emerald });
+addNode({ id: 'self-learning', label: 'SELF-LEARNING', sub: 'skill-recall · skill-hunt · solution-hunt · learn-from-failure', pos: [-6.3, 1.1, -1.3], r: 0.68, color: COLOR.amber });
+addNode({ id: 'routing', label: 'ROUTING / MULTI-LLM', sub: 'model-tier dispatch + Codex adapter', pos: [-6.0, -2.0, 2.0], r: 0.62, color: COLOR.amber });
+addNode({ id: 'vault', label: 'VAULT', sub: 'obsidian · memory/ concepts/ agents/ skills/', pos: [0, -1.6, -0.7], r: 0.85, color: COLOR.emerald });
+addNode({ id: 'caddy', label: 'CADDY', sub: 'skill router', pos: [-2.6, -3.9, 0.4], r: 0.55, color: COLOR.indigo });
+addNode({ id: 'hooks', label: 'HOOKS', sub: 'session-event automation', pos: [2.6, -3.9, 0.4], r: 0.55, color: COLOR.slate });
+addNode({ id: 'somatic', label: 'SOMATIC LAYER', sub: '5 pressure gauges', pos: SOMATIC_HUB, r: 0.65, color: COLOR.slate });
+
+const PANTHEON_AGENTS = ['Echo', 'Iris', 'Lyra', 'Mnemosyne', 'Newton', 'Hestia', 'Vitruvius', 'Demosthenes', 'Hypatia'];
+ring(PANTHEON_HUB, PANTHEON_AGENTS.length, 2.7, 0.3).forEach((p, i) => {
+  addNode({ id: 'pa-' + i, label: PANTHEON_AGENTS[i], pos: p, r: 0.26, color: COLOR.emerald });
+});
+
+const GAUGES = ['context', 'memory', 'decision', 'tokens', 'drift'];
+ring(SOMATIC_HUB, GAUGES.length, 2.4, 0.6).forEach((p, i) => {
+  addNode({ id: 'sg-' + i, label: GAUGES[i], pos: p, r: 0.22, color: COLOR.slate });
+});
+
+// edges — spine + primary flow
+addEdge('you', 'aigent');
+addEdge('aigent', 'pantheon');
+addEdge('aigent', 'self-learning');
+addEdge('aigent', 'routing');
+addEdge('pantheon', 'vault');
+addEdge('self-learning', 'vault');
+addEdge('auto-refresh', 'vault', { bow: 0.35 });
+addEdge('auto-refresh', 'aigent', { bow: 0.35 });
+addEdge('vault', 'caddy');
+addEdge('vault', 'hooks');
+addEdge('hooks', 'somatic');
+PANTHEON_AGENTS.forEach((_, i) => addEdge('pantheon', 'pa-' + i, { thin: true, bow: 0.25 }));
+GAUGES.forEach((_, i) => addEdge('somatic', 'sg-' + i, { thin: true, bow: 0.25 }));
+
+// ---- post-processing (bloom) -----------------------------------------------
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(WIDTH, HEIGHT), 0.55, 0.45, 0.32);
+composer.addPass(bloom);
+
+// ---- camera orbit ------------------------------------------------------------
+const ORBIT_RADIUS = 25;
+const ORBIT_BASE_Y = 0.3;
+const TARGET = new THREE.Vector3(0, -0.3, 0.2);
+
+const PHASE_OFFSET = Math.PI / 2; // frame K=0 / the GIF's loop seam lands on the cleanest composition
+
+function setCameraAngle(angle) {
+  const a = angle + PHASE_OFFSET;
+  camera.position.x = Math.cos(a) * ORBIT_RADIUS;
+  camera.position.z = Math.sin(a) * ORBIT_RADIUS;
+  camera.position.y = ORBIT_BASE_Y + Math.sin(a) * 1.8; // 2*PI-periodic -> seamless loop
+  camera.lookAt(TARGET);
+}
+
+function render() {
+  composer.render();
+}
+
+if (DETERMINISTIC) {
+  const angle = (2 * Math.PI * FRAME_K) / FRAME_N;
+  setCameraAngle(angle);
+  render();
+  requestAnimationFrame(() => {
+    render();
+    requestAnimationFrame(() => {
+      window.__frameReady = true;
+    });
+  });
+} else {
+  const ANGULAR_SPEED = (2 * Math.PI) / 90; // one full orbit per ~90s — slow, continuous
+  let last = performance.now();
+  let angle = 0;
+  function loop(now) {
+    const dt = (now - last) / 1000; last = now;
+    angle += ANGULAR_SPEED * dt;
+    setCameraAngle(angle);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>

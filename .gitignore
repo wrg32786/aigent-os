@@ -5,6 +5,7 @@ node_modules/
 Thumbs.db
 STRIP-REPORT.md
 *.tmp
+frames/
 
 # Codex finding #23: the write-ahead prompt journal is never committable, even
 # in this dev checkout -- covers the live file and rotated dated sidecars.
