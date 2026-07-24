@@ -1,0 +1,44 @@
+{
+  "title": "aigent-OS — Auto-Refresh: the session refreshes its own context",
+  "ariaLabel": "A Claude Code session reaches 60% context, automatically writes its capsule, gets /clear injected, runs the resume verb, and picks up exactly where it left off with fresh context at 10% — no human input at any step.",
+  "turns": [
+    {
+      "speaker": "sys",
+      "lines": ["[context 60% — auto-refresh threshold reached]"]
+    },
+    {
+      "speaker": "ai",
+      "lines": [
+        "Context at 60%. Checkpointing myself before the window fills —",
+        "nothing to save by hand.",
+        "",
+        "Wrote vault/memory/capsules/2026-04-25-onboarding-v2.md",
+        "  objective          ship onboarding v2",
+        "  waiting_on         your sign-off on the auth-refactor brief",
+        "  next_valid_action  wire the final intake step, then QA the flow"
+      ]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[/clear injected — context window reset to empty]"]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[new session · source: clear → running resume]"]
+    },
+    {
+      "speaker": "ai",
+      "lines": [
+        "Resumed from the newest capsule. Back exactly where we left off:",
+        "  - onboarding v2 — the final intake step is next",
+        "  - still waiting on your sign-off on the auth-refactor brief",
+        "",
+        "No re-briefing needed. Picking the intake step back up now."
+      ]
+    },
+    {
+      "speaker": "sys",
+      "lines": ["[context 10% — full memory intact, room to run]"]
+    }
+  ]
+}
