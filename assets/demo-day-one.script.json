@@ -1,0 +1,46 @@
+{
+  "title": "aigent-OS — day one",
+  "ariaLabel": "First Claude Code session after install: the operator-setup conversation, three plain questions leading to a first plan.",
+  "turns": [
+    {
+      "speaker": "ai",
+      "lines": [
+        "I'm your AIgent operator. Let's get you one real win in the next few minutes.",
+        "In a sentence or two, what's your business, or the work you want help running?"
+      ]
+    },
+    {
+      "speaker": "you",
+      "lines": ["I run a bookkeeping practice for trades — electricians, plumbers, HVAC."]
+    },
+    {
+      "speaker": "ai",
+      "lines": ["Got it. What's the one outcome that would make this month a win?"]
+    },
+    {
+      "speaker": "you",
+      "lines": ["Five new clients, without working weekends."]
+    },
+    {
+      "speaker": "ai",
+      "lines": ["And what do you spend the most time on that you wish just ran itself?"]
+    },
+    {
+      "speaker": "you",
+      "lines": ["Chasing leads. I'm always the one following up."]
+    },
+    {
+      "speaker": "ai",
+      "lines": [
+        "Here's what I know about you: you run a bookkeeping practice for trades, you want five new clients this month without working weekends, and chasing leads eats your time.",
+        "",
+        "Three things I'd do first:",
+        "1. Draft a week of outreach to local trade businesses, so lead-chasing runs without you.",
+        "2. Build a \"new client\" intake that collects everything you need before the first call.",
+        "3. Turn last month's finished jobs into three referral asks.",
+        "",
+        "Pick one and we'll do it right now."
+      ]
+    }
+  ]
+}

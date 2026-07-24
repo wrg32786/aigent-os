@@ -814,5 +814,18 @@
       "CSS animation"
     ],
     "why": "Senior UI/UX engineer persona with metric-based design rules, CSS hardware acceleration, and balanced design engineering. MIT license — LeonxInx."
+  },
+  {
+    "name": "codex-adapter",
+    "triggers": [
+      "route this to codex",
+      "use codex for this",
+      "hand this to codex",
+      "run this through codex",
+      "codex exec",
+      "non-claude executor",
+      "multi-llm"
+    ],
+    "why": "Route one bounded, mechanical task to the Codex CLI as a non-Claude executor, under the same review-before-merge gate as any agent-produced diff."
   }
 ]
