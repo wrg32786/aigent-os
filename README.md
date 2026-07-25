@@ -291,7 +291,7 @@ If you're building an agent framework for end-users to consume, you probably wan
 ## 🏗 Architecture
 
 <div align="center">
-<img src="assets/architecture.svg" alt="aigent-OS Architecture — Principal to the AIgent to Sub-agents to Vault to Hooks" width="100%"/>
+<img src="assets/architecture.gif" alt="aigent-OS Architecture — Principal to the AIgent to Sub-agents to Vault to Hooks" width="100%"/>
 </div>
 
 **16 system documents** (`00_identity` → `15_somatic_layer`) are a complete operating manual — how the AI thinks, decides, delegates, remembers, and manages time. Not prompts; a kernel. Full index: [`system/`](system).
