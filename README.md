@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/hero.png" alt="aigent-OS — The Claude Operating System" width="100%"/>
+<img src="assets/hero.gif" alt="aigent-OS — The Claude Operating System" width="100%"/>
 
 <br/>
 
@@ -379,7 +379,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## 🌐 The AIgent
 
-aigent-OS is the free, open-source front door of [The AIgent](https://theaigent.xyz) — a media project for people building with AI. The rest of what's free to take lives at the [public tools & repo library](https://tools.theaigent.xyz/repos).
+aigent-OS is the free, open-source harness of [The AIgent](https://theaigent.xyz) — a media project for people building with AI. The rest of what's free to take lives at the [public tools](https://tools.theaigent.xyz).
 
 ---
 
@@ -389,7 +389,7 @@ aigent-OS is the free, open-source front door of [The AIgent](https://theaigent.
 
 <br/>
 
-Built by **[Will Gwyn](https://github.com/wrg32786)**
+Built by **[The AIgent](https://theaigent.xyz)**
 
 *Battle-tested across multiple ventures. Months of daily use.*
 *This framework emerged from real operational needs — not theory.*
