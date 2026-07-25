@@ -64,7 +64,7 @@
   },
   {
     "name": "deep-recon",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "deep recon",
       "brainstorm deeply",
@@ -431,7 +431,7 @@
   },
   {
     "name": "scout-vault",
-    "agent": "echo",
+    "agent": null,
     "triggers": [
       "scout vault",
       "vault traversal",
@@ -446,7 +446,7 @@
   },
   {
     "name": "comms-summarize",
-    "agent": "echo",
+    "agent": null,
     "triggers": [
       "summarize comms",
       "comms summary",
@@ -461,7 +461,7 @@
   },
   {
     "name": "port-spec",
-    "agent": "lyra",
+    "agent": null,
     "triggers": [
       "port this spec",
       "implement this spec",
@@ -476,7 +476,7 @@
   },
   {
     "name": "ship-adapter",
-    "agent": "lyra",
+    "agent": null,
     "triggers": [
       "ship adapter",
       "port adapter",
@@ -491,7 +491,7 @@
   },
   {
     "name": "research-deep",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "research this",
       "deep research",
@@ -506,7 +506,7 @@
   },
   {
     "name": "tool-evaluation",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "evaluate this tool",
       "tool evaluation",
@@ -521,7 +521,7 @@
   },
   {
     "name": "sprite-spec",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "design sprite",
       "sprite spec",
@@ -536,7 +536,7 @@
   },
   {
     "name": "visual-polish",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "visual polish",
       "polish the UI",
@@ -551,7 +551,7 @@
   },
   {
     "name": "ui-architecture",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "design this UI",
       "UI architecture",
@@ -566,7 +566,7 @@
   },
   {
     "name": "supersede",
-    "agent": "mnemosyne",
+    "agent": null,
     "triggers": [
       "supersede this entry",
       "supersede",
@@ -581,7 +581,7 @@
   },
   {
     "name": "compact-note",
-    "agent": "mnemosyne",
+    "agent": null,
     "triggers": [
       "compact this note",
       "compact note",
@@ -596,7 +596,7 @@
   },
   {
     "name": "critique-plan",
-    "agent": "hypatia",
+    "agent": null,
     "triggers": [
       "critique this plan",
       "critique plan",
@@ -611,7 +611,7 @@
   },
   {
     "name": "find-weakness",
-    "agent": "hypatia",
+    "agent": null,
     "triggers": [
       "find the weakness",
       "find weakness",
@@ -626,7 +626,7 @@
   },
   {
     "name": "sweep-tracker",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep tracker",
       "clean delegation tracker",
@@ -641,7 +641,7 @@
   },
   {
     "name": "sweep-heat",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep heat",
       "heat index sweep",
@@ -656,7 +656,7 @@
   },
   {
     "name": "sweep-links",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep links",
       "broken links",

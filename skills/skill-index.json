@@ -373,7 +373,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/deep-recon",
-      "pantheon_agent": "Newton",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -421,7 +421,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/digest",
-      "pantheon_agent": "Mnemosyne",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -558,7 +558,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/frontend-slides",
-      "pantheon_agent": "Iris",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -631,7 +631,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/impeccable",
-      "pantheon_agent": "Iris",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -1116,7 +1116,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/skill-hunt",
-      "pantheon_agent": "Newton",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -1139,7 +1139,7 @@
       "model_preference": "haiku",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/skill-recall",
-      "pantheon_agent": "Echo",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -1231,7 +1231,7 @@
       "model_preference": "haiku",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/status",
-      "pantheon_agent": "Echo",
+      "pantheon_agent": null,
       "active": true
     },
     {
@@ -1416,7 +1416,7 @@
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/taste-skill",
-      "pantheon_agent": "Iris",
+      "pantheon_agent": null,
       "active": true
     },
     {
