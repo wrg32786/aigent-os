@@ -41,4 +41,4 @@ aigent-OS bundles the following third-party skills under their respective open-s
 
 ## Not included
 
-**emil-design-eng** — Based on Emil Kowalski's design engineering philosophy (animations.dev). No explicit open-source license confirmed for the skill file; excluded pending license clarification.
+**emil-design-eng**: Based on Emil Kowalski's design engineering philosophy (animations.dev). No explicit open-source license confirmed for the skill file; excluded pending license clarification.

@@ -1,5 +1,5 @@
 {
-  "title": "aigent-OS — day one",
+  "title": "aigent-OS: day one",
   "ariaLabel": "First Claude Code session after install: the operator-setup conversation, three plain questions leading to a first plan.",
   "turns": [
     {
@@ -11,7 +11,7 @@
     },
     {
       "speaker": "you",
-      "lines": ["I run a bookkeeping practice for trades — electricians, plumbers, HVAC."]
+      "lines": ["I run a bookkeeping practice for trades: electricians, plumbers, HVAC."]
     },
     {
       "speaker": "ai",

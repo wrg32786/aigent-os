@@ -9,7 +9,7 @@ For users who want manual control, optional features, or deeper configuration be
 Hooks run silently in the background on every Claude Code event. The installer creates `.claude/settings.json` with paths pre-resolved. If you installed manually or need to reconfigure:
 
 1. Copy `.claude/settings.json.template` to `.claude/settings.json`
-2. Replace every occurrence of the placeholder `__AIGENT_ROOT__` with your actual install path. Note the double underscores: `__AIGENT_ROOT__` is the substitutable placeholder, while the bare `AIGENT_ROOT` (and `AIGENT_VAULT`) env-key names must stay literal — the installer only rewrites `__AIGENT_ROOT__`.
+2. Replace every occurrence of the placeholder `__AIGENT_ROOT__` with your actual install path. Note the double underscores: `__AIGENT_ROOT__` is the substitutable placeholder, while the bare `AIGENT_ROOT` (and `AIGENT_VAULT`) env-key names must stay literal; the installer only rewrites `__AIGENT_ROOT__`.
 
 ```bash
 # From your aigent-OS directory:
@@ -21,7 +21,7 @@ sed -i "s|__AIGENT_ROOT__|$(pwd)|g" .claude/settings.json
 ```bash
 grep -c "__AIGENT_ROOT__" .claude/settings.json  # should print 0
 ```
-(Do not grep for bare `AIGENT_ROOT` — a correctly-rendered file still contains it as an env-key name, so it will never be 0.)
+(Do not grep for bare `AIGENT_ROOT`; a correctly-rendered file still contains it as an env-key name, so it will never be 0.)
 
 ### What each hook does
 
@@ -32,7 +32,7 @@ grep -c "__AIGENT_ROOT__" .claude/settings.json  # should print 0
 | `hooks/auto-capture.sh` | PostToolUse | Logs actions to daily note automatically |
 | `daemons/caddy-detect-new-skill.sh` | PostToolUse (Write/Edit) | Detects new skill files, prompts `/caddy-enroll` |
 | `hooks/session-capture-summary.sh` | Stop | Writes session summary at conversation end |
-| `hooks/session-end-check.sh` | — (not wired) | Legacy end-of-session check — present in the tree but NOT registered by the installer; superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
+| `hooks/session-end-check.sh` | (not wired) | Legacy end-of-session check: present in the tree but NOT registered by the installer; superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
 | `hooks/log-token-usage.sh` | Stop | Logs token cost to vault |
 
 ---
@@ -69,7 +69,7 @@ The model used is `all-MiniLM-L6-v2` (local). No API calls. No data leaves your 
 
 ## Obsidian vault setup
 
-Obsidian gives you a visual graph of the vault's knowledge connections. Optional — the vault works without it.
+Obsidian gives you a visual graph of the vault's knowledge connections. Optional: the vault works without it.
 
 1. [Download Obsidian](https://obsidian.md/) (free)
 2. Open Obsidian → "Open folder as vault"
@@ -78,9 +78,9 @@ Obsidian gives you a visual graph of the vault's knowledge connections. Optional
 You'll see the knowledge graph: memory files, concept notes, project notes, and daily session logs connected by wikilinks.
 
 **Recommended Obsidian plugins (optional):**
-- Graph View — visualize the link graph
-- Dataview — query vault notes like a database
-- Templater — faster note creation with templates
+- Graph View: visualize the link graph
+- Dataview: query vault notes like a database
+- Templater: faster note creation with templates
 
 ---
 
@@ -98,13 +98,13 @@ The installer copies `skills/` to `.claude/skills/` during setup. If you add a n
 1. Create `skills/<name>/SKILL.md` (for versioning)
 2. Also create `.claude/skills/<name>/SKILL.md` (for runtime)
 
-Or run `/caddy-enroll` after placing the file — it reads the SKILL.md and adds the skill to Caddy's index.
+Or run `/caddy-enroll` after placing the file; it reads the SKILL.md and adds the skill to Caddy's index.
 
 ---
 
 ## Caddy skill index management
 
-Caddy is a non-blocking hook that matches your prompts to skills. Its index lives at `.claude/skill-index.json` — installed automatically by the installer and read by `daemons/caddy.sh` at runtime.
+Caddy is a non-blocking hook that matches your prompts to skills. Its index lives at `.claude/skill-index.json`, installed automatically by the installer and read by `daemons/caddy.sh` at runtime.
 
 **Manually enroll a skill:**
 ```
@@ -132,7 +132,7 @@ The memory-heat daemon ranks vault notes by recency + frequency of access, so a 
 node daemons/memory-heat/compute-heat.js
 ```
 
-**Schedule weekly** (optional) — add to cron or use the `/schedule` skill to set a recurring trigger.
+**Schedule weekly** (optional): add to cron or use the `/schedule` skill to set a recurring trigger.
 
 ---
 

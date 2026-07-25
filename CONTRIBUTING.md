@@ -8,13 +8,13 @@ The highest-value contributions, ranked by leverage:
 
 1. **Decision framework lenses for new domains.** `system/04_decision_frameworks.md` ships 12 lenses. Domain-specific additions (legal, clinical, marketing, manufacturing) are valuable.
 2. **Hook scripts for additional Claude Code events.** Anything in `hooks/` that runs silently in the background and earns its keep on the next session.
-3. **Vault templates.** Engineering, legal, consulting, creative — populated `vault/templates/*.md` files that fork-friendly users can drop in.
+3. **Vault templates.** Engineering, legal, consulting, creative: populated `vault/templates/*.md` files that fork-friendly users can drop in.
 4. **Integration guides.** Notion, Linear, Slack, n8n, Make. How to wire aigent-OS into the rest of someone's stack.
 5. **Examples.** Sanitized, populated `vault/examples/*.md` files showing what good content looks like in practice.
 
 ## What probably doesn't land
 
-- New base system docs in `system/00–14`. Those are the kernel — changes go through deeper review.
+- New base system docs in `system/00–14`. Those are the kernel; changes go through deeper review.
 - Personality prompts. aigent-OS is operational, not conversational. "You are a helpful assistant"-style prompts get rejected.
 - Heavy dependencies. Zero-build, zero-server is a hard constraint. Anything requiring a database, a backend, or a Python virtualenv beyond what's already there is a tougher sell.
 
@@ -39,7 +39,7 @@ Rules in `CLAUDE.md`, `system/`, and `vault/concepts/` follow the META section i
 - Minimize examples
 - Bullets over paragraphs
 
-If a new rule duplicates an existing one, update the existing — don't add another.
+If a new rule duplicates an existing one, update the existing; don't add another.
 
 ## License
 

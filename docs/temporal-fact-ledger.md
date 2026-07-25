@@ -14,11 +14,11 @@ created: 2026-05-08
 
 Memory notes go stale. When a fact changes, the old note gets edited and the prior state is lost. The temporal fact ledger preserves:
 
-- **What was true then?** — `valid_from` / `valid_until` window
-- **What changed?** — `superseded_by` links old fact to new
-- **Where did this belief come from?** — `source` field (vault note, daily note, session)
-- **Is this still valid?** — `valid_until: null` means currently believed true
-- **Who asserted it?** — `created_by` (aigent, will, agent name)
+- **What was true then?**: `valid_from` / `valid_until` window
+- **What changed?**: `superseded_by` links old fact to new
+- **Where did this belief come from?**: `source` field (vault note, daily note, session)
+- **Is this still valid?**: `valid_until: null` means currently believed true
+- **Who asserted it?**: `created_by` (aigent, will, agent name)
 
 ## Schema
 
@@ -64,7 +64,7 @@ Filter facts.jsonl where `valid_from <= T` AND (`valid_until is null` OR `valid_
 
 ## Related
 
-- [[Self-Improving CLAUDE.md]] — the broader learning loop
-- [[concepts/remindb]] — SQLite augment candidate for agent-consumable fact queries
-- [[Memory Decay Doctrine]] — how facts age and lose relevance
-- [[memory/facts/facts.jsonl]] — the ledger file
+- [[Self-Improving CLAUDE.md]]: the broader learning loop
+- [[concepts/remindb]]: SQLite augment candidate for agent-consumable fact queries
+- [[Memory Decay Doctrine]]: how facts age and lose relevance
+- [[memory/facts/facts.jsonl]]: the ledger file

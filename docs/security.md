@@ -1,6 +1,6 @@
 # Security
 
-aigent-OS processes your operational context — priorities, decisions, business details. Security matters.
+aigent-OS processes your operational context: priorities, decisions, business details. Security matters.
 
 ## Built-In Protections
 
@@ -8,17 +8,17 @@ aigent-OS processes your operational context — priorities, decisions, business
 
 The authority matrix (`system/12_authority_matrix.md`) is the primary security control. It defines what the AI can do autonomously, what needs approval, and what it should never touch. This prevents:
 
-- **Unauthorized actions** — AI can't spend money, send emails, or make irreversible decisions without explicit approval
-- **Scope creep** — Clear boundaries prevent the AI from acting outside its defined role
-- **Escalation failures** — Uncertain situations get surfaced, not guessed at
+- **Unauthorized actions**: AI can't spend money, send emails, or make irreversible decisions without explicit approval
+- **Scope creep**: Clear boundaries prevent the AI from acting outside its defined role
+- **Escalation failures**: Uncertain situations get surfaced, not guessed at
 
 ### Vault Privacy
 
 The vault contains your operational brain. Protections:
 
-- **Local by default** — Everything runs on your machine. No cloud sync required.
-- **Semantic search is local** — The `all-MiniLM-L6-v2` model runs on your device. No data sent to any API.
-- **Git awareness** — The `.gitignore` excludes `embeddings.json` and `.obsidian/` config. Sensitive files don't accidentally get committed.
+- **Local by default**: Everything runs on your machine. No cloud sync required.
+- **Semantic search is local**: The `all-MiniLM-L6-v2` model runs on your device. No data sent to any API.
+- **Git awareness**: The `.gitignore` excludes `embeddings.json` and `.obsidian/` config. Sensitive files don't accidentally get committed.
 
 ## Recommended: Prompt Injection Defense
 
@@ -83,7 +83,7 @@ Wire it into your Claude Code settings:
 }
 ```
 
-Replace `__AIGENT_ROOT__` with your absolute install path (the installer does this automatically; hand-wiring, substitute it yourself — see [Advanced Setup](advanced-setup.md#hook-configuration)). A bare `AIGENT_ROOT` resolves to a nonexistent relative path and the hook silently never fires.
+Replace `__AIGENT_ROOT__` with your absolute install path (the installer does this automatically; hand-wiring, substitute it yourself; see [Advanced Setup](advanced-setup.md#hook-configuration)). A bare `AIGENT_ROOT` resolves to a nonexistent relative path and the hook silently never fires.
 
 ### What It Catches
 
@@ -97,7 +97,7 @@ Replace `__AIGENT_ROOT__` with your absolute install path (the installer does th
 - Social engineering through plausible-looking content
 - Obfuscated or encoded payloads
 
-This is a first line of defense, not a complete solution. The authority matrix is the deeper protection — even if injection succeeds in changing the AI's intent, the authority boundaries prevent unauthorized actions.
+This is a first line of defense, not a complete solution. The authority matrix is the deeper protection: even if injection succeeds in changing the AI's intent, the authority boundaries prevent unauthorized actions.
 
 ## Best Practices
 
@@ -107,7 +107,7 @@ This is a first line of defense, not a complete solution. The authority matrix i
 
 3. **Separate vaults for separate contexts.** If you work with multiple organizations, consider separate aigent-OS installations. Don't mix confidential contexts.
 
-4. **Audit the vault periodically.** Check that no sensitive information crept into notes that shouldn't contain it. The vault is markdown files — you can grep for patterns like API keys, passwords, or financial details.
+4. **Audit the vault periodically.** Check that no sensitive information crept into notes that shouldn't contain it. The vault is markdown files; you can grep for patterns like API keys, passwords, or financial details.
 
 5. **Back up the vault.** It's your AI's brain. Treat it like you'd treat any critical data. Git + a backup service covers most cases.
 

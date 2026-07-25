@@ -93,19 +93,19 @@ Use `/setup` later for deeper configuration or to revise identity, priorities, a
 
 ## Normal session flow
 
-The lifecycle is two verbs, and both fire automatically at their hook points — you rarely invoke them by name. See [`two-verb-lifecycle.md`](two-verb-lifecycle.md).
+The lifecycle is two verbs, and both fire automatically at their hook points; you rarely invoke them by name. See [`two-verb-lifecycle.md`](two-verb-lifecycle.md).
 
 1. **`/resume`** loads the newest valid capsule by `created_at`, re-grounds on recent context and open threads, and acts on `next_valid_action`. It auto-fires on `SessionStart(clear)` via `daemons/resume-verb.mjs`; a warm reinject (showing the newest active capsule) runs on every other SessionStart source.
 2. **Work normally.** Skills and hooks route tasks, capture privacy-safe action metadata, and update durable notes when appropriate. A rolling, best-effort capsule autosave runs on every `Stop` (`daemons/stop-capsule-writer.mjs`).
-3. **`/context-capsule`** reconciles and writes a resume-ready capsule, then stops — invoke it for a deliberate mid-session checkpoint or a clean end-of-thread finalize. The autosave already covers the case where you just walk away.
+3. **`/context-capsule`** reconciles and writes a resume-ready capsule, then stops; invoke it for a deliberate mid-session checkpoint or a clean end-of-thread finalize. The autosave already covers the case where you just walk away.
 
-`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage — the context-pressure sensor nudges a capsule-then-clear as the window fills.
+`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage; the context-pressure sensor nudges a capsule-then-clear as the window fills.
 
 ## State layout
 
-There are two memory trees, and both are actively written across sessions. They are not a clean "operator vs framework" split (an earlier version of this doc claimed root `memory/` was framework-index-only — that was inaccurate).
+There are two memory trees, and both are actively written across sessions. They are not a clean "operator vs framework" split (an earlier version of this doc claimed root `memory/` was framework-index-only; that was inaccurate).
 
-### `vault/memory/` — the operator's flat ledgers
+### `vault/memory/`: the operator's flat ledgers
 
 ```text
 vault/
@@ -114,14 +114,14 @@ vault/
   people/                        People and role context
   concepts/                      Durable doctrine and reusable knowledge
   agents/                        Human-readable agent definitions
-  memory/                        Flat Markdown/JSON ledgers — no subdirectories:
+  memory/                        Flat Markdown/JSON ledgers: no subdirectories:
     ACTIVE_PRIORITIES.md  DECISION_LOG.md  DECISION_OUTCOMES.md
     DELEGATION_TRACKER.md  SESSION_LOG.md  HONESTY_LEDGER.md
     MEMORY_CANDIDATES.md  BODY_STATE.json  AGENT_FITNESS.md  …
     capsules/                    Resume-ready capsules (created at runtime)
 ```
 
-### root `memory/` — framework indexes + the cognitive/runtime layer
+### root `memory/`: framework indexes + the cognitive/runtime layer
 
 ```text
 memory/
@@ -136,7 +136,7 @@ memory/
 Root `memory/` is not a passive index area: daemons plus the `/dream`, `/meta-improve`, `/status`, and `/reconcile` skills all read and write `memory/runtime/` every session.
 
 > [!warning] Known path inconsistency (code issue, not a doc issue)
-> `daemons/runtime/update-active-state.py` writes `ACTIVE_STATE.json` to `vault/memory/runtime/`, but every reader (`/status`, `/reconcile`) reads it from root `memory/runtime/` — which is the only populated copy on disk. This split should be reconciled to one canonical path; it is tracked separately from this docs pass.
+> `daemons/runtime/update-active-state.py` writes `ACTIVE_STATE.json` to `vault/memory/runtime/`, but every reader (`/status`, `/reconcile`) reads it from root `memory/runtime/`, which is the only populated copy on disk. This split should be reconciled to one canonical path; it is tracked separately from this docs pass.
 
 ### Generated local state
 

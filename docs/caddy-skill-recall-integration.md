@@ -7,7 +7,7 @@ created: 2026-05-08
 
 # Caddy Skill Recall Integration
 
-How `/skill-recall` and the SKILL_LEDGER taxonomy are wired into Caddy's prompt-matching loop. **SHIPPED in S39** — taxonomy fallback and chain recall are live in `caddy.sh`.
+How `/skill-recall` and the SKILL_LEDGER taxonomy are wired into Caddy's prompt-matching loop. **SHIPPED in S39**: taxonomy fallback and chain recall are live in `caddy.sh`.
 
 See [[concepts/Caddy]] for Caddy's current architecture.
 See [[concepts/Capability Expansion Doctrine]] for the doctrine this serves.
@@ -35,7 +35,7 @@ The Python block scores every skill in `skill-index.json` against the prompt via
 
 ### Goal
 
-On every prompt, do a lightweight scan against SKILL_LEDGER taxonomy entries — not just Caddy-enrolled triggers. This closes the gap between "skills that exist" and "skills Caddy knows about."
+On every prompt, do a lightweight scan against SKILL_LEDGER taxonomy entries, not just Caddy-enrolled triggers. This closes the gap between "skills that exist" and "skills Caddy knows about."
 
 ### Implementation spec
 
@@ -49,7 +49,7 @@ ledger_path = os.path.join(root, "memory", "SKILL_LEDGER.md")
 # Extract: path, description, skill_reference per entry
 ```
 
-Use a simple regex against markdown lines rather than a full parser — the ledger format is stable:
+Use a simple regex against markdown lines rather than a full parser; the ledger format is stable:
 ```
 ^- `([^`]+)` — (.+?) — (.+)$
 ```
@@ -91,7 +91,7 @@ This fires at most once per session (track in a temp file keyed by session start
 
 The mute system (`memory/CADDY_MUTES.json`) uses named classes. Add:
 
-- `taxonomy` — mutes SKILL_LEDGER taxonomy hints but leaves trigger-match hints active
+- `taxonomy`: mutes SKILL_LEDGER taxonomy hints but leaves trigger-match hints active
 - Existing classes: `memory`, `context`, `body`, `routing`, `all`
 
 Wire `class_muted taxonomy` before the taxonomy block output, same pattern as existing class guards.
@@ -140,8 +140,8 @@ When wiring this in `caddy.sh`:
 
 ## Related
 
-- [[concepts/Caddy]] — full Caddy architecture
-- [[concepts/Capability Expansion Doctrine]] — doctrine this wiring serves
-- [[memory/SKILL_LEDGER]] — the taxonomy file being queried
-- [[memory/SKILL_CHAINS]] — the chains file for prior sequence recall
-- [[memory/SKILL_GAPS]] — where gap detections should be logged
+- [[concepts/Caddy]]: full Caddy architecture
+- [[concepts/Capability Expansion Doctrine]]: doctrine this wiring serves
+- [[memory/SKILL_LEDGER]]: the taxonomy file being queried
+- [[memory/SKILL_CHAINS]]: the chains file for prior sequence recall
+- [[memory/SKILL_GAPS]]: where gap detections should be logged
