@@ -123,9 +123,14 @@ test('hand-authored capsule keeping fields as body sections is valid and wins by
     writeFileSync(path.join(fixture.capsules, '2026-07-22-hand-authored.md'),
       '---\nid: 2026-07-22-hand-authored\nstatus: active\ntrigger: auto-refresh\n'
       + 'created_at: 2026-07-22T18:57:00Z\ntags: [capsule]\n---\n\n'
-      + '## objective\nKeep the pipeline healthy.\n\n'
-      + '## waiting_on\n1. the next watchdog catch\n\n'
-      + '## next_valid_action\nRead the watchdog log and compare snapshots.\n\n'
+      // Prose headings, the form a hand-authored capsule actually uses. Spelled
+      // as machine keys (`## next_valid_action`) this fixture passed against a
+      // matcher that rejected every real capsule, because no capsule on disk is
+      // written that way. A fixture that cannot fail the way production fails
+      // certifies nothing.
+      + '## Objective\nKeep the pipeline healthy.\n\n'
+      + '## Waiting on\n1. the next watchdog catch\n\n'
+      + '## Next valid action\nRead the watchdog log and compare snapshots.\n\n'
       + '## session state\nnot a slot binding\n');
     const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-x' });
     assert.equal(result.loaded.id, '2026-07-22-hand-authored');

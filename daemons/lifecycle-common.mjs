@@ -41,9 +41,19 @@ export function memRoot(root) {
 // Hand-authored capsules carry objective / waiting_on / next_valid_action as
 // `## <key>` body sections instead of frontmatter scalars; both shapes are valid
 // capsule fields. Captures until the next heading of any level.
+// The key is a machine name (`next_valid_action`) but a hand-authored heading is
+// prose (`## Next valid action`), so an underscore in the key must also match a
+// space in the heading. Interpolating the key literally defeated the paragraph
+// above: `objective` matched (one word, no separator) while `next_valid_action`
+// and `waiting_on` never did, so a capsule written with prose headings failed
+// newestValidCapsule's `!nextAction` gate and was skipped in silence -- resume
+// then fell back to whatever autosave happened to be newest.
 export function bodySection(doc, key) {
+  const heading = String(key)
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/_/g, '[ _]');
   const match = String(doc).match(
-    new RegExp(`^#{1,6}[ \\t]+${key}[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,6}[ \\t]|(?![\\s\\S]))`, 'mi'),
+    new RegExp(`^#{1,6}[ \\t]+${heading}[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,6}[ \\t]|(?![\\s\\S]))`, 'mi'),
   );
   const value = match?.[1]?.trim();
   return value || null;
