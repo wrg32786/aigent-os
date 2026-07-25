@@ -1160,6 +1160,29 @@
       "active": true
     },
     {
+      "id": "sk_nightly",
+      "name": "nightly",
+      "description": "Evidence-gated pass sequencing /dream, /reconcile, /sweep-now, and /digest into one named nightly routine over your own vault, plus a /system-check gate -- human-gated legs stay human-gated, the routine's own writes are limited to its evidence log",
+      "triggers": [
+        "nightly",
+        "night pass",
+        "self-maintenance",
+        "maintenance pass",
+        "dream log review",
+        "nightly routine",
+        "maintenance sweep"
+      ],
+      "intent_patterns": [
+        "user wants a scheduled or on-demand maintenance pass over their vault",
+        "user asks about nightly self-maintenance or a dream/reconcile/sweep/digest routine"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/nightly",
+      "pantheon_agent": null,
+      "active": true
+    },
+    {
       "id": "sk_migration_generator",
       "name": "migration-generator",
       "description": "Generate safe, reversible database migrations with up/down support for Prisma, Knex, Alembic, Django, ActiveRecord",

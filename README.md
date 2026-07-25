@@ -76,7 +76,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 | 3-tier memory (napkin → index → deep) | Heat-scored top-20 + staged digest sit above full topic files | ✅ shipped |
 | Model-tier dispatch enforcement | A `PreToolUse` hook checks every named agent's `Agent`-tool dispatch against its declared model tier live; advisory by default, `AIGENT_MODEL_GUARD=enforce` opts into a hard block | ✅ shipped ([`docs/model-routing-enforcement.md`](docs/model-routing-enforcement.md)) |
 | Non-Claude execution (Codex adapter) | One bounded, mechanical task class routed to the Codex CLI's non-interactive `codex exec`, review-gated, never auto-merged | ✅ shipped (single task class; [`docs/codex-adapter.md`](docs/codex-adapter.md)) |
-| Nightly self-maintenance (individual) | Sequencing `/dream`, `/reconcile`, `/sweep-now`, `/digest` into one named routine over your own vault | ❌ not shipped (Roadmap) |
+| Nightly self-maintenance (individual) | Sequencing `/dream`, `/reconcile`, `/sweep-now`, `/digest` into one named routine over your own vault, plus a `/system-check` gate | ✅ shipped ([`docs/nightly-self-maintenance.md`](docs/nightly-self-maintenance.md)) |
 | Self-testing of one's own operating rules | A portable subset of the probe idea, scoped to one seat's own behavior | ❌ not shipped (Roadmap) |
 
 ---
@@ -360,7 +360,6 @@ The most differentiating thing about aigent-OS isn't a feature; it's that the fr
 
 Explicitly non-normative: nothing below is claimed as shipped, and none of it appears in the tables above until it is.
 
-- **Nightly self-maintenance**: sequencing `/dream`, `/reconcile`, `/sweep-now`, and `/digest` into one named routine over your own vault, run on a cadence instead of ad hoc.
 - **Self-testing of one's own operating rules**: a portable subset of the probe idea, scoped to testing one seat's own shipped mechanisms against its own doctrine.
 - **A generic recurring-task primitive**: a portable tick/heartbeat structure for "run this on a cadence," session-hook-driven today, wall-clock-driven as the next step. Structure only, no built-in business-specific firers, and no coupling to any multi-agent coordination substrate.
 - **Codex adapter generalization**: routing by task class, and additional non-Claude CLIs behind the same interface (see [Agent Routing and Multi-LLM Execution](#-agent-routing-and-multi-llm-execution) above).
