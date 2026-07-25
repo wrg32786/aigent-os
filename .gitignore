@@ -12,6 +12,9 @@ frames/
 **/runtime/utterance-journal*.jsonl
 **/runtime/stop-writer/
 
+# GateGuard's per-session first-touch markers are ephemeral local state.
+**/runtime/gateguard/
+
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json

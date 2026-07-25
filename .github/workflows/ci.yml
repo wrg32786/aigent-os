@@ -112,6 +112,12 @@ jobs:
       - name: Model-tier routing-guard tests
         run: node daemons/tests/model-tier-guard.test.mjs
 
+      - name: Discipline-check ledger-trigger tests
+        run: node daemons/tests/discipline-check.test.mjs
+
+      - name: GateGuard fact-forcing gate tests
+        run: node daemons/tests/gateguard.test.mjs
+
       - name: Codex adapter tests
         run: bash tests/test-codex-adapter.sh
 

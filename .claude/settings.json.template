@@ -79,6 +79,16 @@
             "timeout": 2000
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/gateguard.mjs\"",
+            "timeout": 3000
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -130,6 +140,11 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/stop-capsule-writer.mjs\"",
+            "timeout": 2000
+          },
+          {
+            "type": "command",
+            "command": "node \"__AIGENT_ROOT__/daemons/discipline-check.mjs\"",
             "timeout": 2000
           }
         ]
