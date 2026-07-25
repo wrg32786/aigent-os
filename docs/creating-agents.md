@@ -1,17 +1,17 @@
 # Creating Agents
 
-The AIgent is one agent — the strategic layer. But real operational leverage comes from building **specialized agents** that handle execution in their domain. This guide walks through how to design, deploy, and coordinate them.
+The AIgent is one agent, the strategic layer. But real operational leverage comes from building **specialized agents** that handle execution in their domain. This guide walks through how to design, deploy, and coordinate them.
 
 ## When to Create an Agent
 
 Only when ALL of these are true (from `system/09_subagent_manifest.md`):
 
-1. **Specialization creates leverage** — A general agent handles this task poorly
-2. **Recurring need** — You'll need this capability repeatedly
-3. **Clear scope boundary** — You can define what it owns and what's off-limits
-4. **Model routing benefit** — It can run on a cheaper model than the main session
+1. **Specialization creates leverage**: A general agent handles this task poorly
+2. **Recurring need**: You'll need this capability repeatedly
+3. **Clear scope boundary**: You can define what it owns and what's off-limits
+4. **Model routing benefit**: It can run on a cheaper model than the main session
 
-If a task is just a variation of existing scope, give instructions to an existing agent — don't create a new one.
+If a task is just a variation of existing scope, give instructions to an existing agent; don't create a new one.
 
 ## Agent Anatomy
 
@@ -21,12 +21,12 @@ Every agent needs five things:
 
 A markdown file that defines who the agent is. Lives in `vault/agents/`.
 
-> [!important] The installer only registers an agent whose **first 20 lines** contain both a `name:` and a `tools:` YAML key (`install.sh` check). A file missing either is **silently skipped** — no error. Lead the frontmatter with both, as below.
+> [!important] The installer only registers an agent whose **first 20 lines** contain both a `name:` and a `tools:` YAML key (`install.sh` check). A file missing either is **silently skipped**: no error. Lead the frontmatter with both, as below.
 
 ```markdown
 ---
 name: Architect
-description: Technical execution lead — code, infrastructure, deployments
+description: Technical execution lead: code, infrastructure, deployments
 tools:
   - Read
   - Write
@@ -43,7 +43,7 @@ aliases:
 
 # Architect
 
-**Role:** Technical execution lead — code, infrastructure, deployments
+**Role:** Technical execution lead: code, infrastructure, deployments
 **Model Tier:** Mid (sonnet)
 **Status:** Active
 **Interface:** Receives structured briefs from the AIgent. Returns completed work with verification.
@@ -74,7 +74,7 @@ aliases:
 
 ### 2. Tools & MCP Servers
 
-Each agent gets the tools it needs — nothing more. This follows the principle of least privilege.
+Each agent gets the tools it needs, nothing more. This follows the principle of least privilege.
 
 | Agent Type | Typical Tools |
 |-----------|--------------|
@@ -103,9 +103,9 @@ Match the model to the work:
 
 The authority matrix applies to agents too. Define explicitly:
 
-- **What it can do without asking** — commits, branch creation, dependency updates
-- **What it needs approval for** — production deployments, architecture changes, external API integrations
-- **What it never touches** — billing, access control, other agents' scope
+- **What it can do without asking**: commits, branch creation, dependency updates
+- **What it needs approval for**: production deployments, architecture changes, external API integrations
+- **What it never touches**: billing, access control, other agents' scope
 
 Write these in the agent's identity document. The AIgent references them when routing work.
 
@@ -128,7 +128,7 @@ the AIgent (opus) → spawns Agent (sonnet) with specific brief → gets result 
 
 ### Model B: Separate Claude Code Terminal
 
-The agent runs as its own Claude Code instance — separate machine, separate conversation, separate context.
+The agent runs as its own Claude Code instance: separate machine, separate conversation, separate context.
 
 ```
 Machine 1: the AIgent (your machine)
@@ -185,7 +185,7 @@ Say you need a QA agent that tests your web app via browser automation.
 
 **Step 1:** Create `vault/agents/QA Agent.md` with identity, scope, tools, and boundaries.
 
-**Step 2:** Configure its tools — Playwright MCP for browser automation, database MCP for checking data.
+**Step 2:** Configure its tools: Playwright MCP for browser automation, database MCP for checking data.
 
 **Step 3:** Define what it can verify autonomously (UI renders correctly, API returns expected data) vs. what needs human review (visual design quality, UX flow decisions).
 
@@ -197,8 +197,8 @@ Say you need a QA agent that tests your web app via browser automation.
 
 ## Anti-Patterns
 
-- **Agent proliferation** — Don't create an agent for every task. Create them for recurring capability gaps.
-- **Overlapping scope** — Two agents that own the same domain create confusion. One owner per domain.
-- **No verification** — "Agent says it's done" is not verification. Check the work.
-- **Frontier model for everything** — Most agents don't need your most expensive model. Route by task type.
-- **Skipping the brief** — Unstructured delegation produces unstructured output. Every time.
+- **Agent proliferation**: Don't create an agent for every task. Create them for recurring capability gaps.
+- **Overlapping scope**: Two agents that own the same domain create confusion. One owner per domain.
+- **No verification**: "Agent says it's done" is not verification. Check the work.
+- **Frontier model for everything**: Most agents don't need your most expensive model. Route by task type.
+- **Skipping the brief**: Unstructured delegation produces unstructured output. Every time.

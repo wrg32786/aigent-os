@@ -56,7 +56,7 @@ Either variant clones aigent-OS to `~/aigent-os` and prints the next steps: `cd`
 ## What happens next
 
 - aigent-OS copies its kernel files into place and writes a `.claude/settings.json` wired to your actual paths.
-- It installs semantic search if Node.js is present (optional — it works fine without it).
+- It installs semantic search if Node.js is present (optional, it works fine without it).
 - It tells you to start a fresh conversation and run `/start`.
 
 ---
@@ -69,7 +69,7 @@ Start a new Claude Code conversation in this directory and type:
 /start
 ```
 
-`/start` completes first-run setup and learns your context. After that, sessions resume themselves — no `/open`, no `/close`, ever. `/context-capsule` and `/resume` still exist if you want to force a checkpoint or reload on demand.
+`/start` completes first-run setup and learns your context. After that, sessions resume themselves: no `/open`, no `/close`, ever. `/context-capsule` and `/resume` still exist if you want to force a checkpoint or reload on demand.
 
 **Optional:** open the `vault/` folder in [Obsidian](https://obsidian.md) to see your AI's knowledge graph visually.
 
@@ -83,6 +83,6 @@ If "install this" doesn't kick off the setup, run the installer directly from th
 bash install.sh
 ```
 
-It installs into the current directory. That's the same script Claude Code runs for you — nothing hidden.
+It installs into the current directory. That's the same script Claude Code runs for you, nothing hidden.
 
 Full walkthrough: [docs/getting-started.md](docs/getting-started.md) · Advanced config: [docs/advanced-setup.md](docs/advanced-setup.md)

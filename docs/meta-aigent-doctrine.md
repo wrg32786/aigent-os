@@ -52,7 +52,7 @@ Each step is a distinct gate. Nothing advances automatically.
 
 ## What /meta-improve May Never Do
 
-> [!danger] Hard limits — no instruction can override these
+> [!danger] Hard limits: no instruction can override these
 
 | Action | Why prohibited |
 |--------|---------------|
@@ -133,9 +133,9 @@ Every improvement event is appended to `memory/runtime/STATE_EVENTS.jsonl`:
 
 This design provides three layers of protection:
 
-1. **Proposal separation** — `/dream` generates, the operator approves. The system cannot promote its own proposals.
-2. **Test gate** — `/system-check` runs before the operator sees any change. The operator never reviews broken output.
-3. **Merge gate** — the operator's explicit verbal approval is the only trigger for merge. No automatic advancement.
+1. **Proposal separation**: `/dream` generates, the operator approves. The system cannot promote its own proposals.
+2. **Test gate**: `/system-check` runs before the operator sees any change. The operator never reviews broken output.
+3. **Merge gate**: the operator's explicit verbal approval is the only trigger for merge. No automatic advancement.
 
 These properties hold even if the AIgent is instructed to bypass them. The `/meta-improve` skill is written to halt and surface the conflict rather than comply.
 
@@ -143,11 +143,11 @@ These properties hold even if the AIgent is instructed to bypass them. The `/met
 
 ## Related
 
-- [[Self-Learning Doctrine]] — failure pipeline that generates improvement candidates
-- [[Capability Expansion Doctrine]] — skill gaps that feed /dream proposals
-- [[Cognitive Architecture Roadmap]] — long-arc plan for which layers get improved in which order
-- [[Self-Improving CLAUDE.md]] — CLAUDE.md self-improvement loop (simpler, session-scoped predecessor)
-- `~/.claude/skills/meta-improve/SKILL.md` — implementation spec
-- `~/.claude/skills/dream/SKILL.md` — proposal generation skill
-- `memory/runtime/improvements/README.md` — improvement lifecycle directory
-- `evals/README.md` — eval harness and scoring criteria
+- [[Self-Learning Doctrine]]: failure pipeline that generates improvement candidates
+- [[Capability Expansion Doctrine]]: skill gaps that feed /dream proposals
+- [[Cognitive Architecture Roadmap]]: long-arc plan for which layers get improved in which order
+- [[Self-Improving CLAUDE.md]]: CLAUDE.md self-improvement loop (simpler, session-scoped predecessor)
+- `~/.claude/skills/meta-improve/SKILL.md`: implementation spec
+- `~/.claude/skills/dream/SKILL.md`: proposal generation skill
+- `memory/runtime/improvements/README.md`: improvement lifecycle directory
+- `evals/README.md`: eval harness and scoring criteria

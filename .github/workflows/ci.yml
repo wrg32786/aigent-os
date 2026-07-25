@@ -45,6 +45,61 @@ jobs:
           done < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
           test "$fail" -eq 0
 
+      - name: Em-dash guard (public copy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import glob, re, sys
+
+          scope = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CREDITS.md',
+                   'INSTALL.md', 'SECURITY.md']
+          scope += glob.glob('docs/**/*.md', recursive=True)
+          scope += glob.glob('docs/**/*.html', recursive=True)
+          scope += glob.glob('daemons/**/*.md', recursive=True)
+          scope += glob.glob('assets/*.svg')
+
+          DASH = '—'
+          fail = False
+
+          def blank(m):
+              # Replace a stripped (exempt) region with only its own newlines,
+              # so every surviving line keeps its real line number.
+              return '\n' * m.group(0).count('\n')
+
+          for path in sorted(set(scope)):
+              try:
+                  text = open(path, encoding='utf-8').read()
+              except FileNotFoundError:
+                  continue
+              if path.endswith('.md'):
+                  # code/data is exempt: strip fenced code blocks and inline code spans
+                  scan = re.sub(r'```.*?```', blank, text, flags=re.S)
+                  scan = re.sub(r'`[^`]*`', blank, scan)
+              elif path.endswith('.html') or path.endswith('.svg'):
+                  # comments are exempt: only rendered markup/text is in scope
+                  scan = re.sub(r'<!--.*?-->', blank, text, flags=re.S)
+                  scan = re.sub(r'/\*.*?\*/', blank, scan, flags=re.S)
+                  if path.endswith('.html'):
+                      # strip `//` line comments, but never a URL's own `//`
+                      # (http:// and https:// survive untouched)
+                      scan = re.sub(r'(?<!http:)(?<!https:)//[^\n]*', '', scan)
+              else:
+                  scan = text
+              for lineno, line in enumerate(scan.split('\n'), start=1):
+                  if DASH in line:
+                      print(f'EM DASH: {path}:{lineno}: {line.strip()}')
+                      fail = True
+
+          if fail:
+              print()
+              print('Em dashes found in public-facing copy. Replace with a colon, semicolon,')
+              print('comma, or parentheses per house style. Code/data inside fenced blocks,')
+              print('inline code spans, and file comments is exempt from this guard.')
+              sys.exit(1)
+          print('Em-dash guard: no em dashes in rendered public copy.')
+          PYEOF
+
       - name: Node hook tests
         run: node --test tests/tool-tracker.test.cjs
 

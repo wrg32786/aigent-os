@@ -8,13 +8,13 @@ created: 2026-05-08
 # Self-Learning Doctrine
 
 > [!abstract] Core rule
-> Every repeated failure must produce one reusable artifact — memory, rule, skill, test, checklist, or Caddy trigger. A failure that produces nothing is a failure that will recur.
+> Every repeated failure must produce one reusable artifact: memory, rule, skill, test, checklist, or Caddy trigger. A failure that produces nothing is a failure that will recur.
 
 ## The Failure → Artifact Pipeline
 
 Every confirmed failure passes through this 9-step sequence. No skipping.
 
-1. **Diagnose failure** — identify the exact mechanism that caused the bad output. Not "it didn't work." What specific condition triggered the failure?
+1. **Diagnose failure**: identify the exact mechanism that caused the bad output. Not "it didn't work." What specific condition triggered the failure?
 
 2. **Classify the failure mode**
 
@@ -26,21 +26,21 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
    | `knowledge` | Agent lacked domain knowledge to act correctly |
    | `authority` | Agent acted outside its delegation zone |
 
-3. **Check if repeated** — search `memory/FAILURE_MODES.md` for prior instances matching the same root cause pattern. If the same Pattern line has appeared 2+ times: **this is now mandatory artifact territory**.
+3. **Check if repeated**: search `memory/FAILURE_MODES.md` for prior instances matching the same root cause pattern. If the same Pattern line has appeared 2+ times: **this is now mandatory artifact territory**.
 
-4. **Write to FAILURE_MODES.md** — log with date, classification, description, root cause, and one-line Pattern. Format follows existing ledger entries.
+4. **Write to FAILURE_MODES.md**: log with date, classification, description, root cause, and one-line Pattern. Format follows existing ledger entries.
 
-5. **Add memory candidate** — does this failure point to a fact, rule, or architectural property that should persist across sessions? If yes, surface it for vault encoding.
+5. **Add memory candidate**: does this failure point to a fact, rule, or architectural property that should persist across sessions? If yes, surface it for vault encoding.
 
-6. **If actionable → create skill candidate** — if the fix requires a repeatable procedure, draft a skill spec. Route to Lyra for implementation if the skill doesn't exist.
+6. **If actionable → create skill candidate**: if the fix requires a repeatable procedure, draft a skill spec. Route to Lyra for implementation if the skill doesn't exist.
 
-7. **If routing failure → update Caddy** — add a trigger-pattern entry to `.claude/hooks/` or `.claude/skill-index.json` so the right skill fires automatically next time.
+7. **If routing failure → update Caddy**: add a trigger-pattern entry to `.claude/hooks/` or `.claude/skill-index.json` so the right skill fires automatically next time.
 
-8. **If verification failure → add test/check** — append a concrete check to the relevant doctrine note (usually [[Pipeline Verification Doctrine]] or [[concepts/Verification Rules]]). The check must be runnable, not aspirational.
+8. **If verification failure → add test/check**: append a concrete check to the relevant doctrine note (usually [[Pipeline Verification Doctrine]] or [[concepts/Verification Rules]]). The check must be runnable, not aspirational.
 
-9. **If knowledge gap → log to SKILL_GAPS.md** — record the exact knowledge boundary that was missing. This feeds Newton's research queue and Demosthenes's prompt review queue.
+9. **If knowledge gap → log to SKILL_GAPS.md**: record the exact knowledge boundary that was missing. This feeds Newton's research queue and Demosthenes's prompt review queue.
 
-## Failure Modes by Type — Artifact Map
+## Failure Modes by Type: Artifact Map
 
 | Failure mode | Required artifact | Owner | Target file |
 |---|---|---|---|
@@ -54,10 +54,10 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
 
 - **First occurrence:** log, classify, monitor.
 - **Second occurrence:** mandatory artifact. Log is not enough.
-- **Third occurrence:** the artifact didn't prevent recurrence. The artifact itself failed — diagnose why and fix it or replace it.
+- **Third occurrence:** the artifact didn't prevent recurrence. The artifact itself failed: diagnose why and fix it or replace it.
 
 > [!danger] Anti-pattern
-> Logging a failure without an artifact is a false resolution. The ledger grows, the failure recurs, and the system learns nothing. A log entry is not an artifact — it is the precondition for one.
+> Logging a failure without an artifact is a false resolution. The ledger grows, the failure recurs, and the system learns nothing. A log entry is not an artifact; it is the precondition for one.
 
 ## Invariant
 
@@ -71,9 +71,9 @@ A failure mode that has appeared more than once without a durable artifact in pl
 
 ## Connects to
 
-- [[Self-Improving CLAUDE.md]] — session-level learning protocol, where rules go
-- [[Capability Expansion Doctrine]] — how the system grows new skills
-- [[Pipeline Verification Doctrine]] — verification failures → this pipeline
-- [[Somatic Layer]] — body-check surfaces unresolved failure patterns
-- [[memory/FAILURE_MODES.md]] — the live ledger this doctrine feeds
-- [[agents/Pantheon]] — agent skill loadouts include `/learn-from-failure`
+- [[Self-Improving CLAUDE.md]]: session-level learning protocol, where rules go
+- [[Capability Expansion Doctrine]]: how the system grows new skills
+- [[Pipeline Verification Doctrine]]: verification failures → this pipeline
+- [[Somatic Layer]]: body-check surfaces unresolved failure patterns
+- [[memory/FAILURE_MODES.md]]: the live ledger this doctrine feeds
+- [[agents/Pantheon]]: agent skill loadouts include `/learn-from-failure`

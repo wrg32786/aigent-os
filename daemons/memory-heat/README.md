@@ -21,8 +21,8 @@ Output: `vault/memory/HEAT_INDEX.json`
 
 ## When it runs
 
-- **On demand only** — heat is not wired to a session hook. (Earlier builds invoked it from a `/close` skill; `/close` and `/open` are retired, so run it yourself when you want a fresh prioritization signal.)
-- **Manually** — run the command above any time after a big vault reorg or to test pin changes.
+- **On demand only**: heat is not wired to a session hook. (Earlier builds invoked it from a `/close` skill; `/close` and `/open` are retired, so run it yourself when you want a fresh prioritization signal.)
+- **Manually**: run the command above any time after a big vault reorg or to test pin changes.
 
 ## Pinning
 
@@ -34,9 +34,9 @@ You can also add `pin: critical` to a note's YAML frontmatter as an alternative.
 
 Constants at the top of `compute-heat.js`:
 
-- `HALF_LIFE_DAYS` — how fast untouched notes decay (default: 60 days)
-- `LOOKBACK_DAYS` — session read window (default: 30 days)
-- `PIN_FLOOR` — minimum score for pinned notes (default: 50)
-- `WEIGHTS` — relative importance of each signal (reads 40%, backlinks 25%, mtime 20%, pin 15%)
+- `HALF_LIFE_DAYS`: how fast untouched notes decay (default: 60 days)
+- `LOOKBACK_DAYS`: session read window (default: 30 days)
+- `PIN_FLOOR`: minimum score for pinned notes (default: 50)
+- `WEIGHTS`: relative importance of each signal (reads 40%, backlinks 25%, mtime 20%, pin 15%)
 
 Increase `HALF_LIFE_DAYS` if your vault is slower-moving; decrease if you want aggressive de-prioritization.
