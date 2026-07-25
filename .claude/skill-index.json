@@ -827,5 +827,18 @@
       "multi-llm"
     ],
     "why": "Route one bounded, mechanical task to the Codex CLI as a non-Claude executor, under the same review-before-merge gate as any agent-produced diff."
+  },
+  {
+    "name": "nightly",
+    "triggers": [
+      "nightly",
+      "night pass",
+      "self-maintenance",
+      "maintenance pass",
+      "dream log review",
+      "nightly routine",
+      "maintenance sweep"
+    ],
+    "why": "Evidence-gated pass sequencing /dream, /reconcile, /sweep-now, and /digest into one named nightly routine over your own vault, plus a /system-check gate."
   }
 ]
