@@ -116,3 +116,5 @@ Why structured: the ledger feeds `/retro` (v0.3) and the [[Cost of Confidence]] 
 The principal-facing output (the ledger summary in the response message) stays unchanged — that's for human reading. The structured entry is for longitudinal data.
 
 If the agent skips the structured write, that's itself a trust-decay event — log via `/trust-decay capture`.
+
+Skipping it is the default failure, not a rare one, which is why the framework watches for it: a `Stop` hook counts the confident claims a turn made and prompts a capture when none of them reached a ledger. See [Closing the Measurement Loop](../../docs/closing-the-measurement-loop.md).

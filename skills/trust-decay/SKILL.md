@@ -102,4 +102,5 @@ The pairing is the whole point. A confident claim with no resolution is just rhe
 - [[Reading Agent Output Defensively]] — the principal-side pattern that often triggers a Phase 1 capture
 - [[Common Failure Modes]] — sister corpus tracking layer-level failures rather than confidence-level failures
 - `vault/memory/TRUST_DECAY.md` — the ledger file
+- [Closing the Measurement Loop](../../docs/closing-the-measurement-loop.md) — the `Stop` hook that prompts a Phase 1 capture when a turn's confident claims went unrecorded
 - `/retro` (forthcoming v0.3) — quarterly analysis that consumes this ledger
