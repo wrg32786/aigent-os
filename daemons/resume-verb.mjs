@@ -26,7 +26,7 @@
 // own SessionStart(clear) hook must no-op rather than double-inject the procedure.
 
 import { readFileSync } from 'node:fs';
-import { memRoot, logErr, newestValidCapsule, bodySection } from './lifecycle-common.mjs';
+import { memRoot, logErr, newestValidCapsule, bodySection, markCapsuleConsumed } from './lifecycle-common.mjs';
 
 function frontmatterScalar(doc, key) {
   const fmMatch = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
@@ -47,6 +47,13 @@ function loadCapsule(projectRoot) {
   try { doc = readFileSync(newest.path, 'utf8'); } catch (e) {
     logErr(projectRoot, 'resume-verb', `capsule unreadable: ${e?.message || e}`);
     return null;
+  }
+  // A capsule consumed by this resume is spent HERE, at load — not by the model
+  // later, which is exactly the step that never happens. A failed mark must not
+  // break session start, but it may not be silent: it means the next clear will
+  // re-resume this same capsule as if it were fresh.
+  try { markCapsuleConsumed(newest.path); } catch (e) {
+    logErr(projectRoot, 'resume-verb', `mark-consumed FAILED for ${newest.path}: ${e?.message || e} — next resume will replay this capsule`);
   }
   return {
     id: frontmatterScalar(doc, 'id') ?? newest.id,

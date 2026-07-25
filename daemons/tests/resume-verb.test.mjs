@@ -63,6 +63,42 @@ test('newest-by-date capsule loads without a pointer', () => {
   }
 });
 
+// The consume contract, red-first: both assertions fail against a resume verb
+// that never marks what it loads (where the same capsule replays on every clear).
+test('resume spends the capsule it loads; a second clear does not silently replay it', () => {
+  const fixture = mkFixture();
+  try {
+    const first = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    assert.equal(first.degraded, false);
+    // The write half: the consumed capsule is spent ON DISK, at load time.
+    assert.match(readFileSync(fixture.capPath, 'utf8'), /^status:[ \t]*resumed[ \t]*$/m);
+
+    // With nothing active left, the next clear takes the documented degraded
+    // path (re-derive from live memory) instead of replaying stale state.
+    const second = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
+    assert.equal(second.degraded, true);
+    assert.match(second.prompt, /re-derive entirely from the live memory/i);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('a freshly written capsule (the normal two-verb cycle) wins over the spent one', () => {
+  const fixture = mkFixture();
+  try {
+    runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    // The capsule verb writes a NEW capsule before the next clear — the loop's
+    // normal state. Resume must pick it up, untouched by the earlier spend.
+    writeFileSync(path.join(fixture.capsules, '2026-07-22-next-cycle.md'),
+      capsuleDoc({ id: '2026-07-22-next-cycle', createdAt: '2026-07-22T09:00:00.000Z' }));
+    const next = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
+    assert.equal(next.degraded, false);
+    assert.equal(next.loaded.id, '2026-07-22-next-cycle');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
 test('prompt carries the two fences, re-ground step, ACT postcondition, and ACK-after-action', () => {
   const fixture = mkFixture();
   try {

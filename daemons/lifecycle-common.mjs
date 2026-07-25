@@ -15,7 +15,7 @@
 // curatedWindowMs, resumeFlipShouldDefer) is retired along with the daemons that
 // only existed to drive it.
 
-import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 // seatId resolution: env override first (multi-instance forks), else the fixed
@@ -104,6 +104,22 @@ export function newestValidCapsule(memoryRoot) {
     }
   }
   return best;
+}
+
+// The write half of the consume contract. The selector above only ever picks
+// `status: active` capsules; without this, nothing ever LEAVES that state on the
+// automatic path, so the newest capsule would be silently re-resumed on every
+// subsequent clear — stale state presented as fresh. The resume verb calls this
+// at load time, and only the resume verb: orientation reads are not a resume and
+// must not spend the capsule. If the session dies between the mark and the acted
+// step, the next boot takes the documented degraded path (re-derive from live
+// memory) — a loud fresh start, never a silent replay.
+export function markCapsuleConsumed(capsulePath) {
+  const doc = readFileSync(capsulePath, 'utf8');
+  const marked = doc.replace(/^(status:[ \t]*)(['"]?)active\2[ \t]*$/m, '$1resumed');
+  if (marked === doc) return false; // not active — already spent, nothing to mark
+  writeFileSync(capsulePath, marked);
+  return true;
 }
 
 // null = the read itself THREW (a real failure, log it); '' = genuinely empty.
