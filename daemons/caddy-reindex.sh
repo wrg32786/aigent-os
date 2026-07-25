@@ -57,6 +57,35 @@ for md in sorted(vault_dir.glob("*.md")):
     except Exception as e:
         print(f"[caddy-reindex] skipped {md.name}: {e}", file=sys.stderr)
 
+# Refuse to shrink the live index without an explicit override.
+#
+# A missing source directory is already handled above, but the dangerous case is a
+# source directory that EXISTS and yields few or no skills: this script overwrites the
+# index caddy.sh matches against at every prompt, so a partial harvest silently replaces
+# a complete index with a smaller one and the router quietly stops finding most skills.
+# Nothing downstream would report an error; skills would just stop being suggested.
+#
+# Set CADDY_REINDEX_FORCE=1 when a genuine shrink is intended.
+existing = []
+if out_path.exists():
+    try:
+        existing = json.loads(out_path.read_text(encoding="utf-8"))
+    except Exception:
+        existing = []
+
+force = os.environ.get("CADDY_REINDEX_FORCE") == "1"
+if existing and len(index) < len(existing) and not force:
+    print(
+        f"[caddy-reindex] REFUSING to write: would shrink the index from "
+        f"{len(existing)} to {len(index)} skills.\n"
+        f"[caddy-reindex] Source: {vault_dir}\n"
+        f"[caddy-reindex] The router matches against this file, so a partial harvest "
+        f"would silently stop most skills being suggested.\n"
+        f"[caddy-reindex] If the shrink is intended, re-run with CADDY_REINDEX_FORCE=1.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 out_path.parent.mkdir(parents=True, exist_ok=True)
 out_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
 print(f"[caddy-reindex] wrote {len(index)} skills to {out_path}")
