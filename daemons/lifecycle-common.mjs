@@ -30,12 +30,27 @@ export function seatOf(root) {
 // Memory root: aigent-OS's documented convention is <AIGENT_ROOT>/vault/memory
 // (see daemons/memory-heat/compute-heat.js). 'memory' at the root is kept as a
 // fallback for forks that skip the vault/ subdirectory.
+// AIGENT_STATE_HOME_DIR is the DIVERSION LEVER, honored ahead of the passed root.
+// Why it exists: a test or probe that spawns a real agent child with cwd = your
+// vault gets working hooks — usually the point — but those hooks then write REAL
+// capsules and state for a synthetic session. When the child's prompt is
+// adversarial (an isolation test asking it to breach a fence), its autosaved
+// capsule's objective IS that prompt; resume selects the newest capsule by
+// created_at, so the next resume can load an attacker-shaped capsule. Not
+// hypothetical — it cost this project's own fleet two nights and 121 capsules.
+//
+// Divert, don't suppress: point this at a throwaway vault-shaped tree and the
+// hooks still run their real code (so the test tests something) while the real
+// vault stays clean. Killing hooks instead exercises nothing, and a missed hook
+// writes silently. Pair it with a before/after diff of the real memory dir so a
+// diversion that failed to take fails LOUD instead of hiding.
 export function memRoot(root) {
+  const base = process.env.AIGENT_STATE_HOME_DIR || root;
   for (const candidate of ['vault/memory', 'memory']) {
-    const p = path.join(String(root), ...candidate.split('/'));
+    const p = path.join(String(base), ...candidate.split('/'));
     if (existsSync(p)) return p;
   }
-  return path.join(String(root), 'vault', 'memory');
+  return path.join(String(base), 'vault', 'memory');
 }
 
 // Hand-authored capsules carry objective / waiting_on / next_valid_action as
