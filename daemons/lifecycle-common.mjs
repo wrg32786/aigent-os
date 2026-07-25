@@ -116,12 +116,16 @@ export function newestValidCapsule(memoryRoot) {
 // memory) — a loud fresh start, never a silent replay.
 export function markCapsuleConsumed(capsulePath) {
   const doc = readFileSync(capsulePath, 'utf8');
+  // Operate on the frontmatter block ONLY — a body line quoting "status: active"
+  // must never be rewritten.
+  const fm = doc.match(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!fm) return false;
   // (\r?) keeps CRLF capsules markable: multiline $ matches before \n only, so
   // without capturing the \r a capsule saved with Windows line endings would
   // silently never match — the exact silent-failure class this function ends.
-  const marked = doc.replace(/^(status:[ \t]*)(['"]?)active\2[ \t]*(\r?)$/m, '$1resumed$3');
-  if (marked === doc) return false; // not active — already spent, nothing to mark
-  writeFileSync(capsulePath, marked);
+  const marked = fm[0].replace(/^(status:[ \t]*)(['"]?)active\2[ \t]*(\r?)$/m, '$1resumed$3');
+  if (marked === fm[0]) return false; // not active — already spent, nothing to mark
+  writeFileSync(capsulePath, marked + doc.slice(fm[0].length));
   return true;
 }
 

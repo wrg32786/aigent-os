@@ -52,7 +52,13 @@ function loadCapsule(projectRoot) {
   // later, which is exactly the step that never happens. A failed mark must not
   // break session start, but it may not be silent: it means the next clear will
   // re-resume this same capsule as if it were fresh.
-  try { markCapsuleConsumed(newest.path); } catch (e) {
+  try {
+    // A false return is always an anomaly here (the selector just verified this
+    // capsule is active): the marker could not find the status line it needs.
+    if (!markCapsuleConsumed(newest.path)) {
+      logErr(projectRoot, 'resume-verb', `mark-consumed NO-OP on active capsule ${newest.path} — next resume will replay it silently`);
+    }
+  } catch (e) {
     logErr(projectRoot, 'resume-verb', `mark-consumed FAILED for ${newest.path}: ${e?.message || e} — next resume will replay this capsule`);
   }
   return {
