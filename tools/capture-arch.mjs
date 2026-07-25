@@ -9,13 +9,23 @@
  *
  * Prerequisite: Playwright + a Chromium build must be installed —
  *   npm i -D playwright && npx playwright install chromium
+ * If you already have a Playwright-managed Chromium cached under a different
+ * revision (common with a shared/global Playwright install), point at it
+ * directly instead of downloading another copy:
+ *   PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome node tools/capture-arch.mjs
  *
  * Assemble the resulting frames/frame_%03d.png sequence into a GIF with
- * ffmpeg's two-pass palette workflow:
- *   ffmpeg -y -i frames/frame_%03d.png -vf "fps=15,scale=1000:-1:flags=lanczos,palettegen" /tmp/palette.png
- *   ffmpeg -y -i frames/frame_%03d.png -i /tmp/palette.png -lavfi "fps=15,scale=1000:-1:flags=lanczos [x]; [x][1:v] paletteuse" assets/architecture.gif
+ * ffmpeg's two-pass palette workflow (120 frames @ 12fps = a calm ~10s/orbit).
+ * -framerate 12 on the input is load-bearing: frames/frame_%03d.png has no
+ * embedded timing, and ffmpeg's image2 demuxer otherwise assumes 25fps,
+ * silently dropping ~half of the 120 captured frames when resampled down to
+ * 12. max_colors=128 + dither=none keeps the ~10s loop under a 4MB GIF —
+ * bump max_colors or re-add a dither mode (bayer is a cheaper middle ground
+ * than the default Floyd–Steinberg) if you have size budget to spare:
+ *   ffmpeg -y -framerate 12 -i frames/frame_%03d.png -vf "scale=1000:-1:flags=lanczos,palettegen=max_colors=128:stats_mode=diff" /tmp/palette.png
+ *   ffmpeg -y -framerate 12 -i frames/frame_%03d.png -i /tmp/palette.png -lavfi "scale=1000:-1:flags=lanczos [x]; [x][1:v] paletteuse=dither=none:diff_mode=rectangle" assets/architecture.gif
  *
- * Usage: node tools/capture-arch.mjs [--frames 60] [--width 1000] [--height 625] [--out frames]
+ * Usage: node tools/capture-arch.mjs [--frames 120] [--width 1000] [--height 625] [--out frames]
  */
 import { chromium } from 'playwright';
 import { mkdirSync, statSync, existsSync } from 'node:fs';
@@ -30,7 +40,7 @@ function arg(name, fallback) {
   return i !== -1 ? process.argv[i + 1] : fallback;
 }
 
-const TOTAL = parseInt(arg('frames', '60'), 10);
+const TOTAL = parseInt(arg('frames', '120'), 10);
 const WIDTH = parseInt(arg('width', '1000'), 10);
 const HEIGHT = parseInt(arg('height', '625'), 10);
 const OUT_DIR = path.resolve(repoRoot, arg('out', 'frames'));
@@ -47,6 +57,7 @@ const baseUrl = pathToFileURL(HTML_PATH).href;
 async function main() {
   const browser = await chromium.launch({
     headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swapchain', '--ignore-gpu-blocklist'],
   });
 
