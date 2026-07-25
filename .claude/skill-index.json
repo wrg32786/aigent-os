@@ -64,7 +64,7 @@
   },
   {
     "name": "deep-recon",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "deep recon",
       "brainstorm deeply",
@@ -431,7 +431,7 @@
   },
   {
     "name": "scout-vault",
-    "agent": "echo",
+    "agent": null,
     "triggers": [
       "scout vault",
       "vault traversal",
@@ -446,7 +446,7 @@
   },
   {
     "name": "comms-summarize",
-    "agent": "echo",
+    "agent": null,
     "triggers": [
       "summarize comms",
       "comms summary",
@@ -461,7 +461,7 @@
   },
   {
     "name": "port-spec",
-    "agent": "lyra",
+    "agent": null,
     "triggers": [
       "port this spec",
       "implement this spec",
@@ -476,7 +476,7 @@
   },
   {
     "name": "ship-adapter",
-    "agent": "lyra",
+    "agent": null,
     "triggers": [
       "ship adapter",
       "port adapter",
@@ -491,7 +491,7 @@
   },
   {
     "name": "research-deep",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "research this",
       "deep research",
@@ -506,7 +506,7 @@
   },
   {
     "name": "tool-evaluation",
-    "agent": "newton",
+    "agent": null,
     "triggers": [
       "evaluate this tool",
       "tool evaluation",
@@ -521,7 +521,7 @@
   },
   {
     "name": "sprite-spec",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "design sprite",
       "sprite spec",
@@ -536,7 +536,7 @@
   },
   {
     "name": "visual-polish",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "visual polish",
       "polish the UI",
@@ -551,7 +551,7 @@
   },
   {
     "name": "ui-architecture",
-    "agent": "iris",
+    "agent": null,
     "triggers": [
       "design this UI",
       "UI architecture",
@@ -566,7 +566,7 @@
   },
   {
     "name": "supersede",
-    "agent": "mnemosyne",
+    "agent": null,
     "triggers": [
       "supersede this entry",
       "supersede",
@@ -581,7 +581,7 @@
   },
   {
     "name": "compact-note",
-    "agent": "mnemosyne",
+    "agent": null,
     "triggers": [
       "compact this note",
       "compact note",
@@ -596,7 +596,7 @@
   },
   {
     "name": "critique-plan",
-    "agent": "hypatia",
+    "agent": null,
     "triggers": [
       "critique this plan",
       "critique plan",
@@ -611,7 +611,7 @@
   },
   {
     "name": "find-weakness",
-    "agent": "hypatia",
+    "agent": null,
     "triggers": [
       "find the weakness",
       "find weakness",
@@ -626,7 +626,7 @@
   },
   {
     "name": "sweep-tracker",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep tracker",
       "clean delegation tracker",
@@ -641,7 +641,7 @@
   },
   {
     "name": "sweep-heat",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep heat",
       "heat index sweep",
@@ -656,7 +656,7 @@
   },
   {
     "name": "sweep-links",
-    "agent": "hestia",
+    "agent": null,
     "triggers": [
       "sweep links",
       "broken links",
@@ -840,5 +840,184 @@
       "maintenance sweep"
     ],
     "why": "Evidence-gated pass sequencing /dream, /reconcile, /sweep-now, and /digest into one named nightly routine over your own vault, plus a /system-check gate."
+  },
+  {
+    "name": "agent-fitness",
+    "triggers": [
+      "agent fitness",
+      "agent calibration",
+      "agent stats",
+      "sub-agent stats",
+      "which agents work",
+      "agent dispatch trends"
+    ],
+    "why": "Track and surface sub-agent dispatch calibration ratios. Extract from JSONL transcript or read existing ledger. Per-agent clean/blocked/errored/partial trends."
+  },
+  {
+    "name": "capsule-compact",
+    "triggers": [
+      "capsule compact",
+      "compact chain",
+      "chain compaction",
+      "compact capsules",
+      "chain too long"
+    ],
+    "why": "Compact a long capsule chain. Walks parent_capsule_id backward from a head capsule; if the chain reaches five or more, summarizes the oldest three into a chain-summary capsule."
+  },
+  {
+    "name": "dream",
+    "triggers": [
+      "dream",
+      "offline consolidation",
+      "consolidation pass",
+      "find patterns in my notes",
+      "improvement candidates",
+      "what should I improve",
+      "review recent sessions"
+    ],
+    "why": "Offline consolidation — scan recent daily notes for patterns, extract durable improvement candidates, and surface them for review. Proposes only; never auto-applies."
+  },
+  {
+    "name": "humanize-docs",
+    "triggers": [
+      "humanize this doc",
+      "make this readable",
+      "remove AI patterns from doc",
+      "add human touch to this",
+      "this reads like AI",
+      "deformalize this",
+      "make these docs human"
+    ],
+    "why": "Transform AI-generated documentation into human-readable prose — aggressive deformalization of checklist spam, symmetric structures, and template dumps into flowing, colleague-authored writing."
+  },
+  {
+    "name": "learn-from-failure",
+    "triggers": [
+      "learn from failure",
+      "recurring issue",
+      "same issue again",
+      "happened again",
+      "keeps happening",
+      "third time"
+    ],
+    "why": "Convert failures into reusable artifacts — classify failure mode, check for recurrence, write durable prevention rule"
+  },
+  {
+    "name": "meta-improve",
+    "triggers": [
+      "meta improve",
+      "self improve",
+      "dream log",
+      "implement improvement",
+      "system improvement candidate"
+    ],
+    "why": "Constrained self-modification — implement approved DREAM_LOG candidates, branch + test + surface for the operator's approval only"
+  },
+  {
+    "name": "pause",
+    "triggers": [
+      "pause",
+      "pause this work",
+      "pause here",
+      "stop for now",
+      "park this",
+      "waiting on",
+      "blocked for now",
+      "come back to this"
+    ],
+    "why": "Pause current work with resumable state — captures objective, files touched, last verified state, and blockers into a paused capsule."
+  },
+  {
+    "name": "reconcile",
+    "triggers": [
+      "reconcile",
+      "run a reconcile",
+      "cross-system check",
+      "out of sync",
+      "drifting",
+      "consistency check",
+      "records disagree",
+      "reconcile the vault"
+    ],
+    "why": "Cross-system consistency check — find where the vault, projects, and trackers disagree, and propose resolutions. Proposes only; never auto-fixes."
+  },
+  {
+    "name": "resume",
+    "triggers": [
+      "resume",
+      "resume work",
+      "resume the session",
+      "where we left off",
+      "where did we leave off",
+      "load the capsule",
+      "re-ground",
+      "catch me up",
+      "what was I doing"
+    ],
+    "why": "The resume verb — load the newest valid capsule by created_at, re-ground against live memory, then ACT on waiting_on. Absorbs /open: there is no separate open ceremony. The post-clear boot runs the same contract automatically via daemons/resume-verb.mjs."
+  },
+  {
+    "name": "skill-hunt",
+    "triggers": [
+      "skill hunt",
+      "find a skill",
+      "search for skill",
+      "install skill",
+      "missing capability",
+      "need a skill for",
+      "skill marketplace"
+    ],
+    "why": "Search GitHub and skill marketplaces for missing capabilities — quarantine install, safety scan, test, promote"
+  },
+  {
+    "name": "skill-recall",
+    "triggers": [
+      "skill recall",
+      "find skill",
+      "what skill",
+      "which skill",
+      "do we have a skill for",
+      "is there a skill",
+      "match skill"
+    ],
+    "why": "Match current task to installed skills via SKILL_LEDGER taxonomy — prefix matching, chain recall, gap detection"
+  },
+  {
+    "name": "solution-hunt",
+    "triggers": [
+      "solution hunt",
+      "workaround",
+      "creative workaround",
+      "alternate route",
+      "blocked",
+      "stuck on",
+      "can't do",
+      "find a way"
+    ],
+    "why": "Creative workaround engine — search local memory, skills, GitHub, docs for alternate routes when blocked"
+  },
+  {
+    "name": "status",
+    "triggers": [
+      "status",
+      "how are things",
+      "what's the state",
+      "operational status",
+      "system status",
+      "status check"
+    ],
+    "why": "aigent-OS operational status — quick health check"
+  },
+  {
+    "name": "sweep-now",
+    "triggers": [
+      "sweep now",
+      "vault sweep",
+      "clean the vault",
+      "sweep stale",
+      "run all sweeps",
+      "full vault sweep"
+    ],
+    "why": "Run all vault sweeps in one pass — stale tracker items, dormant heat flips, and broken wikilinks — and append the result to the sweep log."
   }
 ]
