@@ -65,9 +65,11 @@ test('newest-by-date capsule loads without a pointer', () => {
 
 // The consume contract, red-first: both assertions fail against a resume verb
 // that never marks what it loads (where the same capsule replays on every clear).
-test('resume spends the capsule it loads; a second clear does not silently replay it', () => {
+for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']])
+test(`resume spends the capsule it loads (${eolName}); a second clear does not silently replay it`, () => {
   const fixture = mkFixture();
   try {
+    writeFileSync(fixture.capPath, capsuleDoc().replace(/\n/g, eol));
     const first = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
     assert.equal(first.degraded, false);
     // The write half: the consumed capsule is spent ON DISK, at load time.
