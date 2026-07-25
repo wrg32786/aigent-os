@@ -17,6 +17,10 @@ related:
 
 The post-clear boot does NOT need this skill — `daemons/resume-verb.mjs` injects the full procedure automatically on `SessionStart(clear)`. Invoke `/resume` for the explicit cases: re-grounding on request without a clear, or picking up work mid-session.
 
+## The consume contract (the runtime enforces this; know it, don't re-implement it)
+
+On the post-clear boot, the capsule the runtime loads is marked `status: resumed` mechanically at load — the same capsule is never silently re-resumed on a later clear. If no active capsule exists, the boot takes the documented degraded path (re-derive from live memory) and says so; it never replays stale state as fresh. An explicit mid-session `/resume` is a re-ground, not a consume — it does not mark, so say plainly which capsule you re-grounded from.
+
 ## Fences (never cross)
 
 - **Select by newest `created_at`, never a pointer.** Load the valid capsule with the newest frontmatter `created_at` in `vault/memory/capsules/` (or `memory/capsules/`) — there is no pointer file to consult.

@@ -37,6 +37,8 @@ Every capsule is a markdown file with YAML frontmatter. Four fields are REQUIRED
 
 Plus `parent_capsule_id`, `status` (`active → resumed → resolved`, also `paused`/`abandoned`), `trigger`, `expires`, `tags`, `created_at`, and `resolved_at`. `resume_trigger` and `success_criteria` are optional, additional fields a skill may include when they add real signal.
 
+Two mechanics the fields above imply: `created_at` is stamped at write time in ISO-8601 with offset (the selector orders by parsing it — a date-only stamp backdates to midnight UTC), and `active → resumed` is written by the resume runtime at load (`markCapsuleConsumed`), never by hand — a consumed capsule cannot be silently re-resumed.
+
 The body carries seven `[REFERENCE ONLY]` sections behind HTML anchor comments (`<!-- swe:done -->` etc.) that `stop-capsule-writer.mjs` merges bullets into: `Done (don't redo)`, `Historical-Errors → Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `Pending-Gates`, `Claimed-Rows`. "Historical-" prefixes and latest-wins framing are deliberate: body content is a *reference snapshot*, never an active instruction queue. Treating it as one is exactly the trap `/resume`'s fences exist to prevent.
 
 ## The content gate

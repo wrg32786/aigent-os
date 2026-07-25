@@ -30,7 +30,7 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 
 1. **RECONCILE from live memory** — re-read the session log, active priorities, and this session's git commits. Record what happened, not what was said. Budget: **2–4 reads, no more**.
 2. **WRITE** `vault/memory/capsules/<YYYY-MM-DD>-<slug>.md`:
-   - Frontmatter — all four REQUIRED fields non-empty, no inline `#` comments on them, `waiting_on` quoted (never bare `null`): `id`, `objective`, `waiting_on`, `next_valid_action`; plus `parent_capsule_id`, `status: active`, `trigger`, `expires`, `tags`, `created_at`. `resume_trigger` and `success_criteria` are OPTIONAL — include them when they add real signal, omit otherwise.
+   - Frontmatter — all four REQUIRED fields non-empty, no inline `#` comments on them, `waiting_on` quoted (never bare `null`): `id`, `objective`, `waiting_on`, `next_valid_action`; plus `parent_capsule_id`, `status: active`, `trigger`, `expires`, `tags`, `created_at`. Stamp `created_at` with the real current date-time at this write, **ISO-8601 with offset** (e.g. `2026-07-25T11:12:04-07:00`) — the selector parses this field, and a date-only stamp backdates the capsule to midnight UTC where it loses to every same-day autosave. `resume_trigger` and `success_criteria` are OPTIONAL — include them when they add real signal, omit otherwise.
    - Body — `[REFERENCE ONLY]` banner, then: `Done (don't redo)` · `Historical-Errors → Resolutions` · `Historical-Rejected-Approaches` · `Files-Read / Files-Modified` · `Operating-Facts` · `Pending-Gates` · `Claimed-Rows`. Historical- prefixes and latest-wins stay (anti-zombie).
    - `waiting_on` is the resume contract: write it so a fresh session can act from it alone — concrete items, owners, gates.
 3. **SYNC fail-soft.** After the capsule and any memory edits land, run `node daemons/vault-sync.mjs`. It resolves the installed root from `.aigent/state.json`, stages only capsule/memory changes, and handles no-remote or push-failure outcomes without prompting or gating the lifecycle.
@@ -38,7 +38,7 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 
 ## Lifecycle
 
-`active → resumed → resolved`. The resume verb flips `active → resumed` when it acts from the capsule; a capsule superseded by a newer one, or `resumed` >30 days, resolves. `/open`/`/close` are retired — resume absorbs open, this verb absorbs close.
+`active → resumed → resolved`. The resume RUNTIME marks the capsule `resumed` mechanically at load (`daemons/resume-verb.mjs` via `markCapsuleConsumed`) — never edit a capsule's status by hand, and never expect the same capsule to be silently re-resumed on a later clear. A capsule superseded by a newer one, or `resumed` >30 days, resolves. `/open`/`/close` are retired — resume absorbs open, this verb absorbs close.
 
 ## When NOT to capsule
 
