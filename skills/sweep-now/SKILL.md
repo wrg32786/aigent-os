@@ -34,7 +34,7 @@ Under `## Recent sweeps` section:
 - HEAT_INDEX dormant flips: <N> proposed
 - Broken wikilinks found: <N>
 - Notes touched: [<wikilink list>]
-- Open issues for Will: <list or "none">
+- Open issues for the operator: <list or "none">
 ```
 
 ## When to run

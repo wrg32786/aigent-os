@@ -36,7 +36,7 @@ Nothing above was typed. The session hits 60% context, writes its own capsule, g
 
 > **Dependency model:** the core kernel is markdown + shell: no build step, no database, no server. Optional features (semantic search, hooks automation) need Node.js 18+ and install automatically if Node is present. Obsidian is optional, for browsing the vault visually.
 
-Unlike memory add-ons that keep state in an opaque database, every checkpoint here is a real git commit, readable with plain `git log`, not a query against someone else's schema. That's the strongest gap the research behind this README could confirm; where the claims used to outrun the code (routing, non-Claude execution) is in the table right below, scored honestly against real rivals, not strawmen.
+Unlike memory add-ons that keep state in an opaque database, every checkpoint here is a real git commit, readable with plain `git log`, not a query against someone else's schema. The table below scores the rest against real rivals, not strawmen.
 
 > **Recent:** the Auto-Refresh two-verb lifecycle, model-tier dispatch enforcement, and the Codex adapter all shipped this cycle: see [`CHANGELOG.md`](CHANGELOG.md) for dates and detail.
 
@@ -58,7 +58,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 
 ¹ via bundled Serena MCP.
 
-**The honest framing:** compaction-survival and cross-session memory are populated categories now; several projects do them well. Git-native auditability is where this repo is currently ahead. Routing and non-Claude execution used to be claims this repo made without the code behind them. Both now have a real, tested mechanism, scoped honestly to what's actually shipped, not what's aspirational.
+**The honest framing:** compaction-survival and cross-session memory are populated categories now; several projects do them well. Git-native auditability is where this repo is currently ahead. Routing and non-Claude execution are real, tested mechanisms, scoped in the table to exactly what ships and no more.
 
 ---
 
@@ -71,6 +71,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 | Somatic layer | Five lazy-computed pressure gauges (context, memory backlog, decision pressure, token usage, drift) read before acting, no daemon polling | ✅ shipped |
 | Self-learning engine | Skill recall → skill hunt → solution hunt escalation chain; every failure becomes a durable artifact | ✅ shipped |
 | Cognitive architecture | Persistent self-model, goal stack, belief tracking with confidence scores, human-gated `/dream` consolidation, `/reconcile`, `/meta-improve` | ✅ shipped |
+| Calibration measurement | `HONESTY_LEDGER`, `TRUST_DECAY`, and `FAILURE_MODES` are paired ledgers: a claim captured, then resolved as held, drifted, or reversed; drift detection runs at `resume` | ✅ shipped |
 | Caddy skill router | Non-blocking prompt-matching hook surfaces the right skill from your own catalog; auto-reindexes on drop-in | ✅ shipped |
 | 3-tier memory (napkin → index → deep) | Heat-scored top-20 + staged digest sit above full topic files | ✅ shipped |
 | Model-tier dispatch enforcement | A `PreToolUse` hook checks every named agent's `Agent`-tool dispatch against its declared model tier live; advisory by default, `AIGENT_MODEL_GUARD=enforce` opts into a hard block | ✅ shipped ([`docs/model-routing-enforcement.md`](docs/model-routing-enforcement.md)) |
@@ -214,29 +215,29 @@ That's `/operator-setup`: three plain questions, on first run only, and the answ
 [new Claude Code session, nothing typed]
 
 AI:  3 open threads from yesterday.
-     - Pricing decision pending (you said you'd think on it overnight)
-     - Engineering brief for the auth refactor needs your sign-off
-     - Onboarding flow draft ready for your review
+     - Outreach batch: 12 of 20 trade businesses contacted, 3 replies waiting on you
+     - New-client intake form drafted, needs your sign-off before it goes out
+     - Referral asks: 2 of 3 sent, the HVAC client still pending
 
      Active priorities:
-     1. Close the bridge round (blocked on legal review)
-     2. Ship onboarding v2 (in progress, ~70% done)
-     3. Hire #5 engineer (interviews scheduled this week)
+     1. Five new clients this month (2 now in the pipeline)
+     2. Lead follow-up runs without you (outreach batch in progress)
+     3. Month-end close for existing clients (starts Thursday)
 
-     Last session you were heads-down on the onboarding flow.
-     Want to pick that up, or hit one of the open threads first?
+     Last session you were drafting the intake form.
+     Want to finish that, or handle the 3 outreach replies first?
 
-You: pricing first. Going with $49 annual, $59 monthly.
+You: replies first. Quote them the standard monthly rate.
 
-AI:  Locked. I'm writing it to vault/concepts/Pricing Strategy.md and
-     logging the decision in DECISION_LOG. Reasoning captured: 17%
-     monthly premium is standard SaaS, annual-pre-pay customers
-     churn 4× less. Want me to also draft the pricing-page copy
-     change for engineering, or is that part of onboarding v2?
+AI:  Locked. Drafting replies to all 3 with the standard rate, and
+     logging the pricing call in DECISION_LOG. Reasoning captured:
+     one consistent rate beats per-job haggling for trades, and you
+     said no weekends. Want the intake form linked in the replies,
+     or is it not ready to send?
 
-You: part of v2.
+You: not yet.
 
-AI:  Got it. Updating the Onboarding v2 project note. Anything else
+AI:  Got it. Replies go out without it. Anything else
      before we move on?
 
 [... 90 minutes of work ...]
@@ -246,12 +247,12 @@ AI:  Got it. Updating the Onboarding v2 project note. Anything else
 [capsule fires automatically: reconciles the session, writes to vault/daily/2026-04-25.md]
 
      What got decided today:
-     - Pricing: $49/$59 split. Logged.
-     - Onboarding v2: ship Friday, no further scope additions.
+     - Standard monthly rate quoted to all new trade leads. Logged.
+     - Intake form holds until your sign-off.
 
      Open threads carrying to next session:
-     - Engineering brief still pending sign-off
-     - Hire #5: call back to candidate B by Tuesday
+     - HVAC referral ask still pending
+     - Intake form sign-off
 
      See you tomorrow.
 ```
@@ -283,8 +284,8 @@ If you're building an agent framework for end-users to consume, you probably wan
 
 ### Next
 
-- **Route by task class, not just one class.** The Codex adapter proves the shape for one bounded task type; generalizing to route by task class (and to wire additional CLIs, such as Gemini CLI, opencode, and others, behind the same interface) is the next step, not something this README implies is already live.
-- Every rival harness surveyed for this redo locks you to one vendor's model. This one is built to route across them once that generalization ships, dated here so the claim ages honestly rather than getting stale.
+- **Route by task class, not just one class.** The Codex adapter proves the shape for one bounded task type; generalizing to route by task class (and to wire additional CLIs, such as Gemini CLI, opencode, and others, behind the same interface) is the next step.
+- Every rival harness surveyed locks you to one vendor's model. This one is built to route across them once that generalization ships.
 
 ---
 
@@ -312,13 +313,13 @@ If you're building an agent framework for end-users to consume, you probably wan
 <img src="assets/self-learning-loop.svg" alt="Self-Learning Loop: failure to artifact pipeline" width="49%"/>
 </div>
 
-**Vault as brain.** Your AI's memory is an Obsidian vault, not a vector database, the same files you can open, read, search, and navigate yourself. Wikilinks (`[[Project Alpha]]`) build the knowledge graph; the graph IS the intelligence. `resume` reads it, `capsule` writes to it, both fire on their own: see [Auto-Refresh](#-auto-refresh) above for exactly what gets committed and when. See the [two-verb lifecycle doc](docs/two-verb-lifecycle.md) for the full write-ahead/flush contract.
+**Vault as brain.** Your AI's memory is an Obsidian vault, not a vector database, the same files you can open, read, search, and navigate yourself. Wikilinks (`[[Project Alpha]]`) build the knowledge graph your AI actually navigates. `resume` reads it, `capsule` writes to it, both fire on their own: see [Auto-Refresh](#-auto-refresh) above for exactly what gets committed and when. See the [two-verb lifecycle doc](docs/two-verb-lifecycle.md) for the full write-ahead/flush contract.
 
 > **Testing isolation:** scripting `claude` child sessions inside your vault directory means their Stop autosaves write *real* capsules into your *real* vault. Point automated children at a scratch root via `AIGENT_ROOT`.
 
-**Caddy: the skill that finds the right skill.** A non-blocking `UserPromptSubmit` hook matches your words against every skill in your catalog and surfaces the one that fits, without ever blocking the turn on a wrong guess. A `PostToolUse` hook detects a newly dropped skill and nudges `/caddy-enroll` to index it; the golf bag stays complete without manual upkeep.
-
 **Measurement layer.** Most agent frameworks let the AI talk; almost none measure how often it's confidently wrong. `HONESTY_LEDGER.md`, `TRUST_DECAY.md`, and `FAILURE_MODES.md` are paired ledgers (a claim captured, then resolved later as held/drifted/reversed) plus drift detection at `resume` (decision aging, attention reconciliation vs. `ACTIVE_PRIORITIES.md`). The credible claim: the framework measures its own AI's calibration over time, not just its output. Full doctrine: [`vault/concepts/Cost of Confidence.md`](vault/concepts/Cost%20of%20Confidence.md).
+
+**Caddy: the skill that finds the right skill.** A non-blocking `UserPromptSubmit` hook matches your words against every skill in your catalog and surfaces the one that fits, without ever blocking the turn on a wrong guess. A `PostToolUse` hook detects a newly dropped skill and nudges `/caddy-enroll` to index it; the golf bag stays complete without manual upkeep.
 
 **Self-aware about what it doesn't do yet.** `system/12_authority_matrix.md` bounds what the AI decides alone vs. brings to you; `/dream` proposes improvements but only the operator approves merges: see [`docs/meta-aigent-doctrine.md`](docs/meta-aigent-doctrine.md) for the safety boundary.
 
@@ -391,7 +392,7 @@ aigent-OS is the free, open-source harness of [The AIgent](https://theaigent.xyz
 
 Built by **[The AIgent](https://theaigent.xyz)**
 
-*Battle-tested across multiple ventures. Months of daily use.*
+*In daily production use since April 2026, running a real media business.*
 *This framework emerged from real operational needs, not theory.*
 
 <br/>
