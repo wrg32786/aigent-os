@@ -73,6 +73,12 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(BG);
 scene.fog = new THREE.FogExp2(BG, 0.028);
 
+// Labels live in their own group within the main scene (not a separate one)
+// so they still depth-test correctly against nodes — a label whose node
+// rotates behind another node gets properly hidden instead of pasting on
+// top of everything. They dodge the bloom pass a different way: see render().
+const labelGroup = new THREE.Group();
+
 const camera = new THREE.PerspectiveCamera(42, WIDTH / HEIGHT, 0.1, 100);
 
 const ambient = new THREE.AmbientLight(0x8890a8, 0.55);
@@ -105,32 +111,37 @@ scene.add(rim);
 })();
 
 // ---- text sprite helper ----------------------------------------------------
+// Sizes tuned for legibility at README render width (~830px, GIF captured at
+// 1000px): bold weight, high-res source canvas, and a fixed world-space size
+// decoupled from canvas resolution so type stays large regardless of texture
+// detail.
 function makeLabel(text, sub, color) {
-  const pad = 18;
-  const cw = 512, ch = sub ? 128 : 88;
+  const pad = 22;
+  const cw = 640, ch = sub ? 192 : 120;
   const cvs = document.createElement('canvas');
   cvs.width = cw; cvs.height = ch;
   const ctx = cvs.getContext('2d');
   ctx.clearRect(0, 0, cw, ch);
   const hex = '#' + color.toString(16).padStart(6, '0');
-  ctx.font = '600 40px -apple-system, Segoe UI, Arial, sans-serif';
+  ctx.font = '700 58px -apple-system, Segoe UI, Arial, sans-serif';
   ctx.textBaseline = 'top';
   ctx.shadowColor = hex;
-  ctx.shadowBlur = 18;
-  ctx.fillStyle = '#f5f7fb';
-  ctx.fillText(text, pad, 6);
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillText(text, pad, 8);
   if (sub) {
     ctx.shadowBlur = 0;
-    ctx.font = '400 22px -apple-system, Segoe UI, Arial, sans-serif';
-    ctx.fillStyle = '#9aa3b6';
-    wrapText(ctx, sub, pad, 60, cw - pad * 2, 26);
+    ctx.font = '500 28px -apple-system, Segoe UI, Arial, sans-serif';
+    ctx.fillStyle = '#b7bfd1';
+    wrapText(ctx, sub, pad, 82, cw - pad * 2, 34);
   }
   const tex = new THREE.CanvasTexture(cvs);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(cw * 0.0072, ch * 0.0072, 1);
+  const widthUnits = 5.4;
+  sprite.scale.set(widthUnits, widthUnits * (ch / cw), 1);
   return sprite;
 }
 function wrapText(ctx, text, x, y, maxW, lh) {
@@ -149,10 +160,10 @@ function wrapText(ctx, text, x, y, maxW, lh) {
 // ---- node + edge builders ---------------------------------------------------
 const nodeGroup = new THREE.Group();
 const edgeGroup = new THREE.Group();
-scene.add(edgeGroup, nodeGroup);
+scene.add(edgeGroup, nodeGroup); // labelGroup deliberately NOT here — see overlayScene below
 const registry = new Map();
 
-function addNode({ id, label, sub, pos, r, color, headline }) {
+function addNode({ id, label, sub, pos, r, color, headline, dot }) {
   const geo = new THREE.SphereGeometry(r, 32, 32);
   const mat = new THREE.MeshStandardMaterial({
     color, emissive: color, emissiveIntensity: headline ? 1.15 : 0.8,
@@ -169,9 +180,15 @@ function addNode({ id, label, sub, pos, r, color, headline }) {
   halo.position.copy(mesh.position);
   nodeGroup.add(halo);
 
-  const label3d = makeLabel(label, sub, color);
-  label3d.position.set(pos[0], pos[1] + r + 0.55, pos[2]);
-  nodeGroup.add(label3d);
+  // `dot` nodes (the pantheon/gauge ring members) skip their own label —
+  // each ring's hub node already carries the count ("9 instruments",
+  // "5 pressure gauges"), so a dozen-plus illegible micro-labels collapse
+  // into the one legible cluster label instead.
+  if (!dot) {
+    const label3d = makeLabel(label, sub, color);
+    label3d.position.set(pos[0], pos[1] + r + 0.6, pos[2]);
+    labelGroup.add(label3d);
+  }
 
   registry.set(id, { pos: new THREE.Vector3(...pos), r, color });
   return mesh;
@@ -226,12 +243,12 @@ addNode({ id: 'somatic', label: 'SOMATIC LAYER', sub: '5 pressure gauges', pos: 
 
 const PANTHEON_AGENTS = ['Echo', 'Iris', 'Lyra', 'Mnemosyne', 'Newton', 'Hestia', 'Vitruvius', 'Demosthenes', 'Hypatia'];
 ring(PANTHEON_HUB, PANTHEON_AGENTS.length, 2.7, 0.3).forEach((p, i) => {
-  addNode({ id: 'pa-' + i, label: PANTHEON_AGENTS[i], pos: p, r: 0.26, color: COLOR.emerald });
+  addNode({ id: 'pa-' + i, pos: p, r: 0.26, color: COLOR.emerald, dot: true });
 });
 
 const GAUGES = ['context', 'memory', 'decision', 'tokens', 'drift'];
 ring(SOMATIC_HUB, GAUGES.length, 2.4, 0.6).forEach((p, i) => {
-  addNode({ id: 'sg-' + i, label: GAUGES[i], pos: p, r: 0.22, color: COLOR.slate });
+  addNode({ id: 'sg-' + i, pos: p, r: 0.22, color: COLOR.slate, dot: true });
 });
 
 // edges — spine + primary flow
@@ -249,14 +266,30 @@ addEdge('hooks', 'somatic');
 PANTHEON_AGENTS.forEach((_, i) => addEdge('pantheon', 'pa-' + i, { thin: true, bow: 0.25 }));
 GAUGES.forEach((_, i) => addEdge('somatic', 'sg-' + i, { thin: true, bow: 0.25 }));
 
+// Invisible depth-only stand-ins for every node (colorWrite:false — they
+// paint nothing, only occupy the depth buffer). Rendered together with the
+// labels in a plain, un-bloomed pass (see render()) so a label whose node
+// has rotated behind another node is still correctly hidden by it, without
+// ever exposing the label text to UnrealBloomPass.
+const depthProxyGroup = new THREE.Group();
+registry.forEach(({ pos, r }) => {
+  const proxy = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 12), new THREE.MeshBasicMaterial({ colorWrite: false }));
+  proxy.position.copy(pos);
+  depthProxyGroup.add(proxy);
+});
+const overlayScene = new THREE.Scene();
+overlayScene.add(depthProxyGroup, labelGroup);
+
 // ---- post-processing (bloom) -----------------------------------------------
+// `scene` never contains labels, so the bloom pass can't blur/wash text —
+// it simply never renders any.
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(WIDTH, HEIGHT), 0.55, 0.45, 0.32);
 composer.addPass(bloom);
 
 // ---- camera orbit ------------------------------------------------------------
-const ORBIT_RADIUS = 25;
+const ORBIT_RADIUS = 24; // slightly closer than the original 25 -> a bit more frame fill, headroom kept for the worst-case pitch frame
 const ORBIT_BASE_Y = 0.3;
 const TARGET = new THREE.Vector3(0, -0.3, 0.2);
 
@@ -270,8 +303,35 @@ function setCameraAngle(angle) {
   camera.lookAt(TARGET);
 }
 
+// Depth-test alone only hides a label when a nearer node's proxy sphere
+// sits exactly between it and the camera; side-on orbit angles can still
+// project several different nodes' labels into the same screen region
+// without any one of them technically occluding another. Fading label
+// opacity by camera distance settles that: the near label reads crisp and
+// wins the eye, the far one recedes instead of visually fighting it.
+const LABEL_NEAR = ORBIT_RADIUS - 6, LABEL_FAR = ORBIT_RADIUS + 6;
+function updateLabelFade() {
+  labelGroup.children.forEach((sprite) => {
+    const d = sprite.position.distanceTo(camera.position);
+    const t = THREE.MathUtils.clamp((d - LABEL_NEAR) / (LABEL_FAR - LABEL_NEAR), 0, 1);
+    sprite.material.opacity = THREE.MathUtils.lerp(1, 0.12, t);
+  });
+}
+
 function render() {
+  // 1) The bloomed graph (nodes + edges + starfield), no labels involved.
   composer.render();
+
+  // 2) Crisp overlay on top, same camera: a fresh depth buffer populated by
+  //    invisible node stand-ins + the visible label sprites, rendered with
+  //    no post-processing. Labels behind a (proxy) node are correctly
+  //    depth-tested away instead of pasting over everything.
+  updateLabelFade();
+  renderer.setRenderTarget(null);
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  renderer.render(overlayScene, camera);
+  renderer.autoClear = true;
 }
 
 if (DETERMINISTIC) {
