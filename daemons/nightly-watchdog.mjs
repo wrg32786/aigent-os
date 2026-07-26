@@ -184,6 +184,15 @@ export function assessNightlyCompletion({
   };
 }
 
+// Every alert code this watchdog can raise. Both the emitter and the green-path
+// resolver read THIS list, so a new code cannot end up raisable but never
+// resolvable — the defect that made PASS_FAILED permanent when the resolver
+// hand-listed NO_FIRE only.
+export const WATCHDOG_ALERT_CODES = Object.freeze([
+  'NIGHTLY:NO_FIRE',
+  'NIGHTLY:PASS_FAILED',
+]);
+
 export async function runNightlyWatchdog({
   root = defaultNightlyRoot(),
   now = new Date(),
@@ -223,13 +232,17 @@ export async function runNightlyWatchdog({
     }
     : headerFreshness;
   if (freshness.ok) {
+    // Green clears EVERY red this watchdog can raise, derived from the shared
+    // list rather than hand-listed. An alert that never clears re-surfaces at
+    // every boot after the condition is gone, which teaches the reader to skip
+    // the channel — and then a real alert lands somewhere already ignored.
     const resolved = persist
-      ? resolveNightlyAlerts({
+      ? WATCHDOG_ALERT_CODES.reduce((total, code) => total + resolveNightlyAlerts({
         root,
-        code: 'NIGHTLY:NO_FIRE',
+        code,
         reason: `fresh complete nightly block ${freshness.newest}`,
         now,
-      })
+      }), 0)
       : 0;
     return {
       ok: true,
