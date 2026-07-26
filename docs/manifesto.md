@@ -32,7 +32,7 @@ The vault is your AI's brain. You should be able to walk into Obsidian and read 
 
 Most "AI operating system" projects are static: a prompt template, a folder layout, maybe a hook or two, then the user maintains it forever. aigent-OS is recursive: the framework includes the skills that maintain the framework.
 
-When the principal's local aigent-OS learns a new rule, captures a new doctrine note, or codifies a new workflow into a skill, aigent-OS itself decides what graduates to the public repo, sanitizes the principal's private references out of it, runs a secret scanner, drafts the commit message, and opens the pull request. The publish skill is one of aigent-OS's own skills. The release log writes itself.
+When the principal's local aigent-OS learns a new rule, captures a new doctrine note, or codifies a new workflow into a skill, the framework is built to carry that change forward itself: deciding what graduates to the public repo, sanitizing the principal's private references out of it, and drafting the release record. Today the maintenance skills (nightly self-maintenance, skill indexing, changelog discipline) ship with the framework; the full publish skill (automated sanitize, secret scan, and pull request) is on the roadmap and tracked in the review-hardening plan.
 
 This isn't a gimmick. It's the deepest expression of the legibility thesis: not only is your memory in a format you can read, the system's *evolution* is also in a format you can read. Every release records what shipped, what the sanitizer caught, what was held back and why, who signed off at each authority gate.
 

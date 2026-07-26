@@ -52,7 +52,7 @@ The vault is your AI's brain. You should be able to walk into Obsidian and read 
 
 A static framework drifts. The principal carries it forward by hand, makes a hundred small decisions a year about what to keep and what to throw away, and eventually the framework either calcifies (no changes) or sprawls (every change kept). Both are failure modes.
 
-A framework that **operates on itself** doesn't have this problem. When the principal learns a new rule, captures a new doctrine note, codifies a new workflow into a skill — the framework itself decides what graduates from local to public, sanitizes private references, runs a secret scanner, drafts the commit message, opens the pull request. The release log writes itself.
+A framework that **operates on itself** doesn't have this problem. When the principal learns a new rule, captures a new doctrine note, codifies a new workflow into a skill — the framework carries the maintenance cycle: the self-maintenance skills ship today, and the full publish path (deciding what graduates from local to public, sanitizing private references, secret scanning, opening the pull request) is the planned completion of this claim — see [[The Self-Management Layer]].
 
 The principal stays in the loop at authority gates — but the maintenance cycle is itself an artifact of the system. And because every piece of that cycle is markdown, the principal can read exactly what happened, when, and why.
 
