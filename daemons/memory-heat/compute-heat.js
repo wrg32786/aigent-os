@@ -33,7 +33,7 @@ const SCRIPT_DIR = __dirname;
 //
 // All scored note paths are VAULT-RELATIVE (e.g. "concepts/Foo.md").
 // Session-read paths from JSONL are absolute; we strip VAULT_ROOT to normalize them to the same form.
-// Never mix repo-relative and vault-relative — that mismatch is what caused the "reads never match" bug.
+// Keep both inputs in one namespace so session reads match scored notes.
 const AIGENT_ROOT = process.env.AIGENT_ROOT || path.resolve(SCRIPT_DIR, '..', '..');
 const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || path.join(AIGENT_ROOT, 'vault');
 const JSONL_ROOT = process.env.AIGENT_JSONL_ROOT || null;
@@ -245,6 +245,43 @@ function computeScores(vaultPaths, reads, backlinks, pinList) {
   return rows;
 }
 
+function writeHeatIndexAtomic(output, payload, {
+  fsImpl = fs,
+  pid = process.pid,
+  report = console.error,
+} = {}) {
+  const tempOutput = `${output}.tmp-${pid}`;
+  let stage = 'write-temp';
+
+  try {
+    fsImpl.writeFileSync(tempOutput, payload);
+    stage = 'rename';
+    fsImpl.renameSync(tempOutput, output);
+    return { output, tempOutput };
+  } catch (error) {
+    let cleanup = 'not-needed';
+    try {
+      if (fsImpl.existsSync(tempOutput)) {
+        fsImpl.unlinkSync(tempOutput);
+        cleanup = 'removed';
+      }
+    } catch (cleanupError) {
+      cleanup = `failed:${cleanupError?.code || cleanupError?.message || 'unknown'}`;
+    }
+
+    const code = error?.code || 'UNKNOWN';
+    const message = `MEMORY_HEAT_WRITE FAIL code=${code} stage=${stage} cleanup=${cleanup} `
+      + `output=${output} temp=${tempOutput}`;
+    report(message);
+
+    const wrapped = new Error(message);
+    wrapped.code = code;
+    wrapped.cause = error;
+    wrapped.reported = true;
+    throw wrapped;
+  }
+}
+
 function main() {
   console.log(`[memory-heat] aigent-OS root: ${AIGENT_ROOT}`);
   console.log(`[memory-heat] vault root: ${VAULT_ROOT}`);
@@ -284,13 +321,28 @@ function main() {
     notes: rows,
   };
 
-  fs.writeFileSync(OUTPUT, JSON.stringify(out, null, 2));
+  writeHeatIndexAtomic(OUTPUT, JSON.stringify(out, null, 2) + '\n');
   console.log(`[memory-heat] wrote ${OUTPUT}`);
   console.log('');
   console.log('Hot top 10:');
   rows.slice(0, 10).forEach((r, i) => {
     console.log(`  ${i + 1}. ${r.heat_score.toFixed(1).padStart(5)}  ${r.path}`);
   });
+  return out;
 }
 
-main();
+module.exports = {
+  main,
+  writeHeatIndexAtomic,
+};
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    if (!error?.reported) {
+      console.error(`MEMORY_HEAT_RUN FAIL code=${error?.code || 'UNKNOWN'}: ${error?.message || error}`);
+    }
+    process.exitCode = 1;
+  }
+}

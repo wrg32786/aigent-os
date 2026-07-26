@@ -118,6 +118,15 @@ jobs:
       - name: GateGuard fact-forcing gate tests
         run: node daemons/tests/gateguard.test.mjs
 
+      - name: Nightly close-parity mutation proofs
+        run: >-
+          node --test
+          daemons/tests/nightly-close-parity.test.mjs
+          daemons/tests/nightly-watchdog-hooks.test.mjs
+          daemons/tests/nightly-route-hardening.test.mjs
+          daemons/tests/nightly-pass-alerts.test.mjs
+          daemons/tests/memory-heat-atomic.test.mjs
+
       - name: Codex adapter tests
         run: bash tests/test-codex-adapter.sh
 

@@ -1,0 +1,15 @@
+{
+  "version": "",
+  "updated_at": null,
+  "identity": "",
+  "role": "",
+  "capabilities": [],
+  "known_capabilities": [],
+  "limitations": [],
+  "known_limitations": [],
+  "recurring_failure_modes": [],
+  "reliability_risks": [],
+  "active_learning_goals": [],
+  "authority_boundaries": []
+}
+

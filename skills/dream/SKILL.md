@@ -1,156 +1,153 @@
 ---
-title: Dream Skill
-tags: [skill, cognitive, consolidation, improvement, aigent-internal]
-aliases: [/dream, dream-skill, offline-consolidation]
-created: 2026-05-08
+name: dream
+agent: none
+description: Evidence-gated synthesis over recent operating evidence. Appends admitted lessons and a dated synthesis with propose-only improvement candidates.
+allowed-tools: Read, Write, Bash
+user-invocable: true
+status: PRODUCTION - canonical writer and propose-only
+triggers:
+  - dream
+  - offline consolidation
+  - consolidation pass
+  - improvement candidates
+  - review recent sessions
 ---
 
-# /dream — Offline Consolidation
+# /dream - evidence-gated synthesis
 
-> [!danger] CRITICAL SAFETY RULE: /dream PROPOSES. It does NOT auto-apply. Every candidate requires the operator's explicit approval before becoming a real change. This boundary is non-negotiable.
+`/dream` is the canonical writer for lessons and Dream synthesis. It never
+applies an improvement, promotes its own proposal, edits system instructions,
+or treats an agent-authored claim as verification.
 
-The frontier piece of the cognitive architecture. Simulates the consolidation function of sleep — scanning recent experience for patterns, extracting durable improvements, surfacing them for review.
+## Canonical ownership
+
+- Lessons: `vault/memory/runtime/LESSONS.jsonl`.
+- Dream synthesis: `vault/memory/DREAM_LOG.md`.
+- The documented `memory/` fallback is valid only for minimal installations.
+- Any older `runtime/DREAM_LOG.md` copy is not an input or output.
+- `/close` and `/nightly` invoke this protocol instead of carrying a competing
+  inline writer.
+- Candidate status transitions also go through this writer.
 
 ## Invocation
 
-```
+```text
 /dream
-/dream --days 14       # scan last 14 daily notes instead of 7
-/dream --since 2026-04-01  # scan from a specific date
+/dream --window nightly
+/dream --set-status <candidate-id> <approved|merged|rejected|blocked> \
+  --operator-evidence "<direct operator reference>"
 ```
 
----
+`proposed -> approved` always requires the operator's exact decision. Never
+infer approval from silence, an automated status, another agent, or prior prose.
 
-## Step 1 — Load Source Material
+## Sources
 
-Read all of the following. Run parallel reads where possible.
+Read, in order:
 
-**Daily notes** — read last N from `$AIGENT_VAULT/daily/` (default N=7, most recent by filename date):
-- Extract: failures, decisions, delegations, patterns noted, tools used
+1. The newest five valid capsules by frontmatter `created_at`.
+2. The newest five dated live Session Log blocks.
+3. Open Trust Decay captures.
+4. The newest three dated Honesty Ledger sessions.
+5. Recent Failed Experiments and Failure Modes entries.
+6. Existing Lessons JSONL for dedupe and prior evidence chains.
+7. Staged `NIGHTLY_CAPTURE_CANDIDATES.jsonl` rows from the prior fire as
+   discovery and pressure signals only.
+8. Explicitly supplied local Git or command evidence.
 
-**Runtime state files:**
-| File | What to extract |
-|------|----------------|
-| `$AIGENT_VAULT/memory/FAILURE_MODES.md` | recent entries (last 30 days) |
-| `$AIGENT_VAULT/memory/runtime/BELIEF_STATE.jsonl` | beliefs with `confidence < 0.7` or `last_checked` > 14 days |
-| `$AIGENT_VAULT/memory/SKILL_GAPS.md` | all open entries |
-| `$AIGENT_VAULT/memory/runtime/LESSONS.jsonl` | all entries from last N days |
-| `$AIGENT_VAULT/memory/runtime/STATE_EVENTS.jsonl` | mode transitions, escalations, context switches |
+Record exact source references. A capsule or Session Log entry can establish
+that a claim occurred; it cannot prove the claim true.
 
----
+## Lesson admission predicate
 
-## Step 2 — Analysis Passes
+Append a lesson only when one is true:
 
-Run each pass independently, then consolidate. Low confidence = skip, don't hallucinate patterns.
+- the same pattern appears in at least two independent source events;
+- one explicit operator directive is paired with a separately observed
+  outcome; or
+- one mechanical red-before/green-after predicate supplies an artifact and
+  literal exit codes.
 
-### Pass A: Repeated Failure Patterns
-- Count occurrences of each failure mode across FAILURE_MODES.md + daily notes
-- Flag any pattern appearing 2+ times as a **consolidation candidate**
-- Check whether it already has a standing rule in CLAUDE.md or `concepts/Standing Rules - Operations.md`
-- If it does: no candidate needed (rule exists, enforcement may be the gap)
-- If it doesn't: produce a rule/caddy candidate
+Two retellings of one event are not independent. Discard one-off observations,
+unverified causal stories, and self-confirmation.
 
-### Pass B: Stale Beliefs
-- Flag beliefs with `last_checked` > 14 days AND `confidence < 0.8`
-- Especially flag beliefs tagged `assumes` or `unverified`
-- Candidate type: **verification task** (not a rule, just a check needed)
+Each admitted lesson has:
 
-### Pass C: Missing Procedures
-- Scan daily notes for tasks performed manually that follow the same pattern across 2+ sessions
-- Signal: same verb + same noun across multiple days ("manually updated X", "copied Y to Z", "checked W before doing V")
-- If the pattern is repeatable and deterministic: candidate type = **procedure**
-- Do not flag one-off tasks
+- `lesson_id`: next max numeric `lNNN` suffix plus one;
+- `type`: `procedural | calibration | strategic | failure-mode | doctrine`;
+- `confidence`: `0.0..1.0`, capped at `0.85` for one mechanical event;
+- `source_events`: at least two refs unless an allowed exception applies;
+- `created_at`: the configured local `YYYY-MM-DD`;
+- `admission`: one of:
+  - `{kind: "two-source"}`;
+  - `{kind: "operator-outcome", operator_ref, outcome_ref}`;
+  - `{kind: "mechanical-red-green", red_exit, green_exit: 0, artifact_ref}`.
 
-### Pass D: Doctrine Gaps
-- Scan daily notes and LESSONS.jsonl for recurring decisions that had to be reasoned from scratch
-- Signal: "decided to...", "chose to...", "went with..." appearing on similar topics across sessions
-- If a standing rule would have made the decision automatic: candidate type = **doctrine**
-- Check that no existing rule already covers it before proposing
+Serialize UTF-8 JSON, parse the complete JSONL file after append, and confirm
+the new line round-trips. Historical duplicate ids do not authorize a new
+collision.
 
-### Pass E: Unused Skills
-- Read `$AIGENT_VAULT/memory/SKILL_LEDGER.md` (if present) for registered skills
-- Scan daily notes for invoked skills (any `/skill-name` pattern)
-- Flag skills in SKILL_LEDGER not invoked in any of the last N sessions as **possibly unused**
-- Note: absence from daily notes is weak signal — flag as low confidence
+## Improvement candidate predicate
 
-### Pass F: Better Workflows
-- Read STATE_EVENTS.jsonl for context switch patterns (frequent mode switches, repeated escalations)
-- Flag sequences that appear to be inefficient (e.g., same escalation pattern 3+ times)
-- Candidate type = **workflow optimization**
-
----
-
-## Step 3 — Format Candidates
-
-For each finding with confidence >= 0.5, produce:
+When evidence names a repeatable system gap, append this inside the same dated
+Dream section:
 
 ```markdown
-## Candidate: {title}
-Type: skill | rule | procedure | doctrine | caddy-trigger | memory | verification
-Confidence: {0.0–1.0}
-Evidence: {specific sessions, file references, occurrence count}
-Proposed change: {concrete and specific — what to write, where to write it}
-Expected gain: {what improves if this is adopted}
-Risk: {what could go wrong if applied carelessly}
+### ni-YYYYMMDD-NN - short name
+- **status:** proposed
+- **evidence:** source-ref-1; source-ref-2
+- **failure class:** concise class
+- **proposed_change:** smallest testable change
+- **mutation proof:** break condition -> named red; restore -> named green
+- **operator gate:** approve / reject / revise
+- **operator evidence:** pending
 ```
 
-Confidence guidance:
-- `>= 0.9` — strong pattern, multiple independent evidence sources
-- `0.7–0.89` — probable pattern, worth reviewing
-- `0.5–0.69` — weak signal, flag but mark low priority
-- `< 0.5` — skip entirely
+Generated candidates always start with the literal field `status: proposed`.
+Any generated `approved`,
+`merged`, or self-ratifying wording is a hard failure.
 
----
+## Canonical dated entry
 
-## Step 4 — Write to DREAM_LOG.md
+Append one `## YYYY-MM-DD (...)` section every time synthesis runs, even with
+zero admitted lessons. It must contain nonempty forms of all eight labels:
 
-Append to `$AIGENT_VAULT/memory/runtime/DREAM_LOG.md`:
+- Sources reviewed
+- Lessons extracted
+- Improvement candidates proposed
+- Patterns observed
+- Discarded as one-off
+- Calibration miscalls
+- Productive surprises
+- Open trust-decay items to watch
 
-```markdown
-## Dream Run — {YYYY-MM-DD}
-Sessions reviewed: {N} | Date range: {start} to {end}
-Candidates: {total count}
+A quiet run writes a minimal zero-lesson entry and appends no Lessons row.
+Never overwrite an earlier entry.
 
-{all formatted candidates}
+## Executable postcondition
 
----
+A nightly fire uses the snapshot created by `nightly-pass begin`. Explicit
+`/dream` creates an operating-system temp snapshot first:
+
+```text
+node daemons/nightly-contracts.mjs snapshot --root <aigent-root> \
+  --out <os-temp>/dream-contract-before.json
 ```
 
-Do NOT overwrite — always append with a new date header.
+After writing:
 
----
-
-## Step 5 — Output Summary
-
-Print to console:
-
-```
-/dream complete — {N} improvement candidates from {M} sessions reviewed.
-Types: {skill: X, rule: Y, procedure: Z, doctrine: W, other: V}
-Confidence distribution: high(>=0.9): A | mid(0.7-0.89): B | low(0.5-0.69): C
-See DREAM_LOG.md for full candidates. No changes applied — the operator's approval required.
+```text
+node daemons/nightly-contracts.mjs dream --root <aigent-root> \
+  --date <YYYY-MM-DD> --snapshot <os-temp>/dream-contract-before.json
 ```
 
----
+Only `DREAM_CONTRACT PASS` is green. The validator proves byte-prefix
+preservation, parses JSONL, derives ids, validates admission, masks fenced
+examples, requires the eight sections and current configured date, and rejects
+a newly generated candidate that does not start `proposed`.
 
-## What /dream Never Does
+Return:
 
-- Does not modify CLAUDE.md
-- Does not create new vault notes
-- Does not update SKILL_GAPS.md, LESSONS.jsonl, or any runtime file (except appending to DREAM_LOG.md)
-- Does not close or resolve any tracker item
-- Does not invoke other skills
-- Does not send comms
-
-The dream log is a proposal queue, not an execution queue.
-
----
-
-## Caddy Enrollment
-
-Caddy fires this skill when:
-- User types `/dream`
-- Weekly on /close (if last run > 7 days — check DREAM_LOG.md last entry date)
-- Message contains "consolidation run", "pattern review", "offline learning"
-
-See [[concepts/Cognitive Architecture Roadmap]] · [[memory/runtime/DREAM_LOG]] · [[memory/runtime/LEARNING_SCORECARD]]
+```text
+DREAM PASS date=<YYYY-MM-DD> sources=<N> lessons=<N> candidates=<N>
+```

@@ -7,18 +7,20 @@ STRIP-REPORT.md
 *.tmp
 frames/
 
-# Codex finding #23: the write-ahead prompt journal is never committable, even
-# in this dev checkout -- covers the live file and rotated dated sidecars.
+# The write-ahead prompt journal is local runtime state. Ignore both the live
+# file and rotated dated sidecars.
 **/runtime/utterance-journal*.jsonl
 **/runtime/stop-writer/
 
 # GateGuard's per-session first-touch markers are ephemeral local state.
 **/runtime/gateguard/
+**/runtime/NIGHTLY_PASS_STATE.json
 
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json
 vault/memory/HEAT_INDEX.json
+vault/memory/HEAT_INDEX.json.tmp-*
 vault/memory/.daemon-errors.log
 memory/.daemon-errors.log
 .claude/settings.aigent.json

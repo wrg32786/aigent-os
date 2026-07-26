@@ -76,7 +76,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 | 3-tier memory (napkin → index → deep) | Heat-scored top-20 + staged digest sit above full topic files | ✅ shipped |
 | Model-tier dispatch enforcement | A `PreToolUse` hook checks every named agent's `Agent`-tool dispatch against its declared model tier live; advisory by default, `AIGENT_MODEL_GUARD=enforce` opts into a hard block | ✅ shipped ([`docs/model-routing-enforcement.md`](docs/model-routing-enforcement.md)) |
 | Non-Claude execution (Codex adapter) | One bounded, mechanical task class routed to the Codex CLI's non-interactive `codex exec`, review-gated, never auto-merged | ✅ shipped (single task class; [`docs/codex-adapter.md`](docs/codex-adapter.md)) |
-| Nightly self-maintenance (individual) | Sequencing `/dream`, `/reconcile`, `/sweep-now`, `/digest` into one named routine over your own vault, plus a `/system-check` gate | ✅ shipped ([`docs/nightly-self-maintenance.md`](docs/nightly-self-maintenance.md)) |
+| Nightly close-parity maintenance | Seven framework legs produce eleven independently validated checkpoints, append-only failure alerts, and a session-start no-fire fallback that needs no external scheduler or transport. Human judgment stays staged for review. | ✅ shipped ([`docs/nightly-self-maintenance.md`](docs/nightly-self-maintenance.md)) |
 | Self-testing of one's own operating rules | A portable subset of the probe idea, scoped to one seat's own behavior | ❌ not shipped (Roadmap) |
 
 ---

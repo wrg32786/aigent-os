@@ -1,26 +1,19 @@
-// lifecycle-common.mjs — shared identity/vault resolution for the two-verb lifecycle.
+// lifecycle-common.mjs — shared identity and vault resolution for the two-verb lifecycle.
 //
-// aigent-OS is single-operator by default: one vault, one BODY_STATE.json, one
-// active-capsule pointer. `seatId` stays a first-class concept (not stripped) so a
-// fork that dispatches persistent sub-agents — each with its own vault root — can
-// still tag evidence/receipts per-identity; out of the box it resolves to the
-// single 'operator' identity via AIGENT_SEAT_ID (or the default). Keep this file
-// dependency-free and side-effect-free — everything downstream imports from here.
+// aigent-OS is single-operator by default: one vault and one BODY_STATE.json.
+// An optional identity override remains available for compatible multi-instance
+// installations. Keep this file dependency-free and side-effect-free because
+// lifecycle hooks import it directly.
 //
-// v0.9.0 minimal model: resume selection has exactly one authority —
-// newestValidCapsule() below, by frontmatter created_at. There is no pointer, no
-// definition_hash, and no cross-session curated-close bookkeeping to keep in sync
-// with it; the refresh-cycle tower that used to live in this file (CLOSE_KINDS,
-// flipCapsuleToResumed, stampBootEvidence, crossSessionCuratedAllowed,
-// curatedWindowMs, resumeFlipShouldDefer) is retired along with the daemons that
-// only existed to drive it.
+// Resume selection has one authority: newestValidCapsule(), ordered by the
+// frontmatter created_at value. No secondary pointer or cross-session close
+// bookkeeping competes with that selection.
 
 import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// seatId resolution: env override first (multi-instance forks), else the fixed
-// single-operator default. No path-based regex table — a single vault has nothing
-// to disambiguate.
+// Resolve an explicit identity override first, then use the single-operator
+// default. A single vault needs no path-based identity table.
 export function seatOf(root) {
   const override = process.env.AIGENT_SEAT_ID;
   if (typeof override === 'string' && override.trim().length > 0) return override.trim();
@@ -30,20 +23,10 @@ export function seatOf(root) {
 // Memory root: aigent-OS's documented convention is <AIGENT_ROOT>/vault/memory
 // (see daemons/memory-heat/compute-heat.js). 'memory' at the root is kept as a
 // fallback for forks that skip the vault/ subdirectory.
-// AIGENT_STATE_HOME_DIR is the DIVERSION LEVER, honored ahead of the passed root.
-// Why it exists: a test or probe that spawns a real agent child with cwd = your
-// vault gets working hooks — usually the point — but those hooks then write REAL
-// capsules and state for a synthetic session. When the child's prompt is
-// adversarial (an isolation test asking it to breach a fence), its autosaved
-// capsule's objective IS that prompt; resume selects the newest capsule by
-// created_at, so the next resume can load an attacker-shaped capsule. Not
-// hypothetical — it cost this project's own fleet two nights and 121 capsules.
-//
-// Divert, don't suppress: point this at a throwaway vault-shaped tree and the
-// hooks still run their real code (so the test tests something) while the real
-// vault stays clean. Killing hooks instead exercises nothing, and a missed hook
-// writes silently. Pair it with a before/after diff of the real memory dir so a
-// diversion that failed to take fails LOUD instead of hiding.
+// AIGENT_STATE_HOME_DIR is honored before the passed root so tests and probes can
+// divert every hook write into a disposable vault-shaped tree. Diversion keeps
+// the real hook behavior under test while protecting operational memory; callers
+// can pair it with a before/after memory diff to prove the isolation held.
 export function memRoot(root) {
   const base = process.env.AIGENT_STATE_HOME_DIR || root;
   for (const candidate of ['vault/memory', 'memory']) {
@@ -58,11 +41,8 @@ export function memRoot(root) {
 // capsule fields. Captures until the next heading of any level.
 // The key is a machine name (`next_valid_action`) but a hand-authored heading is
 // prose (`## Next valid action`), so an underscore in the key must also match a
-// space in the heading. Interpolating the key literally defeated the paragraph
-// above: `objective` matched (one word, no separator) while `next_valid_action`
-// and `waiting_on` never did, so a capsule written with prose headings failed
-// newestValidCapsule's `!nextAction` gate and was skipped in silence -- resume
-// then fell back to whatever autosave happened to be newest.
+// space in the heading. Normalizing that separator keeps prose-heading capsules
+// eligible for the same validation as frontmatter-backed capsules.
 export function bodySection(doc, key) {
   const heading = String(key)
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -137,7 +117,7 @@ export function markCapsuleConsumed(capsulePath) {
   if (!fm) return false;
   // (\r?) keeps CRLF capsules markable: multiline $ matches before \n only, so
   // without capturing the \r a capsule saved with Windows line endings would
-  // silently never match — the exact silent-failure class this function ends.
+  // not match.
   const marked = fm[0].replace(/^(status:[ \t]*)(['"]?)active\2[ \t]*(\r?)$/m, '$1resumed$3');
   if (marked === fm[0]) return false; // not active — already spent, nothing to mark
   writeFileSync(capsulePath, marked + doc.slice(fm[0].length));

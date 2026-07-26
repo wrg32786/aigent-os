@@ -1,65 +1,85 @@
 ---
 name: system-check
 agent: none
-description: Full-stack smoke-test covering Somatic v0.4/v0.5 layer AND Cognitive v0.7 runtime. Skills, daemons, state files, runtime files, capsules, mirror discipline, evals, daemon error log. Reports green/red per path.
+description: Read-only installation smoke test for skills, daemons, operational memory, cognitive runtime, nightly freshness, terminal evidence, and unique route ownership.
 allowed-tools: Bash, Read
 user-invocable: true
 triggers:
   - system check
-  - somatic check
   - smoke test
   - check wiring
   - is everything wired
-  - audit somatic
-  - cognitive check
+  - audit install
   - runtime check
+  - nightly health
   - /system-check
 ---
 
 # /system-check
 
-Run `bash daemons/system-check.sh` from the vault root.
+Run from the aigent-OS root:
 
-Covers the full stack — Somatic v0.4/v0.5 AND Cognitive v0.7.
+```bash
+bash daemons/system-check.sh
+```
 
-## Somatic layer (v0.4/v0.5)
+The script is read-only. It prints one line per check, a final
+`SUMMARY: N PASS / N FAIL / N INFO`, and exits `1` when any check fails.
 
-- **Skills (8):** body-check, digest, context-capsule, caddy-mute, system-check, sweep-now, capsule-compact, agent-fitness
-- **Daemons (8):** caddy.sh, memory-capture.sh, sync-usage.sh, log-token-usage.sh, system-check.sh, compute-heat.js, capsule-compact.py, agent-fitness-extract.py
-- **State files (7):** BODY_STATE.json (schema keys), HEAT_INDEX.json (JSON + mtime <7d), CADDY_MUTES.json (if present), MEMORY_CANDIDATES.md (table present), HESTIA_SWEEP_LOG.md, AGENT_FITNESS.md (header row), capsules dir (non-empty)
-- **Capsules health:** all capsules have valid frontmatter (status enum, capsule_id)
-- **Mirror discipline:** vault `.claude/skills/` and `daemons/` match public aigent-OS
+## Path resolution
 
-## Cognitive layer (v0.7)
+Framework code resolves from `AIGENT_ROOT`, defaulting to the parent directory
+of `daemons/system-check.sh`.
 
-- **Skills (9):** status, reconcile, dream, meta-improve, skill-recall, skill-hunt, context-capsule, pause, resume
-- **Runtime daemon:** `daemons/runtime/update-active-state.py` — exists + parses
-- **Runtime state files (8):**
-  - `ACTIVE_STATE.json` — valid JSON, `mode` in [stabilization, build, expansion, recovery]
-  - `SELF_MODEL.json` — `capabilities` and `limitations` arrays non-empty
-  - `GOAL_STACK.json` — `active_goals` array exists
-  - `BELIEF_STATE.jsonl` — valid JSONL, last entry has `confidence` field
-  - `LESSONS.jsonl` — valid JSONL
-  - `PROCEDURES.jsonl` — valid JSONL
-  - `STATE_EVENTS.jsonl` — valid JSONL
-  - `DREAM_LOG.md` — exists; FAIL if last modified > 7 days ago
-- **Evals directory:** `evals/` exists and contains at least one file
+Operational memory resolves in this order:
 
-## Daemon error log
+1. `AIGENT_STATE_HOME_DIR/vault/memory` when the state-home diversion is set.
+2. `AIGENT_STATE_HOME_DIR/memory` as a compatibility fallback.
+3. `AIGENT_ROOT/vault/memory` for a normal installation.
+4. `AIGENT_ROOT/memory` only when the canonical vault path does not exist.
 
-Tail of `memory/.daemon-errors.log` — count + top 5 entries surfaced as INFO.
+This is the same shape used by the nightly controller. Tests should set
+`AIGENT_ROOT`, `AIGENT_STATE_HOME_DIR`, and date-sensitive environment values
+explicitly so ambient state cannot change the result.
 
-Exits 0 if all green, 1 if any FAIL.
+## Checks
 
-## When to run
+- Required top-level skills exist, including the nightly close-parity skills.
+- Shell and Python daemons parse.
+- Every nightly daemon exists and passes `node --check`.
+- The memory-heat daemon parses.
+- Operational state files have their required schemas, including the generic
+  sweep log and dispatch-fitness table.
+- Capsules have valid frontmatter, identity, and status.
+- Canonical cognitive JSON and JSONL inputs exist and parse. Missing canonical
+  input is a failure, not an empty-success case.
+- `DREAM_LOG.md` freshness comes from its newest valid dated header, never its
+  file modification time.
+- The newest `NIGHTLY_LOG.md` pass is current and has complete terminal
+  evidence. A terminal `status: FAIL` remains red even when every checkpoint
+  row is present.
+- `/nightly` resolves through the unique `/nightly-close-parity` route.
+- The eval directory contains at least one supported file.
+- The local daemon error log is surfaced as INFO when it contains entries.
 
-- On demand when something feels off
-- After shipping any Somatic or Cognitive version update
-- Before closing a session where runtime state was mutated
-- After `/dream` or `/reconcile` to confirm state files updated cleanly
+## Date configuration
 
-## What it does NOT do
+All date-sensitive checks use one timezone and one cutoff:
 
-- Does not fix anything. Read-only audit.
-- Does not validate semantic correctness — only that wired things parse and exist.
-- Does not run heavy computation. Should complete in <5 seconds.
+```bash
+export AIGENT_NIGHTLY_TIME_ZONE="America/Los_Angeles"
+export AIGENT_NIGHTLY_CUTOFF_HOUR="4"
+bash daemons/system-check.sh
+```
+
+`America/Los_Angeles` and hour `4` are the defaults. Tests may pin the current
+instant with `AIGENT_SYSTEM_CHECK_NOW`.
+
+## What it does not do
+
+- It does not repair files or resolve alerts.
+- It invokes the route checker with alerts disabled.
+- It invokes the watchdog in check-only mode, so `/system-check` never appends
+  to the nightly alert ledger.
+- It does not inspect a message bus, task board, browser profile, or private
+  machine configuration.

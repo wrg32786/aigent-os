@@ -13,6 +13,28 @@ Run the aigent-OS end-of-session memory commit inline. The close must be idempot
 
 All operator-owned durable state lives under `vault/`. Framework indexes such as `memory/SKILL_LEDGER.md` remain outside the vault and are not session memory.
 
+## Hardened compatibility contract
+
+The active two-verb lifecycle does not run a second close ceremony, but manual
+`/close` keeps the same shared postconditions as nightly:
+
+- exact already-authored decision outcomes append only through
+  `daemons/nightly-decision-outcome.mjs`, with a unique decision/interval match
+  and compare-and-swap;
+- bounded Session Log or Active Priorities trimming runs only through
+  `skills/context-hygiene/SKILL.md`, archives before removal, and must end in
+  `CONTEXT_HYGIENE PASS`;
+- Dream synthesis follows `skills/dream/SKILL.md` and must end in
+  `DREAM_CONTRACT PASS`;
+- cognitive changes follow `skills/cognitive-update/SKILL.md` and must end in
+  `COGNITIVE_CONTRACT PASS`;
+- missing canonical input is failure, not "nothing to do";
+- judgment-bearing measurement entries are staged through
+  `skills/nightly-ledger-capture/SKILL.md`.
+
+These helpers use local memory, Git, stderr, and the SessionStart surface. No
+external coordination service is required.
+
 ## Step 0: discipline audit
 
 Run these checks before writing the daily note.
@@ -35,7 +57,20 @@ If `/diagnose` established a verified cause, append it to `vault/memory/FAILURE_
 
 ### Gate D: decision outcomes
 
-If the operator answered a decision-aging prompt, record the result in `vault/memory/DECISION_OUTCOMES.md` before closing.
+If the operator answered a decision-aging prompt, use the dedicated writer
+before closing:
+
+```text
+node daemons/nightly-decision-outcome.mjs --root "$AIGENT_ROOT" \
+  --as-of <YYYY-MM-DD> --decision-date <YYYY-MM-DD> \
+  --decision-title "<exact heading>" --interval <30|60|90> \
+  --outcome "<enum>" --operator-text "<exact enum>" \
+  --operator-source "<durable direct operator ref>" \
+  --expected-file-sha "<pre-read sha256>"
+```
+
+Ambiguous, not-yet-due, already-recorded, or raced correspondence is staged
+instead of guessed.
 
 ### Gate E: weekly measurement
 
@@ -92,7 +127,7 @@ For each file:
 2. Make the smallest accurate change.
 3. Preserve user-authored material.
 4. Add relevant wikilinks.
-5. Avoid duplicate session IDs, claim IDs, fact IDs, and capsule IDs.
+5. Avoid duplicate local entry keys, claim IDs, fact IDs, and capsule IDs.
 
 ## Step 3: daily note
 
@@ -131,17 +166,43 @@ Preserve an existing `## Session Captures` section written by hooks. Merge sessi
 Add one entry near the top of `vault/memory/SESSION_LOG.md`:
 
 ```markdown
-### YYYY-MM-DD: session topic
+## YYYY-MM-DD - session topic
 
-**Session ID:** <session_id>
-**Worked on:** one line
-**Key conclusion:** one line
+**Objective:** one line
+
+**Completed:**
+- completed work or None
+
+**Decisions:**
+- durable decision or None
+
+**Open threads:**
+- unresolved item or None
+
 **Next action:** action and owner
-**Open thread:** unresolved item or None
+
 See [[YYYY-MM-DD]].
 ```
 
-Use `session_id` as the idempotency key. If the same session already exists, update it instead of appending another entry. Keep ten detailed recent entries and collapse older entries into the archive.
+Use the current session's stable local key for idempotency. If the same entry
+already exists, update it instead of appending another block. Keep five
+detailed recent entries and collapse older entries into the archive.
+
+## Step 4.5: synthesis and bounded context hygiene
+
+Run the shared Dream protocol in `skills/dream/SKILL.md`. Capture an
+operating-system temp pre-write snapshot and require literal
+`DREAM_CONTRACT PASS`; a caller-supplied candidate count is not evidence.
+
+Then run:
+
+```bash
+node "$AIGENT_ROOT/daemons/nightly-context-hygiene.mjs" --root "$AIGENT_ROOT"
+```
+
+If it reports red, use `skills/context-hygiene/SKILL.md` to archive whole dated
+blocks before trimming, then re-run the checker. Refuse unfamiliar shapes and
+compare-and-swap races.
 
 ## Step 5: rebuild memory heat
 
@@ -188,6 +249,13 @@ bash "$AIGENT_ROOT/daemons/system-check.sh"
 - INFO: report the count and durable log location.
 
 The audit does not block memory persistence, but failures must not be described as success.
+
+## Step 7.75: conservative cognitive update
+
+Execute `skills/cognitive-update/SKILL.md`. It may touch only the four files in
+that skill's ownership fence. Require literal `COGNITIVE_CONTRACT PASS`. Zero
+qualifying updates are valid when the skipped count and source scope are
+recorded.
 
 ## Step 8: recompute runtime state
 
