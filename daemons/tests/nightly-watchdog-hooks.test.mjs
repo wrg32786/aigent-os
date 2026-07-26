@@ -462,7 +462,7 @@ test('mutation proof: an honest FAIL is "fired and failed", never a no-fire', as
 // A line that looks like a checkpoint row but misses the strict row regex was
 // dropped silently. Paired with a well-formed row for the same checkpoint it
 // evaded both `missing` and `duplicates`, so the block read "11/11 checkpoints"
-// with a FAIL row in it. Both specimens found by DaVinci in R26 review.
+// with a FAIL row in it. Both specimens surfaced in review, not by the author.
 test('mutation proof: an unparseable checkpoint row is loud, never silently dropped', async () => {
   const { assessNightlyCompletion } = await import('../nightly-watchdog.mjs');
   const { base, root } = fixture('unparseable-rows');
