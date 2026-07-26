@@ -16,7 +16,7 @@ triggers:
 
 # /digest
 
-Background curation tier. Reviews staged candidates and asks the principal to:
+Background curation tier. Reviews staged candidates and asks the operator to:
 - **promote** → write to suggested destination (concepts/, decisions/, etc.)
 - **skip** → mark `status: skipped`, leave in ledger
 - **supersede** → strike + replace an existing vault entry
@@ -25,15 +25,16 @@ Background curation tier. Reviews staged candidates and asks the principal to:
 
 - At `/close` (auto, surface candidates)
 - When `/body-check` reports `memory_candidate_backlog > 10`
-- Manually when the principal asks
-- On Hestia's 7-day cadence (Hestia invokes `/digest` as part of her sweep)
+- Manually when the operator asks
+- On the documented seven-day vault-maintenance cadence
 
 ## Behavior
 
-1. Read `memory/MEMORY_CANDIDATES.md`. Filter `status: staged`.
+1. Read `vault/memory/MEMORY_CANDIDATES.md` (or the documented `memory/`
+   fallback). Filter exact `status: staged` rows.
 2. Group by `type` (decision / preference / doctrine / project / person / skill).
-3. Surface each group to the principal: source phrase, suggested destination, confidence.
-4. For each, principal answers in one word: promote / skip / supersede / defer.
+3. Surface each group to the operator: source phrase, suggested destination, confidence.
+4. For each, the operator answers in one word: promote / skip / supersede / defer.
 5. Apply the action. Update `status` and `digested_on` fields.
 
-NEVER auto-promote. Only act on principal's word.
+NEVER auto-promote. Only act on the operator's word.

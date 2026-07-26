@@ -55,7 +55,7 @@ jobs:
       - name: Validate core skill source files exist
         run: |
           FAIL=0
-          for skill in open close setup; do
+          for skill in open close setup nightly nightly-close-parity cognitive-update context-hygiene nightly-ledger-capture meta-improve-vault; do
             if [ ! -f "$INSTALL_TARGET/.claude/skills/$skill/SKILL.md" ]; then
               echo "FAIL: .claude/skills/$skill/SKILL.md missing"
               FAIL=1
@@ -63,6 +63,42 @@ jobs:
               echo "PASS: $skill skill installed"
             fi
           done
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Validate nightly runtime machinery
+        run: |
+          FAIL=0
+          for daemon in \
+            nightly-alerts.mjs nightly-context-hygiene.mjs nightly-contracts.mjs \
+            nightly-decision-outcome.mjs nightly-freshness.mjs \
+            nightly-ledger-predicate.mjs nightly-ledger-review.mjs \
+            nightly-ledger-stage.mjs nightly-pass.mjs nightly-paths.mjs nightly-reconcile.mjs \
+            nightly-route-check.mjs nightly-watchdog.mjs; do
+            if [ ! -f "$INSTALL_TARGET/daemons/$daemon" ]; then
+              echo "FAIL: daemons/$daemon missing"
+              FAIL=1
+            else
+              node --check "$INSTALL_TARGET/daemons/$daemon" || FAIL=1
+            fi
+          done
+          for input in \
+            vault/memory/DREAM_LOG.md \
+            vault/memory/MEMORY_CANDIDATES.md \
+            vault/memory/SWEEP_LOG.md \
+            vault/memory/runtime/BELIEF_STATE.jsonl \
+            vault/memory/runtime/GOAL_STACK.json \
+            vault/memory/runtime/LESSONS.jsonl \
+            vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl \
+            vault/memory/runtime/PROCEDURES.jsonl \
+            vault/memory/runtime/SELF_MODEL.json; do
+            if [ ! -f "$INSTALL_TARGET/$input" ]; then
+              echo "FAIL: canonical nightly input missing: $input"
+              FAIL=1
+            fi
+          done
+          SELF_MODEL="$INSTALL_TARGET/vault/memory/runtime/SELF_MODEL.json" \
+            python3 -c 'import json, os; d=json.load(open(os.environ["SELF_MODEL"], encoding="utf-8")); assert all(isinstance(d.get(k), list) for k in ("capabilities", "known_capabilities", "limitations", "known_limitations"))' \
+            || FAIL=1
           [ "$FAIL" -eq 0 ] || exit 1
 
       - name: Validate .claude/skill-index.json exists

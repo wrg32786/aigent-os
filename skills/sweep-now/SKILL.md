@@ -1,62 +1,55 @@
 ---
 name: sweep-now
-agent: hestia
-description: Dispatch Hestia to run all 3 vault sweeps (DELEGATION_TRACKER stale items, HEAT_INDEX dormant flips, broken wikilinks) and append the result to HESTIA_SWEEP_LOG.
+agent: none
+description: Run the three read-mostly vault sweeps for stale tracker items, dormant-note candidates, and broken wikilinks, then append one dated result to SWEEP_LOG.md.
 allowed-tools: Read, Edit, Bash, Grep, Glob
 user-invocable: true
 triggers:
   - sweep now
-  - run hestia
-  - hestia sweep
   - vault sweep
-  - /sweep-now
   - clean the vault
   - sweep stale
+  - broken links
 ---
 
 # /sweep-now
 
-Dispatch [[agents/Hestia]] sub-agent (sonnet) to run all 3 sweeps in one shot. Appends the result to `memory/HESTIA_SWEEP_LOG.md`. Surfaces nothing else unless Hestia found genuinely actionable items.
+Run all three sweeps in sequence and append one result to
+`vault/memory/SWEEP_LOG.md`.
 
-## What Hestia does
+## Checks
 
-1. **DELEGATION_TRACKER stale items** — scan `memory/DELEGATION_TRACKER.md` ACTIVE section. Flag items with `Opened` more than 14 days ago AND `Status: In Progress` (or similar live states). Surface count + IDs of staleness candidates.
-2. **HEAT_INDEX dormant flips** — read `memory/HEAT_INDEX.json` `cold_bottom_20`. For each, check mtime — if last touched >60 days, propose dormant flip. Don't actually flip without principal approval; just count + list.
-3. **Broken wikilinks** — scan vault for `[[X]]` references whose target file doesn't exist. Use Grep + Glob. Output list of broken links + the source notes that contain them.
+1. Scan active Delegation Tracker items. Flag live items whose last meaningful
+   update is older than 14 days.
+2. Read `HEAT_INDEX.json` `cold_bottom_20`. For each note last touched more than
+   60 days ago, propose a dormant flip. Do not apply it unattended.
+3. Scan vault wikilinks and list references whose target does not exist.
 
-## Output format (Hestia appends to HESTIA_SWEEP_LOG.md)
+## Output
 
-Under `## Recent sweeps` section:
+Append:
 
 ```markdown
-### YYYY-MM-DD — full sweep
-- DELEGATION_TRACKER swept: <N> stale items flagged (<comma-list of IDs>)
-- HEAT_INDEX dormant flips: <N> proposed
-- Broken wikilinks found: <N>
-- Notes touched: [<wikilink list>]
-- Open issues for the operator: <list or "none">
+### YYYY-MM-DD - full sweep
+- Delegation tracker: <N> stale items flagged (<stable references>)
+- Dormant-note candidates: <N> proposed
+- Broken wikilinks: <N>
+- Notes inspected: <wikilink list or none>
+- Open issues for the operator: <list or none>
 ```
 
-## When to run
+Append only after all three scans complete. The nightly controller independently
+checks the newest real H3 date header.
 
-- When body-check surfaces `recommended_reflex: sweep` (overdue >7d)
-- After major vault restructure (e.g., new concept folder, mass deletion)
-- Before any /lint or /digest expecting a clean baseline
+## Cadence
 
-## Cadence doctrine
+The default cadence is seven days. A nightly skip is legal only when
+`SWEEP_LOG.md` exists, contains a valid real dated H3 header, and the controller
+derives that it is within cadence. Missing or malformed evidence is failure.
 
-Default 7-day cadence per [[agents/Hestia]] definition. Body-check enforces — if you skip, body-check keeps surfacing the reflex until you sweep.
+## Boundaries
 
-## What it does NOT do
-
-- Does not auto-fix broken wikilinks. Surfaces them for principal review.
-- Does not auto-flip dormant notes. Proposes flips; principal decides.
-- Does not auto-close stale delegations. Flags for status update.
-- Does not run sub-sweeps in parallel. Sequential per Hestia agent definition.
-
-## Cross-links
-
-- [[concepts/Somatic v0.4.4 Hestia Wiring]] — spec
-- [[agents/Hestia]] — sub-agent definition
-- [[memory/HESTIA_SWEEP_LOG]] — output destination
-- [[concepts/Somatic Layer]] — base doctrine
+- Do not auto-fix broken links.
+- Do not auto-flip dormant notes.
+- Do not auto-close stale work.
+- Keep every proposal human-reviewable.

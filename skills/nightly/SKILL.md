@@ -1,145 +1,347 @@
 ---
 name: nightly
 agent: none
-description: One evidence-gated pass that sequences /dream, /reconcile, /sweep-now, and /digest over your own vault, with a /system-check gate and a ledger-review pass over the measurement layer (Honesty Ledger, Trust Decay, Failure Modes). Stays exactly as human-gated as the legs it calls -- stages, never auto-applies. Skips a leg gracefully when there is nothing to do; every leg that runs leaves an evidence line.
-allowed-tools: Read, Write, Edit, Bash
-user-invocable: true
-triggers:
-  - nightly
-  - night pass
-  - self-maintenance
-  - maintenance pass
-  - dream log review
-  - nightly routine
-  - maintenance sweep
-  - /nightly
+description: Canonical seven-leg nightly close-parity protocol. Eleven independently evidenced checkpoints cover synthesis, reconciliation, context hygiene, sweeps, heat, digest, runtime health, cognitive state, ledger capture/review, and vault sync.
+allowed-tools: Read, Write, Bash
+user-invocable: false
+status: PRODUCTION - invoke through /nightly-close-parity
 ---
 
-# /nightly -- Nightly Self-Maintenance
+# /nightly - canonical seven-leg close-parity protocol
 
-> [!danger] Same gate as every leg it calls
-> `/nightly` does not lower the bar any leg already holds itself to. `/dream` still only proposes -- candidates land in `DREAM_LOG.md` as `status: proposed`, the operator still promotes them through `/meta-improve`. `/digest` still only stages -- candidates stay `status: staged` until the operator answers promote/skip/supersede. `/sweep-now` still only proposes tracker/heat/link fixes for review. `/nightly` itself writes less than any leg it calls: one line per leg, to its own log, and nothing else.
+NIGHTLY_LOCAL_PROTOCOL: close-parity-v2-7L-11C
 
-Sequences the four already-shipped verbs named in the README's Roadmap -- `/dream`, `/reconcile`, `/sweep-now`, `/digest` -- into one named routine, with a `/system-check` gate and a ledger-review pass over the measurement layer, so a vault gets a maintenance pass on a cadence instead of only when the operator remembers to run each piece by hand.
+`/nightly-close-parity` is the public fire verb for this seven-leg framework. It first proves that this
+project-local protocol is the one being loaded. Do not fall back to another
+same-name skill or an installed cache.
 
-## Invocation
+The seven legs contain eleven independently recorded checkpoints:
 
-```
-/nightly
-/nightly --skip dream                    # run every leg except one
-/nightly --only reconcile,system-check   # run a subset
-```
+| Leg | Checkpoints |
+|---|---|
+| A - Dream | `dream` |
+| B - Reconcile and context | `reconcile`, `context-hygiene` |
+| C - Sweep and heat | `sweep-now`, `heat-index` |
+| D - Digest | `digest` |
+| E - Runtime health | `system-check`, `cognitive-runtime` |
+| F - Measurement ledgers | `ledger-capture`, `ledger-review` |
+| G - Vault sync | `vault-sync` |
 
----
+Every checkpoint is recorded through `daemons/nightly-pass.mjs`. A failed
+checkpoint immediately writes a named event to the append-only
+`NIGHTLY_ALERTS.jsonl` ledger, writes the same bounded alert to stderr, and
+leaves it active for the next SessionStart hook. Local delivery is the complete
+default channel; no external coordination service is required.
 
-## What it sequences
+## Root, memory, date, and environment
 
-Six legs, run in order. Each leg is gated by the cadence its own skill already documents -- `/nightly` does not invent a new cadence, it just checks the one that already exists before deciding whether a leg has anything to do.
+Run from the aigent-OS root. The normal operational memory root is
+`vault/memory`; the daemon also supports the documented `memory` fallback used
+by minimal forks and honors `AIGENT_STATE_HOME_DIR` for isolated probes.
 
-### Leg A -- `/dream` consolidation
+One time zone is used for pass dating, alert scopes, ledger review, and
+freshness. Configure it with `AIGENT_NIGHTLY_TIME_ZONE`; the documented default
+is `America/Los_Angeles`. Configure the post-fire cutoff with
+`AIGENT_NIGHTLY_CUTOFF_HOUR`; the default is `4`. A CLI `--time-zone` or
+`--cutoff-hour` override must be threaded through the whole invocation. The
+controller stores both values in pass state so a later checkpoint cannot drift
+to a different date policy.
 
-Run the full protocol in `skills/dream/SKILL.md` (Steps 1-5): load daily notes + runtime state, run the six analysis passes, append any candidates to `DREAM_LOG.md` with `status: proposed`.
+Tests and scheduled invocations must set the root, state-home, time zone, and
+cutoff explicitly. Ambient values must never decide which memory tree a proof
+mutates.
 
-**Cadence gate:** skip if the most recent `## Dream Run` header in `DREAM_LOG.md` is less than 7 days old -- matches `/dream`'s own Caddy Enrollment cadence ("Weekly on /close, if last run > 7 days"). Running the same 7-day source window twice a night apart produces near-duplicate candidates, not new signal.
+## Evidence controller
 
-**Never:** promotes a candidate, edits CLAUDE.md, or touches anything besides appending to `DREAM_LOG.md` -- exactly per `/dream`'s own "What /dream Never Does" section.
+Prove the route, then begin:
 
-### Leg B -- `/reconcile`
-
-Run the full protocol in `skills/reconcile/SKILL.md` (Checks A-G against `ACTIVE_STATE.json`, `GOAL_STACK.json`, `BELIEF_STATE.jsonl`, `SELF_MODEL.json`, `ACTIVE_PRIORITIES.md`, `LESSONS.jsonl`, `facts.jsonl`, `SKILL_GAPS.md`, `DELEGATION_TRACKER.md`, `BODY_STATE.json`). `/reconcile` is read-only by its own design -- it prints a report and modifies no runtime file.
-
-**Cadence gate:** skip if `ACTIVE_STATE.json`'s `last_reconcile` field is less than 7 days old -- matches `/reconcile`'s own Caddy Enrollment cadence.
-
-**Never:** modifies `ACTIVE_STATE.json`, `GOAL_STACK.json`, beliefs, or facts. The report's summary counts (contradictions / stale items / drift / orphans) become this leg's evidence line, since `/reconcile` itself persists nothing.
-
-### Leg C -- `/sweep-now`
-
-Invoke `/sweep-now` exactly as `skills/sweep-now/SKILL.md` specifies: it dispatches Hestia (sonnet) to run all three vault sweeps -- `DELEGATION_TRACKER` stale items, `HEAT_INDEX` dormant flips, broken wikilinks -- and appends the result to `HESTIA_SWEEP_LOG.md`.
-
-**Cadence gate:** skip if the most recent `### YYYY-MM-DD` header in `HESTIA_SWEEP_LOG.md` is less than 7 days old -- matches Hestia's own default cadence in `skills/sweep-now/SKILL.md`.
-
-This reuses the shipped `/sweep-now` verb as-is rather than re-implementing wikilink and tracker scans inline -- it is a real skill in this repo (`skills/sweep-now/SKILL.md`, `skills/sweep-links/SKILL.md`, `skills/sweep-tracker/SKILL.md`), and it is the exact verb the README's own Roadmap line names for this routine.
-
-### Leg D -- `/digest` staging review
-
-A lighter pass than the full `/digest` skill, deliberately. `/digest` ends in an interactive promote/skip/supersede exchange with the operator -- there is no operator present during an unattended nightly run to answer it, and `/nightly` never simulates an answer on the operator's behalf. So this leg only:
-
-1. Reads `MEMORY_CANDIDATES.md`.
-2. Counts rows with `status: staged`, grouped by `type` (decision / preference / doctrine / project / person / skill) exactly as `/digest`'s own Step 2 groups them.
-3. Records the count and grouping as this leg's evidence line, for the operator to run the real `/digest` against at their next session.
-
-**Cadence gate:** skip if there are zero `status: staged` rows.
-
-**Never:** promotes, skips, or supersedes a candidate. That stays `/digest`'s job, on the operator's word, per its own "NEVER auto-promote" rule.
-
-### Leg E -- `/system-check`
-
-Run `bash daemons/system-check.sh` from the vault root, exactly as `skills/system-check/SKILL.md` specifies. Capture the PASS/FAIL/INFO counts and exit code as this leg's evidence line.
-
-**Cadence gate:** none -- always runs. It is a read-only smoke test that completes in under 5 seconds per its own doctrine, so there is no cost to running it every night, and a FAIL here is exactly the kind of thing a nightly pass should never skip past silently.
-
-### Leg F -- Ledger review (Honesty Ledger / Trust Decay / Failure Modes)
-
-Cross-references the three measurement-layer ledgers `/honesty-check`, `/trust-decay`, and `/diagnose` already populate: `vault/memory/HONESTY_LEDGER.md`, `vault/memory/TRUST_DECAY.md`, `vault/memory/FAILURE_MODES.md`. Scope is new-since-last-`/nightly`-pass only -- entries dated after the most recent `## Nightly Pass` header in `NIGHTLY_LOG.md` -- read against each ledger's own actual schema, not a new nightly-invented vocabulary.
-
-1. **Resolve what's already knowable.** For each `TRUST_DECAY.md` entry still in the `## Open (awaiting outcome)` section, and each `HONESTY_LEDGER.md` entry with `**Resolution:** OPEN`, check whether unambiguous confirming or disconfirming evidence already exists elsewhere in the vault (a later daily note, a session capsule, or a matching `FAILURE_MODES.md` entry). If it does, invoke `/trust-decay resolve` exactly per its own Phase 2 format -- `**Resolution (YYYY-MM-DD):** WRONG | PARTIALLY WRONG | CONFIRMED CORRECT` plus `**Evidence:**` citing the source -- which per `/honesty-check`'s own doctrine pairs and updates both ledgers together. If no unambiguous evidence exists, leave the entry open; it counts toward step 2 instead. This never invents a resolution -- it only applies one that is already documented somewhere else in the vault.
-2. **Count the pressure.** Count entries still unresolved after 7+ days: `TRUST_DECAY.md` Open-section entries, `HONESTY_LEDGER.md` entries with `Resolution: OPEN`, and -- since `FAILURE_MODES.md` has no open/resolved concept of its own -- `Pattern frequency tracker` patterns that reached count 3+ but have not yet been promoted to `[[Common Failure Modes]]` doctrine. This total is the pressure signal in the evidence line; a rising count means calibration data is piling up unreviewed.
-3. **Stage a candidate on a repeat.** Scan `FAILURE_MODES.md` Phase 1 entries new since the last `/nightly` pass for a `Pattern` line that now appears 2+ times. If found, stage one candidate into `DREAM_LOG.md` using `/meta-improve`'s own required candidate schema (`status: proposed`, `change_type`, `target`, `proposed_change`, `rationale`, `risk`, `proposed_by: aigent` -- noting `/nightly` leg F as the source in the rationale) -- staging only, exactly as operator-gated as every other `/dream` candidate. `/nightly` never runs `/meta-improve` itself.
-
-This overlaps by design with `/dream`'s own Pass A, which also scans `FAILURE_MODES.md` for a 2+ repeat -- but Pass A only runs on Leg A's 7-day cadence, so on a night Leg A is skipped, this is the only thing still watching for a fresh repeat between dream passes. It is also distinct from `FAILURE_MODES.md`'s own built-in 3+ promotion path (`/skill-audit` or `/retro` walking the Pattern frequency tracker straight to `[[Common Failure Modes]]` doctrine) -- this leg proposes a `DREAM_LOG.md` candidate at the lower 2+ bar, through the dream/meta-improve gate, not a direct doctrine promotion.
-
-**Cadence gate:** always runs; scope is bounded to new-since-last-pass rather than skipped outright, since a zero-new-entries night is the common case and gets recorded as such, not silently passed over.
-
-**Never:** invokes `/trust-decay resolve` without citable evidence already in the vault. Never promotes a pattern straight to `[[Common Failure Modes]]` doctrine -- that stays `/skill-audit`'s job (and `/retro`'s once it ships) at the 3+ threshold. Never applies a staged candidate -- that stays `/meta-improve`, on the operator's approval.
-
----
-
-## Evidence log
-
-Every leg -- run or skipped -- gets one line appended to `$AIGENT_VAULT/memory/runtime/NIGHTLY_LOG.md`. This file is `/nightly`'s only direct write, with one exception: leg F stages a `DREAM_LOG.md` candidate itself when it sees a repeated failure pattern, since the leg that normally owns that file (`/dream`, leg A) may have been skipped. It does not exist until the first `/nightly` run creates it; do not pre-seed it.
-
-```markdown
-## Nightly Pass -- {YYYY-MM-DD}
-Legs run: {N}/6 | Legs skipped: {N}
-
-- dream: {ran -- N candidates appended to DREAM_LOG.md | skipped -- last run {X}d ago (<7d cadence)}
-- reconcile: {ran -- N contradictions, N stale, N drift, N orphans | skipped -- last run {X}d ago (<7d cadence)}
-- sweep-now: {ran -- see HESTIA_SWEEP_LOG.md entry {date} | skipped -- last run {X}d ago (<7d cadence)}
-- digest: {ran -- N candidates staged across {types} | skipped -- 0 staged}
-- system-check: {N PASS / N FAIL / N INFO -- exit {0|1}}
-- ledger-review: {N resolved via /trust-decay resolve (cited evidence) / N unresolved 7d+ pressure / N candidate(s) staged to DREAM_LOG.md | no new ledger entries since last pass}
-
----
+```text
+node daemons/nightly-route-check.mjs --root <aigent-root>
+node daemons/nightly-pass.mjs begin --root <aigent-root> [--date YYYY-MM-DD] [--replace]
 ```
 
-Do NOT overwrite -- always append with a new date header, matching `DREAM_LOG.md`'s own convention.
+Begin requires both canonical inputs to exist and be readable:
 
----
+- `vault/memory/MEMORY_CANDIDATES.md`
+- `vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
 
-## What `/nightly` Never Does
+The exact prefix may be `memory/` only when the root uses the documented
+fallback layout. Missing input is a failed invocation, never an empty or skip
+claim.
 
-- Does not promote a memory candidate, approve a dream candidate, or apply a sweep fix -- every human gate the legs already have stays exactly where it is.
-- Does not write to `MEMORY_CANDIDATES.md`, `HESTIA_SWEEP_LOG.md`, `TRUST_DECAY.md`, `HONESTY_LEDGER.md`, or any runtime state file directly. Only the leg being invoked writes there, under that leg's own contract. The one exception is leg F's staged `DREAM_LOG.md` candidate, which leg F writes itself precisely because leg A may not have run.
-- Does not resolve a trust-decay or honesty-ledger claim without evidence already documented elsewhere in the vault -- Leg F only invokes `/trust-decay resolve` where a citation already exists.
-- Does not promote a failure pattern straight to `[[Common Failure Modes]]` doctrine -- that stays `/skill-audit`'s job (and `/retro`'s once it ships) at the 3+ threshold.
-- Does not run `/meta-improve`. Turning a dream candidate into a real change stays a separate, manual step.
-- Does not invent a cadence. Every skip decision cites a cadence a sibling skill already documents.
-- Its own write surface is `NIGHTLY_LOG.md`, plus one staged `DREAM_LOG.md` candidate when leg F sees a repeated failure pattern -- every other write happens because `/nightly` invoked an already-shipped skill's own action, under that skill's own contract.
+`--replace` is recovery-only. It abandons an interrupted `status=running` pass
+with a named alert before starting a new pass. It never overwrites completed
+evidence.
 
----
+After each checkpoint:
 
-## When to run
+```text
+node daemons/nightly-pass.mjs record --root <aigent-root> \
+  --checkpoint <name> --status <pass|skipped|fail> --exit-code <integer> \
+  --artifact <file:PATH|git:SHA|stdout:CHECKPOINT@exit=N|none:ALLOWLISTED-REASON> \
+  --detail "<bounded factual detail>"
+```
 
-- On a schedule -- see `docs/nightly-self-maintenance.md` for the cron and Windows Task Scheduler recipes.
-- Manually, any time, via `/nightly`.
-- Never fires automatically from inside a running session -- there is no hook wiring this to `Stop` or `SessionEnd`. It is either typed or scheduled.
+Any nonzero exit, missing/stale/noncanonical artifact, illegal skip, or explicit
+failure becomes `fail` and raises
+`NIGHTLY:LEG_FAIL:<checkpoint>`. A duplicate record is refused, preserves the
+first evidence, raises `NIGHTLY:DUPLICATE_CHECKPOINT:<checkpoint>`, and makes
+finish red. Only `sweep-now` and `digest` may be skipped under their exact
+predicates. Continue collecting other safe evidence after a failure.
 
----
+Finish:
 
-## Caddy Enrollment
+```text
+node daemons/nightly-pass.mjs finish --root <aigent-root>
+```
 
-Caddy fires this skill when:
-- User types `/nightly`
-- Message contains "nightly pass", "self-maintenance", "maintenance pass", "maintenance sweep", or "dream log review"
+A missing checkpoint raises `NIGHTLY:INCOMPLETE_PASS`. The terminal block is
+green only when all eleven checkpoint rows are present once, every validator
+receipt is nonempty, no row failed, and terminal `status: PASS` is written.
+Terminal `status: FAIL` is always red.
 
-See [[concepts/Cognitive Architecture Roadmap]] · `docs/nightly-self-maintenance.md` · `skills/dream/SKILL.md` · `skills/reconcile/SKILL.md` · `skills/sweep-now/SKILL.md` · `skills/digest/SKILL.md` · `skills/system-check/SKILL.md` · `skills/honesty-check/SKILL.md` · `skills/trust-decay/SKILL.md` · `skills/diagnose/SKILL.md`
+## Artifact and postcondition contract
+
+The controller captures pre-fire Dream, cognitive, and ledger snapshots at
+begin. It independently re-runs each known postcondition and stores bounded
+literal output in the checkpoint's `validator` field.
+
+| Checkpoint | Accepted green artifact |
+|---|---|
+| dream | canonical `file:` path to `DREAM_LOG.md` |
+| reconcile | `stdout:reconcile@exit=0` |
+| context-hygiene | `stdout:context-hygiene@exit=0` |
+| sweep-now | canonical `file:` path to `SWEEP_LOG.md` |
+| heat-index | canonical `file:` path to `HEAT_INDEX.json` |
+| digest | canonical `MEMORY_CANDIDATES.md` file, or `none:no-staged-candidates` when re-parsing proves zero |
+| system-check | `stdout:system-check@exit=0` |
+| cognitive-runtime | `stdout:cognitive-runtime@exit=0` |
+| ledger-capture | canonical candidate file/stdout, or `none:no-ledger-candidates` when the begin snapshot proves no append |
+| ledger-review | `stdout:ledger-review@exit=0` |
+| vault-sync | current `git:<HEAD>`, or `none:nothing-to-commit` after a clean-tree predicate |
+
+A checkpoint may not certify itself by echoing an artifact string. File paths
+must remain inside the selected root and resolve to the canonical product.
+Stdout receipts cause the deterministic daemon to run again. `none:` reasons
+are allowlisted and reproduced from live state.
+
+## Human-gate invariants
+
+- Dream improvements start `proposed`; only an exact operator decision can
+  approve them.
+- Digest only counts and surfaces staged candidates unattended; it never
+  changes status.
+- Reconcile reports drift; it never reprioritizes.
+- Context hygiene archives before removal, uses compare-and-swap, and refuses
+  unfamiliar shapes.
+- Cognitive updates write only explicit or mechanically evidenced deltas.
+- Judgment-bearing ledger entries are staged. Direct mutation requires an
+  allowlisted executable predicate and the existing ledger owner.
+- Sweep results remain proposals.
+- Meta-improvement consumes approved candidates only and never self-merges.
+- Vault sync never force-pushes, resolves conflicts, stages unrelated work, or
+  acts without the configured repository authority.
+
+## Leg A - Dream
+
+Execute `skills/dream/SKILL.md` directly. The leg runs on every fire and appends
+one canonical dated synthesis, including an explicit zero-lesson result when
+there is no new signal.
+
+PASS requires:
+
+- the newest real Dream header matches the pass date;
+- the Dream and Lessons products retain their pre-fire byte prefixes;
+- every appended JSONL row parses, uses a valid next id, and satisfies the
+  admission predicate;
+- every improvement candidate starts `status: proposed`;
+- exact source references and mutation-proof fields are present.
+
+Record the canonical Dream file. The controller runs
+`DREAM_CONTRACT PASS`; serialization errors, self-approval, legacy paths, or a
+missing dated entry are failures.
+
+## Leg B - Reconcile and context
+
+### B1 - `reconcile`
+
+Run:
+
+```text
+node daemons/nightly-reconcile.mjs --root <aigent-root> --as-of <pass-date>
+```
+
+The daemon computes an exact seven-calendar-day attention window from explicit
+Tier-1 intended shares. Missing intended shares return the named failure
+`intended-share-input-absent`; the leg must not invent percentages or call the
+absence a skip. Record `stdout:reconcile@exit=<literal-exit>`.
+
+### B2 - `context-hygiene`
+
+Execute `skills/context-hygiene/SKILL.md`. It archives old dated Session Log
+blocks before removal, keeps the documented five-entry newest-first live
+window, and requires one operating-mode heading plus one to five priorities
+under Tier 1-3 headings. It refuses ambiguous content and uses pre-write
+SHA-256 compare-and-swap.
+
+Run the read-only checker after any edit:
+
+```text
+node daemons/nightly-context-hygiene.mjs --root <aigent-root>
+```
+
+Only `CONTEXT_HYGIENE PASS` is green. Record
+`stdout:context-hygiene@exit=<literal-exit>`.
+
+## Leg C - Sweep and heat
+
+### C1 - `sweep-now`
+
+Reuse `skills/sweep-now/SKILL.md`. Preserve its seven-day cadence:
+
+- skip only when the newest real `### YYYY-MM-DD` `SWEEP_LOG.md` header is within
+  cadence;
+- otherwise run the existing tracker, heat, and link proposal pass;
+- surface every untracked path by name.
+
+A cadence skip records `status=skipped exit=0` with the canonical sweep-log
+file. Missing or unparseable cadence evidence is failure.
+
+### C2 - `heat-index`
+
+Always run:
+
+```text
+node daemons/memory-heat/compute-heat.js
+```
+
+The daemon atomically replaces `HEAT_INDEX.json`. Re-read it and require valid
+JSON, a current parseable `generated_at`, an array `hot_top_20`, and a
+nonnegative integer `total_notes`. A fresh mtime with stale content is red.
+
+## Leg D - Digest
+
+Read the canonical `MEMORY_CANDIDATES.md` table and count exact
+`status=staged` rows by type. Do not promote, skip, supersede, or simulate an
+operator answer.
+
+- Zero staged rows: `status=skipped exit=0
+  artifact=none:no-staged-candidates`.
+- One or more: `status=pass exit=0` with the canonical file. The controller
+  re-parses it and records the derived count.
+
+## Leg E - Runtime health
+
+### E1 - `system-check`
+
+Run `bash daemons/system-check.sh` from the aigent-OS root with explicit
+`AIGENT_ROOT`, vault, time-zone, and cutoff values. Record
+`stdout:system-check@exit=<literal-exit>`. A nonzero result is a failed
+checkpoint, but later safe legs still run.
+
+### E2 - `cognitive-runtime`
+
+Execute `skills/cognitive-update/SKILL.md`. It may touch only `GOAL_STACK.json`,
+`BELIEF_STATE.jsonl`, `SELF_MODEL.json`, and `PROCEDURES.jsonl`. Zero qualifying
+updates are valid when the skipped count and sources are recorded.
+
+The controller derives append-only suffixes, id allocation, and alias deltas
+from its begin snapshot. Record
+`stdout:cognitive-runtime@exit=<literal-exit>`.
+
+## Leg F - Ledger capture and review
+
+### F1 - `ledger-capture`
+
+Execute `skills/nightly-ledger-capture/SKILL.md`. Local capsules, the canonical
+Session Log, explicitly referenced Git evidence, and existing ledgers are
+discovery inputs. A source cannot verify its own confident claim.
+
+Judgment-bearing proposals append through the sole writer to:
+
+`vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
+
+Direct ledger mutation is legal only through an existing ledger owner after a
+green allowlisted executable predicate with structured arguments, observed
+result, literal exit, artifact, and receipt hash. Exact already-given decision
+outcomes use the dedicated compare-and-swap writer only when matching is
+unique, due, and replay-safe.
+
+### F2 - `ledger-review`
+
+Run `daemons/nightly-ledger-review.mjs`. Count open honesty/trust items older
+than seven days, executable resolution candidates, and repeated failure
+classes. Stage any judgment-bearing resolution or doctrine proposal. On Friday
+the literal `FRIDAY_MEASUREMENT` line implements the weekly measurement.
+
+Record `stdout:ledger-review@exit=<literal-exit>` even when every count is zero.
+
+## Leg G - Vault sync
+
+Run last using the existing `daemons/vault-sync.mjs` boundary and the
+repository's configured authority:
+
+1. Inspect `git status --porcelain` and name every untracked path.
+2. Keep unrelated user work out of the sync.
+3. Run the configured vault sync only when its remote and authority predicates
+   pass.
+4. Record current `git:<HEAD>`, or record
+   `none:nothing-to-commit` only when a fresh clean-tree check reproduces it.
+5. Finish the evidence controller.
+
+If durable evidence cannot be committed after finish, run
+`nightly-pass.mjs evidence-fail` with the literal failure. After a verified
+retry, run `evidence-success --sha <commit>` to resolve only that run's alert.
+Never force-push, rewrite history, switch branches, resolve divergence, or
+claim delivery without readback.
+
+## No-fire watchdog
+
+`daemons/nightly-watchdog.mjs` reads the actual maximum dated Nightly Log
+header outside fenced examples. File mtime is ignored. It applies the same
+configured time zone and post-fire cutoff, then verifies the selected block:
+
+- exact protocol;
+- terminal `status: PASS`;
+- valid completion timestamp;
+- all eleven checkpoints exactly once;
+- no unknown, unparseable, or unreceipted rows;
+- no failed or nonzero row under a `PASS` terminal status.
+
+Red raises one of two distinct alerts, because "the pass never ran" and "the
+pass ran and failed" are different conditions and must not report as the same
+thing:
+
+- **`NIGHTLY:NO_FIRE`** — no block, a stale block, or a structurally incomplete
+  one. The pass did not complete.
+- **`NIGHTLY:PASS_FAILED`** — a structurally complete block whose terminal
+  status is `FAIL`, naming the failed checkpoints. The pass ran every checkpoint
+  and reported its failures honestly. Raising this also resolves any stale
+  no-fire, so the ledger never carries both claims at once.
+
+Either way the result is red — a failing nightly never reads green. The active
+alert is visible at SessionStart even if no optional integration exists, and the
+boot renderer interpolates the alert code rather than filtering on it, so a new
+code surfaces without a change there. Green resolves only the no-fire alert.
+
+## Betterment flow
+
+Nightly produces lessons, Dream proposals, staged ledger candidates, and
+pressure signals. `skills/meta-improve-vault/SKILL.md` may consume only a Dream
+proposal that carries exact operator approval. The flow is:
+
+`propose -> operator review -> approved -> independently reviewed implementation`
+
+Nothing auto-applies, auto-promotes, auto-approves, or self-merges.
+
+## What this pass never does
+
+- Never fires or writes nightly evidence merely because the framework is
+  installed or tested. Installation may seed only missing empty schema
+  templates; tests use disposable operating-system temp roots.
+- Never treats a missing input, stub, incomplete checkpoint, invalid artifact,
+  or terminal FAIL as green.
+- Never uses a capsule or agent-authored summary as its own verification oracle.
+- Never requires or reports to an external coordination system.
+- Never changes scheduler registration.
+- Never lowers a sibling skill's human gate.

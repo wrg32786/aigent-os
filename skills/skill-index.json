@@ -3,7 +3,7 @@
     "version": "1.2",
     "description": "Typed SkillCard index for aigent-OS skill router. Skills are data, not hardcoded triggers.",
     "doctrine": "concepts/MAP.md",
-    "updated": "2026-07-25"
+    "updated": "2026-07-26"
   },
   "cards": [
     {
@@ -680,10 +680,11 @@
       "active": true
     },
     {
-      "id": "sk_meta_improve",
-      "name": "meta-improve",
-      "description": "Constrained self-modification — implement approved DREAM_LOG candidates, branch + test + surface for the operator's approval only",
+      "id": "sk_meta_improve_vault",
+      "name": "meta-improve-vault",
+      "description": "Project-local route for implementing one operator-approved Dream candidate under an executable mutation proof and independent review.",
       "triggers": [
+        "meta improve vault",
         "meta improve",
         "self improve",
         "dream log",
@@ -696,15 +697,16 @@
       ],
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
-      "path": "~/.claude/skills/meta-improve",
+      "path": "~/.claude/skills/meta-improve-vault",
       "pantheon_agent": null,
       "active": true
     },
     {
-      "id": "sk_nightly",
-      "name": "nightly",
-      "description": "Evidence-gated pass sequencing /dream, /reconcile, /sweep-now, and /digest into one named nightly routine over your own vault, plus a /system-check gate -- human-gated legs stay human-gated, the routine's own writes are limited to its evidence log",
+      "id": "sk_nightly_close_parity",
+      "name": "nightly-close-parity",
+      "description": "Project-local seven-leg and eleven-checkpoint nightly pass with independently re-derived postconditions, append-only alerts, and a no-fire watchdog.",
       "triggers": [
+        "nightly close parity",
         "nightly",
         "night pass",
         "self-maintenance",
@@ -719,7 +721,7 @@
       ],
       "model_preference": "sonnet",
       "lifecycle": "on_demand",
-      "path": "~/.claude/skills/nightly",
+      "path": "~/.claude/skills/nightly-close-parity",
       "pantheon_agent": null,
       "active": true
     },
@@ -1541,6 +1543,61 @@
       "lifecycle": "on_demand",
       "path": "~/.claude/skills/visual-polish",
       "pantheon_agent": null,
+      "active": true
+    },
+    {
+      "id": "sk_cognitive_update",
+      "name": "cognitive-update",
+      "description": "Apply only explicit or mechanically evidenced deltas to the four cognitive runtime products, with append-only and alias postconditions.",
+      "triggers": [
+        "cognitive update",
+        "update cognitive state",
+        "runtime state update"
+      ],
+      "intent_patterns": [
+        "the operator wants to update durable goals beliefs self-model or procedures",
+        "nightly is running the conservative cognitive checkpoint"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/cognitive-update",
+      "active": true
+    },
+    {
+      "id": "sk_context_hygiene",
+      "name": "context-hygiene",
+      "description": "Archive old Session Log and Active Priorities content before bounded trimming, using compare-and-swap and a read-only postcondition.",
+      "triggers": [
+        "context hygiene",
+        "trim session log",
+        "archive old session entries",
+        "clean active priorities"
+      ],
+      "intent_patterns": [
+        "the operational context files need bounded archival",
+        "nightly is running the context hygiene checkpoint"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/context-hygiene",
+      "active": true
+    },
+    {
+      "id": "sk_nightly_ledger_capture",
+      "name": "nightly-ledger-capture",
+      "description": "Discover missing measurement entries from local evidence, stage judgment, and require executable predicates for direct ledger mutation.",
+      "triggers": [
+        "nightly ledger capture",
+        "stage measurement candidates",
+        "ledger capture"
+      ],
+      "intent_patterns": [
+        "nightly is capturing measurement candidates",
+        "the operator wants claim evidence staged without automatic judgment"
+      ],
+      "model_preference": "sonnet",
+      "lifecycle": "on_demand",
+      "path": "~/.claude/skills/nightly-ledger-capture",
       "active": true
     }
   ]

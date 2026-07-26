@@ -11,6 +11,22 @@ status: DEPRECATED by the two-verb lifecycle — see skills/resume/SKILL.md. /re
 
 Run this at the start of every normal working session.
 
+## Nightly alert surface
+
+Before normal orientation, run the local watchdog with the same configured time
+zone and cutoff used by the pass:
+
+```text
+node daemons/nightly-watchdog.mjs --root <aigent-root>
+```
+
+Surface every active named alert from
+`vault/memory/runtime/NIGHTLY_ALERTS.jsonl`. The append-only ledger and stderr
+are the default delivery channels; no external coordination service is
+required. If the ledger is unreadable, report `ALERT_LEDGER_INVALID` and
+continue the resume path. An alert-read failure must never suppress session
+orientation or make the hook indistinguishable from "not installed."
+
 ## First-run detection
 
 Before the normal protocol, read `.aigent/state.json`.

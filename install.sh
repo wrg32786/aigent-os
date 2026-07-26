@@ -133,7 +133,7 @@ MODE="copy"
 
 COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals)
 
-# ── Symlink-escape guard (Codex finding #22) ─────────────────────────────────
+# ── Symlink-escape guard ──────────────────────────────────────────────────────
 # A pre-seeded symlink inside TARGET -- e.g. a file named "CLAUDE.md" that is
 # actually a symlink to "~/.bashrc" -- would otherwise let a write we believe
 # lands on "$TARGET/CLAUDE.md" actually land wherever the link points, because
@@ -239,7 +239,7 @@ STAMP="${AIGENT_INSTALL_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 #
 # sensitive=1 marks files that become trusted -- read as agent instructions,
 # wired as slash commands/subagents, or run as hooks/daemons -- the next
-# time Claude Code touches them (Codex finding #19). For those, a
+# time Claude Code touches them. For those, a
 # pre-existing file that differs from the framework's copy is quarantined
 # instead of silently kept, unless --trust-existing was passed. Byte-
 # identical files (e.g. a prior run's own copy) pass through with no action.
@@ -269,7 +269,7 @@ copy_missing_file() {
   local quarantine_dest="$QUARANTINE_DIR/$quarantine_rel.$STAMP"
   safe_mkdir_p "$QUARANTINE_DIR/$(dirname -- "$quarantine_rel")" || return 0
   if ! path_is_symlink_safe "$quarantine_dest"; then
-    # The quarantine slot itself is unsafe (Codex finding #22's item-2 case):
+    # The quarantine slot itself is unsafe:
     # rather than quarantine into or through a symlink, leave the
     # pre-existing file exactly where it was and say so loudly.
     warn_symlink_escape "$quarantine_dest"
@@ -320,8 +320,58 @@ copy_missing_tree() {
   done < <(cd "$source" && find . -type f -print0)
 }
 
+seed_nightly_templates() {
+  local template_root="$SRC/daemons/templates/nightly"
+  if [[ ! -d "$template_root" ]]; then
+    # Older/minimal source fixtures do not ship the close-parity controller and
+    # have nothing to seed. A package that does ship the controller must include
+    # its canonical templates; continuing in that case would create a guaranteed
+    # first-run failure.
+    [[ ! -f "$SRC/daemons/nightly-pass.mjs" ]] \
+      || fail "nightly templates missing: $template_root"
+    return 0
+  fi
+
+  safe_mkdir_p "$TARGET/vault/memory/runtime" \
+    || fail "cannot create $TARGET/vault/memory/runtime"
+
+  local memory_file
+  for memory_file in DREAM_LOG.md MEMORY_CANDIDATES.md SWEEP_LOG.md; do
+    copy_missing_file \
+      "$template_root/$memory_file" \
+      "$TARGET/vault/memory/$memory_file" \
+      0 || true
+  done
+
+  local runtime_file
+  for runtime_file in \
+    BELIEF_STATE.jsonl GOAL_STACK.json LESSONS.jsonl \
+    NIGHTLY_CAPTURE_CANDIDATES.jsonl PROCEDURES.jsonl SELF_MODEL.json; do
+    copy_missing_file \
+      "$template_root/runtime/$runtime_file" \
+      "$TARGET/vault/memory/runtime/$runtime_file" \
+      0 || true
+  done
+
+  # These framework-wide runtime files predate the nightly controller. Retain
+  # their public templates while keeping nightly's own canonical seeds isolated
+  # above so an operational ledger is never copied from a development vault.
+  for runtime_file in ACTIVE_STATE.json STATE_EVENTS.jsonl; do
+    if [[ -f "$SRC/memory/runtime/$runtime_file" ]]; then
+      copy_missing_file \
+        "$SRC/memory/runtime/$runtime_file" \
+        "$TARGET/vault/memory/runtime/$runtime_file" \
+        0 || true
+    fi
+  done
+}
+
 if [[ "$MODE" == "copy" ]]; then
   printf '\n  Copying framework files without overwriting user files...\n'
+  # Seed sanitized canonical inputs before the general vault tree. The normal
+  # no-clobber copy then preserves these product templates instead of importing
+  # development-vault staging content.
+  seed_nightly_templates
   for dir in "${COPY_DIRS[@]}"; do
     [[ -d "$SRC/$dir" ]] || continue
     case "$dir" in
@@ -330,8 +380,10 @@ if [[ "$MODE" == "copy" ]]; then
     esac
     printf '  [ok] %s/\n' "$dir"
   done
+
 else
   printf '\n  Activating this checkout in place; source files already exist.\n'
+  seed_nightly_templates
 fi
 
 # Manage the aigent-OS portion of CLAUDE.md with explicit markers so reruns do
@@ -356,10 +408,9 @@ else
     cp "$MANAGED_BLOCK" "$TARGET/CLAUDE.md"
     printf '  [ok] CLAUDE.md created with managed aigent-OS block\n'
   else
-    # Backup leaf write (Codex finding #22 item 2): STAMP's second-precision
-    # makes the exact backup filename hard but not impossible to predict, so
-    # this gets the same abort-on-symlink treatment as the primary write
-    # above rather than assuming a fresh name can't collide with a plant.
+    # STAMP's second-precision backup name is hard but not impossible to
+    # predict, so the backup leaf gets the same symlink guard as the primary
+    # write.
     require_symlink_safe "$BACKUP_DIR/CLAUDE.md.$STAMP"
     cp "$TARGET/CLAUDE.md" "$BACKUP_DIR/CLAUDE.md.$STAMP"
     CLEAN_CLAUDE="$AIGENT_TMP/CLAUDE.clean.md"
@@ -382,8 +433,8 @@ safe_mkdir_p "$TARGET/.claude/skills" || fail "cannot create $TARGET/.claude/ski
 safe_mkdir_p "$TARGET/.claude/agents" || fail "cannot create $TARGET/.claude/agents (see symlink warning above)"
 # .claude/rules is read as agent instructions on every session -- a planted
 # file here that differs from the framework's is as much a trust-surface
-# concern as a hook script (Codex finding #19's "same bug class one
-# directory over"), so it goes through copy_missing_file(sensitive=1) too.
+# concern as a hook script, so it goes through
+# copy_missing_file(sensitive=1) too.
 RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
 RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then
@@ -454,8 +505,7 @@ if [[ ! -f "$SETTINGS_DST" ]]; then
   cp "$RENDERED_TMPL" "$SETTINGS_DST"
   printf '  [ok] .claude/settings.json created\n'
 else
-  # Backup leaf write (Codex finding #22 item 2) -- same reasoning as the
-  # CLAUDE.md backup above.
+  # Guard the backup leaf for the same reason as the CLAUDE.md backup above.
   require_symlink_safe "$BACKUP_DIR/settings.json.$STAMP"
   cp "$SETTINGS_DST" "$BACKUP_DIR/settings.json.$STAMP"
   MERGED="$AIGENT_TMP/settings.merged.json"
@@ -566,8 +616,8 @@ if [[ "$(abspath "$SETTINGS_SRC")" != "$(abspath "$TARGET/.claude/settings.json.
   cp "$SETTINGS_SRC" "$TARGET/.claude/settings.json.template"
 fi
 
-# skill-index.json drives Caddy's skill auto-invoke hints (rule 12) --
-# trusted routing metadata, same sensitivity class as a hook.
+# skill-index.json drives Caddy's skill auto-invoke hints. It is trusted routing
+# metadata in the same sensitivity class as a hook.
 if [[ -f "$SRC/.claude/skill-index.json" ]]; then
   copy_missing_file "$SRC/.claude/skill-index.json" "$TARGET/.claude/skill-index.json" 1 || true
 fi
@@ -596,7 +646,7 @@ GITIGNORE="$TARGET/.gitignore"
 GI_START='# aigent-os:generated-state:start'
 GI_END='# aigent-os:generated-state:end'
 GI_BLOCK="$AIGENT_TMP/gitignore.block"
-# Managed ignore set (Codex finding #39): every path a fresh install or normal
+# Managed ignore set: every path a fresh install or normal
 # session can generate under TARGET needs an entry here, not just the .aigent/
 # state directory -- the prompt journal (utterance-journal*.jsonl, rotated
 # sidecars included), the semantic-search node_modules/ the deps step below
@@ -608,19 +658,21 @@ $GI_START
 .aigent/
 vault/memory/embeddings.json
 vault/memory/HEAT_INDEX.json
+vault/memory/HEAT_INDEX.json.tmp-*
 vault/memory/.daemon-errors.log
 memory/.daemon-errors.log
 .claude/settings.aigent.json
 .claude/settings.local.json
 **/runtime/utterance-journal*.jsonl
 **/runtime/stop-writer/
+**/runtime/NIGHTLY_PASS_STATE.json
 node_modules/
 .obsidian/
 $GI_END
 EOF_GI
 require_symlink_safe "$GITIGNORE"
 if [[ -f "$GITIGNORE" ]]; then
-  # Marker validation (Codex finding #38): the awk strip below turns "managed"
+  # Marker validation: the awk strip below turns "managed"
   # on at the first start marker and off at the first end marker, printing
   # everything else. A malformed marker pair -- a stray extra start/end line
   # from a hand edit or a bad merge, or the two out of order -- makes that
@@ -639,9 +691,8 @@ if [[ -f "$GITIGNORE" ]]; then
     fi
   fi
 
-  # Backup leaf write (Codex finding #22 item 2 / #38): same reasoning as the
-  # CLAUDE.md and settings.json backups above -- a validated block still gets
-  # backed up before the strip/rewrite, so the edit is always recoverable.
+  # As with the CLAUDE.md and settings.json backups, a validated block is
+  # backed up before strip/rewrite so the edit remains recoverable.
   require_symlink_safe "$BACKUP_DIR/.gitignore.$STAMP"
   cp "$GITIGNORE" "$BACKUP_DIR/.gitignore.$STAMP"
 
@@ -674,7 +725,7 @@ else
   else
     printf '  Installing optional semantic-search dependencies (network access may occur)...\n'
     pushd "$TARGET/daemons/semantic-search" >/dev/null
-    # --ignore-scripts (Codex finding #18): disables lifecycle scripts for
+    # --ignore-scripts disables lifecycle scripts for
     # this package AND every transitive dependency. Without it, installing
     # into a target that already had its own daemons/semantic-search/
     # package.json (or a compromised transitive dependency) could execute

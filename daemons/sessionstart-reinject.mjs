@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 // sessionstart-reinject.mjs — warm-start reinject + resume-verb carrier (SessionStart hook).
 //
-// Fires on every SessionStart source (startup | resume | clear | compact) — a
-// single hook for a single operator. (The private origin of this port ran two
-// separate scripts because its multi-agent SessionStart matchers were wired
-// per-agent; that split doesn't apply to a single-operator install, so it is
-// merged into this one file — see docs/two-verb-lifecycle.md for the note.)
+// Fires on every SessionStart source (startup | resume | clear | compact).
+// One carrier keeps warm orientation and post-clear resume ordering consistent.
 //
 // On source=clear, this is the SINGLE carrier for the resume verb: it calls
 // runResumeVerb() (resume-verb.mjs) directly and prints its procedure text, then
@@ -35,6 +32,8 @@
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { memRoot as resolveMemRoot, newestValidCapsule } from './lifecycle-common.mjs';
+import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
+import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
 
 const TOP_LINKS = 5;
@@ -94,6 +93,31 @@ try {
   // cover it — this is the SessionStart half of "the session always knows the
   // date." Unconditional, first, before the coordination-guard branch.
   process.stdout.write(`[CLOCK] ${new Date().toString()}\n`);
+
+  // SessionStart is the durable fallback when no scheduler is installed: it
+  // re-derives watchdog status, persists a named alert, delivers it on stderr,
+  // and then surfaces active alerts in the hook payload. Alert deduplication
+  // prevents repeated starts from flooding the ledger. Keep the entire path
+  // isolated so a missing, malformed, or unreadable ledger can never suppress
+  // post-clear recovery.
+  try {
+    await runNightlyWatchdog({
+      root,
+      deliver: true,
+      persist: true,
+    });
+    const nightlyAlerts = formatNightlyBootAlerts(root);
+    if (nightlyAlerts.length) process.stdout.write(nightlyAlerts.join('\n') + '\n');
+  } catch (error) {
+    const detail = String(error?.message || error).replace(/[\r\n]+/g, ' ').slice(0, 300);
+    logErr(root, `nightly watchdog/alert read failed: ${detail}`);
+    process.stderr.write(`[NIGHTLY-ALERT: ALERT_SURFACE_FAILED] ${detail}\n`);
+    process.stdout.write(
+      '[NIGHTLY-ALERT: ALERT_SURFACE_FAILED] Nightly alert ledger/watchdog state '
+      + 'could not be read; '
+      + 'see vault/memory/.daemon-errors.log.\n',
+    );
+  }
 
   // A live coordination cycle (if a fork wires one) owns the lifecycle — including
   // across a clear, so this check runs before the source==='clear' branch below.
@@ -163,8 +187,7 @@ try {
     if (top.length) out.push(`Hot notes: ${top.map((n) => `[[${n}]]`).join(' · ')}`);
   } catch { /* no heat index yet — fine */ }
 
-  // Latest session-log hint (folds in the private origin's separate cold-start
-  // seed): first meaningful heading in SESSION_LOG.md after the title.
+  // Latest session-log hint: first meaningful heading after the title.
   try {
     const lines = readFileSync(path.join(MEM, 'SESSION_LOG.md'), 'utf8').split('\n');
     for (const l of lines) {
