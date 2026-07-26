@@ -305,11 +305,24 @@ configured time zone and post-fire cutoff, then verifies the selected block:
 - terminal `status: PASS`;
 - valid completion timestamp;
 - all eleven checkpoints exactly once;
-- no unknown, failed, nonzero, or unreceipted rows.
+- no unknown, unparseable, or unreceipted rows;
+- no failed or nonzero row under a `PASS` terminal status.
 
-Red raises `NIGHTLY:NO_FIRE` in the local alert ledger and stderr. The active
-alert is visible at SessionStart even if no optional integration exists. Green
-resolves only the matching no-fire alert.
+Red raises one of two distinct alerts, because "the pass never ran" and "the
+pass ran and failed" are different conditions and must not report as the same
+thing:
+
+- **`NIGHTLY:NO_FIRE`** — no block, a stale block, or a structurally incomplete
+  one. The pass did not complete.
+- **`NIGHTLY:PASS_FAILED`** — a structurally complete block whose terminal
+  status is `FAIL`, naming the failed checkpoints. The pass ran every checkpoint
+  and reported its failures honestly. Raising this also resolves any stale
+  no-fire, so the ledger never carries both claims at once.
+
+Either way the result is red — a failing nightly never reads green. The active
+alert is visible at SessionStart even if no optional integration exists, and the
+boot renderer interpolates the alert code rather than filtering on it, so a new
+code surfaces without a change there. Green resolves only the no-fire alert.
 
 ## Betterment flow
 

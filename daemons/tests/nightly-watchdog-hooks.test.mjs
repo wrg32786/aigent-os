@@ -449,3 +449,46 @@ test('mutation proof: an honest FAIL is "fired and failed", never a no-fire', as
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+// A line that looks like a checkpoint row but misses the strict row regex was
+// dropped silently. Paired with a well-formed row for the same checkpoint it
+// evaded both `missing` and `duplicates`, so the block read "11/11 checkpoints"
+// with a FAIL row in it. Both specimens found by DaVinci in R26 review.
+test('mutation proof: an unparseable checkpoint row is loud, never silently dropped', async () => {
+  const { assessNightlyCompletion } = await import('../nightly-watchdog.mjs');
+  const { base, root } = fixture('unparseable-rows');
+  try {
+    const log = path.join(root, 'vault/memory/runtime/NIGHTLY_LOG.md');
+    for (const loose of [
+      '- heat-index: status=FAIL (crashed, no exit recorded)',
+      '- heat-index: status=ERROR exit=1 validator=r',
+    ]) {
+      // The loose row is ADDED alongside the complete set — that pairing is what
+      // used to make it invisible to every existing guard.
+      write(
+        root,
+        'vault/memory/runtime/NIGHTLY_LOG.md',
+        protocolBlock('PASS').replace(/\n$/, `\n${loose}\n`),
+      );
+      const leak = assessNightlyCompletion({
+        file: log, date: PASS_DATE, timeZone: TIME_ZONE, cutoffHour: CUTOFF_HOUR,
+      });
+      assert.equal(leak.ok, false, `must not read green: ${loose}`);
+      assert.equal(leak.code, 'incomplete');
+      assert.match(leak.detail, /unparseable_rows=1/);
+      console.log(`LAW-XV RED: '${loose.slice(0, 44)}' -> ${leak.code}`);
+    }
+
+    // RESTORE: the honest block has no unparseable rows and stays green — the
+    // guard must not simply refuse everything.
+    write(root, 'vault/memory/runtime/NIGHTLY_LOG.md', protocolBlock('PASS'));
+    const green = assessNightlyCompletion({
+      file: log, date: PASS_DATE, timeZone: TIME_ZONE, cutoffHour: CUTOFF_HOUR,
+    });
+    assert.equal(green.ok, true);
+    assert.equal(green.code, 'complete');
+    console.log(`RESTORE GREEN: ${green.detail}`);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});

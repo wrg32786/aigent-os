@@ -102,7 +102,17 @@ export function assessNightlyCompletion({
   const unreceipted = checkpointRows
     .filter((entry) => !/\bvalidator=(?!none(?:\s|$))\S+/i.test(entry[0]))
     .map((entry) => entry[1].toLowerCase());
+  // A line that LOOKS like a checkpoint row but misses the strict row regex was
+  // being dropped in SILENCE. Paired with a well-formed row for the same
+  // checkpoint it evaded `missing` (the good row satisfies `recorded`) AND
+  // `duplicates` (which only counts strict matches), so the block could report
+  // "11/11 checkpoints" with a FAIL row sitting in it. Count loosely, compare
+  // strictly: a row the strict parser cannot read is loud, never invisible.
+  const looseRows = [...block.matchAll(/^-[ \t]+[a-z][a-z0-9-]*:[ \t]+status=/gmi)];
   const invalid = [];
+  if (looseRows.length !== checkpointRows.length) {
+    invalid.push(`unparseable_rows=${looseRows.length - checkpointRows.length}`);
+  }
   if (protocol !== NIGHTLY_PROTOCOL) invalid.push(`protocol=${protocol || 'missing'}`);
   if (!status) invalid.push('terminal status');
   if (!completedAt || !Number.isFinite(Date.parse(completedAt))) invalid.push('completed_at');
