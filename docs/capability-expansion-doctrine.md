@@ -40,7 +40,7 @@ Capability expansion is about finding a legitimate path, not about removing cons
 When Step 1 (recall) finds nothing:
 
 1. Log to `memory/SKILL_GAPS.md`: date, task context, gap description, status = `open`
-2. Surface `/skill-hunt` to Will with the gap description as the argument
+2. Surface `/skill-hunt` to the operator with the gap description as the argument
 3. Do not silently skip capability; gaps logged are gaps closed over time
 
 When a hunt succeeds:
