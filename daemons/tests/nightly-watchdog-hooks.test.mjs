@@ -506,9 +506,9 @@ test('mutation proof: an unparseable checkpoint row is loud, never silently drop
 // The assessor can return code='failed' perfectly while the alert never reaches a human.
 // NIGHTLY:PASS_FAILED is emitted at exactly ONE site and, before this test, was asserted
 // NOWHERE — every other hook assertion in this file pins NIGHTLY:NO_FIRE. So a code filter
-// added to the boot path would leave the unit tests green while Will silently stopped being
-// told his nightly failed. This drives the REAL SessionStart entry point end to end and
-// asserts on the boot payload a human actually sees.
+// added to the boot path would leave the unit tests green while the operator silently
+// stopped being told the nightly failed. This drives the REAL SessionStart entry point end
+// to end and asserts on the boot payload a human actually sees.
 test('mutation proof: a fired-and-failed nightly reaches SessionStart boot output as PASS_FAILED, never NO_FIRE', () => {
   const { root } = fixture('sessionstart-pass-failed');
   const input = JSON.stringify({ source: 'startup', cwd: root });
