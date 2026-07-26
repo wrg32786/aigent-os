@@ -71,6 +71,14 @@ if printf '%s' "$INPUT_LOWER" | grep -qE \
   class_muted routing || printf '%s\n' '[CADDY:routing] STYLE — Match the configured team voice. Keep the message short, specific, and free of generic AI scaffolding.'
 fi
 
+# Build intent. Unguarded by design: this is Standard 16, not one maintainer's
+# policy, so it ships on by default like /orient and STYLE. Rungs 1 and 2 are
+# the ones that actually get skipped, which is why the hint leads with them.
+if printf '%s' "$INPUT_LOWER" | grep -qE \
+  '\b(build|implement|create|scaffold|refactor|rewrite|introduce|wire up|set up|stand up)\b|\badd (a|an|another|some)? ?(feature|module|service|component|helper|wrapper|layer|abstraction|framework|handler|utility|endpoint|pipeline|system)\b|from scratch|new (module|service|helper|wrapper|abstraction|framework|system|layer)'; then
+  class_muted routing || printf '%s\n' '[CADDY:routing] PONYTAIL — Walk the ladder before writing; stop at the first rung that holds: does this need to exist -> already in this codebase -> stdlib -> native platform -> installed dependency -> one line -> minimum that works. If a structure is defending a defect, fix the defect and DELETE the structure rather than patching it. Never cut validation, security, data-loss handling, or error propagation to make a diff smaller. Standard 16; full doctrine in vault/concepts/Ponytail Doctrine.md'
+fi
+
 if [[ "${AIGENT_ENABLE_REMINDB:-0}" == "1" ]] && printf '%s' "$INPUT_LOWER" | grep -qE \
   '(read|load|recall|find|search|query|look up|fetch) .*(vault|memory|notes?|concepts?)|memory query|vault query|recall|catch me up'; then
   class_muted memory || printf '%s\n' '[CADDY:memory] MEMDB — Use the configured remindb MCP tools for known-topic vault queries.'
