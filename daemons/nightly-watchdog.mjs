@@ -184,13 +184,23 @@ export function assessNightlyCompletion({
   };
 }
 
-// Every alert code this watchdog can raise. Both the emitter and the green-path
-// resolver read THIS list, so a new code cannot end up raisable but never
-// resolvable — the defect that made PASS_FAILED permanent when the resolver
-// hand-listed NO_FIRE only.
+// Every alert code this watchdog can raise. The emitter and the green-path
+// resolver both go through these constants, so the string that gets raised is
+// the same object that gets cleared — the defect that made PASS_FAILED
+// permanent was the resolver hand-listing NO_FIRE only.
+//
+// What this DOES enforce: no code can be raised from a literal that is absent
+// from the list, because the emitter has no literals left to raise.
+// What it does NOT enforce: adding a third code still means adding it here by
+// hand. Nothing fails if you forget. The constants make that omission awkward
+// and visible at the call site rather than invisible — they do not make it
+// impossible, and an earlier version of this comment claimed otherwise.
+const ALERT_NO_FIRE = 'NIGHTLY:NO_FIRE';
+const ALERT_PASS_FAILED = 'NIGHTLY:PASS_FAILED';
+
 export const WATCHDOG_ALERT_CODES = Object.freeze([
-  'NIGHTLY:NO_FIRE',
-  'NIGHTLY:PASS_FAILED',
+  ALERT_NO_FIRE,
+  ALERT_PASS_FAILED,
 ]);
 
 export async function runNightlyWatchdog({
@@ -268,14 +278,14 @@ export async function runNightlyWatchdog({
       // masked by a stale one, and so the ledger never carries both claims.
       resolveNightlyAlerts({
         root,
-        code: 'NIGHTLY:NO_FIRE',
+        code: ALERT_NO_FIRE,
         reason: `nightly ${freshness.newest} fired with terminal status=FAIL`,
         now,
       });
     }
     alert = await emitNightlyAlert({
       root,
-      code: firedButFailed ? 'NIGHTLY:PASS_FAILED' : 'NIGHTLY:NO_FIRE',
+      code: firedButFailed ? ALERT_PASS_FAILED : ALERT_NO_FIRE,
       summary: firedButFailed
         ? `nightly pass fired and failed (${failedNames.length} checkpoint${failedNames.length === 1 ? '' : 's'}: ${failedNames.join(', ') || 'unnamed'})`
         : `nightly pass did not complete (${freshness.code})`,
