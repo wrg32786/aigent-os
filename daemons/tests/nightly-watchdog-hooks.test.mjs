@@ -95,7 +95,11 @@ function canonicalDream() {
   ].join('\n');
 }
 
-function protocolBlock(status, date = PASS_DATE) {
+// `failed` names checkpoints that ran and genuinely failed, so a caller can build a
+// STRUCTURALLY COMPLETE block that is honestly red — the "fired and failed" shape, which
+// is a different condition from a pass that never ran. Default [] keeps every existing
+// call site byte-identical.
+function protocolBlock(status, date = PASS_DATE, failed = []) {
   return [
     `## Nightly Pass -- ${date} (terminal-status-proof)`,
     `protocol: ${NIGHTLY_PROTOCOL}`,
@@ -105,9 +109,14 @@ function protocolBlock(status, date = PASS_DATE) {
     `time_zone: ${TIME_ZONE}`,
     `cutoff_hour: ${CUTOFF_HOUR}`,
     `framework_legs: 7 | checkpoints: ${NIGHTLY_CHECKPOINTS.length}/${NIGHTLY_CHECKPOINTS.length}`,
-    ...NIGHTLY_CHECKPOINTS.map((checkpoint) => (
-      `- ${checkpoint}: status=PASS exit=0 evidence=stdout:${checkpoint}@exit=0 alert=none validator=FIXTURE_RECEIPT_PASS`
-    )),
+    ...NIGHTLY_CHECKPOINTS.map((checkpoint) => {
+      const red = failed.includes(checkpoint);
+      const exit = red ? 1 : 0;
+      return `- ${checkpoint}: status=${red ? 'FAIL' : 'PASS'} exit=${exit}`
+        + ` evidence=stdout:${checkpoint}@exit=${exit}`
+        + ` alert=${red ? 'raised' : 'none'}`
+        + ` validator=FIXTURE_RECEIPT_${red ? 'FAIL' : 'PASS'}`;
+    }),
     '',
   ].join('\n');
 }
@@ -491,4 +500,48 @@ test('mutation proof: an unparseable checkpoint row is loud, never silently drop
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// WIRING proof — deliberately NOT another assertion on assessNightlyCompletion.
+// The assessor can return code='failed' perfectly while the alert never reaches a human.
+// NIGHTLY:PASS_FAILED is emitted at exactly ONE site and, before this test, was asserted
+// NOWHERE — every other hook assertion in this file pins NIGHTLY:NO_FIRE. So a code filter
+// added to the boot path would leave the unit tests green while Will silently stopped being
+// told his nightly failed. This drives the REAL SessionStart entry point end to end and
+// asserts on the boot payload a human actually sees.
+test('mutation proof: a fired-and-failed nightly reaches SessionStart boot output as PASS_FAILED, never NO_FIRE', () => {
+  const { root } = fixture('sessionstart-pass-failed');
+  const input = JSON.stringify({ source: 'startup', cwd: root });
+  // Dated for the watchdog SessionStart actually runs: it takes no `now` override, so a
+  // stale fixture would fail the freshness gate first and mask the condition under test.
+  const expected = expectedNightlyDate({
+    now: new Date(),
+    timeZone: TIME_ZONE,
+    cutoffHour: CUTOFF_HOUR,
+  });
+
+  // BREAK: a structurally complete evidence block that is honestly red on one checkpoint.
+  write(
+    root,
+    'vault/memory/runtime/NIGHTLY_LOG.md',
+    protocolBlock('FAIL', expected, ['heat-index']),
+  );
+  const failed = runNode(SESSIONSTART, [], { root, input });
+  assert.equal(failed.status, 0, failed.stderr);
+  assert.match(failed.stdout, /\[NIGHTLY-ALERT: NIGHTLY:PASS_FAILED\]/);
+  // Named, not merely coded — an alert that cannot say WHICH leg failed sends a human back
+  // to the log to find out, which is the friction the alert exists to remove.
+  assert.match(failed.stdout, /heat-index/);
+  // The point of separating structure from verdict: a pass that DID fire must never be
+  // reported as one that never ran.
+  assert.doesNotMatch(failed.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  proof('BREAK sessionstart-pass-failed', failed);
+
+  // RESTORE: same block, every checkpoint green — the alert must clear from boot output.
+  write(root, 'vault/memory/runtime/NIGHTLY_LOG.md', protocolBlock('PASS', expected));
+  const restored = runNode(SESSIONSTART, [], { root, input });
+  assert.equal(restored.status, 0, restored.stderr);
+  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: NIGHTLY:PASS_FAILED\]/);
+  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  proof('RESTORE sessionstart-pass-failed', restored);
 });
