@@ -81,7 +81,7 @@ if EXCLUDED.search(prompt):
 
 # ── Strip non-human input ─────────────────────────────────────────────────
 # The prompt includes tool output, agent responses, code blocks, JSON, XML.
-# These are NOT Will's words. Strip them before matching to avoid false positives.
+# These are NOT the operator's words. Strip them before matching to avoid false positives.
 import html
 prompt = html.unescape(prompt)
 # Remove XML/HTML tags and their content (tool results, system reminders)
@@ -102,7 +102,7 @@ if not prompt.strip():
 # ── Trigger pattern table ───────────────────────────────────────────────────
 # Two tiers:
 #   Tier 1 (original): explicit memory-authoring phrases. High precision.
-#   Tier 2 (v0.5.3 addition): correction patterns. Will's real feedback style.
+#   Tier 2 (v0.5.3 addition): correction patterns. How operators really give feedback.
 #     These fire on correction-y signals WITHOUT requiring trigger keywords.
 #     Calibrated to capture what was missed in S31d:
 #       - "em-dashes signal AI writing — drop them"
@@ -143,8 +143,8 @@ PATTERNS = [
     (re.compile(r"(?:that's|that is|you're|you are|this is)\s+wrong[,.]?\s+(.{5,})", re.IGNORECASE), "doctrine", "medium", "correction_wrong"),
     # REMOVED: correction_actually — matched any "actually" + 10 chars, 100% false positive rate.
     # REMOVED: correction_drop — matched any "drop/cut/remove", same problem.
-    # Real corrections from Will are short imperative sentences. Tier 1 patterns
-    # ("from now on", "new rule", "remember that") catch those. If Will says
+    # Real corrections are short imperative sentences. Tier 1 patterns
+    # ("from now on", "new rule", "remember that") catch those. If the operator says
     # "drop em-dashes" it'll be caught by correction_never_use ("don't use em-dashes")
     # or he'll say "from now on, no em-dashes" which Tier 1 catches.
 ]
