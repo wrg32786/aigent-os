@@ -32,6 +32,17 @@ test('valid capsule text passes with no problems', () => {
   assert.equal(fields.next_valid_action, 'Run the daemon test suite');
 });
 
+test('JSON-quoted frontmatter scalars decode embedded quotes and backslashes', () => {
+  const objective = 'Fix the "quoted" C:\\capsule path';
+  const quoted = VALID.replace(
+    'objective: "Finish the daemon reconcile"',
+    `objective: ${JSON.stringify(objective)}`,
+  );
+  const { fields, problems } = validateCapsuleText(quoted);
+  assert.deepEqual(problems, []);
+  assert.equal(fields.objective, objective);
+});
+
 test('missing frontmatter block is refused', () => {
   const { fields, problems } = validateCapsuleText('no frontmatter here\n');
   assert.deepEqual(fields, {});

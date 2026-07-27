@@ -136,24 +136,27 @@ function capsuleAgeLines(loaded) {
   return lines;
 }
 
-// The Stop-hook autosave is a delta snapshot wearing a capsule's schema. Its
-// objective is a fixed placeholder, waiting_on is hardcoded null in the writer's
-// skeleton, and next_valid_action is a generic line padded with truncated prose
-// from the last turn. Every required field is non-empty, so the selector accepts
-// it — correctly, since there may be nothing else on disk. The gap is that the
-// session cannot tell it apart from a curated capsule once both arrive through
-// the same procedure, so a null waiting_on reads as "nothing pends" when it
-// means "unknown", and the padding reads as an instruction.
+// The Stop-hook autosave is a delta snapshot wearing a capsule's schema, not a
+// contract reconciled against live state. Current and legacy shapes coexist on
+// disk until each legacy autosave is healed by its next Stop write, so the
+// procedure must explain both without treating either one's fields as commands.
 function autosaveLines(loaded) {
   if (!loaded || !loaded.autosave) return [];
   return [
     '',
     '  *** AUTOSAVE, NOT A CURATED CAPSULE ***',
-    '  Written by the Stop hook from a session delta. `objective` is a fixed placeholder,',
-    '  `waiting_on` is hardcoded null and means UNKNOWN rather than "nothing pends", and',
-    '  `next_valid_action` is generic text padded with a truncated fragment of the last turn.',
-    '  None of that is a resume contract. Treat it as evidence a session ended, derive the',
-    '  next action from live memory, and do not read the padding as an instruction.',
+    '  Written by the Stop hook from a session delta. It records that a session ended;',
+    '  it is not a resume contract and was never reconciled against live state.',
+    '  Two shapes exist on disk, and the difference matters:',
+    '    CURRENT — an undetermined field carries an EXPLICIT unknown marker, while',
+    '    next_valid_action names claimed-row evidence or states plainly that none was',
+    '    captured. An unknown marker means UNKNOWN; it does not mean nothing is pending.',
+    '    LEGACY (written before this fix; healed on that session\'s next Stop) — a fixed',
+    '    placeholder objective, a bare null waiting_on, and a next_valid_action padded',
+    '    with truncated prose, often severed mid-sentence.',
+    '  In BOTH shapes, treat this only as evidence a session ended and derive the next',
+    '  action from live memory. Never read padding as an instruction, and never read an',
+    '  absent or unknown value as "nothing is pending".',
   ];
 }
 

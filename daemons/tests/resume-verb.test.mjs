@@ -575,7 +575,7 @@ test('reporting age never rejects: a stale capsule is still selected', () => {
   }
 });
 
-test('an autosave is named as one and its empty fields are given their real meaning', () => {
+test('an autosave is named and both current and legacy field shapes are explained', () => {
   const fixture = mkFixture();
   try {
     // The real autosave shape: placeholder objective, null waiting_on, and a next
@@ -590,8 +590,11 @@ test('an autosave is named as one and its empty fields are given their real mean
     const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-auto' });
     assert.equal(result.loaded.autosave, true);
     assert.match(result.prompt, /\*\*\* AUTOSAVE, NOT A CURATED CAPSULE \*\*\*/);
-    assert.match(result.prompt, /hardcoded null and means UNKNOWN rather than "nothing pends"/);
-    assert.match(result.prompt, /do not read the padding as an instruction/);
+    assert.match(result.prompt, /CURRENT — an undetermined field carries an EXPLICIT unknown marker/);
+    assert.match(result.prompt, /An unknown marker means UNKNOWN; it does not mean nothing is pending/);
+    assert.match(result.prompt, /LEGACY \(written before this fix; healed on that session's next Stop\)/);
+    assert.match(result.prompt, /Never read padding as an instruction/);
+    assert.match(result.prompt, /never read an\s+absent or unknown value as "nothing is pending"/);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }

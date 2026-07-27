@@ -52,7 +52,7 @@ Both patterns are START-ANCHORED: a capsule that legitimately *references* the c
 
 ## Validation
 
-`daemons/capsule-verb.mjs` exports `validateCapsuleText()`: the one place required-field presence and the content gate (above) are checked together. It returns `{ fields, problems }`; an empty `problems` array means the four required fields are present and neither `objective` nor `next_valid_action` is injection-echo or ceremony-action. There is no separate trusted-writer process that stamps a pointer or a digest (the operator, or the model acting on the operator's behalf, writes the capsule file directly), and `validateCapsuleText()` is available as a utility for a skill or a test to self-check.
+`daemons/capsule-verb.mjs` exports `validateCapsuleText()`: the one place required-field presence and the content gate (above) are checked together. It returns `{ fields, problems }`; an empty `problems` array means the four required fields are present and neither `objective` nor `next_valid_action` is injection-echo or ceremony-action. The Stop-hook writer calls it on the final merged autosave before committing the file. That check is diagnostic and fail-open because a Stop hook must still preserve the best available snapshot if validation cannot run. There is no separate trusted-writer process that stamps a pointer or a digest, and `validateCapsuleText()` remains available for a skill or test to self-check.
 
 ## Selection is loud about what it discards
 
@@ -74,9 +74,9 @@ So `CAPSULE DATA` carries an `age` line every time, and past seven days adds an 
 
 The under-threshold path still says that freshness is not correctness: verify each value against live state, and expect part of the next action to be done already. A capsule minutes old can describe work that has since been finished by someone else.
 
-The same block names the **writer**. The Stop-hook autosave satisfies every selector requirement while carrying no resume contract — its objective is a fixed placeholder, the writer hardcodes `waiting_on` to `null` in its skeleton, and `next_valid_action` is a generic line padded with a truncated fragment of the last turn. Both required fields are non-empty, so selection accepts it, correctly, since there may be nothing else on disk. The gap was that a session could not tell it apart from a curated capsule once both arrived through the same procedure. A null `waiting_on` then reads as "nothing pends" when it means "unknown", and the truncated padding reads as an instruction. The procedure now labels it and gives those empty fields their real meaning.
+The same block names the **writer**. A Stop-hook autosave satisfies every selector requirement, but it is still a session-delta snapshot rather than a contract reconciled against live state. Current autosaves use explicit unknown markers for fields the writer cannot determine, and `next_valid_action` either names real claimed-row evidence or says plainly that none was captured. Legacy autosaves remain on disk until that session's next Stop heals them; those carry the old fixed objective, bare null `waiting_on`, and truncated-prose action. The procedure describes both shapes because a resuming session must never read unknown or absent state as "nothing is pending", or treat legacy prose padding as an instruction.
 
-Detection reads a structured field — the `trigger` scalar or the `tags` array — never the placeholder wording. The wording is free to change, and a marker that lives in prose is the first thing a reader collapses. `created_at` is capsule-controlled like every other value here, so it renders through `inert()` too.
+Detection reads a structured field (the `trigger` scalar or the `tags` array), never the placeholder wording. The wording is free to change, and a marker that lives in prose is the first thing a reader collapses. `created_at` is capsule-controlled like every other value here, so it renders through `inert()` too.
 
 Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in four independent ways: against removal of the age reporting, against removal of the autosave labelling, against a moved staleness threshold, and against detection that sniffs the placeholder prose instead of the structured field. Its ages are relative to the run, so the tests cannot drift into a different verdict as the calendar advances.
 
@@ -104,9 +104,9 @@ If a fork wires multiple agents/sessions that need to pause for a conducted, mul
 
 - **The capsule is best-effort autosave, never a gate.** An operator `/clear` passes through whether or not a capsule landed. Nothing in this system should ever tell the operator to wait on capsule machinery.
 
-## Known issue: resolved by removal
+## Former refresh-cycle issue
 
-The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a fresh, still-`waiting_on: null` autosave capsule and be refused) no longer applies: v0.9.1 removes the automated stamping path entirely (see "Context-pressure self-refresh" above). `validateCapsuleText()` still treats a bare `waiting_on: null` as not-yet-resumable (that check is correct and unchanged), but nothing calls it against an in-flight autosave capsule anymore. It only matters when a skill or test explicitly validates a capsule that's meant to be a resume source.
+The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a fresh, still-`waiting_on: null` autosave capsule and be refused) no longer applies: v0.9.1 removes that stamping path entirely (see "Context-pressure self-refresh" above). `validateCapsuleText()` still treats a bare `waiting_on: null` as not resumable, and the Stop writer now calls it diagnostically on every final autosave. Validation problems are logged but never block the snapshot. Current autosaves emit an explicit unknown marker instead of null, while legacy autosaves heal on their next write.
 
 ## File map
 
