@@ -54,28 +54,50 @@ export function bodySection(doc, key) {
   return value || null;
 }
 
+// A capsule a previous resume already spent. `active` is the only selectable
+// state; every status here marks a capsule kept for the record, not for replay.
+// It is tracked as its own rejection reason so the ledger below can separate
+// ordinary history from a capsule that was authored and then thrown away.
+export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
+
 // Resume has one selector: the valid active capsule with the newest frontmatter
 // created_at. Any unreadable or malformed candidate is ignored; hook callers
 // degrade without throwing when no valid capsule exists.
-export function newestValidCapsule(memoryRoot) {
+//
+// selectCapsule returns the FULL result: { capsule, rejected, unavailable }.
+// The rejection ledger is why this exists alongside the thin wrapper below.
+// Every discard used to be a bare `continue` — six separate silent paths, no
+// record of any of them. A capsule silently discarded and a capsule that never
+// existed look identical to the session resuming, so a selector defect can
+// reject every capsule on disk indefinitely and still look completely normal
+// from the outside. Recording the reason is what makes that state auditable.
+//
+// The return shape is EXTENDED, never narrowed: .path/.id/.created/.createdRaw
+// are unchanged and null still means "nothing to resume from", so the existing
+// callers keep working untouched.
+export function selectCapsule(memoryRoot) {
+  const rejected = [];
+  const note = (name, reason, detail) => rejected.push({ name, reason, ...(detail ? { detail } : {}) });
+  const none = (reason) => ({ capsule: null, rejected, unavailable: reason });
+
   let dir;
   try {
     dir = path.join(String(memoryRoot), 'capsules');
-    if (!existsSync(dir)) return null;
-  } catch { return null; }
+    if (!existsSync(dir)) return none('no-capsules-dir');
+  } catch { return none('bad-memory-root'); }
 
   let entries;
   try {
     entries = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.md'));
-  } catch { return null; }
+  } catch { return none('capsules-dir-unreadable'); }
 
   let best = null;
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
-    try { doc = readFileSync(full, 'utf8'); } catch { continue; }
+    try { doc = readFileSync(full, 'utf8'); } catch { note(name, 'unreadable'); continue; }
     const frontmatter = doc.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1];
-    if (!frontmatter) continue;
+    if (!frontmatter) { note(name, 'no-frontmatter'); continue; }
     const scalar = (key) => {
       const match = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
       if (!match) return null;
@@ -92,13 +114,89 @@ export function newestValidCapsule(memoryRoot) {
     const status = scalar('status');
     const objective = scalar('objective') || bodySection(doc, 'objective');
     const nextAction = scalar('next_valid_action') || bodySection(doc, 'next_valid_action');
-    if (status !== 'active' || !id || !Number.isFinite(created)) continue;
-    if (!objective || !nextAction) continue;
+
+    // Spent capsules are labelled apart from junk. The caller must be able to
+    // tell "nothing to resume from" (a fresh install, correct) from "everything
+    // here is already spent" (the ordinary end of a cycle) from "the selector
+    // threw away capsules somebody wrote" (a defect).
+    if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
+    if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
+    if (!id) { note(name, 'no-id'); continue; }
+    if (!Number.isFinite(created)) { note(name, 'bad-created_at', createdRaw || '(absent)'); continue; }
+    // The field-level reason matters most here: "missing next_valid_action" on a
+    // capsule that plainly has one is the signal that surfaces a matcher defect
+    // in a day instead of never.
+    if (!objective || !nextAction) {
+      note(name, 'missing-required-field', !objective ? 'objective' : 'next_valid_action');
+      continue;
+    }
     if (!best || created > best.created) {
       best = { path: full, id, created, createdRaw };
     }
   }
-  return best;
+
+  if (best) return { capsule: best, rejected };
+  return { capsule: null, rejected, unavailable: entries.length ? 'all-candidates-rejected' : 'no-capsules-on-disk' };
+}
+
+// Backward-compatible wrapper for callers that only need the selection. The
+// orientation leg (sessionstart-reinject) labels whatever comes back "newest
+// active capsule", so null here still means exactly what it always did.
+export function newestValidCapsule(memoryRoot) {
+  const { capsule, rejected } = selectCapsule(memoryRoot);
+  if (!capsule) return null;
+  return { ...capsule, rejected };
+}
+
+// Anything that could end a line and start a new one: C0/C1 controls, CR, LF,
+// NEL, and the Unicode line/paragraph separators. JSON.stringify escapes the
+// first two groups but passes U+2028/U+2029 through verbatim, so they are
+// neutralized here rather than left to it.
+const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+// The rendering boundary between capsule content and prompt structure.
+//
+// Values read off a capsule are DATA. They are attacker-controllable in the
+// scenario this design already assumes — a capsules directory is just files, and
+// anything that can write one can choose every byte of its frontmatter — so a
+// value must never be able to contribute STRUCTURE to a generated procedure.
+// Rendered raw, a frontmatter scalar carrying "\n" (which the scalar readers
+// JSON.parse into a real newline) begins its own line, and a line of its own is
+// all a forged instruction needs to look like one of ours.
+//
+// Three properties, each load-bearing:
+//   1. Single line. Every line-breaking character becomes a space, so the value
+//      is always a fragment of a line that OUR code started, never a line.
+//   2. Quoted. The reader can see where the datum begins and ends, so text
+//      shaped like a heading is visibly inside a value.
+//   3. Bounded. An unbounded field can otherwise flood the procedure and push
+//      the fences out of the reader's attention entirely.
+// Truncation is announced, not silent: a value trimmed here is still evidence.
+export function inert(value, max = 500) {
+  let s = String(value ?? '').replace(LINE_BREAKING, ' ').replace(/[ \t]+/g, ' ').trim();
+  if (s.length > max) s = `${s.slice(0, max)}…[+${s.length - max} chars]`;
+  return JSON.stringify(s);
+}
+
+// Human-readable account of what the selector discarded. Grouped by reason so a
+// systemic defect reads as ONE line ("47x missing-required-field
+// (next_valid_action)") rather than 47 unrelated ones, which is the shape that
+// makes a matcher bug obvious on sight.
+//
+// Reasons are this module's own vocabulary; details and file names come off
+// disk, so they go through inert() HERE rather than at the call site — the
+// summary is the unit that must be safe to print, whoever prints it.
+export function rejectionSummary(rejected) {
+  if (!Array.isArray(rejected) || !rejected.length) return null;
+  const byReason = new Map();
+  for (const r of rejected) {
+    const key = r.detail ? `${r.reason} (${inert(r.detail, 120)})` : String(r.reason);
+    if (!byReason.has(key)) byReason.set(key, []);
+    byReason.get(key).push(inert(r.name, 120));
+  }
+  return [...byReason.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([reason, names]) => `${names.length}x ${reason}: ${names.length <= 3 ? names.join(', ') : `e.g. ${names[0]}`}`);
 }
 
 // The write half of the consume contract. The selector above only ever picks
