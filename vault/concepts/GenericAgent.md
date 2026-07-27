@@ -64,4 +64,3 @@ Banked as the next logical extension of [[Memory Decay Doctrine]] — captured i
 
 - Related patterns: [[Lego Arsenal Doctrine]], [[Gstack Port]], [[Pantheon]]
 - Patterns ripped: [[Auto-skill from recurring task]], [[Memory Decay Doctrine]]
-- Cross-reference: [[Hermes Agent]] (same self-evolving territory, more mature ecosystem)
