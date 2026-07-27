@@ -30,7 +30,7 @@ file_path = tool_input.get("file_path", "")
 if not file_path:
     sys.exit(0)
 
-file_path_norm = file_path.replace("\\\\", "/").lower()
+file_path_norm = file_path.replace("\\", "/").lower()
 
 if "/skills/" not in file_path_norm:
     sys.exit(0)
