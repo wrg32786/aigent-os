@@ -36,7 +36,7 @@ That's it. One sentence. The rest of this note unpacks why it's load-bearing.
 - **Wikilinks as the connection layer.** A graph of linked documents. The graph IS the intelligence. The principal can navigate it visually in Obsidian or programmatically with `grep`.
 - **Explicit authority matrix.** What the AI can do alone, what it must ask, what it can never touch — written down, in markdown, where the principal can edit it.
 - **Hooks and daemons that the principal can read.** Shell scripts and small programs, not opaque binaries. If a hook fires, the principal can grep the script to understand why.
-- **Publishing protocols that announce themselves.** When the principal's local the AIgent learns something new and graduates it to a public release, the protocol records what shipped, what was held back, what the sanitizer caught — in markdown, in the repo, where everyone can read it.
+- **Publishing protocols that announce themselves.** *(Planned, not shipped — see [[The Self-Management Layer]].)* When the principal's local the AIgent learns something new and graduates it to a public release, the protocol is meant to record what shipped, what was held back, what the sanitizer caught — in markdown, in the repo, where everyone can read it. Today that graduation is a manual judgement call and nothing records it.
 
 ## Three claims that follow
 

@@ -43,7 +43,7 @@ Setting up the surroundings so the right things happen automatically. **`install
 Layering interventions that compound. **The seven-layer architecture (kernel → doctrine → vault → daemons → hooks → skills → user config).** Each layer does one thing; the stack as a whole does what no single layer could.
 
 ### Protocols
-Cadenced interventions. **Daily (`/open`, `/close`), weekly (quality-pulse, sanitize-and-publish), monthly (vault-health, skill-audit), quarterly (retro, red-team).** A bio-hacker's morning supplement stack is a protocol; so is a Friday `/close`.
+Cadenced interventions. **Daily (`/open`, `/close`), weekly (quality-pulse; sanitize-and-publish is planned, not built), monthly (vault-health, skill-audit), quarterly (retro, red-team).** A bio-hacker's morning supplement stack is a protocol; so is a Friday `/close`.
 
 ## What this posture rules out
 

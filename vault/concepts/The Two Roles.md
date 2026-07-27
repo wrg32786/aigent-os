@@ -58,13 +58,13 @@ Both modes are valid. The discipline is **knowing which mode you're in** and not
 
 ## The publish boundary
 
-The cleanest enforcement of the discipline is the publish boundary. Every vault note and skill carries a `private: true | false | review` flag in YAML frontmatter:
+The cleanest enforcement of the discipline is the publish boundary. **This is a design, not a shipped mechanism** — no file in this repo carries the flag today and no code reads it, so the boundary is currently enforced by the maintainer's judgement alone (see [[The Self-Management Layer]], "Publish skill (planned)"). As designed, every vault note and skill would carry a `private: true | false | review` flag in YAML frontmatter:
 
 - `private: true` — never leaves the principal's local install. principal-specific business context, individual people's notes, in-flight project state.
 - `private: false` — ships to the public aigent-OS repo at next release. Universal doctrine, well-structured skills, generalized examples.
 - `private: review` — pending classification. Default for new files. Forces the principal to make the call explicitly at next publish.
 
-The flag forces the maintainer role to the surface. Every note's `private:` value is a maintainer decision. The principal-as-user can write whatever they want; the principal-as-maintainer decides what graduates.
+The flag's purpose is to force the maintainer role to the surface: every note's `private:` value would be a maintainer decision. The principal-as-user can write whatever they want; the principal-as-maintainer decides what graduates. Until the flag is read by code, that decision happens in the maintainer's head at release time, which is exactly the failure mode the flag is meant to remove.
 
 The generalization test is the second enforcement: *would this skill be useful for at least three radically different principals — say, a SaaS founder, a non-profit director, and a creative production lead?* If only one yes, the skill stays private. If only useful for the principal who built it, the skill stays private.
 

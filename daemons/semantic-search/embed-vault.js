@@ -12,6 +12,7 @@ import { pipeline } from '@xenova/transformers';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -48,6 +49,17 @@ const SKIP_DIRS = new Set([
   'prompts',
   'tools',
 ]);
+
+// Confidential-class deny list. Anyone running semantic search over their own
+// vault can point it at client work, deal notes, or anything else under NDA, and
+// this file writes note text in PLAINTEXT into embeddings.json, so a denied path
+// has to be dropped before it is ever embedded. A deny file that exists but
+// cannot be parsed refuses to build an index at all rather than risk an
+// unfiltered one; no deny file at all is the fresh-install default and indexes
+// everything (see deny-list.mjs). search-vault.js re-filters at query time too,
+// so a stale or hand-edited embeddings.json can't leak a path this file now
+// excludes.
+const DENY_PREFIXES = requireDenyPrefixes(__dirname, 'embed-vault');
 
 // ── YAML frontmatter stripper ────────────────────────────────────────────────
 function stripFrontmatter(content) {
@@ -142,7 +154,10 @@ function collectFiles() {
       scanDirectory(fullDir, files);
     }
   }
-  return files;
+  const kept = files.filter((f) => !deniedPath(DENY_PREFIXES, relative(VAULT_ROOT, f.fullPath)));
+  const dropped = files.length - kept.length;
+  if (dropped > 0) console.log(`[deny] ${dropped} file(s) excluded by index-deny.json`);
+  return kept;
 }
 
 // ── Embedding pipeline ───────────────────────────────────────────────────────
@@ -186,6 +201,15 @@ async function main() {
     } catch (e) {
       console.warn('Could not parse existing embeddings.json, starting fresh.');
     }
+  }
+
+  // Purge denied chunks from the carried-forward index (a --changed-only run must
+  // also strip previously-indexed confidential-class entries, not just skip new ones
+  // -- a prefix added to index-deny.json after the fact has to retroactively purge).
+  const beforePurge = (existing.notes || []).length;
+  existing.notes = (existing.notes || []).filter((n) => !deniedPath(DENY_PREFIXES, n.path));
+  if (beforePurge !== existing.notes.length) {
+    console.log(`[deny] purged ${beforePurge - existing.notes.length} previously-indexed chunk(s) matching index-deny.json`);
   }
 
   // Build a map of path → existing entries (for --changed-only)
