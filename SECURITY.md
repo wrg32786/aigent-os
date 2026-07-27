@@ -6,14 +6,21 @@ aigent-OS processes operational context: priorities, decisions, business details
 
 **Do not post security vulnerabilities publicly.**
 
-The preferred channel is [GitHub private vulnerability reporting](https://github.com/wrg32786/aigent-os/security/advisories/new). If that form is not currently open on this repository, GitHub will say so; in that case open a normal issue containing **only** the words "security report, requesting a private channel" and no details, and the maintainer will open a draft advisory and add you to it so the details can be exchanged privately. Either way, include:
+GitHub's private vulnerability reporting form is **not enabled on this repository yet**, so there is no self-serve private channel. The route that works today is a two-step handshake:
+
+1. Open a regular issue containing **only** the sentence "Security report, requesting a private channel." Include no details, no reproduction, and no hint of the affected component.
+2. The maintainer opens a draft security advisory and adds you to it. Everything substantive is exchanged there, privately.
+
+Be aware of what that costs you: step 1 is public, so the *existence* of a report is visible even though its content is not. If [private vulnerability reporting](https://github.com/wrg32786/aigent-os/security/advisories/new) has been enabled by the time you read this, use it directly and skip the handshake entirely.
+
+Either way, include:
 
 - A description of the vulnerability and its impact
 - Reproduction steps (or a proof-of-concept)
 - The version of aigent-OS you tested against
 - Any suggested mitigation
 
-The maintainer will acknowledge and respond through that channel.
+The maintainer will acknowledge and respond in the advisory.
 
 ## Response Targets
 
@@ -64,7 +71,7 @@ Skills and daemons can read/write the vault and invoke external tools. Vulnerabi
 
 Two of these are code that runs. The first is doctrine the model is asked to follow. The distinction is stated plainly rather than blurred, because it changes what you can rely on:
 
-1. **Authority Matrix** ([`system/12_authority_matrix.md`](system/12_authority_matrix.md)): a markdown document loaded into the model's context defining what the AI may do autonomously, what needs approval, and what it must never touch. **It is a behavioral boundary, not a technical one.** No code reads it and no hook enforces it; it works because the model follows its own instructions, and it fails the way instructions fail. Treat it as the policy layer, and use Claude Code's own `permissions` settings plus OS-level controls for anything you need actually enforced.
+1. **Authority Matrix** ([`system/12_authority_matrix.md`](system/12_authority_matrix.md)): a markdown document loaded into the model's context defining what the AI may do autonomously, what needs approval, and what it must never touch. **It is a behavioral boundary, not a technical one.** No hook enforces it and nothing inspects a pending action against it; it works because the model follows its own instructions, and it fails the way instructions fail. Treat it as the policy layer, and use Claude Code's own `permissions` settings plus OS-level controls for anything you need actually enforced.
 
 2. **Prompt-injection warning scan** (`hooks/security-scan.sh`): a PostToolUse hook, wired by the installer with matcher `Read|WebFetch|WebSearch|Bash|Grep`. It matches tool output against a fixed list of common injection phrases and prints a severity-tagged warning line. It only warns: it cannot block a tool call, it catches only phrasings on its list, and it is a signal to the operator rather than a filter. See [`docs/security.md`](docs/security.md).
 
