@@ -7,6 +7,11 @@ STRIP-REPORT.md
 *.tmp
 frames/
 
+# Python bytecode caches. Several daemons and tests shell out to python3, which
+# writes these next to whatever source it imports.
+__pycache__/
+*.pyc
+
 # The write-ahead prompt journal is local runtime state. Ignore both the live
 # file and rotated dated sidecars.
 **/runtime/utterance-journal*.jsonl
