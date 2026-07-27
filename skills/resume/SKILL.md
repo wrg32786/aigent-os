@@ -21,6 +21,14 @@ The post-clear boot does NOT need this skill — `daemons/resume-verb.mjs` injec
 
 On the post-clear boot, the capsule the runtime loads is marked `status: resumed` mechanically at load — the same capsule is never silently re-resumed on a later clear. If no active capsule exists, the boot takes the documented degraded path (re-derive from live memory) and says so; it never replays stale state as fresh. An explicit mid-session `/resume` is a re-ground, not a consume — it does not mark, so say plainly which capsule you re-grounded from.
 
+## The rejection ledger (part of the load, not decoration)
+
+Everything the selector skipped is printed in the injected procedure under `CAPSULES NOT SELECTED`, grouped by reason with counts and example filenames. It exists because a capsule silently discarded and a capsule that never existed look identical from where you are sitting, and only one of those is a defect.
+
+- **`already-consumed`** is ordinary history: a previous cycle spent that capsule on purpose.
+- **Any other reason** means a capsule somebody wrote was thrown away. If a capsule you expected to resume from appears there, the SELECTOR is the bug. Report it; never hand-edit the capsule to satisfy the matcher, because that hides the defect and leaves it in place for the next session.
+- **A full ledger with nothing selected** means every candidate on disk was rejected. That is a defect until proven otherwise, not an empty install.
+
 ## Fences (never cross)
 
 - **Select by newest `created_at`, never a pointer.** Load the valid capsule with the newest frontmatter `created_at` in `vault/memory/capsules/` (or `memory/capsules/`) — there is no pointer file to consult.

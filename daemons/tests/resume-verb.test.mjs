@@ -237,6 +237,117 @@ test('CLI: source=startup/resume inject nothing via the direct entry; always exi
   }
 });
 
+// ---------------------------------------------------------------------------
+// The rejection ledger. These are the tests that go RED against a selector that
+// discards candidates with a bare `continue` — the shape this repo shipped
+// before, where a capsule thrown away and a capsule that never existed produced
+// byte-identical output.
+// ---------------------------------------------------------------------------
+
+test('discarded capsules are reported with their reason, grouped and counted', () => {
+  const fixture = mkFixture();
+  try {
+    // Three separate discard paths, none of which used to leave a trace.
+    writeFileSync(path.join(fixture.capsules, '2026-07-23-no-next.md'),
+      '---\nid: 2026-07-23-no-next\nstatus: active\nobjective: "has an objective"\n'
+      + 'waiting_on: "something"\ncreated_at: 2026-07-23T10:00:00Z\n---\n\n# body\n');
+    writeFileSync(path.join(fixture.capsules, '2026-07-24-no-objective.md'),
+      '---\nid: 2026-07-24-no-objective\nstatus: active\nwaiting_on: "something"\n'
+      + 'next_valid_action: "do the thing"\ncreated_at: 2026-07-24T10:00:00Z\n---\n\n# body\n');
+    writeFileSync(path.join(fixture.capsules, '2026-07-25-not-a-capsule.md'), '# just a note\n');
+
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+
+    // The valid one still wins; the ledger is additive, never a selector change.
+    assert.equal(result.loaded.id, '2026-07-21-test-capsule');
+
+    const byName = new Map(result.rejected.map((r) => [r.name, r]));
+    assert.equal(byName.get('2026-07-23-no-next.md').reason, 'missing-required-field');
+    assert.equal(byName.get('2026-07-23-no-next.md').detail, 'next_valid_action');
+    assert.equal(byName.get('2026-07-24-no-objective.md').reason, 'missing-required-field');
+    assert.equal(byName.get('2026-07-24-no-objective.md').detail, 'objective');
+    assert.equal(byName.get('2026-07-25-not-a-capsule.md').reason, 'no-frontmatter');
+
+    // Reported out loud, not merely returned: a ledger nobody prints is silence.
+    assert.match(result.prompt, /CAPSULES NOT SELECTED \(3 skipped/);
+    // Grouping keys on reason AND detail, so a field-level miss stays
+    // field-level: "missing next_valid_action" is a different diagnosis from
+    // "missing objective", and collapsing them would hide which one is systemic.
+    assert.match(result.prompt, /1x missing-required-field \(next_valid_action\)/);
+    assert.match(result.prompt, /1x missing-required-field \(objective\)/);
+    assert.match(result.prompt, /1x no-frontmatter/);
+    assert.match(result.prompt, /the SELECTOR is the bug/);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('a selector that rejects EVERY capsule says so instead of looking like an empty install', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'rv-'));
+  const root = path.join(base, 'test-root');
+  const capsules = path.join(root, 'memory', 'capsules');
+  mkdirSync(capsules, { recursive: true });
+  try {
+    // Real capsules with real content, all rejected on one field. This is the
+    // exact production shape of a matcher defect.
+    for (const day of ['21', '22', '23']) {
+      writeFileSync(path.join(capsules, `2026-07-${day}-authored.md`),
+        `---\nid: 2026-07-${day}-authored\nstatus: active\nobjective: "real work"\n`
+        + `waiting_on: "a real gate"\ncreated_at: 2026-07-${day}T10:00:00Z\n---\n\n# body\n`);
+    }
+    const result = runResumeVerb({ projectRoot: root, source: 'clear', sessionId: 'sid-1' });
+
+    assert.equal(result.degraded, true, 'nothing selectable, so the degraded path still holds');
+    assert.equal(result.rejected.length, 3);
+    assert.match(result.prompt, /CAPSULES NOT SELECTED \(3 skipped/);
+    assert.match(result.prompt, /3x missing-required-field \(next_valid_action\)/);
+    assert.match(result.prompt, /3 of these are NOT spent capsules/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a spent capsule reads as history, not as a defect', () => {
+  const fixture = mkFixture();
+  try {
+    // Cycle one consumes the only capsule. Cycle two must be able to tell
+    // "everything here is already spent" from "the selector ate my capsule".
+    runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    const second = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
+
+    assert.equal(second.degraded, true);
+    assert.equal(second.rejected.length, 1);
+    assert.equal(second.rejected[0].reason, 'already-consumed');
+    assert.equal(second.rejected[0].detail, 'resumed');
+    assert.match(second.prompt, /1x already-consumed \(resumed\)/);
+    assert.doesNotMatch(second.prompt, /NOT spent capsules/,
+      'an ordinary spent capsule must not be reported as a selector defect');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('selectCapsule names WHY there is nothing to resume from', async () => {
+  const { selectCapsule } = await import('../lifecycle-common.mjs');
+  const base = mkdtempSync(path.join(tmpdir(), 'rv-'));
+  try {
+    const empty = path.join(base, 'empty', 'memory');
+    mkdirSync(path.join(empty, 'capsules'), { recursive: true });
+    assert.equal(selectCapsule(empty).unavailable, 'no-capsules-on-disk');
+
+    const missing = path.join(base, 'missing', 'memory');
+    mkdirSync(missing, { recursive: true });
+    assert.equal(selectCapsule(missing).unavailable, 'no-capsules-dir');
+
+    const junk = path.join(base, 'junk', 'memory');
+    mkdirSync(path.join(junk, 'capsules'), { recursive: true });
+    writeFileSync(path.join(junk, 'capsules', 'x.md'), '# no frontmatter\n');
+    assert.equal(selectCapsule(junk).unavailable, 'all-candidates-rejected');
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('capsule that vanishes before load degrades and never throws', () => {
   const fixture = mkFixture();
   try {

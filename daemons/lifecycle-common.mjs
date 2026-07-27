@@ -54,28 +54,50 @@ export function bodySection(doc, key) {
   return value || null;
 }
 
+// A capsule a previous resume already spent. `active` is the only selectable
+// state; every status here marks a capsule kept for the record, not for replay.
+// It is tracked as its own rejection reason so the ledger below can separate
+// ordinary history from a capsule that was authored and then thrown away.
+export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
+
 // Resume has one selector: the valid active capsule with the newest frontmatter
 // created_at. Any unreadable or malformed candidate is ignored; hook callers
 // degrade without throwing when no valid capsule exists.
-export function newestValidCapsule(memoryRoot) {
+//
+// selectCapsule returns the FULL result: { capsule, rejected, unavailable }.
+// The rejection ledger is why this exists alongside the thin wrapper below.
+// Every discard used to be a bare `continue` — six separate silent paths, no
+// record of any of them. A capsule silently discarded and a capsule that never
+// existed look identical to the session resuming, so a selector defect can
+// reject every capsule on disk indefinitely and still look completely normal
+// from the outside. Recording the reason is what makes that state auditable.
+//
+// The return shape is EXTENDED, never narrowed: .path/.id/.created/.createdRaw
+// are unchanged and null still means "nothing to resume from", so the existing
+// callers keep working untouched.
+export function selectCapsule(memoryRoot) {
+  const rejected = [];
+  const note = (name, reason, detail) => rejected.push({ name, reason, ...(detail ? { detail } : {}) });
+  const none = (reason) => ({ capsule: null, rejected, unavailable: reason });
+
   let dir;
   try {
     dir = path.join(String(memoryRoot), 'capsules');
-    if (!existsSync(dir)) return null;
-  } catch { return null; }
+    if (!existsSync(dir)) return none('no-capsules-dir');
+  } catch { return none('bad-memory-root'); }
 
   let entries;
   try {
     entries = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.md'));
-  } catch { return null; }
+  } catch { return none('capsules-dir-unreadable'); }
 
   let best = null;
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
-    try { doc = readFileSync(full, 'utf8'); } catch { continue; }
+    try { doc = readFileSync(full, 'utf8'); } catch { note(name, 'unreadable'); continue; }
     const frontmatter = doc.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1];
-    if (!frontmatter) continue;
+    if (!frontmatter) { note(name, 'no-frontmatter'); continue; }
     const scalar = (key) => {
       const match = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
       if (!match) return null;
@@ -92,13 +114,55 @@ export function newestValidCapsule(memoryRoot) {
     const status = scalar('status');
     const objective = scalar('objective') || bodySection(doc, 'objective');
     const nextAction = scalar('next_valid_action') || bodySection(doc, 'next_valid_action');
-    if (status !== 'active' || !id || !Number.isFinite(created)) continue;
-    if (!objective || !nextAction) continue;
+
+    // Spent capsules are labelled apart from junk. The caller must be able to
+    // tell "nothing to resume from" (a fresh install, correct) from "everything
+    // here is already spent" (the ordinary end of a cycle) from "the selector
+    // threw away capsules somebody wrote" (a defect).
+    if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
+    if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
+    if (!id) { note(name, 'no-id'); continue; }
+    if (!Number.isFinite(created)) { note(name, 'bad-created_at', createdRaw || '(absent)'); continue; }
+    // The field-level reason matters most here: "missing next_valid_action" on a
+    // capsule that plainly has one is the signal that surfaces a matcher defect
+    // in a day instead of never.
+    if (!objective || !nextAction) {
+      note(name, 'missing-required-field', !objective ? 'objective' : 'next_valid_action');
+      continue;
+    }
     if (!best || created > best.created) {
       best = { path: full, id, created, createdRaw };
     }
   }
-  return best;
+
+  if (best) return { capsule: best, rejected };
+  return { capsule: null, rejected, unavailable: entries.length ? 'all-candidates-rejected' : 'no-capsules-on-disk' };
+}
+
+// Backward-compatible wrapper for callers that only need the selection. The
+// orientation leg (sessionstart-reinject) labels whatever comes back "newest
+// active capsule", so null here still means exactly what it always did.
+export function newestValidCapsule(memoryRoot) {
+  const { capsule, rejected } = selectCapsule(memoryRoot);
+  if (!capsule) return null;
+  return { ...capsule, rejected };
+}
+
+// Human-readable account of what the selector discarded. Grouped by reason so a
+// systemic defect reads as ONE line ("47x missing-required-field
+// (next_valid_action)") rather than 47 unrelated ones, which is the shape that
+// makes a matcher bug obvious on sight.
+export function rejectionSummary(rejected) {
+  if (!Array.isArray(rejected) || !rejected.length) return null;
+  const byReason = new Map();
+  for (const r of rejected) {
+    const key = r.detail ? `${r.reason} (${r.detail})` : r.reason;
+    if (!byReason.has(key)) byReason.set(key, []);
+    byReason.get(key).push(r.name);
+  }
+  return [...byReason.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([reason, names]) => `${names.length}x ${reason}: ${names.length <= 3 ? names.join(', ') : `e.g. ${names[0]}`}`);
 }
 
 // The write half of the consume contract. The selector above only ever picks

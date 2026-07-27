@@ -4,8 +4,13 @@
 // The DETERMINISTIC half of the resume verb: load the newest valid capsule by
 // created_at, then emit the session-facing procedure — the authored content of
 // docs/two-verb-lifecycle.md's resume procedure with its slot bindings resolved.
-// Selection has ONE authority: newestValidCapsule() (lifecycle-common.mjs) — no
+// Selection has ONE authority: selectCapsule() (lifecycle-common.mjs) — no
 // pointer, no definition_hash comparison.
+//
+// The selector also returns a ledger of what it DISCARDED, and this container
+// prints it. A resume that picks up nothing has to say so, and say why: without
+// the ledger, "there was no capsule" and "the selector rejected every capsule on
+// disk" produce the same silent output, and only one of them is a defect.
 //
 // Container discipline (mirrors the capsule verb): the model executes the
 // procedure; this module only loads state and emits text. It never touches
@@ -26,7 +31,9 @@
 // own SessionStart(clear) hook must no-op rather than double-inject the procedure.
 
 import { readFileSync } from 'node:fs';
-import { memRoot, logErr, newestValidCapsule, bodySection, markCapsuleConsumed } from './lifecycle-common.mjs';
+import {
+  memRoot, logErr, selectCapsule, rejectionSummary, bodySection, markCapsuleConsumed,
+} from './lifecycle-common.mjs';
 
 function frontmatterScalar(doc, key) {
   const fmMatch = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
@@ -38,15 +45,20 @@ function frontmatterScalar(doc, key) {
   return v.replace(/^['"]|['"]$/g, '');
 }
 
-// SLOT-1: capsule selection. newestValidCapsule() is the ONE authority — no
-// pointer fallback, no auxiliary completion gate.
+// SLOT-1: capsule selection. selectCapsule() is the ONE authority — no pointer
+// fallback, no auxiliary completion gate.
+//
+// Returns { loaded, rejected }. `loaded` may be null, and when it is, `rejected`
+// is the whole point: the no-capsule case is exactly where the reasons matter
+// most, so the ledger has to survive the failure path rather than be dropped
+// with it.
 function loadCapsule(projectRoot) {
-  const newest = newestValidCapsule(memRoot(projectRoot));
-  if (!newest) return null;
+  const { capsule: newest, rejected } = selectCapsule(memRoot(projectRoot));
+  if (!newest) return { loaded: null, rejected };
   let doc;
   try { doc = readFileSync(newest.path, 'utf8'); } catch (e) {
     logErr(projectRoot, 'resume-verb', `capsule unreadable: ${e?.message || e}`);
-    return null;
+    return { loaded: null, rejected };
   }
   // A capsule consumed by this resume is spent HERE, at load — not by the model
   // later, which is exactly the step that never happens. A failed mark must not
@@ -61,19 +73,41 @@ function loadCapsule(projectRoot) {
   } catch (e) {
     logErr(projectRoot, 'resume-verb', `mark-consumed FAILED for ${newest.path}: ${e?.message || e} — next resume will replay this capsule`);
   }
-  return {
+  return { rejected, loaded: {
     id: frontmatterScalar(doc, 'id') ?? newest.id,
     path: newest.path,
     objective: frontmatterScalar(doc, 'objective') || bodySection(doc, 'objective'),
     waiting_on: frontmatterScalar(doc, 'waiting_on') || bodySection(doc, 'waiting_on'),
     next_valid_action: frontmatterScalar(doc, 'next_valid_action') || bodySection(doc, 'next_valid_action'),
-  };
+  } };
+}
+
+// The delivery half of the rejection ledger: data nobody reads unless the
+// procedure says it out loud. A capsule silently discarded and a capsule that
+// never existed read identically to the session resuming, and that equivalence
+// is what lets a selector defect run unnoticed for as long as it likes.
+//
+// `already-consumed` is ordinary history: the previous cycle spent that capsule
+// on purpose. Anything else means a capsule somebody WROTE was thrown away,
+// which is a defect until proven otherwise, so the two are counted separately.
+function rejectionReport(rejected) {
+  const summary = rejectionSummary(rejected);
+  if (!summary) return [];
+  const lines = ['', `CAPSULES NOT SELECTED (${rejected.length} skipped, grouped by reason):`];
+  for (const line of summary) lines.push(`  - ${line}`);
+  const defects = rejected.filter((r) => r.reason !== 'already-consumed');
+  if (defects.length) {
+    lines.push(`  ^ ${defects.length} of these are NOT spent capsules: they were authored and then discarded.`);
+    lines.push('    If a capsule you expected to resume from is in that list, the SELECTOR is the bug,');
+    lines.push('    not the capsule. Report it; do not hand-edit the capsule to satisfy the matcher.');
+  }
+  return lines;
 }
 
 // The authored procedure (docs/two-verb-lifecycle.md), slots bound. Every fence
 // and step below is contract text — edits belong in the doc first, then here in
 // lockstep (one authored source feeding one runtime artifact).
-function procedurePrompt(loaded) {
+function procedurePrompt(loaded, rejected = null) {
   const lines = [];
   lines.push('[RESUME VERB] This is a post-clear boot. Your ENTIRE job: load → re-ground → ACT on waiting_on. Resumption is proven by the action taken, never by this text being in context.');
   lines.push('');
@@ -86,6 +120,7 @@ function procedurePrompt(loaded) {
   } else {
     lines.push('No resolvable capsule (no valid active capsule found — a read failure, if any, is already logged). Do NOT guess at prior state: re-derive entirely from the live memory in the re-ground step below.');
   }
+  for (const line of rejectionReport(rejected)) lines.push(line);
   lines.push('');
   lines.push('FENCES (never cross):');
   lines.push('- Do NOT assert resumption is complete because this text appeared in context. Resumption is proven ONLY by an action taken from waiting_on.');
@@ -103,7 +138,8 @@ function procedurePrompt(loaded) {
 
 export function runResumeVerb({ projectRoot, source, sessionId }) {
   let loaded = null;
-  try { loaded = loadCapsule(projectRoot); } catch (e) {
+  let rejected = null;
+  try { ({ loaded, rejected } = loadCapsule(projectRoot)); } catch (e) {
     logErr(projectRoot, 'resume-verb', `loadCapsule threw: ${e?.stack || e}`);
     loaded = null;
   }
@@ -112,6 +148,9 @@ export function runResumeVerb({ projectRoot, source, sessionId }) {
     sessionId: String(sessionId || ''),
     degraded: !loaded,
     loaded,
-    prompt: procedurePrompt(loaded),
+    // The ledger is part of the RESULT, not just the prompt text, so a test or a
+    // supervising script can assert on it instead of scraping prose.
+    rejected,
+    prompt: procedurePrompt(loaded, rejected),
   };
 }

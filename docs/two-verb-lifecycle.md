@@ -54,6 +54,16 @@ Both patterns are START-ANCHORED: a capsule that legitimately *references* the c
 
 `daemons/capsule-verb.mjs` exports `validateCapsuleText()`: the one place required-field presence and the content gate (above) are checked together. It returns `{ fields, problems }`; an empty `problems` array means the four required fields are present and neither `objective` nor `next_valid_action` is injection-echo or ceremony-action. There is no separate trusted-writer process that stamps a pointer or a digest (the operator, or the model acting on the operator's behalf, writes the capsule file directly), and `validateCapsuleText()` is available as a utility for a skill or a test to self-check.
 
+## Selection is loud about what it discards
+
+`selectCapsule()` (in `daemons/lifecycle-common.mjs`) returns `{ capsule, rejected, unavailable }`. `capsule` is the winner; `rejected` is a ledger of every candidate it skipped and why; `unavailable` names the reason there is no winner (`no-capsules-dir`, `no-capsules-on-disk`, `all-candidates-rejected`, `capsules-dir-unreadable`, `bad-memory-root`). `newestValidCapsule()` stays as the thin wrapper for callers that only want the selection.
+
+The ledger exists because of a specific failure shape. Every discard used to be a bare `continue`, so a capsule the selector threw away and a capsule that never existed produced byte-identical output: an empty resume that looked entirely normal. A matcher defect in that design can reject every capsule on disk indefinitely and never announce itself, because the only observable is silence, and silence is also what a clean fresh install looks like.
+
+`daemons/resume-verb.mjs` prints the ledger into the injected procedure under `CAPSULES NOT SELECTED`, grouped by reason with counts, so a systemic defect reads as one line (`47x missing-required-field (next_valid_action)`) instead of 47 unrelated ones. Rejections labelled `already-consumed` are ordinary history, the previous cycle spending its capsule on purpose; every other reason is called out separately as a capsule that was authored and then discarded, which is a defect until proven otherwise.
+
+Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in two independent ways: against a selector that discards without recording, and against a container that computes the ledger but never prints it.
+
 ## Pluggable coordination: multi-agent guard
 
 If a fork wires multiple agents/sessions that need to pause for a conducted, multi-party lifecycle event (a coordinated clear across several concurrent sessions, for example), point `AIGENT_COORDINATION_STATE` at a JSON file carrying a `phase` field. While `phase` is non-terminal (anything other than `done`/`cancelled`/`closed`/`complete`/`aborted`), `sessionstart-reinject.mjs` defers to the external conductor instead of running its own warm-start orientation or resume-verb procedure; this guard is checked before the `source==='clear'` branch, so a live coordinator wins even across a clear. Unset by default: a single-operator install never touches this seam.
@@ -74,7 +84,7 @@ The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a f
 
 | File | Role |
 |---|---|
-| `daemons/lifecycle-common.mjs` | Shared identity/vault resolution, `newestValidCapsule()` selection |
+| `daemons/lifecycle-common.mjs` | Shared identity/vault resolution, `selectCapsule()` selection plus its rejection ledger |
 | `daemons/capsule-content-gate.mjs` | Injection-echo / ceremony-action vocabulary |
 | `daemons/capsule-verb.mjs` | `validateCapsuleText()`: required fields + content gate |
 | `daemons/curated-close-pointer.mjs` | Compatibility pointer writer (audit/orientation hint only, resume never reads it) |

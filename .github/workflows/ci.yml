@@ -118,6 +118,14 @@ jobs:
       - name: GateGuard fact-forcing gate tests
         run: node daemons/tests/gateguard.test.mjs
 
+      - name: Lifecycle tests (capsule selection, validation, state paths)
+        run: >-
+          node --test
+          daemons/tests/resume-verb.test.mjs
+          daemons/tests/capsule-verb.test.mjs
+          daemons/tests/capsule-content-gate.test.mjs
+          daemons/tests/state-home-dir.test.mjs
+
       - name: Nightly close-parity mutation proofs
         run: >-
           node --test
