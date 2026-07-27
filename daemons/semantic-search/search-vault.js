@@ -13,6 +13,7 @@ import { pipeline } from '@xenova/transformers';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -23,6 +24,12 @@ const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
 const EMBEDDINGS_PATH = join(VAULT_ROOT, 'memory', 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_TOP_K = 5;
+
+// Confidential-class deny list -- FAIL-CLOSED, re-checked at query time so this is
+// safe even against a stale or hand-edited embeddings.json built before a prefix was
+// added (or by a version of embed-vault.js run without this filter): no deny list,
+// no results, ever -- not "results minus the deny list" if the list can't be read.
+const DENY_PREFIXES = requireDenyPrefixes(__dirname, 'search-vault');
 
 // ── Args ─────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -76,7 +83,12 @@ async function main() {
   if (!jsonOnly) process.stdout.write('Loading index... ');
   const raw = readFileSync(EMBEDDINGS_PATH, 'utf8');
   const index = JSON.parse(raw);
-  if (!jsonOnly) console.log(`${index.notes.length} entries loaded.`);
+  const beforeDeny = index.notes.length;
+  index.notes = index.notes.filter((n) => !deniedPath(DENY_PREFIXES, n.path));
+  const deniedCount = beforeDeny - index.notes.length;
+  if (!jsonOnly) {
+    console.log(`${index.notes.length} entries loaded.${deniedCount ? ` (${deniedCount} confidential-class chunk(s) filtered by index-deny.json)` : ''}`);
+  }
 
   // Embed query
   const t0 = Date.now();

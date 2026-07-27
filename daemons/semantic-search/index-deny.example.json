@@ -1,0 +1,8 @@
+{
+  "_comment": "EXAMPLE only -- copy the pattern into index-deny.json, do not rename this file in place (embed-vault.js and search-vault.js only read index-deny.json). Each entry is a vault-relative path PREFIX, matched case-insensitively against both '/' and '\\\\' separators via startsWith -- so 'projects/Acme-Deal' also denies 'projects/Acme-Deal/notes.md' and everything else under that folder. Add a prefix here the same session any client-confidential, under-NDA, or otherwise never-share material enters your vault; a stale/partially-filtered index is a leak, not a warning.",
+  "deny_prefixes": [
+    "projects/Client-Confidential-Example",
+    "concepts/Confidential-Example",
+    "projects/NDA-Deal-Example"
+  ]
+}

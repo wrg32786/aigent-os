@@ -118,6 +118,9 @@ jobs:
       - name: GateGuard fact-forcing gate tests
         run: node daemons/tests/gateguard.test.mjs
 
+      - name: Semantic-search confidential-class deny-list tests
+        run: node daemons/tests/semantic-search-deny.test.mjs
+
       - name: Nightly close-parity mutation proofs
         run: >-
           node --test
