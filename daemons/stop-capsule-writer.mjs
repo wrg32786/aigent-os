@@ -115,8 +115,41 @@ try {
   // injection-echo/ceremony, shared with capsule-verb's validateCapsuleText.
   // Import failure degrades to pre-gate behavior (logged, never blocks a turn).
   let gate = null;
-  try { gate = await import('./capsule-content-gate.mjs'); }
-  catch (e) { logErr(root, `content-gate import failed (gate skipped): ${e?.message || e}`); }
+  try {
+    gate = await import('./capsule-content-gate.mjs');
+    if (typeof gate.isInjectionEcho !== 'function') {
+      throw new TypeError('capsule-content-gate.mjs did not export isInjectionEcho()');
+    }
+  } catch (e) {
+    gate = null;
+    logErr(root, `content-gate import failed (gate skipped): ${e?.message || e}`);
+  }
+  const isInjectionEcho = (text) => {
+    if (!gate) return false;
+    try {
+      return Boolean(gate.isInjectionEcho(text));
+    } catch (e) {
+      // Treat a broken gate like an import failure for the rest of this worker.
+      // Falling back may capture noisier data, but the Stop snapshot still lands.
+      gate = null;
+      logErr(root, `content-gate check failed (gate skipped; write continues fail-open): ${e?.message || e}`);
+      return false;
+    }
+  };
+
+  // Keep validation inside the worker's fail-open boundary. A broken or missing
+  // validator is diagnostic: it must be visible, but must never prevent the best
+  // available Stop snapshot from landing.
+  let validateCapsuleText = null;
+  try {
+    ({ validateCapsuleText } = await import('./capsule-verb.mjs'));
+    if (typeof validateCapsuleText !== 'function') {
+      throw new TypeError('capsule-verb.mjs did not export validateCapsuleText()');
+    }
+  } catch (e) {
+    validateCapsuleText = null;
+    logErr(root, `capsule validator import failed (write continues fail-open): ${e?.message || e}`);
+  }
 
   const MEM = memRoot(root);
   const RUNTIME = path.join(MEM, 'runtime', 'stop-writer');
@@ -203,7 +236,7 @@ try {
     // otherwise fall through to [OPERATOR] — which makes injected instruction
     // text the capsule OBJECTIVE verbatim. Gate them out of human-hood; they stay
     // recoverable as tagged utterances under Done.
-    if (gate && gate.isInjectionEcho(t)) return { who: 'INJECT:harness', human: false, t };
+    if (isInjectionEcho(t)) return { who: 'INJECT:harness', human: false, t };
     return { who: 'OPERATOR', human: true, t };
   };
   const tagUtterance = (cl) => {
@@ -223,6 +256,9 @@ try {
     if (!t) continue;
     let ev;
     try { ev = JSON.parse(t); } catch { continue; } // partial trailing lines are normal
+    // JSON primitives and malformed content blocks are valid JSON but not
+    // transcript events. Skip them instead of abandoning the entire Stop delta.
+    if (!ev || typeof ev !== 'object' || Array.isArray(ev)) continue;
 
     if (ev.type === 'user' && !ev.isMeta) {
       const c = ev.message?.content;
@@ -231,21 +267,32 @@ try {
         if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
-          if (b.type === 'text' && b.text) {
+          if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
+          if (b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
             if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = typeof b.content === 'string'
               ? b.content
-              : Array.isArray(b.content) ? b.content.filter((x) => x.type === 'text').map((x) => x.text).join(' ') : '';
+              : Array.isArray(b.content)
+                ? b.content
+                  .filter((x) => x && typeof x === 'object'
+                    && !Array.isArray(x) && x.type === 'text' && typeof x.text === 'string')
+                  .map((x) => x.text).join(' ')
+                : '';
             if (txt) errors.push(txt.replace(/\s+/g, ' ').slice(0, 200));
           }
         }
       }
     } else if (ev.type === 'assistant') {
-      for (const b of ev.message?.content ?? []) {
-        if (b.type === 'text' && b.text?.trim()) lastAssistantText = b.text.trim();
+      const content = ev.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content) {
+        if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
+        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          lastAssistantText = b.text.trim();
+        }
         if (b.type !== 'tool_use') continue;
         const input = b.input ?? {};
         if (b.name === 'Read' || b.name === 'Grep' || b.name === 'Glob') {
@@ -253,10 +300,11 @@ try {
           if (p) filesRead.add(String(p));
         } else if (b.name === 'Edit' || b.name === 'Write' || b.name === 'NotebookEdit') {
           if (input.file_path) filesModified.add(String(input.file_path));
-        } else if (/(^|_)board_claim$/i.test(String(b.name || '')) && input.task_id) {
+        } else if (/(^|_)board_claim$/i.test(String(b.name || ''))
+          && typeof input.task_id === 'string' && input.task_id.trim()) {
           // Generic match on any *_board_claim tool (an optional task-board MCP,
           // whatever it is named) rather than one hardcoded server name.
-          claimedRows.add(String(input.task_id));
+          claimedRows.add(input.task_id.trim());
         }
       }
     }
@@ -290,23 +338,30 @@ try {
     capPath = path.join(capDir, `${dateStr}-auto-${sid.slice(0, 8)}.md`);
   }
 
-  // objective only ever carries a REAL human utterance — the classifier already
-  // gates injections; this re-check is defense in depth. When no human spoke this
-  // turn, nothing is synthesized: the ownership rule below keeps an existing
-  // capsule's objective untouched, and the skeleton default is only ever born at
-  // capsule creation.
-  const humanRequest = (latestRequest && !(gate && gate.isInjectionEcho(latestRequest)))
+  // Only a real operator utterance establishes the objective. A claim identifies
+  // a row, not what the operator intended to accomplish. When no objective was
+  // captured, say so explicitly.
+  const humanRequest = (latestRequest && !isInjectionEcho(latestRequest))
     ? latestRequest : null;
-  const objective = humanRequest || 'In-flight work (auto-captured; see latest session log)';
-  // next_valid_action must carry CONTENT (claimed rows, live assistant state) —
-  // templates like "Re-read the active turn state below..." are exactly what
-  // capsule-verb's content gate bans; this template must never match it.
-  const rowHint = claimedRows.size
-    ? `Re-verify claimed row(s) ${[...claimedRows].map((r) => r.slice(0, 8)).join(', ')} against the live memory, then continue that work`
-    : 'Re-derive the next action from the live memory (autosave carries deltas only)';
-  const nextValid = lastAssistantText
-    ? `${rowHint}; last assistant state: ${lastAssistantText.replace(/\s+/g, ' ').slice(0, 180)}`
-    : rowHint;
+  const rowIds = [...claimedRows].map((r) => r.slice(0, 8)).join(', ');
+  const unknownObjective = claimedRows.size
+    ? `Unknown: no operator objective was captured; claimed row id(s) ${rowIds} were observed.`
+    : 'Unknown: no operator objective was captured in this Stop delta.';
+  const objective = humanRequest || unknownObjective;
+
+  // The transcript has no trustworthy structured "waiting on" event. Tool
+  // errors are possible blockers, but even then their pending status is unknown.
+  // State that uncertainty instead of encoding YAML null ("nothing is pending").
+  const waitingOn = errors.length
+    ? `Unknown: ${errors.length} captured tool error(s) may be pending; inspect Historical-Errors.`
+    : 'Unknown: this Stop delta did not capture whether anything is pending.';
+
+  // A next action comes only from structured evidence. Assistant prose remains
+  // reference material in the body; truncating it into this field would turn a
+  // fragment into an instruction.
+  const nextValid = claimedRows.size
+    ? `Re-verify claimed row(s) ${rowIds} against the live memory, then continue that claimed work.`
+    : 'No concrete next action was captured in this Stop delta.';
 
   const ANCHORS = {
     done: '<!-- swe:done -->',
@@ -324,7 +379,7 @@ id: ${dateStr}-auto-${sid.slice(0, 8)}
 parent_capsule_id: null
 status: active
 objective: ${JSON.stringify(objective)}
-waiting_on: null
+waiting_on: ${JSON.stringify(waitingOn)}
 resume_trigger: compact
 expires: null
 trigger: stop-delta
@@ -405,18 +460,65 @@ ${ANCHORS.rows}
     mergeUnder(ANCHORS.done, [`- ${ts} ${lastAssistantText.replace(/\s+/g, ' ').slice(0, 240)}`]);
   }
 
-  // Refresh live frontmatter fields — the rolling writer only RAISES content,
-  // never downgrades it. objective moves only on a real human utterance, and the
-  // contract fields are touched at all ONLY on the writer's own autosave capsules
-  // (tags carry `autosave`) — deliberate/curated capsules own their frontmatter
-  // outright. Body bullets can never match (always `- `-prefixed) and .replace is
-  // leftmost-first so frontmatter wins.
-  const docTags = ((doc.match(/^tags:\s*(.+)\s*$/m) || [])[1] || '').toLowerCase();
-  if (/\bautosave\b/.test(docTags)) {
+  // Refresh live frontmatter fields. objective moves only on a real operator
+  // utterance (apart from healing the legacy placeholder), while next_valid_action
+  // is refreshed from structured evidence or an explicit no-action marker.
+  // Contract fields are touched ONLY on the writer's own autosave capsules (an
+  // exact `autosave` tag plus trigger `stop-delta`) — deliberate/curated capsules
+  // own their frontmatter outright. Body bullets can never confer ownership.
+  const frontmatterValue = (source, key) => {
+    const leadingFrontmatter = String(source)
+      .match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1] || '';
+    const raw = leadingFrontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim();
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') return parsed;
+    } catch { /* plain YAML scalar */ }
+    return raw.replace(/\s+#.*$/, '').replace(/^['"]|['"]$/g, '').trim();
+  };
+  const autosaveTag = frontmatterValue(doc, 'tags')
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .map((tag) => tag.trim().replace(/^['"]|['"]$/g, '').toLowerCase())
+    .includes('autosave');
+  const writerOwnedAutosave = autosaveTag
+    && frontmatterValue(doc, 'trigger').toLowerCase() === 'stop-delta';
+  if (writerOwnedAutosave) {
     if (humanRequest) {
       doc = doc.replace(/^objective: .*$/m, `objective: ${JSON.stringify(objective)}`);
+    } else {
+      // Heal writer-owned autosaves created by the old skeleton without
+      // overwriting a meaningful objective retained from an earlier turn.
+      doc = doc.replace(
+        `objective: ${JSON.stringify('In-flight work (auto-captured; see latest session log)')}`,
+        `objective: ${JSON.stringify(objective)}`,
+      );
     }
+    // In the capsule schema, unquoted null means "nothing is pending." The old
+    // autosave never knew that, so migrate it to an honest unknown marker.
+    doc = doc.replace(
+      /^waiting_on:[ \t]*(?:null|~)[ \t]*$/mi,
+      `waiting_on: ${JSON.stringify(waitingOn)}`,
+    );
     doc = doc.replace(/^next_valid_action: .*$/m, `next_valid_action: ${JSON.stringify(nextValid)}`);
+  }
+
+  // Validate the exact final document, after every merge and frontmatter
+  // refresh. Problems, malformed results, and thrown exceptions are logged, but
+  // the snapshot still writes: a Stop hook must always fail open.
+  if (validateCapsuleText) {
+    try {
+      const validation = validateCapsuleText(doc);
+      if (!validation || !Array.isArray(validation.problems)) {
+        throw new TypeError('validateCapsuleText() returned an unexpected result');
+      }
+      if (validation.problems.length) {
+        logErr(root, `capsule validation reported ${validation.problems.length} problem(s); write continues fail-open: ${validation.problems.join(' | ').slice(0, 1200)}`);
+      }
+    } catch (e) {
+      logErr(root, `capsule validation threw; write continues fail-open: ${e?.stack || e}`);
+    }
   }
 
   // Write the capsule. tmp+rename first; if rename can't land (AV lock etc.),
@@ -424,14 +526,27 @@ ${ANCHORS.rows}
   // lands, exit WITHOUT advancing state so next turn retries this same delta.
   const tmp = capPath + '.tmp';
   let committed = false;
-  writeFileSync(tmp, doc);
-  try { renameSync(tmp, capPath); committed = true; } catch {
-    try { rmSync(capPath, { force: true }); renameSync(tmp, capPath); committed = true; } catch {
-      try { writeFileSync(capPath, doc); committed = true; rmSync(tmp, { force: true }); } catch (e3) {
-        logErr(root, `capsule write failed (tmp+rename AND direct): ${e3?.message || e3} — state NOT advanced, will retry next turn`);
+  let staged = false;
+  try {
+    writeFileSync(tmp, doc);
+    staged = true;
+  } catch (e) {
+    logErr(root, `capsule tmp write failed; attempting direct write: ${e?.message || e}`);
+  }
+  if (staged) {
+    try { renameSync(tmp, capPath); committed = true; } catch {
+      try { rmSync(capPath, { force: true }); renameSync(tmp, capPath); committed = true; } catch {
+        // Direct fallback below also covers a rename failure after the target
+        // was removed.
       }
     }
   }
+  if (!committed) {
+    try { writeFileSync(capPath, doc); committed = true; } catch (e3) {
+      logErr(root, `capsule write failed (tmp+rename AND direct): ${e3?.message || e3} — state NOT advanced, will retry next turn`);
+    }
+  }
+  try { rmSync(tmp, { force: true }); } catch {}
   if (!committed) { outcome = 'error:write-failed'; process.exit(0); }
 
   // Pointer: aigent-OS is single-operator, so the pointer always lives at
@@ -442,7 +557,9 @@ ${ANCHORS.rows}
   const pointer = {
     id: path.basename(capPath, '.md'),
     path: path.relative(root, capPath).replace(/\\/g, '/'),
-    objective,
+    // Read from the exact final document so a retained objective on a rolling
+    // autosave cannot be replaced in the pointer by this delta's unknown marker.
+    objective: frontmatterValue(doc, 'objective') || objective,
     status: 'active',
     created_at: new Date().toISOString(),
     trigger: 'stop-delta',

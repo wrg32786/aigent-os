@@ -19,8 +19,16 @@ function frontmatterScalar(frontmatter, key) {
   const match = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
   if (!match) return null;
   let value = match[1].trim();
-  if ((value.startsWith('"') && value.endsWith('"'))
-    || (value.startsWith("'") && value.endsWith("'"))) {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    // Writer-owned frontmatter uses JSON.stringify(), so decode its escapes
+    // before returning the field. Fall back to quote stripping for valid YAML
+    // double-quoted scalars that are not also valid JSON strings.
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed === 'string') return parsed.trim();
+    } catch { /* YAML scalar fallback below */ }
+    value = value.slice(1, -1).trim();
+  } else if (value.startsWith("'") && value.endsWith("'")) {
     value = value.slice(1, -1).trim();
   } else {
     value = value.replace(/\s+#.*$/, '').trim();
