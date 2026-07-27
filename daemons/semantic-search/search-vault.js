@@ -25,10 +25,12 @@ const EMBEDDINGS_PATH = join(VAULT_ROOT, 'memory', 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_TOP_K = 5;
 
-// Confidential-class deny list -- FAIL-CLOSED, re-checked at query time so this is
-// safe even against a stale or hand-edited embeddings.json built before a prefix was
-// added (or by a version of embed-vault.js run without this filter): no deny list,
-// no results, ever -- not "results minus the deny list" if the list can't be read.
+// Confidential-class deny list, re-checked at query time so this is safe even
+// against a stale or hand-edited embeddings.json built before a prefix was added
+// (or built by a version of embed-vault.js run without its own filter). A deny
+// file that exists but cannot be parsed returns no results at all, never
+// "results minus the deny list"; no deny file at all is the fresh-install
+// default and searches everything (see deny-list.mjs).
 const DENY_PREFIXES = requireDenyPrefixes(__dirname, 'search-vault');
 
 // ── Args ─────────────────────────────────────────────────────────────────────

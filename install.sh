@@ -652,7 +652,9 @@ GI_BLOCK="$AIGENT_TMP/gitignore.block"
 # sidecars included), the semantic-search node_modules/ the deps step below
 # can npm-install, an Obsidian .obsidian/ workspace dir once TARGET's vault/
 # is opened as a vault, and the settings.local.json Claude Code itself writes
-# for machine-local overrides.
+# for machine-local overrides. The semantic-search index-deny.json belongs here
+# too: it is hand-written rather than generated, but it names the operator's own
+# confidential folders, so it must never be committable from TARGET.
 cat > "$GI_BLOCK" <<EOF_GI
 $GI_START
 .aigent/
@@ -666,6 +668,7 @@ memory/.daemon-errors.log
 **/runtime/utterance-journal*.jsonl
 **/runtime/stop-writer/
 **/runtime/NIGHTLY_PASS_STATE.json
+**/semantic-search/index-deny.json
 node_modules/
 .obsidian/
 $GI_END

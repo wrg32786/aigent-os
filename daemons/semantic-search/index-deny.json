@@ -1,4 +1,0 @@
-{
-  "_comment": "Confidential-class deny list, fail-closed. Vault-relative path PREFIXES (case-insensitive, both slash styles) that embed-vault.js will refuse to index and search-vault.js will refuse to return, even from a stale embeddings.json. Empty by default: this file existing (and parsing) is the contract embed-vault.js checks before it will build an index at all -- add your own prefixes below the same session any confidential material enters your vault. See index-deny.example.json for the pattern.",
-  "deny_prefixes": []
-}

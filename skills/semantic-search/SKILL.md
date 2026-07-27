@@ -30,4 +30,14 @@ node embed-vault.js  # Initial index (~30 seconds)
 
 ## Confidential-class deny list
 
-Both `embed-vault.js` and `search-vault.js` read `daemons/semantic-search/index-deny.json` before doing anything else, and refuse to run (fail-closed, non-zero exit) if it's missing or malformed — an index or a search you can't confirm is filtered is worse than no index at all. It ships with an empty `deny_prefixes` array, so a fresh install builds a full index by default; add your own vault-relative path prefixes (case-insensitive, works with `/` or `\`) the same session any confidential or under-NDA material enters your vault. `index-deny.example.json` shows the pattern with illustrative placeholder paths. The deny check runs twice — once when the index is built, and again on every search — so a stale `embeddings.json` built before a prefix was added still can't leak a denied path.
+If your vault also holds client work, deal notes, or anything under NDA, keep it out of the index:
+
+```bash
+cd daemons/semantic-search
+cp index-deny.example.json index-deny.json
+# then edit index-deny.json and list your own folders
+```
+
+Each entry in `deny_prefixes` is a vault-relative path prefix, matched case-insensitively and with either slash style. `embed-vault.js` drops matching files before they are embedded, so their text never reaches `embeddings.json` (which stores note excerpts in plaintext). `search-vault.js` re-checks the same list at query time, so an index built before you added a prefix still can't return one.
+
+Only `index-deny.example.json` is tracked by git. Your `index-deny.json` is gitignored, because the names of your confidential folders are themselves confidential. With no `index-deny.json` at all, both scripts index and search everything and print a notice on stderr saying so. If the file exists but can't be read or parsed, they exit non-zero instead of falling back to an unfiltered index. Add a prefix the same session confidential material enters your vault, then re-run `embed-vault.js`: it also purges anything already indexed under a newly added prefix.

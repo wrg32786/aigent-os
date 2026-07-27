@@ -50,12 +50,15 @@ const SKIP_DIRS = new Set([
   'tools',
 ]);
 
-// Confidential-class deny list -- FAIL-CLOSED: no deny list, no index. Anyone
-// running semantic search over their own vault can point it at client work, deal
-// notes, or anything else under NDA, so this refuses to build an index at all
-// rather than risk an unfiltered one, and re-filters at query time too (see
-// search-vault.js) so a stale or hand-edited embeddings.json can't leak a path
-// this file now excludes.
+// Confidential-class deny list. Anyone running semantic search over their own
+// vault can point it at client work, deal notes, or anything else under NDA, and
+// this file writes note text in PLAINTEXT into embeddings.json, so a denied path
+// has to be dropped before it is ever embedded. A deny file that exists but
+// cannot be parsed refuses to build an index at all rather than risk an
+// unfiltered one; no deny file at all is the fresh-install default and indexes
+// everything (see deny-list.mjs). search-vault.js re-filters at query time too,
+// so a stale or hand-edited embeddings.json can't leak a path this file now
+// excludes.
 const DENY_PREFIXES = requireDenyPrefixes(__dirname, 'embed-vault');
 
 // ── YAML frontmatter stripper ────────────────────────────────────────────────

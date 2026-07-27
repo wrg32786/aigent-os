@@ -18,7 +18,8 @@ The vault contains your operational brain. Protections:
 
 - **Local by default**: Everything runs on your machine. No cloud sync required.
 - **Semantic search is local**: The `all-MiniLM-L6-v2` model runs on your device. No data sent to any API.
-- **Git awareness**: The `.gitignore` excludes `embeddings.json` and `.obsidian/` config. Sensitive files don't accidentally get committed.
+- **Git awareness**: The `.gitignore` excludes `embeddings.json`, `.obsidian/` config, and the semantic-search deny list `daemons/semantic-search/index-deny.json`. Sensitive files don't accidentally get committed.
+- **Confidential-class deny list**: If your vault also holds client work, deal notes, or anything under NDA, copy `daemons/semantic-search/index-deny.example.json` to `index-deny.json` and list those folders as vault-relative path prefixes. `embed-vault.js` skips them at index-build time, so their text never reaches `embeddings.json`, and `search-vault.js` re-checks at query time, so an index built before you added a prefix still can't return one. Only the `.example` template is tracked by git; your real list stays on your machine, because the folder names alone can be confidential. If a deny list exists but can't be parsed, both scripts refuse to run rather than fall back to an unfiltered index.
 
 ## Recommended: Prompt Injection Defense
 

@@ -261,7 +261,7 @@ IGNORE_TARGET="$WORK/ignore-target"
   cd "$FIXTURE"
   bash install.sh --target "$IGNORE_TARGET" --no-deps >/dev/null
 )
-for pattern in '.claude/settings.local.json' '**/runtime/utterance-journal*.jsonl' 'node_modules/' '.obsidian/'; do
+for pattern in '.claude/settings.local.json' '**/runtime/utterance-journal*.jsonl' 'node_modules/' '.obsidian/' '**/semantic-search/index-deny.json'; do
   grep -qF -- "$pattern" "$IGNORE_TARGET/.gitignore" || {
     printf 'FAIL: managed .gitignore block missing pattern: %s\n' "$pattern" >&2
     exit 1
