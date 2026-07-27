@@ -109,6 +109,9 @@ jobs:
       - name: Caddy router tests
         run: bash tests/test-caddy.sh
 
+      - name: Caddy new-skill detection tests
+        run: bash tests/test-caddy-detect-new-skill.sh
+
       - name: Model-tier routing-guard tests
         run: node daemons/tests/model-tier-guard.test.mjs
 
