@@ -1,12 +1,12 @@
 # Security Policy
 
-aigent-OS processes operational context: priorities, decisions, business details, sometimes credentials referenced by hooks. Vulnerabilities here can leak the principal's working memory or enable unauthorized actions through the authority matrix. Treat this seriously.
+aigent-OS processes operational context: priorities, decisions, business details, sometimes credentials referenced by hooks. Vulnerabilities here can leak the principal's working memory or drive the agent into actions the principal never approved. Treat this seriously.
 
 ## Reporting a Vulnerability
 
 **Do not post security vulnerabilities publicly.**
 
-Report security issues through [GitHub Security Advisories](https://github.com/wrg32786/aigent-os/security/advisories/new) for this repository, or open a private report to the maintainer if you don't have a GitHub account. Include:
+The preferred channel is [GitHub private vulnerability reporting](https://github.com/wrg32786/aigent-os/security/advisories/new). If that form is not currently open on this repository, GitHub will say so; in that case open a normal issue containing **only** the words "security report, requesting a private channel" and no details, and the maintainer will open a draft advisory and add you to it so the details can be exchanged privately. Either way, include:
 
 - A description of the vulnerability and its impact
 - Reproduction steps (or a proof-of-concept)
@@ -43,32 +43,36 @@ See [`docs/install-security.md`](docs/install-security.md) for the trust model a
 Hooks run with the user's permissions on every Claude Code event. Vulnerabilities here include:
 - Command injection via unescaped tool output
 - Logging secrets to files outside the vault
-- Bypassing the prompt-injection defender (if installed)
+- Suppressing the prompt-injection warning scan so it stops reporting matches it would otherwise print
 - Unbounded resource use that locks up a session
 
 ### 3. Skills and daemons (`skills/`, `daemons/`)
 Skills and daemons can read/write the vault and invoke external tools. Vulnerabilities include:
 - Skills that exfiltrate vault content to external endpoints without consent
 - Daemons that run unbounded background processes
-- Skills that sidestep the [authority matrix](system/12_authority_matrix.md)
+- Skills written to talk the model out of the [authority matrix](system/12_authority_matrix.md) rather than escalate to the operator
 - Skills that run unsigned code from external URLs
 
 ## What Does NOT Count
 
 - "The AI did something dumb": not a security issue, that's a prompt or doctrine problem. Open a regular issue.
-- Prompt injection that the prompt-injection defender catches: working as designed.
+- Prompt injection that the warning scan already flags: working as designed. A phrasing it misses is a useful issue, but file it as an enhancement, not a vulnerability; the scan is explicitly a partial-coverage alert, not a filter.
 - The fact that vault files are stored as plaintext markdown, by design (the [legibility thesis](docs/manifesto.md)). Encrypt at the disk layer if your threat model requires it.
-- Authority matrix enforcement gaps in user-customized rules: your matrix, your rules. The shipped defaults are the security boundary.
+- Authority matrix wording in user-customized rules: your matrix, your rules. Note that the matrix is doctrine and not enforcement (see "Built-in Defense Layers"), so "the model exceeded its stated authority level" is a doctrine bug and belongs in a regular issue, not here.
 
 ## Built-in Defense Layers
 
-aigent-OS ships with three defensive layers:
+Two of these are code that runs. The first is doctrine the model is asked to follow. The distinction is stated plainly rather than blurred, because it changes what you can rely on:
 
-1. **Authority Matrix** ([`system/12_authority_matrix.md`](system/12_authority_matrix.md)): defines what the AI can do autonomously, what needs approval, what it must never touch. The deepest protection: even if other layers fail, an AI that respects the matrix can't authorize itself to spend money or send messages.
+1. **Authority Matrix** ([`system/12_authority_matrix.md`](system/12_authority_matrix.md)): a markdown document loaded into the model's context defining what the AI may do autonomously, what needs approval, and what it must never touch. **It is a behavioral boundary, not a technical one.** No code reads it and no hook enforces it; it works because the model follows its own instructions, and it fails the way instructions fail. Treat it as the policy layer, and use Claude Code's own `permissions` settings plus OS-level controls for anything you need actually enforced.
 
-2. **Prompt-Injection Defender** (`hooks/security-scan.sh`): PostToolUse scan over `Read`, `WebFetch`, `Bash`, `Grep` outputs. Catches common injection patterns. See [`docs/security.md`](docs/security.md) for setup.
+2. **Prompt-injection warning scan** (`hooks/security-scan.sh`): a PostToolUse hook, wired by the installer with matcher `Read|WebFetch|WebSearch|Bash|Grep`. It matches tool output against a fixed list of common injection phrases and prints a severity-tagged warning line. It only warns: it cannot block a tool call, it catches only phrasings on its list, and it is a signal to the operator rather than a filter. See [`docs/security.md`](docs/security.md).
 
-3. **Per-file privacy flag** (`private: true|false|review` in YAML frontmatter): defense-in-depth for the publish path. Files marked `private: true` can never be sanitized into the public repo by the publish skill, regardless of content review.
+3. **Credential redaction in activity capture** (`hooks/tool-tracker.js`): the hook that records tool activity into the vault stores metadata only, and runs captured values through a redaction pass (private-key blocks, `Bearer` and `Basic` headers, JWTs, `api_key`/`password`-style assignments, common token prefixes, URL userinfo) before anything is written. Defense in depth against a secret landing in a daily note, not a guarantee that every secret format is recognized.
+
+### Not shipped yet
+
+The self-publishing path described in the [manifesto](docs/manifesto.md), a skill that classifies vault files by a `private: true|false|review` frontmatter flag, secret-scans them, and opens the release PR, **is a roadmap item and not a shipped control.** No file in this repo carries that flag today and no code reads it. Do not rely on it to keep anything out of a public release; that decision is currently entirely manual. Tracked in [`docs/review-hardening-plan.md`](docs/review-hardening-plan.md).
 
 ## Disclosure Hall of Fame
 

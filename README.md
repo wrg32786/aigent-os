@@ -342,7 +342,9 @@ aigent-OS is opinionated but built to be forked.
 
 ## 🔁 How this repo maintains itself
 
-The most differentiating thing about aigent-OS isn't a feature; it's that the framework operates on itself. When the principal's local aigent-OS learns something worth generalizing, aigent-OS is the one that classifies it (`private: true | false | review` frontmatter, defaulting new files to `review`), tests it against a genericity bar (useful to at least three radically different principals, or it stays private), scans it for secrets, drafts the commit, and opens the PR. The publish skill is itself one of aigent-OS's skills; the recursive layer is the actual category claim. Every managed release appends to [`CHANGELOG.md`](CHANGELOG.md): what shipped, what was held back, and why. Full manifesto: [`docs/manifesto.md`](docs/manifesto.md).
+The most differentiating thing about aigent-OS isn't a feature; it's that the framework operates on itself. What ships today is the maintenance half: nightly self-maintenance, skill indexing, and changelog discipline all run as aigent-OS's own skills against aigent-OS's own vault, and every release is recorded in [`CHANGELOG.md`](CHANGELOG.md).
+
+The publish half is designed but not built. The intended shape is a skill that classifies each vault file (`private: true | false | review` frontmatter, defaulting new files to `review`), tests it against a genericity bar (useful to at least three radically different principals, or it stays private), secret-scans it, drafts the commit, and opens the PR. **None of that exists yet:** no file carries the flag, no code reads it, and deciding what graduates from a local install into this repo is a manual judgement call today. Tracked as future work in [`docs/review-hardening-plan.md`](docs/review-hardening-plan.md). Full manifesto, including why the recursive layer is the category claim: [`docs/manifesto.md`](docs/manifesto.md).
 
 ---
 
