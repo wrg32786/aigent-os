@@ -20,6 +20,8 @@ From the team behind [The AIgent](https://theaigent.xyz), a free media project f
 
 [Quick Start](#-quick-start) · [Auto-Refresh](#-auto-refresh) · [Architecture](#-architecture) · [Key Concepts](#-key-concepts) · [Customize](#-make-it-yours) · [Docs](docs/getting-started.md)
 
+If aigent-OS saves you time, [star the repo](https://github.com/wrg32786/aigent-os) so other people can find it.
+
 </div>
 
 ---

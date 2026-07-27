@@ -749,3 +749,8 @@ printf '  Next:\n'
 printf '    1. Open Claude Code in: %s\n' "$TARGET"
 printf '    2. Run /start for first-time setup\n'
 printf '    3. Use /open at the start and /close at the end of later sessions\n\n'
+
+# Reached only on a successful install: the script runs under `set -Eeuo pipefail`,
+# so any earlier failure aborts before this point.
+printf '  If aigent-OS saves you time, a star helps other people find it:\n'
+printf '    https://github.com/wrg32786/aigent-os\n\n'
