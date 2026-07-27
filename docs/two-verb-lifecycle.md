@@ -66,6 +66,20 @@ The selectable state is `active` and nothing else. Two checks enforce that, and 
 
 Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in three independent ways: against a selector that discards without recording, against a container that computes the ledger but never prints it, and against the removal of the active-only check on its own.
 
+## The procedure says how old the capsule is, and who wrote it
+
+Selection orders candidates by `created_at` and stops there. There is no staleness rule, so the newest `active` capsule stays selectable however old it gets: if the fresher ones fail validation, a capsule written weeks ago wins, and it arrives looking exactly like one written minutes ago. The creation stamp has always been required and, until now, nothing read it back to the session.
+
+So `CAPSULE DATA` carries an `age` line every time, and past seven days adds an explicit warning that the next action describes a world that is gone. This is deliberately not a rejection. Refusing a stale capsule would leave a quiet project with nothing to resume from, and the honest response to "everything here is old" is for the session to see that and re-ground, not for the runtime to decide in silence. A stale capsule is still selected and still announces.
+
+The under-threshold path still says that freshness is not correctness: verify each value against live state, and expect part of the next action to be done already. A capsule minutes old can describe work that has since been finished by someone else.
+
+The same block names the **writer**. The Stop-hook autosave satisfies every selector requirement while carrying no resume contract — its objective is a fixed placeholder, the writer hardcodes `waiting_on` to `null` in its skeleton, and `next_valid_action` is a generic line padded with a truncated fragment of the last turn. Both required fields are non-empty, so selection accepts it, correctly, since there may be nothing else on disk. The gap was that a session could not tell it apart from a curated capsule once both arrived through the same procedure. A null `waiting_on` then reads as "nothing pends" when it means "unknown", and the truncated padding reads as an instruction. The procedure now labels it and gives those empty fields their real meaning.
+
+Detection reads a structured field — the `trigger` scalar or the `tags` array — never the placeholder wording. The wording is free to change, and a marker that lives in prose is the first thing a reader collapses. `created_at` is capsule-controlled like every other value here, so it renders through `inert()` too.
+
+Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in four independent ways: against removal of the age reporting, against removal of the autosave labelling, against a moved staleness threshold, and against detection that sniffs the placeholder prose instead of the structured field. Its ages are relative to the run, so the tests cannot drift into a different verdict as the calendar advances.
+
 ## Capsule content is untrusted input
 
 A capsules directory is just files on disk, and whatever can write one chooses every byte of its frontmatter. `daemons/resume-verb.mjs` therefore treats capsule values as hostile input rather than as a trusted continuation of the procedure it generates. Two independent guards apply.
