@@ -3,9 +3,10 @@
 #
 # The hook normalizes a written file's path before testing whether it lands
 # under skills/. That normalization once looked for two consecutive
-# backslashes, which a decoded hook payload never contains, so on Windows the
-# hook matched nothing and exited silently. It had never fired there. This
-# test exists so that failure cannot return unnoticed.
+# backslashes. A JSON-decoded path carries single ones, so on a
+# backslash-separated path the replace matched nothing, the "/skills/" test
+# failed, and the hook exited silently. This test exists so that failure
+# cannot return unnoticed.
 #
 # The two silent cases are the important half. Without them a hook that never
 # printed anything would pass a nudge-only test by accident, which is exactly
@@ -16,13 +17,26 @@
 # sits between the intended path and the bytes the hook receives. Getting that
 # wrong is what hid the bug in the first place.
 #
-# CAVEAT for whoever touches this next: nobody has captured a real Write-tool
-# payload on Windows and confirmed its separator. The single-backslash shape
-# tested here is inferred from JSON decoding plus the observation that the
-# hook had never once fired on a Windows machine. If the harness actually
-# hands over forward slashes, the original code was never broken and the
-# silence needs a different explanation. Logging one real payload settles it
-# and is worth doing before trusting either story.
+# WHAT IS ESTABLISHED AND WHAT IS NOT, for whoever touches this next:
+#
+#   Established, and demonstrated by this suite: JSON decoding turns an
+#   escaped backslash into a single one, and the old two-character pattern
+#   cannot match a path carrying single backslashes.
+#
+#   Not established: that the Write tool on Windows delivers backslash-
+#   separated paths at all. No real payload has ever been captured. A grep of
+#   one vault's runtime logs for the nudge string found nothing, which is
+#   consistent with the hook never having fired there, but nobody confirmed
+#   those logs would have recorded a firing, so it does not establish that it
+#   never fired. Treat the single-backslash story as inference, not history.
+#
+#   Settling it is cheap: log one real payload from a Windows Write and read
+#   its separator. Do that before treating either story as fact.
+#
+# Nothing rides on the answer. The fix is correct either way: if the harness
+# delivers forward slashes, replacing a backslash is a no-op on a path that
+# contains none, and the hook fires as it always did. That is why this suite
+# asserts the behaviour on both path styles instead of choosing one.
 
 set -Eeuo pipefail
 
