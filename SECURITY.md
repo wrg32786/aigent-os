@@ -75,11 +75,11 @@ Two of these are code that runs. The first is doctrine the model is asked to fol
 
 2. **Prompt-injection warning scan** (`hooks/security-scan.sh`): a PostToolUse hook, wired by the installer with matcher `Read|WebFetch|WebSearch|Bash|Grep`. It matches tool output against a fixed list of common injection phrases and prints a severity-tagged warning line. It only warns: it cannot block a tool call, it catches only phrasings on its list, and it is a signal to the operator rather than a filter. See [`docs/security.md`](docs/security.md).
 
-3. **Credential redaction in activity capture** (`hooks/tool-tracker.js`): the hook that records tool activity into the vault stores metadata only, and runs captured values through a redaction pass (private-key blocks, `Bearer` and `Basic` headers, JWTs, `api_key`/`password`-style assignments, common token prefixes, URL userinfo) before anything is written. Defense in depth against a secret landing in a daily note, not a guarantee that every secret format is recognized.
+3. **Credential redaction in activity capture** (`hooks/auto-capture.sh`, which pipes through `hooks/tool-tracker.js`): the hook that records tool activity into the vault stores metadata only, and runs captured values through a redaction pass (private-key blocks, `Bearer` and `Basic` headers, JWTs, `api_key`/`password`-style assignments, common token prefixes, URL userinfo) before anything is written. Defense in depth against a secret landing in a daily note, not a guarantee that every secret format is recognized.
 
 ### Not shipped yet
 
-The self-publishing path described in the [manifesto](docs/manifesto.md), a skill that classifies vault files by a `private: true|false|review` frontmatter flag, secret-scans them, and opens the release PR, **is a roadmap item and not a shipped control.** No file in this repo carries that flag today and no code reads it. Do not rely on it to keep anything out of a public release; that decision is currently entirely manual. Tracked in [`docs/review-hardening-plan.md`](docs/review-hardening-plan.md).
+The self-publishing path described in the [manifesto](docs/manifesto.md), a skill that classifies vault files by a `private: true|false|review` frontmatter flag, secret-scans them, and opens the release PR, **is a roadmap item and not a shipped control.** No file in this repo carries that flag today and no code reads it. Do not rely on it to keep anything out of a public release; that decision is currently entirely manual. No plan in this repo schedules the skill itself; the nearest related item is a proposed public-content lint that would keep files marked `private: true` out of release artifacts ([`docs/review-hardening-plan.md`](docs/review-hardening-plan.md)).
 
 ## Disclosure Hall of Fame
 

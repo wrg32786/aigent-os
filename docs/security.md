@@ -8,7 +8,7 @@ aigent-OS processes your operational context: priorities, decisions, business de
 
 The authority matrix (`system/12_authority_matrix.md`) defines what the AI may do autonomously, what needs approval, and what it should never touch. Read it first, and understand exactly what kind of thing it is:
 
-**It is a markdown document loaded into the model's context, and no hook enforces it.** Nothing in this repository inspects a pending action and compares it against the matrix. The only code that opens the file at all is the memory-heat daemon, which scores it for relevance like any other note. It shapes behavior the way a well-written instruction shapes behavior, which is to say reliably most of the time and not at all under a successful prompt injection.
+**It is a markdown document loaded into the model's context, and no hook enforces it.** Nothing in this repository inspects a pending action and compares it against the matrix. It shapes behavior the way a well-written instruction shapes behavior, which is to say reliably most of the time and not at all under a successful prompt injection.
 
 What it buys you, on that understanding:
 
