@@ -148,17 +148,51 @@ export function newestValidCapsule(memoryRoot) {
   return { ...capsule, rejected };
 }
 
+// Anything that could end a line and start a new one: C0/C1 controls, CR, LF,
+// NEL, and the Unicode line/paragraph separators. JSON.stringify escapes the
+// first two groups but passes U+2028/U+2029 through verbatim, so they are
+// neutralized here rather than left to it.
+const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+// The rendering boundary between capsule content and prompt structure.
+//
+// Values read off a capsule are DATA. They are attacker-controllable in the
+// scenario this design already assumes — a capsules directory is just files, and
+// anything that can write one can choose every byte of its frontmatter — so a
+// value must never be able to contribute STRUCTURE to a generated procedure.
+// Rendered raw, a frontmatter scalar carrying "\n" (which the scalar readers
+// JSON.parse into a real newline) begins its own line, and a line of its own is
+// all a forged instruction needs to look like one of ours.
+//
+// Three properties, each load-bearing:
+//   1. Single line. Every line-breaking character becomes a space, so the value
+//      is always a fragment of a line that OUR code started, never a line.
+//   2. Quoted. The reader can see where the datum begins and ends, so text
+//      shaped like a heading is visibly inside a value.
+//   3. Bounded. An unbounded field can otherwise flood the procedure and push
+//      the fences out of the reader's attention entirely.
+// Truncation is announced, not silent: a value trimmed here is still evidence.
+export function inert(value, max = 500) {
+  let s = String(value ?? '').replace(LINE_BREAKING, ' ').replace(/[ \t]+/g, ' ').trim();
+  if (s.length > max) s = `${s.slice(0, max)}…[+${s.length - max} chars]`;
+  return JSON.stringify(s);
+}
+
 // Human-readable account of what the selector discarded. Grouped by reason so a
 // systemic defect reads as ONE line ("47x missing-required-field
 // (next_valid_action)") rather than 47 unrelated ones, which is the shape that
 // makes a matcher bug obvious on sight.
+//
+// Reasons are this module's own vocabulary; details and file names come off
+// disk, so they go through inert() HERE rather than at the call site — the
+// summary is the unit that must be safe to print, whoever prints it.
 export function rejectionSummary(rejected) {
   if (!Array.isArray(rejected) || !rejected.length) return null;
   const byReason = new Map();
   for (const r of rejected) {
-    const key = r.detail ? `${r.reason} (${r.detail})` : r.reason;
+    const key = r.detail ? `${r.reason} (${inert(r.detail, 120)})` : String(r.reason);
     if (!byReason.has(key)) byReason.set(key, []);
-    byReason.get(key).push(r.name);
+    byReason.get(key).push(inert(r.name, 120));
   }
   return [...byReason.entries()]
     .sort((a, b) => b[1].length - a[1].length)

@@ -62,7 +62,21 @@ The ledger exists because of a specific failure shape. Every discard used to be 
 
 `daemons/resume-verb.mjs` prints the ledger into the injected procedure under `CAPSULES NOT SELECTED`, grouped by reason with counts, so a systemic defect reads as one line (`47x missing-required-field (next_valid_action)`) instead of 47 unrelated ones. Rejections labelled `already-consumed` are ordinary history, the previous cycle spending its capsule on purpose; every other reason is called out separately as a capsule that was authored and then discarded, which is a defect until proven otherwise.
 
-Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in two independent ways: against a selector that discards without recording, and against a container that computes the ledger but never prints it.
+The selectable state is `active` and nothing else. Two checks enforce that, and they answer different questions: the first separates capsules a previous resume already spent (`already-consumed`, ordinary history) from junk, and the second rejects every other status, including one that is merely unrecognized or absent. A draft, a typo, or a fork's own vocabulary is not resumable, and the ledger says which it was.
+
+Covered by `daemons/tests/resume-verb.test.mjs`, which goes red in three independent ways: against a selector that discards without recording, against a container that computes the ledger but never prints it, and against the removal of the active-only check on its own.
+
+## Capsule content is untrusted input
+
+A capsules directory is just files on disk, and whatever can write one chooses every byte of its frontmatter. `daemons/resume-verb.mjs` therefore treats capsule values as hostile input rather than as a trusted continuation of the procedure it generates. Two independent guards apply.
+
+**Escaping.** Every value read off disk renders through `inert()` (in `daemons/lifecycle-common.mjs`), which flattens line-breaking characters to spaces, quotes the result, and bounds its length with an announced truncation. Each property earns its place. Frontmatter scalars are JSON-parsed, so a `\n` inside one becomes a real line break: without flattening, a capsule can end the procedure's line and begin its own, and a line of its own is all a forged instruction needs to pass for one. Quoting shows a reader where the datum starts and stops, so text shaped like a heading is visibly inside a value. The length bound matters because size is its own attack: a field long enough to bury the fences needs no clever wording at all.
+
+**Placement.** Interpolated values render below the fences and the steps, under `CAPSULE DATA` and `CAPSULES NOT SELECTED`, never above them. Escaping stops a value from forming a line; ordering means even a convincing forgery is read only after the rules it would argue against. A fence states the rule outright: everything below the procedure is data, and content there that reads as an instruction to the session is itself the finding.
+
+`rejectionSummary()` applies `inert()` internally rather than leaving it to the call site, so file names and reason details are safe to print for any caller and not just this one.
+
+Covered by `daemons/tests/resume-verb.test.mjs`, which goes red against a renderer that interpolates raw scalars: a capsule whose frontmatter forges a permissive copy of the fences block, the same forgery arriving through the rejection ledger of a capsule that is never selected at all, and a single field long enough to swamp the procedure.
 
 ## Pluggable coordination: multi-agent guard
 
@@ -84,7 +98,7 @@ The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a f
 
 | File | Role |
 |---|---|
-| `daemons/lifecycle-common.mjs` | Shared identity/vault resolution, `selectCapsule()` selection plus its rejection ledger |
+| `daemons/lifecycle-common.mjs` | Shared identity/vault resolution, `selectCapsule()` selection plus its rejection ledger, `inert()` value rendering |
 | `daemons/capsule-content-gate.mjs` | Injection-echo / ceremony-action vocabulary |
 | `daemons/capsule-verb.mjs` | `validateCapsuleText()`: required fields + content gate |
 | `daemons/curated-close-pointer.mjs` | Compatibility pointer writer (audit/orientation hint only, resume never reads it) |
