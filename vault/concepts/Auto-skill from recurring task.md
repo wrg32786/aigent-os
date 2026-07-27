@@ -87,7 +87,7 @@ Skip ahead to phase 3 only is possible (in-session scan), but loses cross-sessio
 ## Adoptions from prior art
 
 - **L4 archive layer** (from [[GenericAgent]]) — auto-skills that haven't fired in 90+ days don't disappear; they decay into a `memory/SKILL_ARCHIVE/` layer that remains queryable via [[remindb]] FTS5. Same pattern as [[Memory Decay Doctrine]] applied to procedural memory.
-- **Procedural-memory framing** (from [[Hermes Agent]]) — auto-skills are explicitly procedural memory ("knowing HOW"), distinct from vault declarative memory ("knowing THAT"). The detector at /close looks for procedural recurring patterns (tool-call sequences), not declarative content (concept-note creation, which is captured by [[LLM Wiki Pattern]] ingest already).
+- **Procedural-memory framing** — auto-skills are explicitly procedural memory ("knowing HOW"), distinct from vault declarative memory ("knowing THAT"). The detector at /close looks for procedural recurring patterns (tool-call sequences), not declarative content (concept-note creation, which is captured by [[LLM Wiki Pattern]] ingest already).
 
 ## Status
 
@@ -100,7 +100,6 @@ Skip ahead to phase 3 only is possible (in-session scan), but loses cross-sessio
 ## Related
 
 - [[GenericAgent]] — crystallization loop prior art + L4 archive layer
-- [[Hermes Agent]] — procedural-memory framing
 - [[MOM Memory]]
 - [[Gstack Port]]
 - [[Pantheon]]
