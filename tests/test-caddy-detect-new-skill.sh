@@ -24,14 +24,19 @@
 #   cannot match a path carrying single backslashes.
 #
 #   Not established: that the Write tool on Windows delivers backslash-
-#   separated paths at all. No real payload has ever been captured. A grep of
-#   one vault's runtime logs for the nudge string found nothing, which is
-#   consistent with the hook never having fired there, but nobody confirmed
-#   those logs would have recorded a firing, so it does not establish that it
-#   never fired. Treat the single-backslash story as inference, not history.
+#   separated paths at all. No real payload has ever been captured.
+#
+#   Not evidence, despite being cited as such while this was written: a grep
+#   of one install's runtime logs for the nudge string, which found nothing.
+#   The hook turned out not to be registered in that install, and an unwired
+#   hook emits nothing whatever its path handling does, so the silence has an
+#   ordinary explanation and separates none of the possibilities. Even setting
+#   registration aside, absence from a log only means something once you have
+#   shown the log would have captured the event, which was never shown here.
+#   Treat the single-backslash reading as inference, not as history.
 #
 #   Settling it is cheap: log one real payload from a Windows Write and read
-#   its separator. Do that before treating either story as fact.
+#   its separator. Do that before treating either reading as fact.
 #
 # Nothing rides on the answer. The fix is correct either way: if the harness
 # delivers forward slashes, replacing a backslash is a no-op on a path that
