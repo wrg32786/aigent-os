@@ -16,7 +16,7 @@ This is a constraint, not a feature. It means we give up some things:
 
 We accept those costs because the alternative, your AI's memory living in a black box you can't inspect, turns the AI into a vendor lock-in trap. The day you can't read your own AI's memory is the day you don't actually own your operating system. The day someone else's compression algorithm decides what your AI remembers is the day you've outsourced your continuity.
 
-**Legibility is the whole point.** Every layer of aigent-OS is designed so you can open it, read it, change it, and hand it off. The system docs are markdown. The vault is markdown. The skills are markdown. The hooks are shell scripts you can read line by line. The publish protocol is markdown. There is no opaque core.
+**Legibility is the whole point.** Every layer of aigent-OS is designed so you can open it, read it, change it, and hand it off. The system docs are markdown. The vault is markdown. The skills are markdown. The hooks are shell scripts you can read line by line. The publish protocol is unbuilt, and its spec is markdown. There is no opaque core.
 
 ## Three claims that follow
 

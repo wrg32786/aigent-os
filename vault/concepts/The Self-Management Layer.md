@@ -24,7 +24,7 @@ Every member of the self-management layer answers the same operational question:
 
 Static frameworks don't answer this. They drift, calcify, or sprawl. The principal eventually stops trusting the framework or stops adding to it; either way, the compound effect dies.
 
-The self-management layer's answer: **build maintenance into the framework itself.** Each member automates a specific maintenance task — surfacing forgotten skills, decaying stale memory, capturing learning from mistakes, evaluating decision outcomes, sanitizing private content from public releases. The principal stays in the loop at authority gates, but the maintenance cycle runs continuously.
+The self-management layer's answer: **build maintenance into the framework itself.** Each member automates a specific maintenance task — surfacing forgotten skills, decaying stale memory, capturing learning from mistakes, evaluating decision outcomes. Sanitizing private content from public releases belongs on that list by design, but its member is planned and not built (see [[#Publish skill (planned)]] below). The principal stays in the loop at authority gates, but the maintenance cycle runs continuously.
 
 ## The members
 
