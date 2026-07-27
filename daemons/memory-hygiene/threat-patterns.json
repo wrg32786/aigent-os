@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "note": "Patterns are held as data, not code, so one table can be read by every scanner that needs it regardless of language. Kept to the regex subset that JavaScript and Python both accept: no lookbehind, no named groups, no anchors. All matching is case-insensitive; each reader must apply that flag.",
+  "patterns": [
+    {
+      "id": "instruction_override",
+      "description": "Text that tells the reader to discard the instructions it already has.",
+      "pattern": "\\b(?:ignore|disregard|forget|override)\\b[^.\\n]{0,40}\\b(?:previous|prior|earlier|above|preceding|system|all)\\b[^.\\n]{0,30}\\b(?:instruction|prompt|direction|directive|rule|message|context)s?\\b"
+    },
+    {
+      "id": "system_prompt_exfil",
+      "description": "Text that asks the reader to disclose its own configuration.",
+      "pattern": "\\b(?:reveal|repeat|print|output|show|display|dump|recite)\\b[^.\\n]{0,30}\\b(?:system prompt|system message|initial instructions|initial prompt|instructions verbatim|prompt verbatim|your instructions)\\b"
+    },
+    {
+      "id": "role_override",
+      "description": "Text that reassigns the reader's identity or claims an unrestricted mode.",
+      "pattern": "\\b(?:you are now|you must now act as|pretend (?:to be|you are)|act as if you are|developer mode|jailbreak)\\b"
+    },
+    {
+      "id": "pseudo_system_block",
+      "description": "Content forging the markers of a system turn so it reads as privileged.",
+      "pattern": "(?:<\\|im_start\\|>\\s*system|<\\s*system\\s*>|\\[\\[?\\s*system\\s*\\]?\\]\\s*:|begin system prompt|end system prompt)"
+    },
+    {
+      "id": "covert_channel",
+      "description": "Instructions to withhold an action or its result from the person being served.",
+      "pattern": "\\b(?:do not|don't|never|avoid)\\b[^.\\n]{0,20}\\b(?:tell|telling|inform|informing|mention|mentioning|reveal|revealing|notify|notifying)\\b[^.\\n]{0,25}\\b(?:user|operator|human|owner|principal)\\b"
+    },
+    {
+      "id": "credential_exfil",
+      "description": "Text pairing a send verb with a secret, which is the shape of data theft.",
+      "pattern": "\\b(?:send|post|upload|email|exfiltrate|transmit|curl|forward)\\b[^.\\n]{0,40}\\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|credential|secret|ssh key|private key)\\b"
+    },
+    {
+      "id": "memory_implant",
+      "description": "Text instructing the reader to write something into its own durable memory. This is the pattern most likely to fire on a legitimate request, which is why a hit stages the row for review rather than discarding it.",
+      "pattern": "\\b(?:add|append|insert|write|save|store|persist)\\b[^.\\n]{0,30}\\b(?:to|into)\\b[^.\\n]{0,20}\\b(?:your |the )?(?:memory|memories|system prompt|standing instructions|rules file)\\b"
+    },
+    {
+      "id": "forged_authority",
+      "description": "A claim that the principal already approved something, made by the text itself rather than by the principal.",
+      "pattern": "\\b(?:the (?:owner|operator|admin|administrator|developer)|your (?:creator|developer|owner|principal))\\b[^.\\n]{0,30}\\b(?:says|said|has authorized|authorized|authorizes|approves|approved|grants|granted|permits|permitted)\\b"
+    },
+    {
+      "id": "tool_coercion",
+      "description": "A command to run, bundled with a reason not to seek approval first.",
+      "pattern": "\\b(?:run|execute|invoke|eval)\\b[^.\\n]{0,30}\\b(?:the following|this)\\b[^.\\n]{0,25}\\b(?:command|script|code|shell|payload)\\b[^.\\n]{0,40}\\b(?:without|no need to|do not|don't)\\b[^.\\n]{0,20}\\b(?:ask|asking|confirm|confirming|approval|permission)\\b"
+    }
+  ]
+}

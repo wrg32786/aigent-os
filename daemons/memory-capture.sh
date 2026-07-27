@@ -286,6 +286,16 @@ except Exception as e:
 sys.exit(0)
 PYEOF
 
+# Injection gate on whatever was just staged. This runs HERE, on the staging
+# path, rather than only at promotion time: promotion is a judged step somebody
+# has to invoke, and a gate that waits to be invoked is a gate that eventually
+# is not. A hit marks the row blocked and leaves the captured text intact so the
+# attempt itself stays on the record.
+if command -v node >/dev/null 2>&1; then
+  node "$ROOT/daemons/memory-candidates-guard.mjs" --file "$CANDIDATES" \
+    >/dev/null 2>>"$DAEMON_ERR_LOG" || true
+fi
+
 # Best-effort: capture script exit code must NOT propagate to caddy.sh.
 # Errors already routed to DAEMON_ERR_LOG above.
 exit 0

@@ -127,6 +127,9 @@ jobs:
           daemons/tests/nightly-pass-alerts.test.mjs
           daemons/tests/memory-heat-atomic.test.mjs
 
+      - name: Memory-hygiene mechanism proofs
+        run: node --test daemons/tests/memory-hygiene.test.mjs
+
       - name: Codex adapter tests
         run: bash tests/test-codex-adapter.sh
 

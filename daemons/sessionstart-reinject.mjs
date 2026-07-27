@@ -35,6 +35,7 @@ import { memRoot as resolveMemRoot, newestValidCapsule } from './lifecycle-commo
 import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
 import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
+import { FRAMING_BLOCK } from './memory-hygiene/resume-framing.mjs';
 
 const TOP_LINKS = 5;
 
@@ -169,6 +170,10 @@ try {
       if (waiting && waiting !== 'null') out.push(`   waiting_on: ${budget(waiting, 200)}`);
       out.push(`   sections: Done (don't redo) · Historical-Errors → Resolutions · Historical-Rejected-Approaches · Files-Read / Files-Modified · Operating-Facts · Pending-Gates · Claimed-Rows`);
       out.push(`   Pending-Gates + Claimed-Rows are LIVE classes — re-verify each against memory before resuming them.`);
+      // Named rulings, not a mood. "Reference only" tells a reader what the
+      // document is; these tell it what to DO when the document and the live
+      // state disagree, which is the moment the framing actually gets tested.
+      for (const line of FRAMING_BLOCK.split('\n')) out.push(`   ${line}`);
     } catch (e) {
       logErr(root, `newest capsule unreadable: ${e?.message || e}`);
       out.push('');

@@ -32,8 +32,13 @@ import {
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { memRoot as resolveMemRoot } from './lifecycle-common.mjs';
+import { framingFrontmatter, FRAMING_BLOCK } from './memory-hygiene/resume-framing.mjs';
+
+const require = createRequire(import.meta.url);
+const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -328,9 +333,11 @@ success_criteria: []
 tags: [capsule, autosave]
 created_at: ${new Date().toISOString()}
 resolved_at: null
+${framingFrontmatter()}
 ---
 
 > [!info] [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.
+${FRAMING_BLOCK.split('\n').map((line) => `> ${line}`).join('\n')}
 
 ## Done (don't redo)
 ${ANCHORS.done}
@@ -442,12 +449,19 @@ ${ANCHORS.rows}
     session_id: sid,
   };
   try {
+    // Lock-serialized read-modify-write. The plain read-mutate-write this
+    // replaced could lose the whole update: a sibling session (or the curated
+    // close writer) reading BODY_STATE between our read and our write would
+    // commit its own copy over ours, and the pointer would silently be one
+    // capsule behind with nothing anywhere recording that it happened.
     const bsPath = path.join(MEM, 'BODY_STATE.json');
-    const bs = JSON.parse(readFileSync(bsPath, 'utf8'));
-    if (bs?.state) {
+    let hadState = true;
+    atomicUpdateJson(bsPath, (bs) => {
+      if (!bs?.state) { hadState = false; return null; }
       bs.state.last_capsule = { ...bs.state.last_capsule, ...pointer };
-      writeFileSync(bsPath, JSON.stringify(bs, null, 2));
-    } else {
+      return bs;
+    });
+    if (!hadState) {
       logErr(root, 'BODY_STATE.json has no .state — capsule pointer not updated (compat hint only; resume is unaffected)');
     }
   } catch (e) {

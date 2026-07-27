@@ -4,9 +4,13 @@
 // selects the newest valid capsule by created_at) — this stamp is an
 // audit/orientation hint only.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { memRoot, seatOf } from './lifecycle-common.mjs';
+
+const require = createRequire(import.meta.url);
+const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
 
 function fail(message) {
   console.error(`[curated-close-pointer] REFUSED: ${message}`);
@@ -40,12 +44,21 @@ const pointer = {
   trigger: 'curated-close',
 };
 
+// The stop-hook writes this same pointer whenever a session ends. Two writers on
+// one field is the whole reason this goes through the lock: without it, whichever
+// of the two read first can commit last and erase the other's stamp, leaving a
+// pointer that is valid, well-formed, and one capsule out of date.
 const bodyPath = path.join(memory, 'BODY_STATE.json');
-let body;
-try { body = JSON.parse(readFileSync(bodyPath, 'utf8')); }
-catch (error) { fail(`BODY_STATE.json unreadable: ${error?.message || error}`); }
-if (!body?.state) fail('BODY_STATE.json has no .state — pointer not stamped');
-body.state.last_capsule = pointer;
-writeFileSync(bodyPath, JSON.stringify(body, null, 2));
+let missingState = false;
+try {
+  atomicUpdateJson(bodyPath, (body) => {
+    if (!body?.state) { missingState = true; return null; }
+    body.state.last_capsule = pointer;
+    return body;
+  });
+} catch (error) {
+  fail(`BODY_STATE.json not stamped: ${error?.message || error}`);
+}
+if (missingState) fail('BODY_STATE.json has no .state — pointer not stamped');
 
 console.log(`[curated-close-pointer] STAMPED ${seat}: ${id}`);
