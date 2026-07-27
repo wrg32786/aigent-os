@@ -16,6 +16,11 @@ frames/
 **/runtime/gateguard/
 **/runtime/NIGHTLY_PASS_STATE.json
 
+# The semantic-search deny list names the operator's own confidential folders,
+# so the names are themselves confidential. Only index-deny.example.json is
+# tracked; the real file stays local.
+**/semantic-search/index-deny.json
+
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json

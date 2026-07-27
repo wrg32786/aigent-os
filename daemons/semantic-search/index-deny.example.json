@@ -1,0 +1,8 @@
+{
+  "_comment": "EXAMPLE only. Copy this file to index-deny.json in the same directory and put your own prefixes in the copy: embed-vault.js and search-vault.js only read index-deny.json, and only that copy is gitignored. Do not rename this file in place, and do not put a real folder name in this one, because it is tracked and the names of your confidential folders are themselves confidential. Each entry is a vault-relative path PREFIX, matched case-insensitively against both '/' and '\\\\' separators via startsWith, so 'projects/Acme-Deal' denies 'projects/Acme-Deal/notes.md' and everything else under that folder. It is a plain prefix match rather than a path-segment match, so it also denies the sibling 'projects/Acme-Deal-Backup.md'. That over-denial is deliberate: losing a search result is cheap, and letting an adjacent copy of confidential material through is not. Add a prefix the same session any client-confidential, under-NDA, or otherwise never-share material enters your vault; a stale or partially filtered index is a leak, not a warning. With no index-deny.json present at all, both scripts index and search everything and say so on stderr.",
+  "deny_prefixes": [
+    "projects/Client-Confidential-Example",
+    "concepts/Confidential-Example",
+    "projects/NDA-Deal-Example"
+  ]
+}

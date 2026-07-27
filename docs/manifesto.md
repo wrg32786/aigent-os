@@ -16,7 +16,7 @@ This is a constraint, not a feature. It means we give up some things:
 
 We accept those costs because the alternative, your AI's memory living in a black box you can't inspect, turns the AI into a vendor lock-in trap. The day you can't read your own AI's memory is the day you don't actually own your operating system. The day someone else's compression algorithm decides what your AI remembers is the day you've outsourced your continuity.
 
-**Legibility is the whole point.** Every layer of aigent-OS is designed so you can open it, read it, change it, and hand it off. The system docs are markdown. The vault is markdown. The skills are markdown. The hooks are shell scripts you can read line by line. The publish protocol is markdown. There is no opaque core.
+**Legibility is the whole point.** Every layer of aigent-OS is designed so you can open it, read it, change it, and hand it off. The system docs are markdown. The vault is markdown. The skills are markdown. The hooks are shell scripts you can read line by line. The publish protocol is unbuilt, and its spec is markdown. There is no opaque core.
 
 ## Three claims that follow
 
@@ -32,9 +32,9 @@ The vault is your AI's brain. You should be able to walk into Obsidian and read 
 
 Most "AI operating system" projects are static: a prompt template, a folder layout, maybe a hook or two, then the user maintains it forever. aigent-OS is recursive: the framework includes the skills that maintain the framework.
 
-When the principal's local aigent-OS learns a new rule, captures a new doctrine note, or codifies a new workflow into a skill, the framework is built to carry that change forward itself: deciding what graduates to the public repo, sanitizing the principal's private references out of it, and drafting the release record. Today the maintenance skills (nightly self-maintenance, skill indexing, changelog discipline) ship with the framework; the full publish skill (automated sanitize, secret scan, and pull request) is on the roadmap and tracked in the review-hardening plan.
+When the principal's local aigent-OS learns a new rule, captures a new doctrine note, or codifies a new workflow into a skill, the framework is built to carry that change forward itself: deciding what graduates to the public repo, sanitizing the principal's private references out of it, and drafting the release record. Today the nightly self-maintenance routine ships with the framework, alongside a hook that spots a new skill file and prompts you to enroll it; the full publish skill (automated sanitize, secret scan, and pull request) is on the roadmap. No plan in this repo schedules that skill; the nearest related item is a proposed public-content lint that would keep files marked `private: true` out of release artifacts ([`docs/review-hardening-plan.md`](review-hardening-plan.md)).
 
-This isn't a gimmick. It's the deepest expression of the legibility thesis: not only is your memory in a format you can read, the system's *evolution* is also in a format you can read. Every release records what shipped, what the sanitizer caught, what was held back and why, who signed off at each authority gate.
+This isn't a gimmick. It's the deepest expression of the legibility thesis: not only is your memory in a format you can read, the system's *evolution* is also in a format you can read. Today that record is [`CHANGELOG.md`](../CHANGELOG.md), and it covers what shipped. The fuller record the publish skill is meant to produce, what the sanitizer caught, what was held back and why, who signed off at each authority gate, arrives with the skill and is not written today.
 
 A framework that can describe its own evolution is one that won't drift on you. It builds institutional memory for the maintenance process itself.
 
