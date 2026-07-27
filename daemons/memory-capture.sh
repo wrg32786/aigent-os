@@ -9,7 +9,8 @@
 # Spec: [[concepts/Somatic v0.4.2 Memory Capture]]
 # Doctrine: [[feedback/Silent successes hide failures]] — no 2>/dev/null without recovery sink.
 
-ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+DAEMON_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${AIGENT_ROOT:-$(cd "$DAEMON_DIR/.." && pwd)}"
 CANDIDATES="$ROOT/memory/MEMORY_CANDIDATES.md"
 DAEMON_ERR_LOG="$ROOT/memory/.daemon-errors.log"
 TIER2_OBS_LOG="$ROOT/memory/.tier2-observations.log"
@@ -175,8 +176,11 @@ except Exception as e:
 
 # ── Count staged rows + extract existing phrases for dedup ─────────────────
 # Row format: | date | "phrase" | type | confidence | dest | status | digested_on | note |
+# `unscanned` is a pending row exactly like `staged` is: it counts against the
+# backlog cap and it dedupes. Leaving it out of this pattern would let the cap be
+# walked straight past whenever the injection scan is down.
 row_re = re.compile(
-    r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*\"(.*?)\"\s*\|.*?\|\s*(staged|promoted|skipped|superseded)\s*\|",
+    r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*\"(.*?)\"\s*\|.*?\|\s*(unscanned|staged|promoted|skipped|superseded)\s*\|",
     re.MULTILINE
 )
 staged_count = 0
@@ -188,7 +192,7 @@ for m in row_re.finditer(content):
     row_date_str = m.group(1)
     row_phrase = m.group(2)
     row_status = m.group(3)
-    if row_status == "staged":
+    if row_status in ("staged", "unscanned"):
         staged_count += 1
         # Parse row_date as date-only; treat as UTC midnight for dedup window
         try:
@@ -241,7 +245,10 @@ for pattern, ptype, confidence, label in PATTERNS:
     dest = suggested_destination(ptype, phrase_stem)
     # Escape any pipes in source phrase (would break markdown table)
     source_escaped = source_phrase.replace("|", "&#124;")
-    row = f'| {today} | "{source_escaped}" | {ptype} | {confidence} | {dest} | staged | null | Auto-captured from prompt |'
+    # Born `unscanned`, NOT `staged`. Only a clean pass of the injection guard
+    # below promotes it. If that guard cannot run, this row stays visibly
+    # unscanned instead of silently joining the promotable set.
+    row = f'| {today} | "{source_escaped}" | {ptype} | {confidence} | {dest} | unscanned | null | Auto-captured from prompt |'
     rows_to_append.append((norm, row))
 
     # Tier 2 observability: log every fire as banked=yes
@@ -258,7 +265,8 @@ if CANDIDATES_HEADER not in content:
     sys.exit(1)
 
 # Add table header if no rows exist yet (file still has placeholder text)
-if "| staged |" not in content and "| promoted |" not in content:
+if ("| staged |" not in content and "| unscanned |" not in content
+        and "| promoted |" not in content):
     # Insert table header row after ## Candidates and its trailing blank line
     table_header = "\n| Date | Source Phrase | Type | Confidence | Suggested Destination | Status | Digested On | Note |\n|------|--------------|------|------------|----------------------|--------|-------------|------|\n"
     insert_point = content.index(CANDIDATES_HEADER) + len(CANDIDATES_HEADER)
@@ -285,6 +293,49 @@ except Exception as e:
 
 sys.exit(0)
 PYEOF
+
+# Injection gate on whatever was just staged. This runs HERE, on the staging
+# path, rather than only at promotion time: promotion is a judged step somebody
+# has to invoke, and a gate that waits to be invoked is a gate that eventually
+# is not. A hit marks the row blocked and leaves the captured text intact so the
+# attempt itself stays on the record.
+#
+# Rows above were written `unscanned`; a clean pass here is what promotes them to
+# `staged`. So a scan that CANNOT run cannot be mistaken for one that ran and
+# found nothing: the rows keep saying so in the file, and the reason is reported
+# on all three channels a failure here can reach -- the row state, the error log,
+# and the caddy hint the session actually sees.
+#
+# The exit code is deliberately captured rather than swallowed with `|| true`.
+# The best-effort contract (never abort a session over memory capture) is kept by
+# the `exit 0` at the bottom of this script, not by refusing to look.
+#
+# The guard is located relative to THIS SCRIPT, not to $ROOT. They are usually
+# the same tree, but $ROOT is the data root and can be pointed elsewhere, and a
+# gate that goes missing whenever the vault moves is a gate with a second silent
+# failure mode. The guard is a sibling of this file in every layout.
+scan_rc=0
+if command -v node >/dev/null 2>&1; then
+  node "$DAEMON_DIR/memory-candidates-guard.mjs" --file "$CANDIDATES" \
+    >/dev/null 2>>"$DAEMON_ERR_LOG"
+  scan_rc=$?
+else
+  # 127 is what a shell reports for "command not found"; reusing it keeps the
+  # missing-runtime case readable next to a real crash in the same log.
+  scan_rc=127
+fi
+
+if [ "$scan_rc" -ne 0 ]; then
+  if [ "$scan_rc" -eq 127 ]; then
+    scan_reason="node not found on PATH"
+  else
+    scan_reason="injection guard exited $scan_rc"
+  fi
+  printf '[memory-capture] %s INJECTION_SCAN_DID_NOT_RUN reason=%s file=%s rows left unscanned\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$scan_reason" "$CANDIDATES" >>"$DAEMON_ERR_LOG"
+  printf '[CADDY:memory] SCAN-FAILED: injection scan did not run (%s); new candidates are marked unscanned and will not promote until it does\n' \
+    "$scan_reason"
+fi
 
 # Best-effort: capture script exit code must NOT propagate to caddy.sh.
 # Errors already routed to DAEMON_ERR_LOG above.

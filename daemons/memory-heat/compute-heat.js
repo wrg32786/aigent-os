@@ -321,7 +321,20 @@ function main() {
     notes: rows,
   };
 
-  writeHeatIndexAtomic(OUTPUT, JSON.stringify(out, null, 2) + '\n');
+  // Serialize the commit against every other writer of this file. The
+  // tmp-plus-rename inside the writer already makes a single write un-tearable;
+  // the lock is what stops two overlapping runs (a nightly pass and a hand-run
+  // recompute) from publishing indexes computed over different vault snapshots
+  // in an order nobody chose. Required lazily: the lock belongs to the CLI path,
+  // and the writer is also loaded directly by tests that copy the module out of
+  // this directory.
+  const { acquireLock, releaseLock } = require('../memory-hygiene/atomic-state.cjs');
+  const lock = acquireLock(OUTPUT);
+  try {
+    writeHeatIndexAtomic(OUTPUT, JSON.stringify(out, null, 2) + '\n');
+  } finally {
+    releaseLock(lock);
+  }
   console.log(`[memory-heat] wrote ${OUTPUT}`);
   console.log('');
   console.log('Hot top 10:');
