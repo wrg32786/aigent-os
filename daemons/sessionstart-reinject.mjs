@@ -35,7 +35,7 @@ import { memRoot as resolveMemRoot, newestValidCapsule } from './lifecycle-commo
 import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
 import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
-import { FRAMING_BLOCK } from './memory-hygiene/resume-framing.mjs';
+import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 
 const TOP_LINKS = 5;
 
@@ -173,7 +173,7 @@ try {
       // Named rulings, not a mood. "Reference only" tells a reader what the
       // document is; these tell it what to DO when the document and the live
       // state disagree, which is the moment the framing actually gets tested.
-      for (const line of FRAMING_BLOCK.split('\n')) out.push(`   ${line}`);
+      for (const line of FRAMING_LINES) out.push(`   ${line}`);
     } catch (e) {
       logErr(root, `newest capsule unreadable: ${e?.message || e}`);
       out.push('');

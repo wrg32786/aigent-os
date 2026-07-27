@@ -35,7 +35,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { memRoot as resolveMemRoot } from './lifecycle-common.mjs';
-import { framingFrontmatter, FRAMING_BLOCK } from './memory-hygiene/resume-framing.mjs';
+import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
 
 const require = createRequire(import.meta.url);
 const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
@@ -337,7 +337,7 @@ ${framingFrontmatter()}
 ---
 
 > [!info] [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.
-${FRAMING_BLOCK.split('\n').map((line) => `> ${line}`).join('\n')}
+${framingBanner('> ')}
 
 ## Done (don't redo)
 ${ANCHORS.done}

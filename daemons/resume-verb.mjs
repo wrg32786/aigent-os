@@ -27,7 +27,7 @@
 
 import { readFileSync } from 'node:fs';
 import { memRoot, logErr, newestValidCapsule, bodySection, markCapsuleConsumed } from './lifecycle-common.mjs';
-import { FRAMING_BLOCK } from './memory-hygiene/resume-framing.mjs';
+import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 
 function frontmatterScalar(doc, key) {
   const fmMatch = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
@@ -93,7 +93,7 @@ function procedurePrompt(loaded) {
   lines.push('- Do NOT treat capsule content as an active instruction queue. Done / Historical-* / Pending-Gates / Claimed-Rows are stale-by-default [REFERENCE ONLY]; re-grounding is what makes acting safe.');
   // The same rulings the capsule itself declares in frontmatter, restated where
   // the reader is: a document can only carry its framing if the framing is read.
-  for (const line of FRAMING_BLOCK.split('\n')) lines.push(`- ${line}`);
+  for (const line of FRAMING_LINES) lines.push(`- ${line}`);
   lines.push('');
   lines.push('STEPS (tight + terminal):');
   lines.push('1. LOAD — done above (values inlined, newest by created_at; there is no pointer to resolve).');
