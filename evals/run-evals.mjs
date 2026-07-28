@@ -26,7 +26,16 @@ const ROOT = path.resolve(EVALS, '..');
 const JSON_OUT = process.argv.includes('--json');
 
 const results = [];
-const record = (suite, id, status, detail) => results.push({ suite, id, status, detail });
+const record = (suite, id, status, detail, extra = {}) => results.push({ suite, id, status, detail, ...extra });
+
+// Duplicate ids inside one corpus collide on the per-case router session id and
+// produce a confusing "(silent)" failure whose cause is invisible. Cheap to reject
+// at load; expensive to diagnose at 2am.
+function duplicateIds(cases) {
+  const seen = new Set(); const dupes = new Set();
+  for (const c of cases || []) { if (seen.has(c?.id)) dupes.add(c.id); seen.add(c?.id); }
+  return [...dupes];
+}
 
 function loadCorpus(name) {
   try { return JSON.parse(readFileSync(path.join(EVALS, name), 'utf8')); }
@@ -98,6 +107,17 @@ function runSkillRecall() {
     // same defect as an assertion-free case, one level down — the case declares an
     // expectation, but the expectation cannot fail. A trailing-comma edit produces
     // it by accident.
+    // Type-check the FIELD before its entries. A JSON string instead of an array
+    // spreads into single characters, each a non-empty string, so an entry-level
+    // check passes and `out.includes('s')` then matches essentially any response.
+    // "acceptable_alternatives": "scout-vault" is one missing bracket pair.
+    const badShape = ['acceptable_alternatives', 'must_not_suggest']
+      .find((k) => c[k] !== undefined && !Array.isArray(c[k]));
+    if (badShape) {
+      record('skill-recall', c.id, 'harness-error',
+        `${badShape} must be an array; a bare string spreads into single characters that match anything`);
+      continue;
+    }
     const emptyNeedle = [...(c.acceptable_alternatives || []), ...(c.must_not_suggest || [])]
       .some((s) => typeof s !== 'string' || s === '');
     if (emptyNeedle) {
@@ -123,7 +143,9 @@ function runSkillRecall() {
     }
     const bad = (c.must_not_suggest || []).find((s) => out.includes(s));
     if (bad) { record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"`); continue; }
-    record('skill-recall', c.id, 'pass', '');
+    // `matched` records whether the router actually resolved a skill, as distinct
+    // from the case merely passing. Only a real match can witness that routing works.
+    record('skill-recall', c.id, 'pass', '', { matched: !/No skill match/i.test(out) });
   }
   // A no-match assertion is satisfied by a router that is COMPLETELY DEAD: total
   // failure emits the same "No skill match" the case expects. Measured — with the
@@ -134,7 +156,12 @@ function runSkillRecall() {
   // because under-firing is what produces its expected output.
   const mine = results.filter((r) => r.suite === 'skill-recall');
   const negativeIds = new Set(cases.filter((c) => c.expect_no_match).map((c) => c.id));
-  const positivesPassed = mine.some((r) => !negativeIds.has(r.id) && r.status === 'pass');
+  // The witness must have MATCHED, not merely passed. caddy's miss line names a
+  // real installed skill ("run /skill-recall to log this gap"), so a positive case
+  // expecting `skill-recall` passes identically whether the router works or is
+  // completely dead — a witness satisfied by the very failure it is meant to rule
+  // out. Only a case whose response was NOT a miss proves routing still works.
+  const positivesPassed = mine.some((r) => !negativeIds.has(r.id) && r.status === 'pass' && r.matched === true);
   const hasPositives = cases.some((c) => !c.expect_no_match);
   if (hasPositives && !positivesPassed) {
     for (const r of mine) {
@@ -238,6 +265,18 @@ for (const [suite, f] of [
 }
 const declarationFor = (r) => declared.get(`${r.suite}/${r.id}`);
 
+for (const [suite, f] of [
+  ['skill-recall', 'skill-recall-tests.json'],
+  ['capsule-resume', 'capsule-resume-tests.json'],
+  ['contradiction', 'contradiction-tests.json'],
+]) {
+  const c = loadCorpus(f);
+  if (c.__error) continue;
+  for (const id of duplicateIds(c)) {
+    record(suite, id, 'harness-error', 'duplicate case id in corpus — cases collide on the per-case router session and fail with a misleading symptom');
+  }
+}
+
 // A DECLARED case that fails is a KNOWN GAP, not a regression — the assertion is
 // kept on purpose to hold an open question open. A DECLARED case that PASSES is
 // fatal: the gap closed and the declaration is now a lie. Without that second
@@ -276,7 +315,14 @@ const harnessError = results.filter((r) => r.status === 'harness-error');
 // person — rename a skill, the case goes undeclared-unrunnable and turns CI red,
 // and the cheapest green is adding `requires` rather than fixing the corpus. Each
 // step defensible, the suite inert. A row is not an assertion.
-const EXECUTED = new Set(['pass', 'fail', 'known-gap']);
+// `known-gap` is deliberately EXCLUDED. It executes, but it is also non-fatal, so
+// counting it let a declaration buy coverage it never pays for: with every
+// positive case declared and the router fully dead, four known-gaps satisfied a
+// floor of four and the suite exited 0 over a router that matched nothing. That is
+// the SAME ratchet closed one round earlier for `unrunnable` — fixing the instance
+// and leaving the identical door open next to it. The floor now counts only rows
+// that both ran AND could have failed the build.
+const EXECUTED = new Set(['pass', 'fail']);
 const MIN_EXECUTABLE = { 'skill-recall': 4, 'capsule-resume': 4 };
 const starved = Object.entries(MIN_EXECUTABLE)
   .map(([suite, min]) => [suite, results.filter((r) => r.suite === suite && EXECUTED.has(r.status)).length, min])
