@@ -71,8 +71,18 @@ function runSkillRecall() {
       encoding: 'utf8',
       timeout: 15_000,
     });
-    if (proc.error) { record('skill-recall', c.id, 'unrunnable', `caddy.sh did not execute: ${proc.error.message}`); continue; }
+    if (proc.error) { record('skill-recall', c.id, 'harness-error', `caddy.sh did not execute: ${proc.error.message}`); continue; }
     const out = proc.stdout || '';
+
+    // A case with neither a positive nor a negative expectation asserts NOTHING:
+    // both branches below are skipped, must_not_suggest is empty in every case,
+    // and it recorded PASS while caddy's output was discarded. An assertion that
+    // cannot fail is worse than an absent one, because it inflates the pass count.
+    if (!c.expect_no_match && !c.expected_skill) {
+      record('skill-recall', c.id, 'harness-error',
+        'case declares neither expected_skill nor expect_no_match — it asserts nothing and can never fail');
+      continue;
+    }
 
     if (c.expect_no_match) {
       // NOT silence. caddy announces a miss ("No skill match") and that marker is
@@ -138,7 +148,9 @@ async function runCapsuleResume() {
           `status "${c.capsule_status}" -> offered=${offered}, expected ${c.expected_offer_resume}`);
       }
     } catch (e) {
-      record('capsule-resume', c.id, 'unrunnable', `harness error: ${e?.message}`);
+      // NOT 'unrunnable': that status is excusable by a `requires` declaration,
+      // and the selector throwing is a defect, not an absent precondition.
+      record('capsule-resume', c.id, 'harness-error', `harness error: ${e?.message}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -164,11 +176,21 @@ await runCapsuleResume();
 runSkillRecall();
 runContradiction();
 
+// Keyed by suite/id, NEVER by bare id. Case ids are unique only WITHIN a corpus,
+// so a bare-id map let a `requires` marker in one suite silence a same-named case
+// in another: renaming contradiction's ct-001 to sr-001 downgraded a live routing
+// FAIL to KNOWN-GAP and exited 0. A declaration may only ever excuse the case that
+// declared it.
 const declared = new Map();
-for (const f of ['skill-recall-tests.json', 'capsule-resume-tests.json', 'contradiction-tests.json']) {
+for (const [suite, f] of [
+  ['skill-recall', 'skill-recall-tests.json'],
+  ['capsule-resume', 'capsule-resume-tests.json'],
+  ['contradiction', 'contradiction-tests.json'],
+]) {
   const c = loadCorpus(f);
-  if (!c.__error) for (const x of c) declared.set(x.id, x.requires || null);
+  if (!c.__error) for (const x of c) declared.set(`${suite}/${x.id}`, x.requires || null);
 }
+const declarationFor = (r) => declared.get(`${r.suite}/${r.id}`);
 
 // A DECLARED case that fails is a KNOWN GAP, not a regression — the assertion is
 // kept on purpose to hold an open question open. A DECLARED case that PASSES is
@@ -176,7 +198,7 @@ for (const f of ['skill-recall-tests.json', 'capsule-resume-tests.json', 'contra
 // rule a `requires` marker becomes a permanent excuse nobody revisits, which is
 // the failure mode this whole runner exists to end.
 for (const r of results) {
-  const req = declared.get(r.id);
+  const req = declarationFor(r);
   if (!req) continue;
   if (r.status === 'fail') { r.status = 'known-gap'; r.detail = `${req} — ${r.detail}`; }
   else if (r.status === 'pass') { r.status = 'gap-closed'; r.detail = `declared "${req}" but the case now PASSES — remove the declaration`; }
@@ -188,10 +210,27 @@ const knownGap = results.filter((r) => r.status === 'known-gap');
 const gapClosed = results.filter((r) => r.status === 'gap-closed');
 const unrunnable = results.filter((r) => r.status === 'unrunnable');
 // An unrunnable case is fatal unless the case itself declares WHY it cannot run.
-const undeclared = unrunnable.filter((r) => !declared.get(r.id));
+const undeclared = unrunnable.filter((r) => !declarationFor(r));
+
+// HARNESS-ERROR is never excusable. `requires` declares a missing PRECONDITION
+// ("needs a model in the loop"); it must not absorb the machinery breaking. A
+// thrown selector crash previously landed as unrunnable, was excused by the
+// case's own declaration, dropped out of the scoreboard entirely, and exited 0 —
+// a production crash reading as a known gap, which is the exact failure this
+// runner exists to end. Kept as a separate status so no declaration can reach it.
+const harnessError = results.filter((r) => r.status === 'harness-error');
+
+// A corpus that asserts nothing is green by vacuum. Emptying both executable
+// corpora to [] previously produced 0 pass / 0 fail / exit 0. Coverage that can
+// silently reach zero is not coverage.
+const MIN_EXECUTABLE = { 'skill-recall': 4, 'capsule-resume': 4 };
+const starved = Object.entries(MIN_EXECUTABLE)
+  .map(([suite, min]) => [suite, results.filter((r) => r.suite === suite).length, min])
+  .filter(([, n, min]) => n < min);
 
 const MARK = {
-  pass: 'PASS', fail: 'FAIL', 'known-gap': 'KNOWN-GAP', 'gap-closed': 'GAP-CLOSED', unrunnable: 'UNRUNNABLE',
+  pass: 'PASS', fail: 'FAIL', 'known-gap': 'KNOWN-GAP', 'gap-closed': 'GAP-CLOSED',
+  unrunnable: 'UNRUNNABLE', 'harness-error': 'HARNESS-ERR',
 };
 
 if (JSON_OUT) {
@@ -202,6 +241,8 @@ if (JSON_OUT) {
     gap_closed: gapClosed.length,
     unrunnable: unrunnable.length,
     undeclared: undeclared.length,
+    harness_error: harnessError.length,
+    starved: starved.map(([suite, n, min]) => ({ suite, cases: n, minimum: min })),
     results,
   }, null, 2));
 } else {
@@ -209,14 +250,21 @@ if (JSON_OUT) {
     console.log(`  ${MARK[r.status].padEnd(11)} ${r.suite}/${r.id}${r.detail ? ` — ${r.detail}` : ''}`);
   }
   console.log('');
-  console.log(`  ${pass.length} pass · ${fail.length} fail · ${knownGap.length} known-gap · ${unrunnable.length} unrunnable (${undeclared.length} undeclared)`);
-  if (fail.length || undeclared.length || gapClosed.length) {
+  console.log(`  ${pass.length} pass · ${fail.length} fail · ${knownGap.length} known-gap · ${gapClosed.length} gap-closed · ${harnessError.length} harness-error · ${unrunnable.length} unrunnable (${undeclared.length} undeclared)`);
+  for (const [suite, n, min] of starved) {
+    console.log(`  STARVED: suite "${suite}" ran ${n} case(s), minimum ${min}. Coverage cannot silently reach zero.`);
+  }
+  if (fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length) {
     console.log('');
     console.log('  RED. FAIL = behaviour drifted from the corpus. UNDECLARED unrunnable = the');
     console.log('  corpus asserts something this install cannot evaluate. GAP-CLOSED = a case');
-    console.log('  declared as a known gap now passes, so the declaration is stale. In every');
-    console.log('  case: fix the code or fix the declaration. Do not delete the assertion.');
+    console.log('  declared as a known gap now passes, so the declaration is stale. HARNESS-ERR');
+    console.log('  = the machinery itself broke, and no `requires` declaration can excuse it.');
+    console.log('  STARVED = a suite lost cases. In every case: fix the code or fix the');
+    console.log('  declaration. Do not delete the assertion.');
   }
 }
 
-process.exit(fail.length || undeclared.length || gapClosed.length ? 1 : 0);
+process.exit(
+  fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length ? 1 : 0,
+);
