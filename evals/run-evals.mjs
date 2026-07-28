@@ -358,6 +358,26 @@ const undercovered = Object.keys(MIN_CASES)
   .map((suite) => [suite, suiteExecuted(suite), Math.ceil(suiteRows(suite) / 2)])
   .filter(([suite, n, need]) => suiteRows(suite) > 0 && n < need);
 
+// UNWITNESSED — a suite with positive cases must contain at least one pass the
+// TRIGGER SCORER resolved. Without this, `matched` was consulted in exactly one
+// place (the negative-case witness rule) and therefore only mattered when the
+// corpus happened to contain an expect_no_match row. Nothing required such a row
+// to exist. Delete the negative case — the likeliest one to be deleted, since it
+// was the flaky one before session isolation — and four taxonomy-resolved passes
+// satisfied both STARVED and UNDERCOVERED with scorer coverage at exactly zero.
+// This makes scorer liveness a property of the suite rather than a courtesy
+// extended to negative cases.
+// KNOWN LATENT FALSE NEGATIVE, recorded so it is not a surprise: daemons/skill-router.sh
+// is a THIRD resolver emitting "[CADDY:skill] MATCH". It cannot spoof `matched`
+// (colon-prefixed), but a corpus whose positives ALL resolve through it would have
+// no witness and go red while healthy. Red-when-healthy is the safe direction and
+// it is loud, so it is left; no current corpus prompt reaches that path.
+const witnessedSuites = new Set(
+  results.filter((r) => r.status === 'pass' && r.matched === true).map((r) => r.suite),
+);
+const unwitnessed = ['skill-recall']
+  .filter((s) => results.some((r) => r.suite === s && EXECUTED.has(r.status)) && !witnessedSuites.has(s));
+
 const MARK = {
   pass: 'PASS', fail: 'FAIL', 'known-gap': 'KNOWN-GAP', 'gap-closed': 'GAP-CLOSED',
   unrunnable: 'UNRUNNABLE', 'harness-error': 'HARNESS-ERR',
@@ -374,6 +394,7 @@ if (JSON_OUT) {
     harness_error: harnessError.length,
     starved: starved.map(([suite, n, min]) => ({ suite, cases: n, minimum: min })),
     undercovered: undercovered.map(([suite, n, need]) => ({ suite, executed: n, needs: need })),
+    unwitnessed,
     results,
   }, null, 2));
 } else {
@@ -386,9 +407,12 @@ if (JSON_OUT) {
     console.log(`  STARVED: suite "${suite}" has ${n} case(s), minimum ${min}. Coverage cannot silently reach zero.`);
   }
   for (const [suite, n, need] of undercovered) {
-    console.log(`  UNDERCOVERED: suite "${suite}" has only ${n} undeclared executed case(s), needs ${need}. Declarations cannot buy coverage.`);
+    console.log(`  UNDERCOVERED: suite "${suite}" has only ${n} undeclared executed case(s) of ${suiteRows(suite)} rows, needs ${need}. Either declarations ate the coverage or unrunnable rows inflated the denominator.`);
   }
-  if (fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length || undercovered.length) {
+  for (const suite of unwitnessed) {
+    console.log(`  UNWITNESSED: suite "${suite}" has no scorer-resolved pass. Every passing case was answered by a fallback resolver, so the trigger scorer could be entirely dead.`);
+  }
+  if (fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length || undercovered.length || unwitnessed.length) {
     console.log('');
     console.log('  RED. FAIL = behaviour drifted from the corpus. UNDECLARED unrunnable = the');
     console.log('  corpus asserts something this install cannot evaluate. GAP-CLOSED = a case');
@@ -401,5 +425,5 @@ if (JSON_OUT) {
 
 process.exit(
   fail.length || undeclared.length || gapClosed.length || harnessError.length
-    || starved.length || undercovered.length ? 1 : 0,
+    || starved.length || undercovered.length || unwitnessed.length ? 1 : 0,
 );
