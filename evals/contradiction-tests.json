@@ -4,13 +4,15 @@
     "fact": "The company has zero operating revenue",
     "contradicting_belief": "The company revenue model is proven",
     "expected_detection": true,
-    "notes": "Zero revenue contradicts 'proven revenue model'. Should flag immediately — this is a critical operating assumption."
+    "requires": "model-harness",
+    "notes": "Zero revenue contradicts 'proven revenue model'. Should flag immediately - this is a critical operating assumption."
   },
   {
     "id": "ct-002",
     "fact": "aigent-OS runs on Claude Opus 4.6",
     "contradicting_belief": "aigent-OS runs on GPT-4",
     "expected_detection": true,
+    "requires": "model-harness",
     "notes": "Clear model identity contradiction. SELF_MODEL.json should make this detectable without external lookup."
   },
   {
@@ -18,6 +20,7 @@
     "fact": "The app is hosted on Railway",
     "contradicting_belief": "The app is hosted on Railway",
     "expected_detection": false,
-    "notes": "Identical claim — no contradiction. Test for false positive suppression. System should not flag consistent facts."
+    "requires": "model-harness",
+    "notes": "Identical claim - no contradiction. Test for false-positive suppression. System should not flag consistent facts."
   }
 ]

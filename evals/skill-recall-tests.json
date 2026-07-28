@@ -1,30 +1,37 @@
 [
   {
     "id": "sr-001",
-    "prompt": "transcribe this audio recording",
-    "expected_skill": "audio-transcriber",
-    "expected_taxonomy": "research.audio.transcriber",
-    "notes": "Direct audio domain match. Should not route to video-analyzer or generic research."
+    "prompt": "audit my install",
+    "expected_skill": "system-check",
+    "must_not_suggest": [],
+    "notes": "Direct install-health match. Rewritten 2026-07-27: the previous case expected 'audio-transcriber', which is not in this repo's skill-index, so it could never be evaluated here."
   },
   {
     "id": "sr-002",
-    "prompt": "check this PR for security issues",
-    "expected_skill": "security-audit",
-    "expected_taxonomy": "security.audit.owasp",
-    "notes": "Security + PR review combined. security-audit is the correct primary skill over code-review."
+    "prompt": "critique this plan",
+    "expected_skill": "critique-plan",
+    "must_not_suggest": [],
+    "notes": "Adversarial review request. Single unambiguous match."
   },
   {
     "id": "sr-003",
-    "prompt": "optimize this slow database query",
-    "expected_skill": "query-optimizer",
-    "expected_taxonomy": "research.deep.investigate",
-    "notes": "Database performance domain. query-optimizer is the installed skill; investigate is the fallback taxonomy path."
+    "prompt": "find notes about pricing",
+    "expected_skill": "semantic-search",
+    "acceptable_alternatives": ["scout-vault"],
+    "must_not_suggest": [],
+    "notes": "Vault retrieval. Caddy returns BOTH scout-vault and semantic-search today, so this case documents that ambiguity rather than pretending to a top-1 answer. Tighten to top-1 only when the router is asked to rank."
+  },
+  {
+    "id": "sr-004",
+    "prompt": "I am blocked and not sure how to proceed",
+    "expected_skill": "stuck",
+    "must_not_suggest": [],
+    "notes": "Restores the id gap in the original corpus, which jumped sr-003 to sr-005."
   },
   {
     "id": "sr-005",
-    "prompt": "generate an OpenAPI spec for this codebase",
-    "expected_skill": "api-docs",
-    "expected_taxonomy": "content.seo.audit",
-    "notes": "API documentation generation. api-docs is the correct skill. taxonomy path is approximate — update if SKILL_LEDGER gets a dedicated api-docs path."
+    "prompt": "what is the weather today",
+    "expect_no_match": true,
+    "notes": "NEGATIVE CASE - no skill should be served. A router that fires on everything has perfect recall and is useless. Caddy announces a miss rather than going silent, so the assertion is on the no-match marker, not on empty output."
   }
 ]
