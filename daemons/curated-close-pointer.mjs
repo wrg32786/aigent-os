@@ -26,6 +26,24 @@ const root = String(process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR ||
 const seat = seatOf(root);
 const memory = memRoot(root);
 const capsulePath = path.resolve(root, capsuleArg);
+
+// Containment: the stamped capsule must live under the memory root.
+//
+// `memory` was computed above and then used only to locate BODY_STATE.json, so
+// the argument itself was bounded by nothing but existsSync. A relative path
+// climbing out (`../../elsewhere.md`) resolved, existed, and got stamped, and
+// the pointer's own `path` field is stored relative to `root` -- so the stored
+// value came out as `../..`-prefixed and every later reader resolving it would
+// follow the pointer straight out of the vault.
+//
+// Compare on a normalised relative path rather than string prefixes: a plain
+// startsWith would accept a sibling directory whose name merely begins with the
+// memory root's ("memory-backup" passes a `memory` prefix test).
+const rel = path.relative(memory, capsulePath);
+if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+  fail(`capsule is outside the memory root: ${capsulePath} (memory root: ${memory})`);
+}
+
 if (!existsSync(capsulePath)) fail(`capsule not found: ${capsulePath}`);
 
 const doc = readFileSync(capsulePath, 'utf8');
