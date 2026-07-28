@@ -26,7 +26,10 @@ const ROOT = path.resolve(EVALS, '..');
 const JSON_OUT = process.argv.includes('--json');
 
 const results = [];
-const record = (suite, id, status, detail, extra = {}) => results.push({ suite, id, status, detail, ...extra });
+// `extra` is spread FIRST so it can never overwrite a row's own verdict. No call
+// site passes corpus-controlled data today, but a status field a caller can
+// rewrite is a loaded gun waiting for the round.
+const record = (suite, id, status, detail, extra = {}) => results.push({ ...extra, suite, id, status, detail });
 
 // Duplicate ids inside one corpus collide on the per-case router session id and
 // produce a confusing "(silent)" failure whose cause is invisible. Cheap to reject
@@ -35,6 +38,15 @@ function duplicateIds(cases) {
   const seen = new Set(); const dupes = new Set();
   for (const c of cases || []) { if (seen.has(c?.id)) dupes.add(c.id); seen.add(c?.id); }
   return [...dupes];
+}
+
+// Duplicates are reported AND skipped. Reporting alone left the duplicate cases
+// executing, which inflated the pass count and fed the coverage floor with rows
+// the corpus never intended. It could not yield green (the error rows are fatal in
+// the same run), but a count nobody can trust is not worth keeping.
+function withoutDuplicates(cases) {
+  const seen = new Set();
+  return (cases || []).filter((c) => (seen.has(c?.id) ? false : (seen.add(c?.id), true)));
 }
 
 function loadCorpus(name) {
@@ -50,13 +62,14 @@ function loadCorpus(name) {
 function runSkillRecall() {
   const cases = loadCorpus('skill-recall-tests.json');
   if (cases.__error) { record('skill-recall', '-', 'unrunnable', `corpus unreadable: ${cases.__error}`); return; }
+  const uniqueCases = withoutDuplicates(cases);
 
   let index;
   try { index = JSON.parse(readFileSync(path.join(ROOT, '.claude', 'skill-index.json'), 'utf8')); }
   catch (e) { record('skill-recall', '-', 'unrunnable', `no skill-index.json: ${e?.message}`); return; }
   const known = new Set(index.map((s) => s.name));
 
-  for (const c of cases) {
+  for (const c of uniqueCases) {
     // A case naming a skill this install does not have cannot be evaluated. It is
     // NOT a routing failure and must not be scored as one — the original corpus
     // referenced four skills absent from this repo, which is how it stayed
@@ -65,12 +78,6 @@ function runSkillRecall() {
       record('skill-recall', c.id, 'unrunnable', `expected_skill "${c.expected_skill}" not in skill-index (${known.size} skills)`);
       continue;
     }
-    // HARNESS ISOLATION, not cheating. caddy suppresses its no-match line after
-    // the first miss per session via .aigent/cache/caddy-gap-<session_id>, and a
-    // session-less invocation keys that flag on the literal "unknown" — so every
-    // caller without a session id shares ONE flag and the second eval run in a
-    // job sees different behaviour from the first. Clearing the flag per case is
-    // what makes routing deterministic; it does not change what caddy decides.
     // Give every case its OWN session id. caddy suppresses its no-match line once
     // per session (caddy.sh:193-194), and a caller that sends no session_id keys
     // that flag on the literal "unknown" — one bucket shared by every session-less
@@ -143,9 +150,15 @@ function runSkillRecall() {
     }
     const bad = (c.must_not_suggest || []).find((s) => out.includes(s));
     if (bad) { record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"`); continue; }
-    // `matched` records whether the router actually resolved a skill, as distinct
-    // from the case merely passing. Only a real match can witness that routing works.
-    record('skill-recall', c.id, 'pass', '', { matched: !/No skill match/i.test(out) });
+    // PRESENCE of the scorer's own line, never ABSENCE of a miss marker. caddy has
+    // TWO resolvers: the trigger scorer prints "[CADDY] /name - why", and when it
+    // finds nothing a SKILL_LEDGER taxonomy fallback prints "[CADDY:taxonomy] ...".
+    // The fallback carries no miss marker, so an absence-check called it a match
+    // while the scorer had contributed nothing — and because the fallback only runs
+    // WHEN the scorer misses, its output is byte-identical whether the scorer is
+    // healthy or completely dead. A corpus drifting toward taxonomy-resolved prompts
+    // would let scorer coverage reach zero with every gate still green.
+    record('skill-recall', c.id, 'pass', '', { matched: /^\[CADDY\] \//m.test(out) });
   }
   // A no-match assertion is satisfied by a router that is COMPLETELY DEAD: total
   // failure emits the same "No skill match" the case expects. Measured — with the
@@ -155,14 +168,14 @@ function runSkillRecall() {
   // match something. Without that pairing the case cannot detect under-firing,
   // because under-firing is what produces its expected output.
   const mine = results.filter((r) => r.suite === 'skill-recall');
-  const negativeIds = new Set(cases.filter((c) => c.expect_no_match).map((c) => c.id));
+  const negativeIds = new Set(uniqueCases.filter((c) => c.expect_no_match).map((c) => c.id));
   // The witness must have MATCHED, not merely passed. caddy's miss line names a
   // real installed skill ("run /skill-recall to log this gap"), so a positive case
   // expecting `skill-recall` passes identically whether the router works or is
   // completely dead — a witness satisfied by the very failure it is meant to rule
   // out. Only a case whose response was NOT a miss proves routing still works.
   const positivesPassed = mine.some((r) => !negativeIds.has(r.id) && r.status === 'pass' && r.matched === true);
-  const hasPositives = cases.some((c) => !c.expect_no_match);
+  const hasPositives = uniqueCases.some((c) => !c.expect_no_match);
   if (hasPositives && !positivesPassed) {
     for (const r of mine) {
       if (negativeIds.has(r.id) && r.status === 'pass') {
@@ -186,6 +199,7 @@ function runSkillRecall() {
 async function runCapsuleResume() {
   const cases = loadCorpus('capsule-resume-tests.json');
   if (cases.__error) { record('capsule-resume', '-', 'unrunnable', `corpus unreadable: ${cases.__error}`); return; }
+  const uniqueCases = withoutDuplicates(cases);
 
   let newestValidCapsule;
   // pathToFileURL, not a bare path: on Windows an absolute path is read as a
@@ -193,7 +207,7 @@ async function runCapsuleResume() {
   try { ({ newestValidCapsule } = await import(pathToFileURL(path.join(ROOT, 'daemons', 'lifecycle-common.mjs')).href)); }
   catch (e) { record('capsule-resume', '-', 'unrunnable', `selector import failed: ${e?.message}`); return; }
 
-  for (const c of cases) {
+  for (const c of uniqueCases) {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'eval-capsule-'));
     try {
       const capsules = path.join(dir, 'capsules');
@@ -237,7 +251,8 @@ async function runCapsuleResume() {
 function runContradiction() {
   const cases = loadCorpus('contradiction-tests.json');
   if (cases.__error) { record('contradiction', '-', 'unrunnable', `corpus unreadable: ${cases.__error}`); return; }
-  for (const c of cases) {
+  const uniqueCases = withoutDuplicates(cases);
+  for (const c of uniqueCases) {
     record('contradiction', c.id, 'unrunnable',
       c.requires ? `declared gap: ${c.requires}` : 'needs a model harness; case does not declare `requires`');
   }
@@ -322,11 +337,26 @@ const harnessError = results.filter((r) => r.status === 'harness-error');
 // the SAME ratchet closed one round earlier for `unrunnable` — fixing the instance
 // and leaving the identical door open next to it. The floor now counts only rows
 // that both ran AND could have failed the build.
+// TWO separate properties, because collapsing them into one floor put honesty in
+// tension with coverage: with a hard floor of 4 over undeclared rows, a suite of 5
+// carrying one legitimate declared gap sat exactly on the boundary, so declaring a
+// SECOND real gap turned the build red. A maintainer telling the truth should never
+// trip a gate. Split them:
+//   STARVED     — the suite lost cases outright. Absolute floor, catches attrition.
+//   UNDERCOVERED — declarations ate the coverage. Relative, so honest gaps have room
+//                  while "declare everything" still cannot buy a green.
 const EXECUTED = new Set(['pass', 'fail']);
-const MIN_EXECUTABLE = { 'skill-recall': 4, 'capsule-resume': 4 };
-const starved = Object.entries(MIN_EXECUTABLE)
-  .map(([suite, min]) => [suite, results.filter((r) => r.suite === suite && EXECUTED.has(r.status)).length, min])
+const MIN_CASES = { 'skill-recall': 4, 'capsule-resume': 4 };
+const suiteRows = (s) => results.filter((r) => r.suite === s).length;
+const suiteExecuted = (s) => results.filter((r) => r.suite === s && EXECUTED.has(r.status)).length;
+
+const starved = Object.entries(MIN_CASES)
+  .map(([suite, min]) => [suite, suiteRows(suite), min])
   .filter(([, n, min]) => n < min);
+
+const undercovered = Object.keys(MIN_CASES)
+  .map((suite) => [suite, suiteExecuted(suite), Math.ceil(suiteRows(suite) / 2)])
+  .filter(([suite, n, need]) => suiteRows(suite) > 0 && n < need);
 
 const MARK = {
   pass: 'PASS', fail: 'FAIL', 'known-gap': 'KNOWN-GAP', 'gap-closed': 'GAP-CLOSED',
@@ -343,6 +373,7 @@ if (JSON_OUT) {
     undeclared: undeclared.length,
     harness_error: harnessError.length,
     starved: starved.map(([suite, n, min]) => ({ suite, cases: n, minimum: min })),
+    undercovered: undercovered.map(([suite, n, need]) => ({ suite, executed: n, needs: need })),
     results,
   }, null, 2));
 } else {
@@ -352,9 +383,12 @@ if (JSON_OUT) {
   console.log('');
   console.log(`  ${pass.length} pass · ${fail.length} fail · ${knownGap.length} known-gap · ${gapClosed.length} gap-closed · ${harnessError.length} harness-error · ${unrunnable.length} unrunnable (${undeclared.length} undeclared)`);
   for (const [suite, n, min] of starved) {
-    console.log(`  STARVED: suite "${suite}" ran ${n} case(s), minimum ${min}. Coverage cannot silently reach zero.`);
+    console.log(`  STARVED: suite "${suite}" has ${n} case(s), minimum ${min}. Coverage cannot silently reach zero.`);
   }
-  if (fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length) {
+  for (const [suite, n, need] of undercovered) {
+    console.log(`  UNDERCOVERED: suite "${suite}" has only ${n} undeclared executed case(s), needs ${need}. Declarations cannot buy coverage.`);
+  }
+  if (fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length || undercovered.length) {
     console.log('');
     console.log('  RED. FAIL = behaviour drifted from the corpus. UNDECLARED unrunnable = the');
     console.log('  corpus asserts something this install cannot evaluate. GAP-CLOSED = a case');
@@ -366,5 +400,6 @@ if (JSON_OUT) {
 }
 
 process.exit(
-  fail.length || undeclared.length || gapClosed.length || harnessError.length || starved.length ? 1 : 0,
+  fail.length || undeclared.length || gapClosed.length || harnessError.length
+    || starved.length || undercovered.length ? 1 : 0,
 );
