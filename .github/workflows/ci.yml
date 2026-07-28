@@ -112,15 +112,6 @@ jobs:
       - name: Caddy new-skill detection tests
         run: bash tests/test-caddy-detect-new-skill.sh
 
-      - name: Model-tier routing-guard tests
-        run: node daemons/tests/model-tier-guard.test.mjs
-
-      - name: Discipline-check ledger-trigger tests
-        run: node daemons/tests/discipline-check.test.mjs
-
-      - name: GateGuard fact-forcing gate tests
-        run: node daemons/tests/gateguard.test.mjs
-
       # The corpora under evals/ existed for weeks with no runner - JSON shaped
       # like evidence that nothing executed. This job is what makes them evidence.
       # Red on: a behaviour drift (FAIL), a case this install cannot evaluate and
@@ -129,29 +120,45 @@ jobs:
       - name: Eval corpora (skill recall, capsule resume)
         run: node evals/run-evals.mjs
 
-      - name: Lifecycle tests (capsule selection, validation, state paths)
-        run: >-
-          node --test
-          daemons/tests/resume-verb.test.mjs
-          daemons/tests/capsule-verb.test.mjs
-          daemons/tests/capsule-content-gate.test.mjs
-          daemons/tests/state-home-dir.test.mjs
-          daemons/tests/stop-capsule-writer.test.mjs
-
-      - name: Semantic-search confidential-class deny-list tests
-        run: node daemons/tests/semantic-search-deny.test.mjs
-
-      - name: Nightly close-parity mutation proofs
-        run: >-
-          node --test
-          daemons/tests/nightly-close-parity.test.mjs
-          daemons/tests/nightly-watchdog-hooks.test.mjs
-          daemons/tests/nightly-route-hardening.test.mjs
-          daemons/tests/nightly-pass-alerts.test.mjs
-          daemons/tests/memory-heat-atomic.test.mjs
-
-      - name: Memory-hygiene mechanism proofs
-        run: node --test daemons/tests/memory-hygiene.test.mjs
+      # Daemons suite runs by DISCOVERY, not by enumeration.
+      #
+      # It used to be seven steps naming files one at a time, and the gap that
+      # creates is silent: a new test file simply does not run, and nothing says
+      # so. Measured 2026-07-28 -- 14 of 19 files were named here, and the five
+      # that were not included `stop-capsule-writer.classify.test.mjs`, the test
+      # for close-classification, which is the very contract this suite exists to
+      # guard. All five passed locally, so CI had been green while not running
+      # them; the gap cost no red, it just meant the gate was narrower than it
+      # looked.
+      #
+      # A rule you have to remember at each new file is a rule you will forget at
+      # some new file. Globbing makes coverage the default and deletes the
+      # per-file bookkeeping instead of patching it. Live evidence from this very
+      # rebase: #36 landed `stop-capsule-writer.test.mjs` and had to hand-add it
+      # to the Lifecycle step to make it run. Under the glob it would simply have
+      # been picked up, and forgetting would not have been possible.
+      #
+      # `node --test daemons/tests/` was tried first and is NOT usable on this
+      # runner's Node: it treats the directory as a single test and fails. The
+      # loop is framework-agnostic -- plain scripts and node:test files both exit
+      # non-zero on failure (verified with a deliberately failing node:test file:
+      # run directly, exit 1), so `set -e` catches either.
+      - name: Daemons test suite (all of daemons/tests, discovery)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(daemons/tests/*.test.mjs)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No daemons test files matched: the glob or the layout changed."
+            echo "Refusing to report a green gate that ran nothing."
+            exit 1
+          fi
+          echo "Running ${#files[@]} daemons test files"
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            node "$f"
+            echo "::endgroup::"
+          done
 
       - name: Codex adapter tests
         run: bash tests/test-codex-adapter.sh
