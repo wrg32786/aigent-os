@@ -2,7 +2,7 @@
   {
     "id": "sr-001",
     "prompt": "audit my install",
-    "expected_skill": "digest",
+    "expected_skill": "system-check",
     "must_not_suggest": [],
     "notes": "Direct install-health match. Rewritten 2026-07-27: the previous case expected 'audio-transcriber', which is not in this repo's skill-index, so it could never be evaluated here."
   },
@@ -17,9 +17,7 @@
     "id": "sr-003",
     "prompt": "find notes about pricing",
     "expected_skill": "semantic-search",
-    "acceptable_alternatives": [
-      "scout-vault"
-    ],
+    "acceptable_alternatives": ["scout-vault"],
     "must_not_suggest": [],
     "notes": "Vault retrieval. Caddy returns BOTH scout-vault and semantic-search today, so this case documents that ambiguity rather than pretending to a top-1 answer. Tighten to top-1 only when the router is asked to rank."
   },
