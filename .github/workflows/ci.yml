@@ -121,6 +121,14 @@ jobs:
       - name: GateGuard fact-forcing gate tests
         run: node daemons/tests/gateguard.test.mjs
 
+      # The corpora under evals/ existed for weeks with no runner - JSON shaped
+      # like evidence that nothing executed. This job is what makes them evidence.
+      # Red on: a behaviour drift (FAIL), a case this install cannot evaluate and
+      # does not declare why (UNDECLARED), or a declared gap that has quietly
+      # closed (GAP-CLOSED).
+      - name: Eval corpora (skill recall, capsule resume)
+        run: node evals/run-evals.mjs
+
       - name: Lifecycle tests (capsule selection, validation, state paths)
         run: >-
           node --test

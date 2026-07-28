@@ -9,24 +9,25 @@
     "id": "cr-002",
     "capsule_status": "paused",
     "expected_offer_resume": true,
-    "notes": "Paused capsule = explicitly suspended but not closed. Must offer resume."
+    "requires": "paused-state-support",
+    "notes": "DECLARED GAP, not a passing case. This asserts paused should be resumable; shipped code disagrees - lifecycle-common.mjs:123 admits only status 'active', so a paused capsule is neither consumed nor selectable and disappears silently. docs/capsule-v2-doctrine.md:44 confirms paused is read only by the retired /pause skill. The assertion is KEPT rather than deleted because the underlying question is real: either paused becomes a supported resumable state, or the /pause skill's state should stop being writable. Deleting this case would erase the question."
   },
   {
     "id": "cr-003",
     "capsule_status": "resolved",
     "expected_offer_resume": false,
-    "notes": "Resolved capsule = work complete. Must NOT offer resume — there is nothing to pick up."
+    "notes": "Resolved capsule = work complete. Must NOT offer resume - there is nothing to pick up."
   },
   {
     "id": "cr-004",
     "capsule_status": "abandoned",
     "expected_offer_resume": false,
-    "notes": "Abandoned capsule = explicitly discarded. Must NOT offer resume — reviving abandoned work creates noise."
+    "notes": "Abandoned capsule = explicitly discarded. Must NOT offer resume. NOTE: this passes for an incidental reason - 'abandoned' is written and read by nothing (docs/capsule-v2-doctrine.md:44), so it is rejected as an unrecognised status rather than as a discarded one. Right answer, wrong mechanism; do not read this green as proof that abandonment is handled."
   },
   {
     "id": "cr-005",
     "capsule_status": null,
     "expected_offer_resume": false,
-    "notes": "No capsule present. Must NOT offer resume — nothing to resume."
+    "notes": "No capsule present. Must NOT offer resume - nothing to resume."
   }
 ]
