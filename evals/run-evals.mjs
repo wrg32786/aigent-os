@@ -62,11 +62,18 @@ function runSkillRecall() {
     // caller without a session id shares ONE flag and the second eval run in a
     // job sees different behaviour from the first. Clearing the flag per case is
     // what makes routing deterministic; it does not change what caddy decides.
-    for (const f of globSync(path.join(ROOT, '.aigent', 'cache', 'caddy-gap-*'))) {
-      rmSync(f, { force: true });
-    }
+    // Give every case its OWN session id. caddy suppresses its no-match line once
+    // per session (caddy.sh:193-194), and a caller that sends no session_id keys
+    // that flag on the literal "unknown" — one bucket shared by every session-less
+    // caller on the install, including any live agent session firing the same hook.
+    // Clearing the shared flag instead of avoiding it was both flaky and rude: it
+    // deleted other sessions' state, and a live session could recreate the flag
+    // between the clear and the spawn. Measured at 1 failure in 5 runs, always the
+    // negative case, always "caddy said: (silent)" — a green suite that goes red
+    // depending on what else is running is not a gate.
+    const evalSession = `eval-${process.pid}-${c.id}`;
     const proc = spawnSync('bash', [path.join(ROOT, 'daemons', 'caddy.sh')], {
-      input: c.prompt,
+      input: JSON.stringify({ prompt: c.prompt, session_id: evalSession }),
       env: { ...process.env, AIGENT_ROOT: ROOT },
       encoding: 'utf8',
       timeout: 15_000,
@@ -81,6 +88,21 @@ function runSkillRecall() {
     if (!c.expect_no_match && !c.expected_skill) {
       record('skill-recall', c.id, 'harness-error',
         'case declares neither expected_skill nor expect_no_match — it asserts nothing and can never fail');
+      continue;
+    }
+
+    // An empty or falsy needle matches EVERY string, because out.includes('') is
+    // always true. One '' in acceptable_alternatives rescues any wrong answer:
+    // a case pointed at the wrong skill with alternatives [''] passed against a
+    // FULLY DEAD router while three siblings went red in the same run. This is the
+    // same defect as an assertion-free case, one level down — the case declares an
+    // expectation, but the expectation cannot fail. A trailing-comma edit produces
+    // it by accident.
+    const emptyNeedle = [...(c.acceptable_alternatives || []), ...(c.must_not_suggest || [])]
+      .some((s) => typeof s !== 'string' || s === '');
+    if (emptyNeedle) {
+      record('skill-recall', c.id, 'harness-error',
+        'acceptable_alternatives/must_not_suggest contains an empty or non-string entry — it matches every response and cannot fail');
       continue;
     }
 
@@ -102,6 +124,30 @@ function runSkillRecall() {
     const bad = (c.must_not_suggest || []).find((s) => out.includes(s));
     if (bad) { record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"`); continue; }
     record('skill-recall', c.id, 'pass', '');
+  }
+  // A no-match assertion is satisfied by a router that is COMPLETELY DEAD: total
+  // failure emits the same "No skill match" the case expects. Measured — with the
+  // scorer stubbed to return nothing, the negative case PASSED while three
+  // positive siblings went red in the same run. So a negative result only carries
+  // information when the router has proven, in this same run, that it can still
+  // match something. Without that pairing the case cannot detect under-firing,
+  // because under-firing is what produces its expected output.
+  const mine = results.filter((r) => r.suite === 'skill-recall');
+  const negativeIds = new Set(cases.filter((c) => c.expect_no_match).map((c) => c.id));
+  const positivesPassed = mine.some((r) => !negativeIds.has(r.id) && r.status === 'pass');
+  const hasPositives = cases.some((c) => !c.expect_no_match);
+  if (hasPositives && !positivesPassed) {
+    for (const r of mine) {
+      if (negativeIds.has(r.id) && r.status === 'pass') {
+        r.status = 'harness-error';
+        r.detail = 'no-match assertion is unverifiable: zero positive cases passed this run, so a dead router would satisfy it identically';
+      }
+    }
+  }
+
+  // Clean up only the flags this run created. Never touch another session's.
+  for (const f of globSync(path.join(ROOT, '.aigent', 'cache', `caddy-gap-eval-${process.pid}-*`))) {
+    rmSync(f, { force: true });
   }
 }
 
@@ -223,9 +269,17 @@ const harnessError = results.filter((r) => r.status === 'harness-error');
 // A corpus that asserts nothing is green by vacuum. Emptying both executable
 // corpora to [] previously produced 0 pass / 0 fail / exit 0. Coverage that can
 // silently reach zero is not coverage.
+// Counted over EXECUTED rows only. Counting every row let declared-unrunnable
+// satisfy the floor: pointing all five skill-recall cases at an absent skill with
+// a `requires` marker produced 5 rows >= the floor, 0 undeclared, exit 0, and
+// caddy was never invoked once. Reachable one case at a time by a reasonable
+// person — rename a skill, the case goes undeclared-unrunnable and turns CI red,
+// and the cheapest green is adding `requires` rather than fixing the corpus. Each
+// step defensible, the suite inert. A row is not an assertion.
+const EXECUTED = new Set(['pass', 'fail', 'known-gap']);
 const MIN_EXECUTABLE = { 'skill-recall': 4, 'capsule-resume': 4 };
 const starved = Object.entries(MIN_EXECUTABLE)
-  .map(([suite, min]) => [suite, results.filter((r) => r.suite === suite).length, min])
+  .map(([suite, min]) => [suite, results.filter((r) => r.suite === suite && EXECUTED.has(r.status)).length, min])
   .filter(([, n, min]) => n < min);
 
 const MARK = {
