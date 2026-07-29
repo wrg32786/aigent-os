@@ -265,12 +265,10 @@ function maskJavaScriptNonCode(source) {
   return masked;
 }
 
-function unsafeIndirections(source) {
+function unsafeSpecialIndirections(source) {
   return [
     ...matches(source, /\bunsafeRaw[A-Za-z0-9_]*\s+as\s+[A-Za-z_$][\w$]*/g),
     ...matches(source, /\bunsafeRaw[A-Za-z0-9_]*\s*:\s*[A-Za-z_$][\w$]*/g),
-    ...matches(source, /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)?unsafeRaw[A-Za-z0-9_]*\b(?!\s*\()/g),
-    ...matches(source, /^[ \t]*[A-Za-z_$][\w$]*[ \t]*=[ \t]*(?:[A-Za-z_$][\w$]*\s*\.\s*)?unsafeRaw[A-Za-z0-9_]*\b(?!\s*\()/gm),
     ...matches(source, /\bunsafeRaw[A-Za-z0-9_]*\s*\.\s*(?:call|apply|bind)\s*\(/g),
     ...matches(source, /\(\s*unsafeRaw[A-Za-z0-9_]*\s*\)\s*\(/g),
     ...matches(source, /\bunsafeRaw[A-Za-z0-9_]*\s*\?\.\s*\(/g),
@@ -283,6 +281,25 @@ function unsafeIndirections(source) {
     ...matches(
       source,
       /\bObject\s*\.\s*getOwnPropertyDescriptor\s*\([^,\r\n]+,\s*['"`]unsafeRaw[A-Za-z0-9_]*['"`]/g,
+    ),
+  ];
+}
+
+function unsafeJavaScriptIndirections(source) {
+  return [
+    ...unsafeSpecialIndirections(source),
+    // A non-call identifier use can alias or escape the raw reader regardless
+    // of the declaration or statement surface around it.
+    ...unsafeTokenViolations(source),
+  ];
+}
+
+function unsafePythonIndirections(source) {
+  return [
+    ...unsafeSpecialIndirections(source),
+    ...matches(
+      source,
+      /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?unsafeRaw[A-Za-z0-9_]*\b(?!\s*\()/gm,
     ),
   ];
 }
@@ -906,6 +923,44 @@ function pythonFStringExpressions(source) {
   return expressions;
 }
 
+const PYTHON_LINE_STRING = String.raw`(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`;
+
+function pythonVariableRenderUses(source, expressions, name, start, end) {
+  const findings = expressions
+    .filter(({ index }) => index > start && index < end)
+    .filter(({ text }) => !isWholeCallExpression(text, 'inert'))
+    .filter(({ text }) => new RegExp(`\\b${regexEscape(name)}\\b`).test(text));
+  const code = maskPythonNonCode(source);
+  const variable = regexEscape(name);
+  const renderPatterns = [
+    {
+      expression: new RegExp(
+        `${PYTHON_LINE_STRING}\\s*\\.\\s*format\\s*\\([^\\r\\n]*\\b${variable}\\b[^\\r\\n]*\\)`,
+        'g',
+      ),
+      codeUse: new RegExp(`\\.\\s*format\\s*\\([^\\r\\n]*\\b${variable}\\b`),
+    },
+    {
+      expression: new RegExp(
+        `${PYTHON_LINE_STRING}\\s*\\+\\s*\\b${variable}\\b`
+          + `|\\b${variable}\\b\\s*\\+\\s*${PYTHON_LINE_STRING}`,
+        'g',
+      ),
+      codeUse: new RegExp(
+        `\\+\\s*\\b${variable}\\b|\\b${variable}\\b\\s*\\+`,
+      ),
+    },
+  ];
+  for (const { expression, codeUse } of renderPatterns) {
+    for (const match of matches(source, expression)) {
+      if (match.index <= start || match.index >= end) continue;
+      const masked = code.slice(match.index, match.index + match[0].length);
+      if (codeUse.test(masked)) findings.push(match);
+    }
+  }
+  return findings;
+}
+
 function pythonReadInterpolations(source) {
   const code = maskPythonNonCode(source);
   const findings = [];
@@ -926,6 +981,31 @@ function pythonReadInterpolations(source) {
     !isWholeCallExpression(text, 'inert')
       && /\bopen\s*\([^\r\n]*\)\s*\.\s*read\s*\(\s*\)/.test(text)
   )));
+  for (const context of matches(
+    source,
+    /^[ \t]*(?:async[ \t]+)?with[ \t]+open\s*\([^\r\n]*\)[ \t]+as[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*:/gm,
+  )) {
+    const firstToken = context.index + context[0].search(/\S/);
+    if (code[firstToken] === ' ') continue;
+    const handle = regexEscape(context[1]);
+    const scopeEnd = pythonScopeEnd(source, context.index, code);
+    const read = new RegExp(
+      `\\b([A-Za-z_][A-Za-z0-9_]*)(?:\\s*:[^=\\r\\n]+)?`
+        + `\\s*=\\s*${handle}\\s*\\.\\s*read(?:lines)?\\s*\\(\\s*\\)`,
+      'g',
+    );
+    read.lastIndex = context.index + context[0].length;
+    let match;
+    while ((match = read.exec(code)) !== null && match.index < scopeEnd) {
+      findings.push(...pythonVariableRenderUses(
+        source,
+        expressions,
+        match[1],
+        match.index + match[0].length,
+        scopeEnd,
+      ));
+    }
+  }
   return findings;
 }
 
@@ -984,7 +1064,88 @@ function shellReadInterpolations(source) {
       findings.push(match);
     }
   }
+  for (const line of matches(source, /^[^\r\n]*$/gm)) {
+    const code = shellCodeOnlyLine(line[0]);
+    if (!/^[ \t]*(?:(?:command|builtin)[ \t]+)?(?:echo|printf)\b/.test(code)) continue;
+    if (/\bprintf\b[ \t]+(?:--[ \t]+)?-v(?:[ \t]|$)/.test(code)) continue;
+    if (shellHasPipeline(continuedShellCommand(source, line.index, line[0]))) continue;
+    for (const substitution of shellFileReadSubstitutions(line[0])) {
+      findings.push({
+        index: line.index + substitution.index,
+        0: substitution.text,
+      });
+    }
+  }
   return findings;
+}
+
+function shellFileReadSubstitutions(line) {
+  const substitutions = [];
+  let quote = null;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+    if (char === "'" && quote === null) {
+      quote = "'";
+      continue;
+    }
+    if (char === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (quote === null
+      && char === '#'
+      && (index === 0 || /[\s;|&()]/.test(line[index - 1]))) {
+      break;
+    }
+    if (char !== '$' || line[index + 1] !== '(' || line[index + 2] === '(') {
+      continue;
+    }
+
+    let innerQuote = null;
+    let innerEscaped = false;
+    let depth = 1;
+    let end = index + 2;
+    for (; end < line.length && depth > 0; end += 1) {
+      const inner = line[end];
+      if (innerEscaped) {
+        innerEscaped = false;
+      } else if (inner === '\\' && innerQuote !== "'") {
+        innerEscaped = true;
+      } else if (innerQuote !== null) {
+        if (inner === innerQuote) innerQuote = null;
+      } else if (inner === '"' || inner === "'") {
+        innerQuote = inner;
+      } else if (inner === '(') {
+        depth += 1;
+      } else if (inner === ')') {
+        depth -= 1;
+      }
+    }
+    if (depth !== 0) break;
+    const text = line.slice(index, end);
+    const read = text.match(/^\$\([ \t]*(?:cat\b([^\r\n)]*)|<([^\r\n)]*))\)$/);
+    if (read) {
+      const operand = (read[1] ?? read[2] ?? '')
+        .replace(/[0-9]*>[>&]?[^\s]*/g, '')
+        .trim();
+      if (operand) substitutions.push({ index, text });
+    }
+    index = end - 1;
+  }
+  return substitutions;
 }
 
 function pythonVariableDelimiterParsers(source) {
@@ -992,9 +1153,10 @@ function pythonVariableDelimiterParsers(source) {
   const findings = [];
   for (const binding of matches(
     source,
-    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*:[^=\r\n]+)?\s*=\s*(["'])---\2[ \t]*$/gm,
+    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*:[^=\r\n]+)?\s*=\s*(?:(["'])---\2|(["'])-\3\s*\*\s*3|(["'])--\4\s*\+\s*(["'])-\5)[ \t]*$/gm,
   )) {
-    if (code[binding.index] === ' ') continue;
+    const firstToken = binding.index + binding[0].search(/\S/);
+    if (code[firstToken] === ' ') continue;
     const variable = regexEscape(binding[1]);
     const scopeEnd = pythonScopeEnd(source, binding.index, code);
     const use = new RegExp(
@@ -1634,7 +1796,7 @@ function scanJavaScript(file, source, rawSeen, readSeen, safeSeen) {
     }
   }
 
-  for (const match of unsafeIndirections(source)) {
+  for (const match of unsafeJavaScriptIndirections(source)) {
     failures.push(violation(file, source, match.index, 'unsafe-raw-indirection'));
   }
   for (const match of unsafeTokenViolations(source)) {
@@ -1919,7 +2081,7 @@ function scanPython(file, source, rawSeen) {
   )) {
     failures.push(violation(file, source, match.index, 'private-reader-helper-access'));
   }
-  for (const match of unsafeIndirections(source)) {
+  for (const match of unsafePythonIndirections(source)) {
     failures.push(violation(file, source, match.index, 'unsafe-raw-indirection'));
   }
   for (const call of findUnsafeCalls(source)) {
@@ -2087,7 +2249,22 @@ test('probe E4 rejects environment values in JavaScript renders', () => {
   );
 });
 
-test('probe P1 rejects Python file reads in f-string renders', () => {
+test('probe unsafeRaw non-call uses reject aliases and escapes', () => {
+  const rules = scanJavaScript(
+    'mutation/unsafe-raw-non-call.mjs',
+    probeSource('unsafe-raw-non-call.mjs'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[unsafe-raw-indirection\]/g) || []).length,
+    6,
+    rules,
+  );
+});
+
+test('probe P1 rejects Python file reads in renders', () => {
   const rules = scanPython(
     'mutation/p1-python-read.py',
     probeSource('p1-python-read.py'),
@@ -2095,12 +2272,12 @@ test('probe P1 rejects Python file reads in f-string renders', () => {
   ).join('\n');
   assert.equal(
     (rules.match(/\[python-read-interpolation\]/g) || []).length,
-    6,
+    9,
     rules,
   );
 });
 
-test('probe P2 rejects shell file reads in printf renders', () => {
+test('probe P2 rejects shell file reads in renders', () => {
   const rules = scanShell(
     'mutation/p2-shell-read.sh',
     probeSource('p2-shell-read.sh'),
@@ -2110,7 +2287,7 @@ test('probe P2 rejects shell file reads in printf renders', () => {
   ).join('\n');
   assert.equal(
     (rules.match(/\[shell-read-interpolation\]/g) || []).length,
-    4,
+    6,
     rules,
   );
 });
@@ -2123,7 +2300,7 @@ test('probe P3 rejects variable delimiters in Python scalar readers', () => {
   ).join('\n');
   assert.equal(
     (rules.match(/\[frontmatter-delimiter-variable\]/g) || []).length,
-    2,
+    4,
     rules,
   );
 });
@@ -2161,7 +2338,14 @@ test('probe shell render rule ignores comments, printf variables, and real pipel
       + `printf -v OUTPUT '%s' "$NOTE"\n`
       + `printf '%s' "$NOTE" | consume_safely\n`
       + `printf '%s' "$NOTE" \\\n`
-      + `  | consume_safely\n`,
+      + `  | consume_safely\n`
+      + `# echo "$(cat "$STATE_FILE")"\n`
+      + `echo '$(cat "$STATE_FILE")'\n`
+      + `echo "\\$(cat "$STATE_FILE")"\n`
+      + `printf -v INLINE '%s' "$(cat "$STATE_FILE")"\n`
+      + `echo "$(cat "$STATE_FILE")" | consume_safely\n`
+      + `echo "$(cat)"\n`
+      + `kind=printf DATA="$(cat f)"\n`,
     new Map(),
     new Map(),
     new Map(),

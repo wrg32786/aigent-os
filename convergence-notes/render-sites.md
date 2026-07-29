@@ -48,20 +48,28 @@ files in each population. It enforces local parser/delimiter declarations,
 reason-gated raw access, JavaScript raw-file render use, and these additional
 probe-shaped render boundaries:
 
-- JavaScript JSON-decoded file fields used by a template render in the same
-  lexical block (`json-read-interpolation`).
+- JavaScript file-backed JSON assigned to a plain object binding, with that
+  object's member used by the four committed same-block template-expression
+  vectors (`json-read-interpolation`).
 - JavaScript scalar readers that compare slices against `'-'.repeat(3)`
   delimiters (`frontmatter-delimiter-expression`).
 - Direct `execSync` results and `spawnSync` stdout/stderr/output used by a
   template render (`child-process-interpolation`).
 - Direct `process.env` access inside a template render
   (`environment-interpolation`).
-- Python direct `open(...).read()` assignments used by f-string renders
-  (`python-read-interpolation`).
+- JavaScript `unsafeRaw*` non-call uses in the six committed alias/escape
+  spellings: `const` and `let` aliases, renamed destructuring, member
+  assignment, `return`, and a call argument (`unsafe-raw-indirection`).
+- Python direct `open(...).read()` assignments used by the six committed
+  f-string vectors, plus three context-manager vectors in the same function:
+  `fh.read()` to an f-string, `fh.readlines()` to literal `.format(...)`, and
+  `fh.read()` to literal concatenation (`python-read-interpolation`).
 - Shell direct `$(cat FILE)` assignments forwarded to an unpiped `printf`
-  render (`shell-read-interpolation`).
-- Python literal frontmatter-delimiter variables used by local
-  split/partition/find/startswith parsers
+  render, plus the committed inline `printf ... "$(cat FILE)"` and
+  `echo "... $(<FILE)"` vectors (`shell-read-interpolation`).
+- Python frontmatter-delimiter bindings proven by committed vectors: literal
+  `"---"` passed to `split`, function-local `"-" * 3` passed to `split`, and
+  function-local `"--" + "-"` passed to `partition`
   (`frontmatter-delimiter-variable`).
 
 Two files remain in the counted populations and sentinel assertions but are
@@ -86,16 +94,37 @@ JavaScript outside the five scanned roots is explicitly excluded:
 - `skills/frontend-slides/bold-template-pack/deck-stage.js` under `skills/` is
   presentation/media build code.
 
-Named static-analysis residue remains for network input, stdin as a data
-channel, and arbitrary interprocedural or dynamic taint propagation. Examples
-include environment or child output copied through helpers/objects, Python
-context-manager handles or `Path.read_text()`, and shell substitutions carried
-through functions or transforms. A regex-only source gate cannot distinguish
-those flows from diagnostics, state processing, and build output at an
-acceptable false-positive rate; accurate enforcement would require
-language-aware AST and interprocedural dataflow. The guard therefore claims
-the concrete rules above, while behavioral tests and this inventory remain
-the defense for the named residue.
+Named static-analysis residue includes direct Python `os.environ[...]` and
+`subprocess.check_output(...)` expressions inside f-strings. These are direct,
+single-expression flows, not merely interprocedural taint. Python
+`Path.read_text()`, other reader/render spellings, and values carried through
+helpers or objects also remain uncovered.
+
+JavaScript destructuring directly from file-backed JSON, such as
+`const { objective } = JSON.parse(...)` followed by same-block interpolation,
+is not matched by `json-read-interpolation`. Shell residue includes
+`read -r value < file`, `mapfile`/`readarray` file reads, and `$(<file)` outside
+the exact committed inline `echo` vector. Assignment, transformation, other
+sink spellings, and substitutions carried through functions remain uncovered.
+Network input, stdin as a data channel, and arbitrary dynamic or
+interprocedural propagation are residue as well.
+
+Enumeration is itself a designed limit. Every guard predicate is a regular
+expression over source text anchored to surface syntax, so a new spelling
+requires a new committed red vector and usually a new or extended predicate.
+The guard rejects the known shapes listed above; it cannot certify the
+source-to-render class. Canonical readers and behavioral rendering tests are
+the class-level defense.
+
+Several predicates also have declared character ceilings.
+`rawReadInterpolations` permits 500 characters on each side of an assigned
+variable in a template expression and 500 characters in the selected sink
+spans. The line-scalar `startsWith` and `indexOf` predicates stop after 400 and
+500 characters, respectively; the shell `unsafeRaw*` function-body check stops
+after 500. The expression-delimiter slice comparison and
+`dynamic-scalar-parser` stop after 160 characters. A sufficiently long site can
+therefore pass because it is long, not because its flow is safe. These ceilings
+remain residue in this round and were not re-engineered.
 
 ## JavaScript direct renders
 

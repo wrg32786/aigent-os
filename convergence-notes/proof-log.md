@@ -165,20 +165,23 @@ The new inert log format in `daemons/lifecycle-common.mjs` was retained.
 
 ### Fix 2: structural guard extension
 
-The seven review probes were first added as production-population-excluded
-scanner fixtures and individually selectable tests. Before their scanner rules
-existed, each selected test exited 1. The same selected commands exit 0 after
-the rules.
+Seven fixtures labeled E1-E4/P1-P3 were added as
+production-population-excluded scanner inputs and individually selectable
+tests. All seven fixture tests exited 1 before their corresponding predicates
+and 0 afterward. The P1 and P3 fixtures did not preserve the reviewer's
+original shapes: P1 used a direct `open(...).read()` assignment, and P3 used a
+literal `"---"` delimiter binding. Those rows therefore prove only the
+fixture-specific variants recorded below.
 
-| Probe | Committed vector | Selected command | RED before rule | Rule | GREEN after rule |
+| Fixture label | Round-1 vector at `97cf2d4` | Selected command | RED before rule | Rule | GREEN after rule |
 |---|---|---|---:|---|---:|
 | E1 | `daemons/tests/fixtures/render-boundary-guard/e1-json-read.mjs` | `node --test --test-name-pattern='probe E1' daemons/tests/render-boundary-guard.test.mjs` | 1 | `json-read-interpolation` | 0 |
 | E2 | `daemons/tests/fixtures/render-boundary-guard/e2-delimiter-expression.mjs` | `node --test --test-name-pattern='probe E2' daemons/tests/render-boundary-guard.test.mjs` | 1 | `frontmatter-delimiter-expression` | 0 |
 | E3 | `daemons/tests/fixtures/render-boundary-guard/e3-child-process.mjs` | `node --test --test-name-pattern='probe E3' daemons/tests/render-boundary-guard.test.mjs` | 1 | `child-process-interpolation` | 0 |
 | E4 | `daemons/tests/fixtures/render-boundary-guard/e4-environment.mjs` | `node --test --test-name-pattern='probe E4' daemons/tests/render-boundary-guard.test.mjs` | 1 | `environment-interpolation` | 0 |
-| P1 | `daemons/tests/fixtures/render-boundary-guard/p1-python-read.py` | `node --test --test-name-pattern='probe P1' daemons/tests/render-boundary-guard.test.mjs` | 1 | `python-read-interpolation` | 0 |
+| P1 round-1 variant | `daemons/tests/fixtures/render-boundary-guard/p1-python-read.py` | `node --test --test-name-pattern='probe P1' daemons/tests/render-boundary-guard.test.mjs` | 1 | `python-read-interpolation` | 0 |
 | P2 | `daemons/tests/fixtures/render-boundary-guard/p2-shell-read.sh` | `node --test --test-name-pattern='probe P2' daemons/tests/render-boundary-guard.test.mjs` | 1 | `shell-read-interpolation` | 0 |
-| P3 | `daemons/tests/fixtures/render-boundary-guard/p3-python-delimiter.py` | `node --test --test-name-pattern='probe P3' daemons/tests/render-boundary-guard.test.mjs` | 1 | `frontmatter-delimiter-variable` | 0 |
+| P3 round-1 variant | `daemons/tests/fixtures/render-boundary-guard/p3-python-delimiter.py` | `node --test --test-name-pattern='probe P3' daemons/tests/render-boundary-guard.test.mjs` | 1 | `frontmatter-delimiter-variable` | 0 |
 
 The E1 production scan also found three JSON-derived `previous.run_id`
 renders in `daemons/nightly-pass.mjs`; those render operands now pass through
@@ -201,15 +204,11 @@ FINAL_FAIL=0
 FINAL_EXIT=0
 ```
 
-All seven requested shapes became executable rules; none of E1-E4 or P1-P3
-was classified as residue. The explicitly named broader residue is network
-input, stdin as a data channel, and arbitrary dynamic or interprocedural taint,
-including environment or child output copied through helpers or objects,
-Python context-manager handles or `Path.read_text()`, and shell substitutions
-carried through functions or transforms. A regex source gate cannot
-distinguish those paths from diagnostics, state processing, and build output
-at an acceptable false-positive rate; language-aware AST and interprocedural
-dataflow would be required.
+Fix round 1 proved E1-E4 and P2 as committed review shapes, plus a
+direct-assignment P1 variant and a literal-delimiter P3 variant. It did not
+prove the reviewer's context-manager P1 or expression-built P3. Fix round 2
+below records red/green evidence for those exact shapes. Current coverage and
+named residue are maintained in `convergence-notes/render-sites.md`.
 
 ### Fix 3: declared canonical-reader exemptions
 
@@ -400,3 +399,100 @@ An earlier combined installer command wrapper reached its 180-second host
 timeout during the fast suite; that wrapper produced no credited result. Legs
 16-18 in the table are the subsequent YAML-derived run with per-command
 process exits.
+
+## Fix round 2
+
+Every result in this section is a process exit status. Assertions were added
+at their final strength before their predicates changed; no assertion was
+inverted or relaxed for a red run.
+
+### Corrected claim
+
+Fix round 1's labels exceeded its measurements. Its committed P1 fixture
+proved direct `open(...).read()` assignments rendered by f-strings, not the
+reviewer's `with open(p) as fh: body = fh.read()` shape. Its P3 fixture proved
+literal `"---"` bindings, not expression-built delimiters. The historical
+section above now says so directly.
+
+### Rule evidence
+
+| Change | New committed red vectors | Selected command | RED before predicate | GREEN after predicate |
+|---|---:|---|---|---|
+| JavaScript `unsafeRaw*` non-call alias/escape classification | 6: `const`, `let`, renamed destructuring, member assignment, `return`, call argument | `node --test --test-name-pattern='probe unsafeRaw non-call' daemons/tests/render-boundary-guard.test.mjs` | exit 1, actual 3 of expected 6 `unsafe-raw-indirection` findings | exit 0, 6 of 6 |
+| Python context-manager file read to render | 3: `fh.read()` to f-string, `fh.readlines()` to literal `.format(...)`, `fh.read()` to literal concatenation | `node --test --test-name-pattern='probe P1' daemons/tests/render-boundary-guard.test.mjs` | exit 1, actual 6 of expected 9 total `python-read-interpolation` findings | exit 0, 9 of 9 |
+| Shell inline file substitution render | 2: `printf ... "$(cat FILE)"`, `echo "... $(<FILE)"` | `node --test --test-name-pattern='probe P2' daemons/tests/render-boundary-guard.test.mjs` | exit 1, actual 4 of expected 6 total `shell-read-interpolation` findings | exit 0, 6 of 6 |
+| Python expression-built delimiter binding | 2: function-local `"-" * 3` to `split`, function-local `"--" + "-"` to `partition` | `node --test --test-name-pattern='probe P3' daemons/tests/render-boundary-guard.test.mjs` | exit 1, actual 2 of expected 4 total `frontmatter-delimiter-variable` findings | exit 0, 4 of 4 |
+
+The unsafeRaw result is a predicate-classification correction, not a claim
+that production code was unsound: before this change the final three spellings
+were already rejected as `unsafe-raw-token-use`, but the narrower
+`unsafe-raw-indirection` predicate did not classify them.
+
+The final direct guard result was:
+
+```text
+STRUCTURAL_GUARD_TESTS=13
+STRUCTURAL_GUARD_PASS=13
+STRUCTURAL_GUARD_FAIL=0
+STRUCTURAL_GUARD_EXIT=0
+GUARD_JAVASCRIPT_POPULATION=42
+GUARD_SHELL_POPULATION=28
+GUARD_PYTHON_POPULATION=6
+```
+
+The baseline and final populations are both 42/28/6. None shrank.
+
+### Coverage after fix round 2
+
+The committed vectors prove E1's four plain-object JSON/member template uses,
+E2's `'-'.repeat(3)` slice comparison, E3's five direct child-output template
+uses, E4's five direct environment template uses, P1's six direct-open
+f-string uses plus the three context-manager reader/render pairs above, P2's
+four assigned-cat/`printf` uses plus the two inline pairs above, and P3's two
+literal bindings plus the two expression-built bindings above. The six
+unsafeRaw non-call spellings in the rule-evidence table are also proven.
+
+No class-wide taint coverage is claimed. `convergence-notes/render-sites.md`
+names the unvectorized residue, including direct Python environment/subprocess
+f-string expressions, destructured JavaScript JSON fields, other shell file
+read spellings, regex surface-syntax enumeration, and the declared 500- and
+160-character predicate ceilings. Canonical readers and behavioral tests are
+the class-level defense.
+
+### Workflow-derived full-suite rerun
+
+The leg list was re-parsed from all 18 `run` blocks in
+`.github/workflows/ci.yml` with PyYAML `BaseLoader`, preserving the established
+suite definition from fix round 1. That is 15 validation commands and 3
+installer commands, or 24 CI executions after the three-OS installer matrix.
+Each unmodified YAML scalar was invoked with
+`bash --noprofile --norc -eo pipefail -c <command>`.
+
+| Leg | Workflow step | Population | Exit |
+|---:|---|---|---:|
+| 1 | Shell syntax check | 39 shell files | 0 |
+| 2 | JSON syntax check | 20 JSON files | 0 |
+| 3 | Em-dash guard (public copy) | 42 public-copy files | 0 |
+| 4 | Node hook tests | 1 file, 9 tests | 0 |
+| 5 | Python runtime tests | 1 module, 13 tests | 0 |
+| 6 | Caddy router tests | 1 test script | 0 |
+| 7 | Caddy new-skill detection tests | 1 script, 6 cases | 0 |
+| 8 | Eval corpora (skill recall, capsule resume) | 3 corpora, 13 cases | 0 |
+| 9 | Rendering-boundary structural guard canary | 1 guard file and 1 sentinel | 0 |
+| 10 | Daemons test suite (all of daemons/tests, discovery) | 24 discovered test files | 0 |
+| 11 | Codex adapter tests | 1 script, 6 scenarios | 0 |
+| 12 | Terminal-demo asset drift guard | 1 script, 2 SVG assets, 7 checks | 0 |
+| 13 | Session-capture-summary hook tests | 1 script, 7 cases | 0 |
+| 14 | Onboarding-guide start-over regression test | 1 script, 2 cases | 0 |
+| 15 | Vault-sync regression tests | 1 script, 4 cases | 0 |
+| 16 | Installer regression suite (fast) | 1 script, 18 cases; 3-OS CI matrix | 0 |
+| 17 | Installer regression suite (slow smoke, real repo tree) | 1 script, 2 scenarios; 3-OS CI matrix | 0 |
+| 18 | Web-install regression suite | 1 script, 4 scenario groups; 3-OS CI matrix | 0 |
+
+```text
+DISCOVERED_UNIQUE_RUN_BLOCKS=18
+MATRIX_EXPANDED_RUN_EXECUTIONS=24
+LOCAL_COMMANDS_EXIT_0=18/18
+DISCOVERED_DAEMON_TEST_FILES_EXIT_0=24/24
+FULL_SUITE_EXIT=0
+```
