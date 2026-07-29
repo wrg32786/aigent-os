@@ -55,6 +55,11 @@ function lockPathFor(target) {
 // and throws EEXIST for every other. A lock older than staleMs is treated as
 // abandoned (the holder crashed) and broken once -- without that, a single crash
 // would wedge the state file until someone deleted the lock by hand.
+//
+// Every acquisition stamps a fresh random TOKEN into the marker, and that token
+// is what makes release safe -- see releaseLock. A pid would not do: pids are
+// reused, and one process can legitimately hold the same lock twice in sequence,
+// so a pid comparison would match in exactly the case that has to fail.
 function acquireLock(target, options = {}) {
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -70,12 +75,16 @@ function acquireLock(target, options = {}) {
   for (;;) {
     try {
       fsImpl.mkdirSync(path.dirname(lockFile), { recursive: true });
+      const token = crypto.randomBytes(8).toString('hex');
       const fd = fsImpl.openSync(lockFile, 'wx');
+      let stamped = true;
       try {
-        fsImpl.writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
-      } catch { /* the marker content is a debugging aid, not the lock */ }
+        fsImpl.writeSync(fd, JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() }));
+      } catch { stamped = false; /* the marker content is an aid, not the lock */ }
       fsImpl.closeSync(fd);
-      return { lockFile, brokeStale };
+      // `stamped` is carried so release can tell "my token is not on disk because
+      // someone replaced it" from "my token was never written at all".
+      return { lockFile, brokeStale, token, stamped };
     } catch (error) {
       if (error && error.code !== 'EEXIST') throw error;
       let age = 0;
@@ -97,9 +106,32 @@ function acquireLock(target, options = {}) {
   }
 }
 
+// Release ONLY the lock we still hold.
+//
+// THE FAILURE THIS EXISTS FOR: a holder that runs longer than staleMs gets its
+// lock broken by the next arrival, which then stamps its own marker. When the
+// original holder finally reaches its `finally { releaseLock(...) }`, a blind
+// unlink deletes the NEW holder's lock -- and the new holder is at that moment
+// inside its read-modify-write window. A third writer can then acquire cleanly,
+// and mutual exclusion is gone precisely in the path the stale break exists to
+// handle. The drift check still prevents a lost update, so this is a liveness
+// and refusal-rate defect rather than a corruption one, but a lock that quietly
+// stops excluding is worse than one that never claimed to.
+//
+// So compare tokens. If the marker on disk carries a different token, the lock
+// is someone else's now and we leave it alone.
 function releaseLock(handle, options = {}) {
   const { fsImpl = fs } = options;
   if (!handle || !handle.lockFile) return;
+  if (handle.token && handle.stamped) {
+    let onDisk = null;
+    try { onDisk = JSON.parse(fsImpl.readFileSync(handle.lockFile, 'utf8')); } catch { onDisk = null; }
+    // An unreadable or tokenless marker falls through to the unlink. That keeps
+    // the old behaviour for the one case we cannot resolve, and it is the safer
+    // direction: releasing a lock we might still own beats wedging the state
+    // file for staleMs on every caller that follows.
+    if (onDisk && typeof onDisk.token === 'string' && onDisk.token !== handle.token) return;
+  }
   try { fsImpl.unlinkSync(handle.lockFile); } catch { /* already gone */ }
 }
 
