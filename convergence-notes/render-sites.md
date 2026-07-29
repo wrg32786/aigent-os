@@ -40,6 +40,63 @@ are not counted: none is generated prompt/procedure text or a persisted
 input to a listed automatic renderer. Fixed text is counted when external
 state selects whether that text is injected.
 
+## Structural guard coverage and declared limits
+
+Population inclusion is not the same as rule coverage. The structural guard
+counts all of the JavaScript, shell, and Python files above and keeps sentinel
+files in each population. It enforces local parser/delimiter declarations,
+reason-gated raw access, JavaScript raw-file render use, and these additional
+probe-shaped render boundaries:
+
+- JavaScript JSON-decoded file fields used by a template render in the same
+  lexical block (`json-read-interpolation`).
+- JavaScript scalar readers that compare slices against `'-'.repeat(3)`
+  delimiters (`frontmatter-delimiter-expression`).
+- Direct `execSync` results and `spawnSync` stdout/stderr/output used by a
+  template render (`child-process-interpolation`).
+- Direct `process.env` access inside a template render
+  (`environment-interpolation`).
+- Python direct `open(...).read()` assignments used by f-string renders
+  (`python-read-interpolation`).
+- Shell direct `$(cat FILE)` assignments forwarded to an unpiped `printf`
+  render (`shell-read-interpolation`).
+- Python literal frontmatter-delimiter variables used by local
+  split/partition/find/startswith parsers
+  (`frontmatter-delimiter-variable`).
+
+Two files remain in the counted populations and sentinel assertions but are
+wholly exempt from structural rule evaluation by design:
+`daemons/frontmatter-reader.cjs` and `daemons/render_boundary.py`. They define
+the canonical parser and raw-reader source shapes that the guard prohibits
+everywhere else. `daemons/tests/render-boundary.test.mjs` behaviorally defends
+the JavaScript reader's exports, complete line-breaking collapse, Unicode
+separator handling, reason-gated raw access, and the historical
+escaped-newline specimen. `tests/test_runtime_paths.py` behaviorally defends
+the Python exports, decoded capsule and `ACTIVE_STATE.json` single-line
+invariants, reason-gated raw access, and separator-safe rewriting.
+
+JavaScript outside the five scanned roots is explicitly excluded:
+
+- `evals/run-evals.mjs` under `evals/` is a CI-only fixture/JSON evaluation
+  harness. It reads corpora and `.claude/skill-index.json`, exercises
+  production code, and has no independent parser or production render
+  boundary.
+- `assets/build-terminal-demo.mjs` under `assets/` is presentation-asset build
+  and drift-check code.
+- `skills/frontend-slides/bold-template-pack/deck-stage.js` under `skills/` is
+  presentation/media build code.
+
+Named static-analysis residue remains for network input, stdin as a data
+channel, and arbitrary interprocedural or dynamic taint propagation. Examples
+include environment or child output copied through helpers/objects, Python
+context-manager handles or `Path.read_text()`, and shell substitutions carried
+through functions or transforms. A regex-only source gate cannot distinguish
+those flows from diagnostics, state processing, and build output at an
+acceptable false-positive rate; accurate enforcement would require
+language-aware AST and interprocedural dataflow. The guard therefore claims
+the concrete rules above, while behavioral tests and this inventory remain
+the defense for the named residue.
+
 ## JavaScript direct renders
 
 | ID | Site | Source → sink |

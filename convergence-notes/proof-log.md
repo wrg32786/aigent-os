@@ -129,3 +129,274 @@ tests/test-session-capture-summary.sh=0  # 7/7
 tests/test-installer-fast.sh=0           # 18/18
 DIFF_CHECK_EXIT=0
 ```
+
+## Fix round 1
+
+Every result in this section is a process exit status. No pass/fail result was
+inferred by grepping a success message.
+
+### Fix 1: `.daemon-errors.log` consumer convergence
+
+The enumerated consumer category was **legacy bracket-tag
+`.daemon-errors.log` record consumers**: assertions or parsers under
+`tests/`, `scripts/`, `daemons/`, and `docs/` that depend on the old
+`[tag] message` record shape. A repository-wide `.daemon-errors.log`
+reference walk followed by format-sensitive assertion searches found four
+stale consumers, all in `tests/test-vault-sync.sh` at original lines 154,
+173, 197, and 224. The first two were called out by the review; the latter
+two were found by completing the category sweep. All four now assert the
+inert `tag="vault-sync" message="..."` record format.
+
+```text
+RED_COMMAND=bash tests/test-vault-sync.sh
+RED_VANTAGE=621f1803
+RED_EXIT=1
+RED_RESULT=FAIL: push failure log line is missing or malformed
+
+GREEN_COMMAND=bash tests/test-vault-sync.sh
+GREEN_EXIT=0
+GREEN_RESULT=4/4 passed
+
+POST_FIX_SWEEP_COMMAND=! git grep -n -I -F '\[vault-sync\]' -- tests scripts daemons docs
+POST_FIX_SWEEP_EXIT=0
+```
+
+The new inert log format in `daemons/lifecycle-common.mjs` was retained.
+
+### Fix 2: structural guard extension
+
+The seven review probes were first added as production-population-excluded
+scanner fixtures and individually selectable tests. Before their scanner rules
+existed, each selected test exited 1. The same selected commands exit 0 after
+the rules.
+
+| Probe | Committed vector | Selected command | RED before rule | Rule | GREEN after rule |
+|---|---|---|---:|---|---:|
+| E1 | `daemons/tests/fixtures/render-boundary-guard/e1-json-read.mjs` | `node --test --test-name-pattern='probe E1' daemons/tests/render-boundary-guard.test.mjs` | 1 | `json-read-interpolation` | 0 |
+| E2 | `daemons/tests/fixtures/render-boundary-guard/e2-delimiter-expression.mjs` | `node --test --test-name-pattern='probe E2' daemons/tests/render-boundary-guard.test.mjs` | 1 | `frontmatter-delimiter-expression` | 0 |
+| E3 | `daemons/tests/fixtures/render-boundary-guard/e3-child-process.mjs` | `node --test --test-name-pattern='probe E3' daemons/tests/render-boundary-guard.test.mjs` | 1 | `child-process-interpolation` | 0 |
+| E4 | `daemons/tests/fixtures/render-boundary-guard/e4-environment.mjs` | `node --test --test-name-pattern='probe E4' daemons/tests/render-boundary-guard.test.mjs` | 1 | `environment-interpolation` | 0 |
+| P1 | `daemons/tests/fixtures/render-boundary-guard/p1-python-read.py` | `node --test --test-name-pattern='probe P1' daemons/tests/render-boundary-guard.test.mjs` | 1 | `python-read-interpolation` | 0 |
+| P2 | `daemons/tests/fixtures/render-boundary-guard/p2-shell-read.sh` | `node --test --test-name-pattern='probe P2' daemons/tests/render-boundary-guard.test.mjs` | 1 | `shell-read-interpolation` | 0 |
+| P3 | `daemons/tests/fixtures/render-boundary-guard/p3-python-delimiter.py` | `node --test --test-name-pattern='probe P3' daemons/tests/render-boundary-guard.test.mjs` | 1 | `frontmatter-delimiter-variable` | 0 |
+
+The E1 production scan also found three JSON-derived `previous.run_id`
+renders in `daemons/nightly-pass.mjs`; those render operands now pass through
+`inert()`. The committed vectors additionally cover multiline and mixed
+JavaScript expressions, `execSync` and `spawnSync` forms, optional environment
+access, annotated Python bindings, uppercase and triple f-strings, shell
+function-local assignments, and shell control-operator and pipeline
+distinctions. Negative vectors defend comments, string/docstring lookalikes,
+unrelated Python scopes, `printf -v`, and real pipelines.
+
+```text
+PRE_RULE_SELECTED_TESTS=7
+PRE_RULE_SELECTED_RED=7
+PRE_RULE_SELECTED_EXIT=1 each
+
+FINAL_COMMAND=node daemons/tests/render-boundary-guard.test.mjs
+FINAL_TESTS=12
+FINAL_PASS=12
+FINAL_FAIL=0
+FINAL_EXIT=0
+```
+
+All seven requested shapes became executable rules; none of E1-E4 or P1-P3
+was classified as residue. The explicitly named broader residue is network
+input, stdin as a data channel, and arbitrary dynamic or interprocedural taint,
+including environment or child output copied through helpers or objects,
+Python context-manager handles or `Path.read_text()`, and shell substitutions
+carried through functions or transforms. A regex source gate cannot
+distinguish those paths from diagnostics, state processing, and build output
+at an acceptable false-positive rate; language-aware AST and interprocedural
+dataflow would be required.
+
+### Fix 3: declared canonical-reader exemptions
+
+`daemons/frontmatter-reader.cjs` and `daemons/render_boundary.py` are now
+declared as counted sentinels but deliberate whole-file scanner exemptions.
+Comments immediately above both exemption returns name the behavioral
+defense, and `convergence-notes/render-sites.md` names the relevant JavaScript
+and Python behavior suites.
+
+```text
+DECLARATION_PREDICATE=guard source contains both exact "Deliberate whole-file exemption" comments immediately before the canonical return; render-sites names both canonical paths and both behavioral suites
+DECLARATION_INPUT_OLD=git show 621f1803:daemons/tests/render-boundary-guard.test.mjs plus git show 621f1803:convergence-notes/render-sites.md
+DECLARATION_INPUT_FIXED=the same two working-tree paths
+DECLARATION_ASSERT_621f1803_EXIT=1
+DECLARATION_ASSERT_FIXED_EXIT=0
+```
+
+### Fix 4: explicit JavaScript exclusions
+
+The inventory now names all three JavaScript areas outside the five scanned
+roots: `evals/`, `assets/`, and `skills/`. It also records why
+`evals/run-evals.mjs` is a fixture/JSON evaluation harness rather than an
+independent production render boundary.
+
+```text
+EXCLUSION_PREDICATE=render-sites contains evals/run-evals.mjs, assets/build-terminal-demo.mjs, skills/frontend-slides/bold-template-pack/deck-stage.js, and the fixture/JSON rationale
+EXCLUSION_INPUT_OLD=git show 621f1803:convergence-notes/render-sites.md
+EXCLUSION_INPUT_FIXED=convergence-notes/render-sites.md
+EXCLUSION_ASSERT_621f1803_EXIT=1
+EXCLUSION_ASSERT_FIXED_EXIT=0
+```
+
+### Workflow-discovered full suite
+
+The leg list was parsed from every `jobs.*.steps[]` entry with a `run` key in
+`.github/workflows/ci.yml` using PyYAML `BaseLoader`; it was not a handwritten
+test list. Discovery returned 18 unique run blocks: 15 in `validate` and 3 in
+`installer`. The three installer blocks expand over the three-OS matrix, so CI
+contains 24 run-step executions. The local proof executed each of the 18
+unique commands on Windows. CI retains its Ubuntu, macOS, and Windows matrix.
+
+For every row, the runner printed the complete YAML `run` scalar between
+`COMMAND_BEGIN` and `COMMAND_END`, printed the population, then invoked the
+unmodified scalar with
+`bash --noprofile --norc -eo pipefail -c <command>`. The command column below
+uses M1-M5 for the multiline scalars, reproduced exactly here:
+
+M1:
+
+```bash
+set -euo pipefail
+fail=0
+while IFS= read -r -d '' script; do
+  if ! bash -n "$script"; then
+    echo "SYNTAX ERROR: $script"
+    fail=1
+  fi
+done < <(find . -name '*.sh' -not -path '*/node_modules/*' -print0)
+test "$fail" -eq 0
+```
+
+M2:
+
+```bash
+set -euo pipefail
+fail=0
+while IFS= read -r -d '' file; do
+  if ! python3 -m json.tool "$file" >/dev/null; then
+    echo "JSON PARSE ERROR: $file"
+    fail=1
+  fi
+done < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
+test "$fail" -eq 0
+```
+
+M3:
+
+```bash
+set -euo pipefail
+python3 - <<'PYEOF'
+import glob, re, sys
+
+scope = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CREDITS.md',
+         'INSTALL.md', 'SECURITY.md']
+scope += glob.glob('docs/**/*.md', recursive=True)
+scope += glob.glob('docs/**/*.html', recursive=True)
+scope += glob.glob('daemons/**/*.md', recursive=True)
+scope += glob.glob('assets/*.svg')
+
+DASH = '—'
+fail = False
+
+def blank(m):
+    # Replace a stripped (exempt) region with only its own newlines,
+    # so every surviving line keeps its real line number.
+    return '\n' * m.group(0).count('\n')
+
+for path in sorted(set(scope)):
+    try:
+        text = open(path, encoding='utf-8').read()
+    except FileNotFoundError:
+        continue
+    if path.endswith('.md'):
+        # code/data is exempt: strip fenced code blocks and inline code spans
+        scan = re.sub(r'```.*?```', blank, text, flags=re.S)
+        scan = re.sub(r'`[^`]*`', blank, scan)
+    elif path.endswith('.html') or path.endswith('.svg'):
+        # comments are exempt: only rendered markup/text is in scope
+        scan = re.sub(r'<!--.*?-->', blank, text, flags=re.S)
+        scan = re.sub(r'/\*.*?\*/', blank, scan, flags=re.S)
+        if path.endswith('.html'):
+            # strip `//` line comments, but never a URL's own `//`
+            # (http:// and https:// survive untouched)
+            scan = re.sub(r'(?<!http:)(?<!https:)//[^\n]*', '', scan)
+    else:
+        scan = text
+    for lineno, line in enumerate(scan.split('\n'), start=1):
+        if DASH in line:
+            print(f'EM DASH: {path}:{lineno}: {line.strip()}')
+            fail = True
+
+if fail:
+    print()
+    print('Em dashes found in public-facing copy. Replace with a colon, semicolon,')
+    print('comma, or parentheses per house style. Code/data inside fenced blocks,')
+    print('inline code spans, and file comments is exempt from this guard.')
+    sys.exit(1)
+print('Em-dash guard: no em dashes in rendered public copy.')
+PYEOF
+```
+
+M4:
+
+```bash
+test -s daemons/tests/render-boundary-guard.test.mjs
+grep -q 'RENDER_BOUNDARY_STRUCTURAL_GUARD_V1' daemons/tests/render-boundary-guard.test.mjs
+```
+
+M5:
+
+```bash
+set -euo pipefail
+shopt -s nullglob
+files=(daemons/tests/*.test.mjs)
+if [ ${#files[@]} -eq 0 ]; then
+  echo "No daemons test files matched: the glob or the layout changed."
+  echo "Refusing to report a green gate that ran nothing."
+  exit 1
+fi
+echo "Running ${#files[@]} daemons test files"
+for f in "${files[@]}"; do
+  echo "::group::$f"
+  node "$f"
+  echo "::endgroup::"
+done
+```
+
+| Leg | Workflow step | Command | Population | Exit |
+|---:|---|---|---|---:|
+| 1 | Shell syntax check | M1 above | 39 shell files | 0 |
+| 2 | JSON syntax check | M2 above | 20 JSON files | 0 |
+| 3 | Em-dash guard (public copy) | M3 above | 42 public-copy files | 0 |
+| 4 | Node hook tests | `node --test tests/tool-tracker.test.cjs` | 1 test file | 0 |
+| 5 | Python runtime tests | `python3 -m unittest discover -s tests -p 'test_*.py' -v` | 1 module, 13 tests | 0 |
+| 6 | Caddy router tests | `bash tests/test-caddy.sh` | 1 test script | 0 |
+| 7 | Caddy new-skill detection tests | `bash tests/test-caddy-detect-new-skill.sh` | 1 test script | 0 |
+| 8 | Eval corpora | `node evals/run-evals.mjs` | 3 corpora, 13 cases | 0 |
+| 9 | Rendering-boundary structural guard canary | M4 above | 1 guard file and 1 sentinel | 0 |
+| 10 | Daemons test suite (discovery) | M5 above | 24 discovered test files | 0 |
+| 11 | Codex adapter tests | `bash tests/test-codex-adapter.sh` | 1 script, 6 scenarios | 0 |
+| 12 | Terminal-demo asset drift guard | `bash tests/test-build-terminal-demo.sh` | 1 script, 2 SVG assets, 7 checks | 0 |
+| 13 | Session-capture-summary hook tests | `bash tests/test-session-capture-summary.sh` | 1 script, 7 cases | 0 |
+| 14 | Onboarding-guide start-over regression test | `bash tests/test-onboarding-start-over.sh` | 1 script, 2 cases | 0 |
+| 15 | Vault-sync regression tests | `bash tests/test-vault-sync.sh` | 1 script, 4 cases | 0 |
+| 16 | Installer regression suite (fast) | `bash tests/test-installer-fast.sh` | 1 script, 18 cases; 3-OS CI matrix | 0 |
+| 17 | Installer regression suite (slow smoke) | `bash tests/test-installer-slow-smoke.sh` | 1 script, 2 scenarios; 3-OS CI matrix | 0 |
+| 18 | Web-install regression suite | `bash tests/test-web-install.sh` | 1 script, 4 scenario groups; 3-OS CI matrix | 0 |
+
+```text
+DISCOVERED_UNIQUE_RUN_BLOCKS=18
+MATRIX_EXPANDED_RUN_EXECUTIONS=24
+LOCAL_COMMANDS_EXIT_0=18/18
+DISCOVERED_DAEMON_TEST_FILES_EXIT_0=24/24
+FULL_SUITE_EXIT=0
+```
+
+An earlier combined installer command wrapper reached its 180-second host
+timeout during the fast suite; that wrapper produced no credited result. Legs
+16-18 in the table are the subsequent YAML-derived run with per-command
+process exits.

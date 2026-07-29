@@ -37,6 +37,7 @@ import {
   resolveNightlyPaths,
   resolveRepositoryOrMemoryPath,
 } from './nightly-paths.mjs';
+import { inert } from './lifecycle-common.mjs';
 
 export const NIGHTLY_PROTOCOL = 'close-parity-v2-7L-11C';
 export const NIGHTLY_CHECKPOINTS = Object.freeze([
@@ -742,15 +743,15 @@ export async function beginNightlyPass({
   if (existsSync(file)) {
     const previous = JSON.parse(readFileSync(file, 'utf8'));
     if (previous.status === 'running' && !replace) {
-      throw new Error(`nightly pass already running: ${previous.run_id}`);
+      throw new Error(`nightly pass already running: ${inert(previous.run_id, 200)}`);
     }
     if (previous.status === 'running' && replace) {
       await emitNightlyAlert({
         root,
         code: 'NIGHTLY:ABANDONED_PASS',
-        summary: `previous nightly pass abandoned (${previous.run_id})`,
+        summary: `previous nightly pass abandoned (${inert(previous.run_id, 200)})`,
         detail: `replacement started at ${timestamp}`,
-        evidence: `memory/runtime/NIGHTLY_PASS_STATE.json run=${previous.run_id}`,
+        evidence: `memory/runtime/NIGHTLY_PASS_STATE.json run=${inert(previous.run_id, 200)}`,
         scope: previous.run_id,
         now,
         deliver,

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, '..', '..');
+const PROBE_DIR = path.join(TEST_DIR, 'fixtures', 'render-boundary-guard');
 const JS_ROOTS = ['daemons', 'hooks', 'launcher', 'scripts', 'tools'];
 const SKIP_DIRS = new Set(['.git', 'node_modules', '__pycache__', 'test', 'tests']);
 const JS_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
@@ -38,6 +39,10 @@ const MINIMUM_COUNTS = Object.freeze({ javascript: 42, shell: 28, python: 6 });
 
 function relative(file) {
   return path.relative(REPO_ROOT, file).replace(/\\/g, '/');
+}
+
+function probeSource(name) {
+  return readFileSync(path.join(PROBE_DIR, name), 'utf8');
 }
 
 function walk(root, predicate, output = []) {
@@ -538,6 +543,468 @@ function rawReadInterpolations(source) {
         index: assignment.call.index,
         0: assignment.call.text,
       });
+    }
+  }
+  return findings;
+}
+
+function regexEscape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function javascriptTemplateExpressions(source, start = 0, end = source.length) {
+  const code = maskJavaScriptNonCode(source);
+  const expressions = [];
+  let cursor = start;
+  while (cursor < end) {
+    const index = code.indexOf('${', cursor);
+    if (index < 0 || index >= end) break;
+    let depth = 1;
+    let close = index + 2;
+    for (; close < code.length && depth > 0; close += 1) {
+      if (code[close] === '{') depth += 1;
+      else if (code[close] === '}') depth -= 1;
+    }
+    if (depth !== 0) break;
+    expressions.push({
+      index,
+      text: source.slice(index + 2, close - 1),
+    });
+    cursor = close;
+  }
+  return expressions;
+}
+
+function javascriptBlockEnd(source, index) {
+  const code = maskJavaScriptNonCode(source);
+  let depth = 0;
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    if (code[cursor] === '{') depth += 1;
+    else if (code[cursor] === '}') depth -= 1;
+  }
+  const startingDepth = depth;
+  for (let cursor = index; cursor < code.length; cursor += 1) {
+    if (code[cursor] === '{') depth += 1;
+    else if (code[cursor] === '}') {
+      depth -= 1;
+      if (depth < startingDepth) return cursor;
+    }
+  }
+  return source.length;
+}
+
+function isWholeCallExpression(expression, accessor) {
+  const trimmed = expression.trim();
+  const match = new RegExp(`^${regexEscape(accessor)}\\s*\\(`).exec(trimmed);
+  if (!match) return false;
+  const open = trimmed.indexOf('(', match.index);
+  return endOfCall(trimmed, open) === trimmed.length;
+}
+
+function isInertJavaScriptExpression(expression) {
+  return isWholeCallExpression(expression, 'inert');
+}
+
+function isWholeLengthExpression(expression, name) {
+  const escaped = regexEscape(name);
+  const member = '(?:\\s*(?:\\?\\.|\\.)\\s*[A-Za-z_$][\\w$]*'
+    + '|\\s*(?:\\?\\.)?\\[[^\\]\\r\\n]+\\])';
+  return new RegExp(
+    `^\\s*${escaped}(?:${member})*`
+      + '\\s*(?:\\?\\.|\\.)\\s*length'
+      + '\\s*(?:(?:\\?\\?|\\|\\|)\\s*\\d+)?\\s*$',
+  ).test(expression);
+}
+
+function javascriptVariableRenderUses(
+  source,
+  name,
+  start,
+  end,
+  { properties = null } = {},
+) {
+  const escaped = regexEscape(name);
+  const reference = properties === null
+    ? new RegExp(`\\b${escaped}\\b`)
+    : new RegExp(
+      `\\b${escaped}\\b\\s*(?:\\?\\.\\s*|\\.\\s*)`
+        + `(?:${properties.map(regexEscape).join('|')})\\b`,
+    );
+  return javascriptTemplateExpressions(source, start, end)
+    .filter(({ text }) => !isInertJavaScriptExpression(text))
+    .filter(({ text }) => reference.test(text))
+    .filter(({ text }) => !isWholeLengthExpression(text, name));
+}
+
+function jsonReadInterpolations(source) {
+  const findings = [];
+  const { aliases } = readFileAliases(source);
+  for (const call of findReadCalls(source, aliases)) {
+    const prefixStart = Math.max(0, call.index - 1_500);
+    const prefix = source.slice(prefixStart, call.index);
+    const assignment = prefix.match(
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*JSON\s*\.\s*parse\s*\([^;{}]{0,1200}$/,
+    );
+    if (!assignment) continue;
+    const assignmentIndex = prefixStart + assignment.index;
+    findings.push(...javascriptVariableRenderUses(
+      source,
+      assignment[1],
+      call.end,
+      javascriptBlockEnd(source, assignmentIndex),
+    ));
+  }
+  return findings;
+}
+
+function expressionDelimiterParsers(source) {
+  const code = maskJavaScriptNonCode(source);
+  const findings = [];
+  for (const binding of matches(
+    source,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])-\2\s*\.\s*repeat\s*\(\s*3\s*\)/g,
+  )) {
+    if (code[binding.index] === ' ') continue;
+    const name = regexEscape(binding[1]);
+    const end = javascriptBlockEnd(source, binding.index);
+    const use = new RegExp(
+      `\\.\\s*(?:slice|substring)\\s*\\([^)]{0,160}\\)\\s*(?:={2,3}|!={1,2})\\s*${name}\\b`
+        + `|\\b${name}\\b\\s*(?:={2,3}|!={1,2})\\s*[^;\\r\\n]{0,200}`
+          + '\\.\\s*(?:slice|substring)\\s*\\('
+        + `|\\.\\s*(?:split|indexOf|startsWith)\\s*\\(\\s*${name}\\b`,
+      'g',
+    );
+    use.lastIndex = binding.index + binding[0].length;
+    let match;
+    while ((match = use.exec(code)) !== null && match.index < end) {
+      findings.push(match);
+    }
+  }
+  return findings;
+}
+
+function childProcessInterpolations(source) {
+  const code = maskJavaScriptNonCode(source);
+  const findings = [];
+  const calls = /\b(execSync|spawnSync)\s*\(/g;
+  for (const match of matches(code, calls)) {
+    const open = match.index + match[0].lastIndexOf('(');
+    const end = endOfCall(source, open);
+    const prefixStart = Math.max(0, match.index - 500);
+    const prefix = source.slice(prefixStart, match.index);
+    const assignment = prefix.match(
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?$/,
+    );
+    if (!assignment) continue;
+    const assignmentIndex = prefixStart + assignment.index;
+    const scopeEnd = javascriptBlockEnd(source, assignmentIndex);
+    if (match[1] === 'execSync') {
+      findings.push(...javascriptVariableRenderUses(
+        source,
+        assignment[1],
+        end,
+        scopeEnd,
+      ));
+      continue;
+    }
+
+    const semicolon = source.indexOf(';', end);
+    const suffixEnd = semicolon < 0 ? Math.min(source.length, end + 200) : semicolon;
+    const suffix = source.slice(end, suffixEnd);
+    if (/^\s*(?:\?\.|\.)\s*(?:stdout|stderr|output)\b/.test(suffix)) {
+      findings.push(...javascriptVariableRenderUses(
+        source,
+        assignment[1],
+        suffixEnd,
+        scopeEnd,
+      ));
+    } else {
+      findings.push(...javascriptVariableRenderUses(
+        source,
+        assignment[1],
+        end,
+        scopeEnd,
+        { properties: ['stdout', 'stderr', 'output'] },
+      ));
+    }
+  }
+
+  for (const expression of javascriptTemplateExpressions(source)) {
+    if (isInertJavaScriptExpression(expression.text)) continue;
+    const expressionCode = maskJavaScriptNonCode(expression.text);
+    let directOutput = /\bexecSync\s*\(/.test(expressionCode);
+    for (const call of matches(expressionCode, /\bspawnSync\s*\(/g)) {
+      const open = call.index + call[0].lastIndexOf('(');
+      const end = endOfCall(expression.text, open);
+      if (/^\s*(?:\?\.|\.)\s*(?:stdout|stderr|output)\b/.test(
+        expression.text.slice(end),
+      )) {
+        directOutput = true;
+      }
+    }
+    if (directOutput) {
+      findings.push(expression);
+    }
+  }
+  return findings;
+}
+
+function environmentInterpolations(source) {
+  return javascriptTemplateExpressions(source)
+    .filter(({ text }) => !isInertJavaScriptExpression(text))
+    .filter(({ text }) => (
+      /\bprocess\s*\.\s*env\s*(?:(?:\?\.|\.)\s*[A-Za-z_$][\w$]*|(?:\?\.\s*)?\[[^\]\r\n]+\])/.test(text)
+    ));
+}
+
+function maskPythonNonCode(source) {
+  let masked = '';
+  let quote = null;
+  let triple = false;
+  let escaped = false;
+  let comment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (comment) {
+      if (char === '\n') {
+        comment = false;
+        masked += '\n';
+      } else {
+        masked += ' ';
+      }
+      continue;
+    }
+    if (quote !== null) {
+      if (triple
+        && !escaped
+        && char === quote
+        && source[index + 1] === quote
+        && source[index + 2] === quote) {
+        masked += '   ';
+        index += 2;
+        quote = null;
+        triple = false;
+      } else {
+        masked += char === '\n' ? '\n' : ' ';
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (!triple && char === quote) quote = null;
+      }
+      continue;
+    }
+    if (char === '#') {
+      comment = true;
+      masked += ' ';
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      triple = source[index + 1] === char && source[index + 2] === char;
+      masked += triple ? '   ' : ' ';
+      if (triple) index += 2;
+    } else {
+      masked += char;
+    }
+  }
+  return masked;
+}
+
+function pythonScopeEnd(source, index, code = maskPythonNonCode(source)) {
+  const starts = [0];
+  for (let cursor = 0; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '\n') starts.push(cursor + 1);
+  }
+  let lineIndex = starts.length - 1;
+  while (lineIndex > 0 && starts[lineIndex] > index) lineIndex -= 1;
+  const lineAt = (line) => {
+    const end = source.indexOf('\n', starts[line]);
+    return {
+      code: code.slice(starts[line], end < 0 ? source.length : end),
+      source: source.slice(starts[line], end < 0 ? source.length : end),
+    };
+  };
+  const bindingLine = lineAt(lineIndex).source;
+  const bindingIndent = bindingLine.match(/^[ \t]*/)[0].length;
+  let searchIndent = bindingIndent;
+  let scopeIndent = null;
+  let scopeLine = null;
+  for (let line = lineIndex - 1; line >= 0; line -= 1) {
+    const candidate = lineAt(line);
+    if (!candidate.code.trim()) continue;
+    const indent = candidate.source.match(/^[ \t]*/)[0].length;
+    if (indent >= searchIndent) continue;
+    const trimmed = candidate.code.trim();
+    if (/^(?:(?:async\s+)?def|class)\b[^:]*:\s*$/.test(trimmed)) {
+      scopeIndent = indent;
+      scopeLine = line;
+      break;
+    }
+    searchIndent = indent;
+    if (searchIndent === 0) break;
+  }
+  if (scopeLine === null) return source.length;
+  for (let line = scopeLine + 1; line < starts.length; line += 1) {
+    const candidate = lineAt(line);
+    if (!candidate.code.trim()) continue;
+    const indent = candidate.source.match(/^[ \t]*/)[0].length;
+    if (indent <= scopeIndent) return starts[line];
+  }
+  return source.length;
+}
+
+function pythonFStringExpressions(source) {
+  const code = maskPythonNonCode(source);
+  const expressions = [];
+  const starts = /\b(?:f|fr|rf)("""|'''|"|')/gi;
+  for (const string of matches(source, starts)) {
+    if (code[string.index] === ' ') continue;
+    const quote = string[1];
+    const bodyStart = string.index + string[0].length;
+    let bodyEnd = bodyStart;
+    let escaped = false;
+    while (bodyEnd < source.length) {
+      if (!escaped && source.startsWith(quote, bodyEnd)) break;
+      if (escaped) escaped = false;
+      else if (source[bodyEnd] === '\\') escaped = true;
+      bodyEnd += 1;
+    }
+    if (bodyEnd >= source.length) continue;
+
+    let cursor = bodyStart;
+    while (cursor < bodyEnd) {
+      const open = source.indexOf('{', cursor);
+      if (open < 0 || open >= bodyEnd) break;
+      if (source[open + 1] === '{') {
+        cursor = open + 2;
+        continue;
+      }
+      let depth = 1;
+      let close = open + 1;
+      let expressionQuote = null;
+      let expressionEscaped = false;
+      for (; close < bodyEnd && depth > 0; close += 1) {
+        const char = source[close];
+        if (expressionQuote !== null) {
+          if (expressionEscaped) expressionEscaped = false;
+          else if (char === '\\') expressionEscaped = true;
+          else if (char === expressionQuote) expressionQuote = null;
+        } else if (char === '"' || char === "'") {
+          expressionQuote = char;
+        } else if (char === '{') {
+          depth += 1;
+        } else if (char === '}') {
+          depth -= 1;
+        }
+      }
+      if (depth !== 0) break;
+      expressions.push({
+        index: open,
+        text: source.slice(open + 1, close - 1),
+      });
+      cursor = close;
+    }
+    starts.lastIndex = bodyEnd + quote.length;
+  }
+  return expressions;
+}
+
+function pythonReadInterpolations(source) {
+  const code = maskPythonNonCode(source);
+  const findings = [];
+  const expressions = pythonFStringExpressions(source);
+  for (const assignment of matches(
+    source,
+    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*:[^=\r\n]+)?\s*=\s*open\s*\([^\r\n]*\)\s*\.\s*read\s*\(\s*\)/gm,
+  )) {
+    if (code[assignment.index] === ' ') continue;
+    const variable = new RegExp(`\\b${regexEscape(assignment[1])}\\b`);
+    const scopeEnd = pythonScopeEnd(source, assignment.index, code);
+    findings.push(...expressions
+      .filter(({ index }) => index > assignment.index && index < scopeEnd)
+      .filter(({ text }) => !isWholeCallExpression(text, 'inert'))
+      .filter(({ text }) => variable.test(text)));
+  }
+  findings.push(...expressions.filter(({ text }) => (
+    !isWholeCallExpression(text, 'inert')
+      && /\bopen\s*\([^\r\n]*\)\s*\.\s*read\s*\(\s*\)/.test(text)
+  )));
+  return findings;
+}
+
+function shellHasPipeline(line) {
+  for (const sourceLine of line.split(/\r?\n/)) {
+    const code = shellCodeOnlyLine(sourceLine);
+    for (let index = 0; index < code.length; index += 1) {
+      if (code[index] === '|'
+        && code[index - 1] !== '|'
+        && code[index + 1] !== '|') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function continuedShellCommand(source, index, firstLine) {
+  let command = firstLine;
+  let line = firstLine;
+  let cursor = index + firstLine.length;
+  while (shellCodeOnlyLine(line).trimEnd().endsWith('\\')) {
+    if (source[cursor] === '\r') cursor += 1;
+    if (source[cursor] !== '\n') break;
+    cursor += 1;
+    const end = source.indexOf('\n', cursor);
+    line = source.slice(cursor, end < 0 ? source.length : end).replace(/\r$/, '');
+    command += `\n${line}`;
+    cursor = end < 0 ? source.length : end;
+  }
+  return command;
+}
+
+function shellReadInterpolations(source) {
+  const findings = [];
+  for (const assignment of matches(
+    source,
+    /^[ \t]*(?:(?:local|declare|readonly)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?:"|')?\$\([ \t]*cat\b([^\r\n)]*)\)(?:"|')?[ \t]*$/gm,
+  )) {
+    const operand = assignment[2]
+      .replace(/[0-9]*>[>&]?[^\s]*/g, '')
+      .trim();
+    if (!operand) continue;
+    const variable = regexEscape(assignment[1]);
+    const sink = new RegExp(
+      `^[^\\r\\n]*\\bprintf\\b[^\\r\\n]*\\$(?:\\{${variable}\\}|${variable}\\b)[^\\r\\n]*$`,
+      'gm',
+    );
+    sink.lastIndex = assignment.index + assignment[0].length;
+    let match;
+    while ((match = sink.exec(source)) !== null) {
+      const code = shellCodeOnlyLine(match[0]);
+      if (!/\bprintf\b/.test(code)) continue;
+      if (/\bprintf\b[ \t]+(?:--[ \t]+)?-v(?:[ \t]|$)/.test(code)) continue;
+      if (shellHasPipeline(continuedShellCommand(source, match.index, match[0]))) continue;
+      findings.push(match);
+    }
+  }
+  return findings;
+}
+
+function pythonVariableDelimiterParsers(source) {
+  const code = maskPythonNonCode(source);
+  const findings = [];
+  for (const binding of matches(
+    source,
+    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*:[^=\r\n]+)?\s*=\s*(["'])---\2[ \t]*$/gm,
+  )) {
+    if (code[binding.index] === ' ') continue;
+    const variable = regexEscape(binding[1]);
+    const scopeEnd = pythonScopeEnd(source, binding.index, code);
+    const use = new RegExp(
+      `\\.\\s*(?:split|partition|find|startswith)\\s*\\(\\s*${variable}\\b`,
+      'g',
+    );
+    use.lastIndex = binding.index + binding[0].length;
+    let match;
+    while ((match = use.exec(code)) !== null && match.index < scopeEnd) {
+      findings.push(match);
     }
   }
   return findings;
@@ -1091,6 +1558,9 @@ function consumeExactLineAllowance(allowlist, seen, file, rule, snippet) {
 }
 
 function scanJavaScript(file, source, rawSeen, readSeen, safeSeen) {
+  // Deliberate whole-file exemption: this is the canonical JavaScript reader.
+  // Its parser and raw-reader behavior is defended by render-boundary.test.mjs;
+  // the same source shapes remain prohibited everywhere else.
   if (file === CANONICAL_JS_READER) return [];
   const failures = [];
   const rules = [
@@ -1131,6 +1601,23 @@ function scanJavaScript(file, source, rawSeen, readSeen, safeSeen) {
   }
   for (const match of rawReadInterpolations(source)) {
     failures.push(violation(file, source, match.index, 'raw-read-interpolation'));
+  }
+  for (const match of jsonReadInterpolations(source)) {
+    failures.push(violation(file, source, match.index, 'json-read-interpolation'));
+  }
+  for (const match of expressionDelimiterParsers(source)) {
+    failures.push(violation(
+      file,
+      source,
+      match.index,
+      'frontmatter-delimiter-expression',
+    ));
+  }
+  for (const match of childProcessInterpolations(source)) {
+    failures.push(violation(file, source, match.index, 'child-process-interpolation'));
+  }
+  for (const match of environmentInterpolations(source)) {
+    failures.push(violation(file, source, match.index, 'environment-interpolation'));
   }
 
   const directReads = /\b(?:readFileSync|readFile)\s*\(\s*(?:newest\.path|cap\.path|[A-Za-z0-9_.$]*capsule[A-Za-z0-9_.$]*|[^,\n)]*capsules[^,\n)]*)/gi;
@@ -1353,6 +1840,9 @@ function scanShell(file, source, parserSeen, rawSeen, copySeen = new Map()) {
       failures.push(violation(file, source, finding.index, 'unaudited-tree-copy'));
     }
   }
+  for (const match of shellReadInterpolations(source)) {
+    failures.push(violation(file, source, match.index, 'shell-read-interpolation'));
+  }
   for (const definition of matches(
     source,
     /^[ \t]*(unsafeRaw[A-Za-z0-9_]*)\(\)[ \t]*\{[\s\S]{0,500}?^[ \t]*\}/gm,
@@ -1384,9 +1874,23 @@ function scanShell(file, source, parserSeen, rawSeen, copySeen = new Map()) {
 }
 
 function scanPython(file, source, rawSeen) {
+  // Deliberate whole-file exemption: this is the canonical Python reader.
+  // Its exports and reader behavior are defended by tests/test_runtime_paths.py;
+  // the same source shapes remain prohibited everywhere else.
   if (file === CANONICAL_PYTHON_READER) return [];
   const failures = parserFindings(file, source)
     .map((finding) => violation(file, source, finding.index, finding.rule));
+  for (const match of pythonReadInterpolations(source)) {
+    failures.push(violation(file, source, match.index, 'python-read-interpolation'));
+  }
+  for (const match of pythonVariableDelimiterParsers(source)) {
+    failures.push(violation(
+      file,
+      source,
+      match.index,
+      'frontmatter-delimiter-variable',
+    ));
+  }
   for (const match of matches(
     source,
     /\bimport[ \t]+(?:daemons\.)?render_boundary\b/g,
@@ -1525,6 +2029,144 @@ test('production readers and raw access stay centralized or exactly audited', ()
   failures.push(...staleAllowances(PYTHON_RAW_ALLOWLIST, pythonRawSeen, 'python-raw'));
 
   assert.deepEqual(failures, [], failures.join('\n'));
+});
+
+test('probe E1 rejects JSON-decoded file fields in JavaScript renders', () => {
+  const rules = scanJavaScript(
+    'mutation/e1-json-read.mjs',
+    probeSource('e1-json-read.mjs'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[json-read-interpolation\]/g) || []).length,
+    4,
+    rules,
+  );
+});
+
+test('probe E2 rejects expression-built delimiters in JavaScript scalar readers', () => {
+  const rules = scanJavaScript(
+    'mutation/e2-delimiter-expression.mjs',
+    probeSource('e2-delimiter-expression.mjs'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.match(rules, /\[frontmatter-delimiter-expression\]/);
+});
+
+test('probe E3 rejects child-process output in JavaScript renders', () => {
+  const rules = scanJavaScript(
+    'mutation/e3-child-process.mjs',
+    probeSource('e3-child-process.mjs'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[child-process-interpolation\]/g) || []).length,
+    5,
+    rules,
+  );
+});
+
+test('probe E4 rejects environment values in JavaScript renders', () => {
+  const rules = scanJavaScript(
+    'mutation/e4-environment.mjs',
+    probeSource('e4-environment.mjs'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[environment-interpolation\]/g) || []).length,
+    5,
+    rules,
+  );
+});
+
+test('probe P1 rejects Python file reads in f-string renders', () => {
+  const rules = scanPython(
+    'mutation/p1-python-read.py',
+    probeSource('p1-python-read.py'),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[python-read-interpolation\]/g) || []).length,
+    6,
+    rules,
+  );
+});
+
+test('probe P2 rejects shell file reads in printf renders', () => {
+  const rules = scanShell(
+    'mutation/p2-shell-read.sh',
+    probeSource('p2-shell-read.sh'),
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[shell-read-interpolation\]/g) || []).length,
+    4,
+    rules,
+  );
+});
+
+test('probe P3 rejects variable delimiters in Python scalar readers', () => {
+  const rules = scanPython(
+    'mutation/p3-python-delimiter.py',
+    probeSource('p3-python-delimiter.py'),
+    new Map(),
+  ).join('\n');
+  assert.equal(
+    (rules.match(/\[frontmatter-delimiter-variable\]/g) || []).length,
+    2,
+    rules,
+  );
+});
+
+test('probe delimiter rules ignore comments, strings, and unrelated Python scopes', () => {
+  const jsRules = scanJavaScript(
+    'mutation/e2-lookalikes.mjs',
+    `const example = "const DELIMITER = '-'.repeat(3)";\n`
+      + `// const COMMENT_DELIMITER = '-'.repeat(3);\n`
+      + `const sliced = row.slice(0, DELIMITER.length) === DELIMITER;\n`,
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.doesNotMatch(jsRules, /\[frontmatter-delimiter-expression\]/);
+
+  const pythonRules = scanPython(
+    'mutation/p3-lookalikes.py',
+    `def docs():\n`
+      + `    text = """\nDELIMITER = "---"\n"""\n`
+      + `    DELIMITER = "---"\n`
+      + `    return text\n\n`
+      + `def csv_value(text, DELIMITER):\n`
+      + `    return text.split(DELIMITER, 2)[0]\n`,
+    new Map(),
+  ).join('\n');
+  assert.doesNotMatch(pythonRules, /\[frontmatter-delimiter-variable\]/);
+});
+
+test('probe shell render rule ignores comments, printf variables, and real pipelines', () => {
+  const rules = scanShell(
+    'mutation/p2-non-sinks.sh',
+    `NOTE="$(cat "$STATE_FILE")"\n`
+      + `# printf '%s' "$NOTE"\n`
+      + `printf -v OUTPUT '%s' "$NOTE"\n`
+      + `printf '%s' "$NOTE" | consume_safely\n`
+      + `printf '%s' "$NOTE" \\\n`
+      + `  | consume_safely\n`,
+    new Map(),
+    new Map(),
+    new Map(),
+  ).join('\n');
+  assert.doesNotMatch(rules, /\[shell-read-interpolation\]/);
 });
 
 test('mutation samples are caught by the same structural rules', () => {
