@@ -19,7 +19,13 @@ if not vault_dir.exists():
     print(f"[caddy-reindex] {vault_dir} not found, skipping", file=sys.stderr)
     sys.exit(0)
 
-def parse_frontmatter(text):
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def single_line(value):
+    return LINE_BREAKING.sub(" ", str(value)).strip()
+
+# AUDIT: this build-time parser reads routing metadata only. Every returned
+# scalar is collapsed here before it can enter the model-facing skill index.
+def read_single_line_frontmatter(text):
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
     if not m:
         return {}
@@ -30,10 +36,10 @@ def parse_frontmatter(text):
             key = key.strip()
             val = val.strip()
             if val.startswith("[") and val.endswith("]"):
-                items = [s.strip().strip('"').strip("'") for s in val[1:-1].split(",")]
+                items = [single_line(s.strip().strip('"').strip("'")) for s in val[1:-1].split(",")]
                 fm[key] = [i for i in items if i]
             elif val:
-                fm[key] = val.strip('"').strip("'")
+                fm[key] = single_line(val.strip('"').strip("'"))
     return fm
 
 index = []
@@ -42,7 +48,7 @@ for md in sorted(vault_dir.glob("*.md")):
         continue
     try:
         text = md.read_text(encoding="utf-8")
-        fm = parse_frontmatter(text)
+        fm = read_single_line_frontmatter(text)
         name = fm.get("skill_name", md.stem)
         triggers = fm.get("triggers", [])
         why = fm.get("why", fm.get("description", ""))

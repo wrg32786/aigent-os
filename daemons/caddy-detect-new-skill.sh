@@ -15,6 +15,13 @@ INPUT=$(cat 2>/dev/null)
 CADDY_DETECT_INPUT="$INPUT" CADDY_INDEX_PATH="$INDEX" python3 <<'PYEOF' 2>/dev/null || exit 0
 import sys, json, os, re
 
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def inert(value, maximum=500):
+    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
+    if len(rendered) > maximum:
+        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
+    return json.dumps(rendered, ensure_ascii=True)
+
 raw = os.environ.get("CADDY_DETECT_INPUT", "")
 try:
     payload = json.loads(raw) if raw.strip().startswith("{") else {}
@@ -30,7 +37,7 @@ file_path = tool_input.get("file_path", "")
 if not file_path:
     sys.exit(0)
 
-file_path_norm = file_path.replace("\\", "/").lower()
+file_path_norm = re.sub(r"/+", "/", file_path.replace("\\", "/")).lower()
 
 if "/skills/" not in file_path_norm:
     sys.exit(0)
@@ -43,6 +50,9 @@ if parts[-1] == "skill.md" and len(parts) >= 2:
 elif parts[-1].endswith(".md"):
     skill_name = parts[-1][:-3]
 else:
+    sys.exit(0)
+
+if not re.fullmatch(r"[a-z0-9_.-]{1,80}", skill_name):
     sys.exit(0)
 
 if skill_name in ("readme", "license", "changelog") or skill_name.startswith("_"):
@@ -59,7 +69,10 @@ existing_names = {s.get("name","").lower() for s in skills}
 if skill_name in existing_names:
     sys.exit(0)
 
-print(f"[CADDY] New skill detected: {skill_name} at {file_path} - run /caddy-enroll to add to the golf bag")
+print(
+    f"[CADDY] New skill detected: /{skill_name} at path={inert(file_path)} "
+    f"- run /caddy-enroll to add to the golf bag"
+)
 PYEOF
 
 exit 0

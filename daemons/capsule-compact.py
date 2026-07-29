@@ -16,17 +16,13 @@ import sys, os, re, argparse
 from pathlib import Path
 from datetime import datetime, timezone
 
-
-def parse_frontmatter(text):
-    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
-    if not m:
-        return None, text
-    fm = {}
-    for line in m.group(1).splitlines():
-        if ":" in line and not line.startswith(" "):
-            k, _, v = line.partition(":")
-            fm[k.strip()] = v.strip()
-    return fm, m.group(2)
+from render_boundary import (
+    collapse_line_breaking,
+    inert,
+    scalar,
+    unsafeRawBodySection,
+    unsafeRawCapsuleParts,
+)
 
 
 def write_frontmatter(path, fm, body):
@@ -39,28 +35,38 @@ def write_frontmatter(path, fm, body):
     lines = []
     for k in keys_order:
         if k in fm:
-            lines.append(f"{k}: {fm[k]}")
+            lines.append(f"{k}: {collapse_line_breaking(fm[k])}")
             seen.add(k)
     for k, v in fm.items():
         if k not in seen:
-            lines.append(f"{k}: {v}")
+            safe_key = collapse_line_breaking(k).strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", safe_key):
+                continue
+            lines.append(f"{safe_key}: {collapse_line_breaking(v)}")
     path.write_text("---\n" + "\n".join(lines) + "\n---\n" + body)
 
 
 def walk_chain(capsules_dir, head_id):
-    """Walk parent_capsule_id chain backward. Returns list of (capsule_id, fm, body, path)."""
+    """Return (capsule_id, raw frontmatter, raw body, path, source text) tuples."""
     chain = []
     seen = set()
     cur = head_id
     while cur and cur not in seen and cur != "null":
         seen.add(cur)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,239}", cur):
+            chain.append((cur, None, None, None, None))
+            break
         path = capsules_dir / f"{cur}.md"
         if not path.exists():
-            chain.append((cur, None, None, None))
+            chain.append((cur, None, None, None, None))
             break
-        fm, body = parse_frontmatter(path.read_text())
-        chain.append((cur, fm, body, path))
-        cur = fm.get("parent_capsule_id", "null").strip() if fm else "null"
+        text = path.read_text(encoding="utf-8")
+        fm, body = unsafeRawCapsuleParts(
+            text,
+            "capsule compaction preserves the complete body while relinking metadata",
+        )
+        chain.append((cur, fm, body, path, text))
+        cur = scalar(text, "parent_capsule_id") or "null"
     return chain
 
 
@@ -69,20 +75,36 @@ def summarize_capsules(to_summarize):
     objectives = []
     open_threads = []
     held_decisions = []
-    for cid, fm, body, _ in to_summarize:
-        objectives.append(f"- **{cid}** ({fm.get('created_at', 'unknown')}): {fm.get('objective', '<no objective>')}")
+    for cid, fm, body, _, text in to_summarize:
+        objectives.append(
+            f"- capsule={inert(cid, 160)} "
+            f"created_at={inert(scalar(text, 'created_at') or 'unknown', 120)} "
+            f"objective={inert(scalar(text, 'objective') or '<no objective>')}"
+        )
         # Extract open_threads section
-        ot = re.search(r"## open_threads\n(.*?)(?=\n##|\Z)", body or "", re.DOTALL)
-        if ot:
-            for line in ot.group(1).strip().splitlines():
+        open_threads_body = unsafeRawBodySection(
+            body or "",
+            "open_threads",
+            "compaction selects individual open-thread bullets from a multiline body section",
+        )
+        if open_threads_body:
+            for line in open_threads_body.splitlines():
                 if line.strip().startswith("-") and "(next move:" in line:
-                    open_threads.append(f"  - [{cid}] {line.strip().lstrip('- ').strip()}")
+                    open_threads.append(
+                        f"  - capsule={inert(cid, 160)} item={inert(line.strip().lstrip('- ').strip())}"
+                    )
         # Extract held decisions
-        dm = re.search(r"## decisions_made_this_session\n(.*?)(?=\n##|\Z)", body or "", re.DOTALL)
-        if dm:
-            for line in dm.group(1).strip().splitlines():
+        decisions_body = unsafeRawBodySection(
+            body or "",
+            "decisions_made_this_session",
+            "compaction selects individual held-decision bullets from a multiline body section",
+        )
+        if decisions_body:
+            for line in decisions_body.splitlines():
                 if "(held)" in line or "status: held" in line:
-                    held_decisions.append(f"  - [{cid}] {line.strip().lstrip('- ').strip()}")
+                    held_decisions.append(
+                        f"  - capsule={inert(cid, 160)} item={inert(line.strip().lstrip('- ').strip())}"
+                    )
     body = "## Compacted from chain\n\n"
     body += "Original capsules summarized into this one (oldest first):\n\n"
     body += "\n".join(objectives) + "\n\n"
@@ -106,18 +128,18 @@ def main():
 
     capsules_dir = Path(args.vault) / "memory" / "capsules"
     if not capsules_dir.exists():
-        print(f"ERROR: capsules dir not found: {capsules_dir}", file=sys.stderr)
+        print(f"ERROR: capsules dir not found: {inert(capsules_dir)}", file=sys.stderr)
         sys.exit(1)
 
     chain = walk_chain(capsules_dir, args.head_id)
     if not chain or chain[0][1] is None:
-        print(f"ERROR: head capsule {args.head_id} not found", file=sys.stderr)
+        print(f"ERROR: head capsule {inert(args.head_id, 160)} not found", file=sys.stderr)
         sys.exit(1)
 
     # Check for missing capsules in chain (broken)
-    for cid, fm, _, path in chain:
+    for cid, fm, _, path, _ in chain:
         if fm is None:
-            print(f"WARNING: chain link {cid} not found on disk; stopping walk", file=sys.stderr)
+            print(f"WARNING: chain link {inert(cid, 160)} not found on disk; stopping walk", file=sys.stderr)
             break
 
     if len(chain) < args.threshold:
@@ -127,7 +149,7 @@ def main():
     # Take the oldest summarize-count
     to_summarize = chain[-args.summarize_count:]
     keep_in_chain = chain[:-args.summarize_count]
-    new_parent_for_summary = to_summarize[-1][1].get("parent_capsule_id", "null").strip() if to_summarize[-1][1] else "null"
+    new_parent_for_summary = scalar(to_summarize[-1][4], "parent_capsule_id") or "null"
 
     # Build summary capsule
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -151,19 +173,19 @@ def main():
     # Update the boundary capsule (kept-in-chain, oldest of the keepers) to point at summary
     if keep_in_chain:
         boundary = keep_in_chain[-1]
-        bid, bfm, bbody, bpath = boundary
+        bid, bfm, bbody, bpath, _ = boundary
         bfm["parent_capsule_id"] = summary_id
         write_frontmatter(bpath, bfm, bbody)
 
     # Mark each compacted capsule with compacted_into
-    for cid, fm, body, path in to_summarize:
+    for cid, fm, body, path, _ in to_summarize:
         fm["compacted_into"] = summary_id
         write_frontmatter(path, fm, body)
 
     new_chain = walk_chain(capsules_dir, args.head_id)
     print(f"compacted: {len(chain)} → {len(new_chain)} chain length")
-    print(f"summary_capsule: {summary_id}")
-    print(f"compacted_ids: {[c[0] for c in to_summarize]}")
+    print(f"summary_capsule: {inert(summary_id, 240)}")
+    print(f"compacted_ids: {inert([c[0] for c in to_summarize], 500)}")
     sys.exit(0)
 
 

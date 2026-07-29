@@ -36,39 +36,118 @@ DAILY_FOR_NODE="$DAILY"
 if command -v cygpath >/dev/null 2>&1; then
   DAILY_FOR_NODE="$(cygpath -w "$DAILY")"
 fi
-STATS=$(node -e "
+
+unsafeRawSessionCaptureSummary() {
+  local daily_path="$1"
+  local summary_time="$2"
+  local reason="${3:-}"
+  [ -n "$reason" ] || {
+    printf 'unsafeRawSessionCaptureSummary requires a reason\n' >&2
+    return 64
+  }
+
+  STATS=$(node -e "
 const fs = require('fs');
 const dailyPath = process.argv[1];
 const time = process.argv[2];
 const content = fs.readFileSync(dailyPath, 'utf8');
+const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+function singleLine(value) {
+  return String(value ?? '').replace(LINE_BREAKING, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function bounded(value, limit) {
+  const text = singleLine(value);
+  if (text.length <= limit) return text;
+  return text.slice(0, limit) + '…[truncated ' + (text.length - limit) + ' chars]';
+}
+
+function inert(value, limit) {
+  return JSON.stringify(bounded(value, limit));
+}
+
+function jsonStringAt(text, start) {
+  if (text.charCodeAt(start) !== 34) return null;
+  let escaped = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (escaped) {
+      escaped = false;
+    } else if (code === 92) {
+      escaped = true;
+    } else if (code === 34) {
+      try {
+        const value = JSON.parse(text.slice(start, index + 1));
+        return typeof value === 'string' ? { value, end: index + 1 } : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function captureRow(line) {
+  const firstSeparator = line.indexOf(' | ');
+  if (firstSeparator < 0) return null;
+  const toolCell = jsonStringAt(line, firstSeparator + 3);
+  if (toolCell && line.slice(toolCell.end, toolCell.end + 3) === ' | ') {
+    const descriptionCell = jsonStringAt(line, toolCell.end + 3);
+    if (descriptionCell && descriptionCell.end === line.length) {
+      return {
+        tool: singleLine(toolCell.value),
+        description: singleLine(descriptionCell.value),
+      };
+    }
+  }
+
+  // Backward compatibility for captures written before fields were JSON-quoted.
+  const parts = line.split(' | ');
+  if (parts.length < 3) return null;
+  return {
+    tool: singleLine(parts[1]),
+    description: singleLine(parts.slice(2).join(' | ')),
+  };
+}
+
 const captureSection = content.split('## Session Captures')[1] || '';
 // Stop at next ## section if any
 const captures = captureSection.split(/\n## /)[0];
-const lines = captures.trim().split('\n').filter(l => l.startsWith('- '));
+const rows = captures.trim().split('\n')
+  .filter(line => line.startsWith('- '))
+  .map(captureRow)
+  .filter(Boolean);
 
-if (lines.length === 0) { process.exit(0); }
+if (rows.length === 0) { process.exit(0); }
 
 const tools = new Set();
 const files = new Set();
-for (const line of lines) {
-  const parts = line.split(' | ');
-  if (parts.length >= 3) {
-    tools.add(parts[1].trim());
-    const desc = parts.slice(2).join(' | ').trim();
-    // Extract file paths (anything with / or .ext)
-    if (desc.match(/\.\w+/) && !desc.startsWith('git ')) {
-      files.add(desc.split(' ')[0]);
-    }
+for (const row of rows) {
+  tools.add(row.tool);
+  // Extract file paths (anything with / or .ext).
+  if (row.description.match(/\.\w+/) && !row.description.startsWith('git ')) {
+    files.add(row.description.split(' ')[0]);
   }
 }
 
-const toolList = [...tools].join(', ');
+const allTools = [...tools];
+const visibleTools = allTools.slice(0, 12).map(tool => inert(tool, 80));
+const omittedTools = allTools.length - visibleTools.length;
+const toolList = visibleTools.join(', ')
+  + (omittedTools > 0 ? ', …[' + omittedTools + ' more tools]' : '');
 const fileCount = files.size;
-const fileSample = [...files].slice(0, 3).join(', ');
-const summary = lines.length + ' actions (' + toolList + ')';
+const fileSample = [...files].slice(0, 3).map(file => inert(file, 160)).join(', ');
+const summary = rows.length + ' actions (' + toolList + ')';
 const fileInfo = fileCount > 0 ? ' | ' + fileCount + ' files touched' + (fileSample ? ': ' + fileSample : '') : '';
-console.log('> [!info] Session ' + time + ' — ' + summary + fileInfo);
-" "$DAILY_FOR_NODE" "$TIME" 2>>"$ERRLOG")
+console.log('> [!info] Session ' + inert(time, 32) + ' — ' + summary + fileInfo);
+" "$daily_path" "$summary_time" 2>>"$ERRLOG")
+}
+
+unsafeRawSessionCaptureSummary \
+  "$DAILY_FOR_NODE" \
+  "$TIME" \
+  "the summary reads a multiline daily capture section before rendering each field through a quoted bound"
 
 [ -z "$STATS" ] && exit 0
 

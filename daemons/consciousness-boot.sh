@@ -20,19 +20,22 @@ HESTIA_LOG="$ROOT/memory/HESTIA_SWEEP_LOG.md"
 
 # ── Skill index health ──────────────────────────────────────────────────────
 if [ -f "$INDEX" ]; then
-  SKILL_SUMMARY=$(python3 <<'PYEOF' 2>>"$DAEMON_ERR_LOG"
-import json, os
+  SKILL_SUMMARY=$(INDEX="$INDEX" python3 <<'PYEOF' 2>>"$DAEMON_ERR_LOG"
+import json, os, re
 idx = os.environ.get("INDEX","")
 if os.name == "nt" and len(idx) > 2 and idx[0] == "/" and idx[2] == "/" and idx[1].isalpha():
     idx = idx[1].upper() + ":" + idx[2:]
 try:
     with open(idx) as f:
         data = json.load(f)
-    cards = data.get("cards", [])
+    cards = data if isinstance(data, list) else data.get("cards", [])
     active = [c for c in cards if c.get("active", True)]
     print(f"Skills: {len(active)} active / {len(cards)} total")
 except Exception as e:
-    print(f"Skills: INDEX ERROR — {e}")
+    rendered = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", str(e))
+    if len(rendered) > 500:
+        rendered = f"{rendered[:500]}…[+{len(rendered) - 500} chars]"
+    print(f"Skills: INDEX ERROR detail={json.dumps(rendered, ensure_ascii=True)}")
 PYEOF
   )
 else
@@ -54,9 +57,16 @@ fi
 DAEMON_SUMMARY="Daemons: ${DAEMONS_WIRED}/${DAEMONS_TOTAL} wired in hooks"
 
 # ── Somatic state ────────────────────────────────────────────────────────────
-SOMATIC_SUMMARY=$(python3 <<'PYEOF' 2>>"$DAEMON_ERR_LOG"
-import json, os
+SOMATIC_SUMMARY=$(BODY_STATE="$BODY_STATE" python3 <<'PYEOF' 2>>"$DAEMON_ERR_LOG"
+import json, os, re
 from datetime import datetime, timezone
+
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def inert(value, maximum=500):
+    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
+    if len(rendered) > maximum:
+        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
+    return json.dumps(rendered, ensure_ascii=True)
 
 body_path = os.environ.get("BODY_STATE", "")
 if os.name == "nt" and len(body_path) > 2 and body_path[0] == "/" and body_path[2] == "/" and body_path[1].isalpha():
@@ -71,7 +81,7 @@ try:
     # Capsule
     cap = state.get("last_capsule")
     if cap and cap.get("status") == "active":
-        parts.append(f"capsule=ACTIVE ({cap.get('objective','')})")
+        parts.append(f"capsule=ACTIVE objective={inert(cap.get('objective', ''))}")
 
     # Delegation backlog
     deleg = state.get("delegation_open_count", 0)
@@ -86,7 +96,7 @@ try:
     # Recommended reflex
     reflex = state.get("recommended_reflex", "none")
     if reflex != "none":
-        parts.append(f"reflex={reflex}")
+        parts.append(f"reflex={inert(reflex, 160)}")
 
     # Comms
     comms = state.get("comms_unread_count", 0)
@@ -98,7 +108,7 @@ try:
 except FileNotFoundError:
     parts.append("BODY_STATE.json missing")
 except Exception as e:
-    parts.append(f"error: {e}")
+    parts.append(f"error={inert(e)}")
 
 print("Somatic: " + " | ".join(parts))
 PYEOF

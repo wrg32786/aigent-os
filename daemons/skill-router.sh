@@ -52,6 +52,13 @@ if not prompt:
 
 prompt_lower = prompt.lower()
 
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def inert(value, maximum=500):
+    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
+    if len(rendered) > maximum:
+        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
+    return json.dumps(rendered, ensure_ascii=True)
+
 # ── Load skill index ──────────────────────────────────────────────────────────
 try:
     with open(index_path, "r", encoding="utf-8") as f:
@@ -81,7 +88,9 @@ scores = []
 for card in cards:
     if not card.get("active", True):
         continue
-    name        = card.get("name", "")
+    name        = str(card.get("name", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        continue
     # new format uses "description"; old format uses "why"
     description = card.get("description") or card.get("why", "")
     triggers    = [t.lower() for t in card.get("triggers", [])]
@@ -130,8 +139,8 @@ if alias:
 matched_str  = ", ".join(best_matched[:4])   # cap to 4 so line stays readable
 
 print(
-    f"[CADDY:skill] MATCH — /{best_name} ({best_desc}) — "
-    f"matched on: [{matched_str}]. Model: {best_model}."
+    f"[CADDY:skill] MATCH — /{best_name} description={inert(best_desc)} — "
+    f"matched_on={inert(matched_str, 240)} model={inert(best_model, 80)}."
 )
 PYEOF
 

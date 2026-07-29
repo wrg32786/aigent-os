@@ -29,24 +29,120 @@ FAIL=0
 INFO=0
 REPORT=""
 
+render_inert() {
+  local value="${1-}"
+  local limit="${2:-500}"
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$value" | python3 -c '
+import json
+import re
+import sys
+
+limit = int(sys.argv[1])
+value = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", sys.stdin.read())
+value = re.sub(r"[ \t]+", " ", value).strip()
+if len(value) > limit:
+    value = f"{value[:limit]}…[+{len(value) - limit} chars]"
+sys.stdout.write(json.dumps(value, ensure_ascii=True))
+' "$limit"
+  elif command -v node >/dev/null 2>&1; then
+    printf '%s' "$value" | node -e '
+const limit = Number(process.argv[1]);
+let value = require("node:fs").readFileSync(0, "utf8")
+  .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+  .replace(/[ \t]+/g, " ")
+  .trim();
+if (value.length > limit) {
+  value = `${value.slice(0, limit)}…[+${value.length - limit} chars]`;
+}
+process.stdout.write(JSON.stringify(value));
+' "$limit"
+  else
+    # Both runtimes are required by this installation. Never echo unreviewed
+    # bytes merely to explain that the renderers themselves are unavailable.
+    printf '"[unrenderable: Python 3 and Node.js unavailable]"'
+  fi
+}
+
+UNSAFE_RAW_CAPSULE_RESULT=""
+UNSAFE_RAW_CAPSULE_EXIT=1
+unsafeRawValidateCapsules() {
+  local directory="$1"
+  local reason="$2"
+  [[ -n "$reason" ]] || {
+    printf 'unsafeRawValidateCapsules requires a reason\n' >&2
+    return 64
+  }
+  UNSAFE_RAW_CAPSULE_RESULT=$(CAPSULE_DIR="$directory" python3 -c '
+import os, re
+directory = os.environ["CAPSULE_DIR"]
+if not os.path.isdir(directory):
+    raise SystemExit("capsules directory missing")
+files = [name for name in os.listdir(directory) if name.endswith(".md")]
+if not files:
+    raise SystemExit("no capsules")
+bad = []
+for name in files:
+    with open(os.path.join(directory, name), encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.match(r"^\ufeff?---\r?\n(.*?)\r?\n---", text, re.DOTALL)
+    if not match:
+        bad.append(name + ":no_frontmatter")
+        continue
+    frontmatter = match.group(1)
+    status = re.search(r"^status:\s*(\w+)", frontmatter, re.MULTILINE)
+    has_id = re.search(r"^(?:capsule_)?id:", frontmatter, re.MULTILINE)
+    spent = status and status.group(1) in ("resumed", "resolved")
+    if not status or status.group(1) not in ("active", "resumed", "resolved"):
+        bad.append(name + ":bad_status")
+    elif not has_id and not spent:
+        bad.append(name + ":missing_id")
+if bad:
+    raise SystemExit(",".join(bad))
+print(len(files))
+' 2>&1)
+  UNSAFE_RAW_CAPSULE_EXIT=$?
+}
+
+UNSAFE_RAW_DAEMON_ERRORS=""
+unsafeRawRecentDaemonErrors() {
+  local error_file="$1"
+  local reason="$2"
+  [[ -n "$reason" ]] || {
+    printf 'unsafeRawRecentDaemonErrors requires a reason\n' >&2
+    return 64
+  }
+  UNSAFE_RAW_DAEMON_ERRORS="$(tail -5 "$error_file" | sed 's/^/    /')"
+}
+
 ck() {
   local label="$1"
   local status="$2"
   local detail="${3:-}"
+  local rendered_label
+  local rendered_detail=""
+  rendered_label="$(render_inert "$label" 240)"
+  if [[ -n "$detail" ]]; then
+    rendered_detail="$(render_inert "$detail" 800)"
+  fi
   if [[ "$status" == "PASS" ]]; then
-    REPORT+="✓ $label"$'\n'
+    REPORT+="✓ $rendered_label"$'\n'
     PASS=$((PASS + 1))
   elif [[ "$status" == "FAIL" ]]; then
-    REPORT+="✗ $label${detail:+ - $detail}"$'\n'
+    REPORT+="✗ $rendered_label${rendered_detail:+ - $rendered_detail}"$'\n'
     FAIL=$((FAIL + 1))
   else
-    REPORT+="ℹ $label${detail:+ - $detail}"$'\n'
+    REPORT+="ℹ $rendered_label${rendered_detail:+ - $rendered_detail}"$'\n'
     INFO=$((INFO + 1))
   fi
 }
 
-echo "=== /system-check report - $(date -Iseconds) ==="
-echo "vantage: root=$ROOT memory=$MEMORY_ROOT time_zone=$TIME_ZONE cutoff_hour=$CUTOFF_HOUR"
+printf '=== /system-check report - %s ===\n' "$(render_inert "$(date -Iseconds)" 80)"
+printf 'vantage: root=%s memory=%s time_zone=%s cutoff_hour=%s\n' \
+  "$(render_inert "$ROOT" 500)" \
+  "$(render_inert "$MEMORY_ROOT" 500)" \
+  "$(render_inert "$TIME_ZONE" 120)" \
+  "$(render_inert "$CUTOFF_HOUR" 40)"
 
 # Runtime prerequisites.
 command -v node >/dev/null 2>&1 \
@@ -202,35 +298,11 @@ else
 fi
 
 CAPSULE_DIR="$MEMORY_ROOT/capsules"
-CAPSULE_RESULT=$(CAPSULE_DIR="$CAPSULE_DIR" python3 -c '
-import os, re
-directory = os.environ["CAPSULE_DIR"]
-if not os.path.isdir(directory):
-    raise SystemExit("capsules directory missing")
-files = [name for name in os.listdir(directory) if name.endswith(".md")]
-if not files:
-    raise SystemExit("no capsules")
-bad = []
-for name in files:
-    with open(os.path.join(directory, name), encoding="utf-8") as handle:
-        text = handle.read()
-    match = re.match(r"^\ufeff?---\r?\n(.*?)\r?\n---", text, re.DOTALL)
-    if not match:
-        bad.append(name + ":no_frontmatter")
-        continue
-    frontmatter = match.group(1)
-    status = re.search(r"^status:\s*(\w+)", frontmatter, re.MULTILINE)
-    has_id = re.search(r"^(?:capsule_)?id:", frontmatter, re.MULTILINE)
-    spent = status and status.group(1) in ("resumed", "resolved")
-    if not status or status.group(1) not in ("active", "resumed", "resolved"):
-        bad.append(name + ":bad_status")
-    elif not has_id and not spent:
-        bad.append(name + ":missing_id")
-if bad:
-    raise SystemExit(",".join(bad))
-print(len(files))
-' 2>&1)
-CAPSULE_EXIT=$?
+unsafeRawValidateCapsules \
+  "$CAPSULE_DIR" \
+  "system-check validates complete capsule documents before rendering only inert schema results"
+CAPSULE_RESULT="$UNSAFE_RAW_CAPSULE_RESULT"
+CAPSULE_EXIT="$UNSAFE_RAW_CAPSULE_EXIT"
 if [[ "$CAPSULE_EXIT" == "0" ]]; then
   ck "Capsules ($CAPSULE_RESULT healthy)" PASS
 else
@@ -356,7 +428,10 @@ fi
 if [[ -f "$DAEMON_ERR_LOG" ]]; then
   ERROR_COUNT=$(wc -l < "$DAEMON_ERR_LOG")
   if [[ "$ERROR_COUNT" -gt 0 ]]; then
-    RECENT=$(tail -5 "$DAEMON_ERR_LOG" | sed 's/^/    /')
+    unsafeRawRecentDaemonErrors \
+      "$DAEMON_ERR_LOG" \
+      "system-check preserves recent multiline diagnostics until ck renders them as one inert value"
+    RECENT="$UNSAFE_RAW_DAEMON_ERRORS"
     ck "Daemon errors: $ERROR_COUNT entries" INFO "$RECENT"
   else
     ck "Daemon errors: 0 entries" PASS
@@ -365,8 +440,7 @@ else
   ck "Daemon error log absent" INFO "expected before the first logged error"
 fi
 
-echo ""
-echo "$REPORT"
-echo "SUMMARY: $PASS PASS / $FAIL FAIL / $INFO INFO"
+printf '\n%s\n' "$REPORT"
+printf 'SUMMARY: %d PASS / %d FAIL / %d INFO\n' "$PASS" "$FAIL" "$INFO"
 
 [[ "$FAIL" == "0" ]] && exit 0 || exit 1

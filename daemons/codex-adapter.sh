@@ -45,6 +45,15 @@ Example:
 USAGE
 }
 
+unsafeRawOperatorTask() {
+  local value="$1" reason="$2"
+  [[ -n "$reason" ]] || {
+    echo "codex-adapter: unsafeRawOperatorTask requires a reason." >&2
+    return 2
+  }
+  UNSAFE_RAW_OPERATOR_TASK="$value"
+}
+
 TASK=""
 DIR="."
 SANDBOX="workspace-write"
@@ -70,6 +79,11 @@ if [[ -z "$TASK" ]]; then
   exit 2
 fi
 
+unsafeRawOperatorTask \
+  "$TASK" \
+  "the operator-supplied task is intentionally the complete multiline Codex prompt" \
+  || exit $?
+
 if [[ ! -d "$DIR" ]]; then
   echo "codex-adapter: --dir '$DIR' does not exist." >&2
   exit 2
@@ -92,7 +106,7 @@ mkdir -p "$RUN_DIR" 2>/dev/null || {
 
 OUTPUT_LOG="$RUN_DIR/output.log"
 {
-  echo "task: $TASK"
+  echo "task: $UNSAFE_RAW_OPERATOR_TASK"
   echo "dir: $DIR"
   echo "sandbox: $SANDBOX"
   echo "---"
@@ -104,7 +118,7 @@ if git -C "$DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 (
-  cd "$DIR" && "$CODEX_BIN" exec --sandbox "$SANDBOX" --skip-git-repo-check "$TASK"
+  cd "$DIR" && "$CODEX_BIN" exec --sandbox "$SANDBOX" --skip-git-repo-check "$UNSAFE_RAW_OPERATOR_TASK"
 ) >>"$OUTPUT_LOG" 2>&1
 CODEX_STATUS=$?
 

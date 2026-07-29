@@ -17,6 +17,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from render_boundary import collapse_data, inert, scalar  # noqa: E402
+
 
 def _native_path(value: str) -> Path:
     """Translate Git-Bash drive paths when native Windows Python is in use."""
@@ -118,7 +121,7 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2, ensure_ascii=False)
+        json.dump(value, handle, indent=2, ensure_ascii=True)
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
@@ -277,12 +280,8 @@ def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, A
         capsule_path = vault / str(capsule["path"])
         try:
             content = capsule_path.read_text(encoding="utf-8")
-            next_match = re.search(r'next_valid_action:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
-            verified_match = re.search(r'last_verified_state:\s*["\']?(.+?)["\']?\s*$', content, re.MULTILINE)
-            if next_match:
-                next_action = next_match.group(1).strip('"\'')
-            if verified_match:
-                last_verified = verified_match.group(1).strip('"\'')
+            next_action = scalar(content, "next_valid_action") or next_action
+            last_verified = scalar(content, "last_verified_state")
         except OSError:
             pass
 
@@ -344,7 +343,7 @@ def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, A
         events.append({"time": now.isoformat(), "event": "objective_set", "value": objective})
     if not previous:
         events.append({"time": now.isoformat(), "event": "state_initialized"})
-    return state, events
+    return collapse_data(state), collapse_data(events)
 
 
 def main() -> int:
@@ -363,13 +362,13 @@ def main() -> int:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         with events_path.open("a", encoding="utf-8") as handle:
             for event in events:
-                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+                handle.write(json.dumps(event, ensure_ascii=True) + "\n")
 
     active_reflexes = [name.removeprefix("should_") for name, enabled in state["reflexes"].items() if enabled]
     print(
-        f"[runtime] vault={vault} mode={state['mode']} "
-        f"objective={state['current_objective'] or 'none'} "
-        f"reflexes={','.join(active_reflexes) or 'none'}"
+        f"[runtime] vault={inert(vault)} mode={inert(state['mode'], 40)} "
+        f"objective={inert(state['current_objective'] or 'none')} "
+        f"reflexes={inert(','.join(active_reflexes) or 'none', 160)}"
     )
     return 0
 

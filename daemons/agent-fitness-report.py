@@ -10,10 +10,20 @@ Usage:
 Output: stdout report. No mutations.
 """
 
-import sys, re, argparse
+import sys, os, re, argparse, json
 from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
+
+from render_boundary import inert
+
+
+def decoded_cell(cell):
+    try:
+        value = json.loads(cell)
+        return value if isinstance(value, str) else cell
+    except (json.JSONDecodeError, TypeError):
+        return cell
 
 
 def parse_ledger(path):
@@ -30,15 +40,15 @@ def parse_ledger(path):
             continue
         rows.append({
             "date": cells[0],
-            "session": cells[1],
-            "tool_id": cells[2],
-            "agent": cells[3],
-            "model": cells[4],
-            "task": cells[5],
-            "tools": cells[6],
-            "duration_ms": cells[7],
-            "outcome": cells[8],
-            "notes": cells[9],
+            "session": decoded_cell(cells[1]),
+            "tool_id": decoded_cell(cells[2]),
+            "agent": decoded_cell(cells[3]),
+            "model": decoded_cell(cells[4]),
+            "task": decoded_cell(cells[5]),
+            "tools": decoded_cell(cells[6]),
+            "duration_ms": decoded_cell(cells[7]),
+            "outcome": decoded_cell(cells[8]),
+            "notes": decoded_cell(cells[9]),
         })
     return rows
 
@@ -105,11 +115,15 @@ def main():
     agents = sorted(set(r["agent"] for r in window_rows))
 
     print(f"Per-agent calibration ({'last ' + str(args.days) + 'd' if args.days else 'all-time'}):")
-    print(f"  {'Agent':25s} {'Total':>6s} {'Clean':>6s} {'Block':>6s} {'Err':>5s} {'Part':>5s}  {'Ratio':>8s}")
+    print("  Fields: agent, total, clean, blocked, errored, partial, ratio")
     for a in agents:
         c = calibration(window_rows, a)
         ratio_str = f"{c['ratio']:.0%}" if c["ratio"] is not None else "n/a"
-        print(f"  {a:25s} {c['total']:>6d} {c['clean']:>6d} {c['blocked']:>6d} {c['errored']:>5d} {c['partial']:>5d}  {ratio_str:>8s}")
+        print(
+            f"  agent={inert(a, 120)} total={c['total']} clean={c['clean']} "
+            f"blocked={c['blocked']} errored={c['errored']} partial={c['partial']} "
+            f"ratio={ratio_str}"
+        )
     print()
 
     # Recent outcome trend per agent (last 10 dispatches)
@@ -121,7 +135,7 @@ def main():
         recent = by_agent[a][-10:]
         c = Counter(recent)
         trend = " ".join(f"{o[0]}{c[o]}" for o in ("clean", "blocked", "errored", "partial") if c.get(o))
-        print(f"  {a:25s} last_{len(recent):2d}: {trend}")
+        print(f"  agent={inert(a, 120)} last_{len(recent)}: {trend}")
     print()
 
     # Repeat-blocker detection
@@ -130,7 +144,7 @@ def main():
     if repeat_blockers:
         print("⚠ Repeat-blocker callouts (>=2 blocks in window):")
         for a, n in repeat_blockers:
-            print(f"  {a}: {n} blocked dispatches — investigate the failure mode")
+            print(f"  agent={inert(a, 120)}: {n} blocked dispatches — investigate the failure mode")
         print()
 
     # Top failing (agent, task) pairs
@@ -142,7 +156,7 @@ def main():
         top3 = pair_counts.most_common(3)
         print("Top failing (agent, task) pairs:")
         for (a, t), n in top3:
-            print(f"  {n}× {a:20s} | {t}")
+            print(f"  {n}× agent={inert(a, 120)} task={inert(t, 80)}")
     else:
         print("No failures in window — all dispatches clean.")
 
@@ -153,5 +167,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        print(f"[agent-fitness-report] error: {e}", file=sys.stderr)
+        print(f"[agent-fitness-report] error: {inert(e)}", file=sys.stderr)
         sys.exit(1)
