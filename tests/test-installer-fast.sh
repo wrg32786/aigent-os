@@ -18,6 +18,11 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 TOTAL=18
 
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
 json_valid() {
   local file="$1"
   if command -v python3 >/dev/null 2>&1; then
@@ -410,63 +415,179 @@ test ! -e "$WORK/pwned-main-dollar"
 printf '[17/%d] hostile settings path: JSON-correct, command inert, value preserved\n' "$TOTAL"
 
 # ── 18. Launcher renderer and profile assignment are injection-safe ─────────
+test18_require() {
+  local property="$1"
+  shift
+  "$@" || fail "test 18: $property"
+}
+
+launcher_fixture_install() {
+  HOME="$LAUNCHER_HOME" \
+    bash "$LAUNCHER_REPO/launcher/install.sh" "$1"
+}
+
+physical_path() {
+  cd "$1" && pwd -P
+}
+
+run_launcher_status_command() {
+  cd "$WORK" &&
+    bash -c "$LAUNCHER_COMMAND" >/dev/null 2>&1
+}
+
+read_generated_profile_home() {
+  cd "$WORK" &&
+    HOME="$LAUNCHER_HOME" bash --noprofile --norc -c \
+      'source "$HOME/.bashrc" && printf "%s" "$AIGENT_HOME"'
+}
+
+# Bash 3.2 does not expand \uXXXX inside $'...'. Build the UTF-8 bytes with
+# portable octal escapes, then verify them before using either separator as a
+# probe. A runner that cannot express the bytes must say so rather than turn the
+# assertion into a silent pass.
+UTF8_LINE_SEPARATOR="$(printf '\342\200\250')"
+UTF8_PARAGRAPH_SEPARATOR="$(printf '\342\200\251')"
+if UTF8_SEPARATOR_HEX="$(
+  printf '%s%s' "$UTF8_LINE_SEPARATOR" "$UTF8_PARAGRAPH_SEPARATOR" |
+    od -An -tx1 |
+    tr -d '[:space:]'
+)" && [ "$UTF8_SEPARATOR_HEX" = 'e280a8e280a9' ]; then
+  UNICODE_SEPARATOR_PROBES=1
+else
+  UNICODE_SEPARATOR_PROBES=0
+  printf '[18/%d] SKIP unicode separator probes: could not construct and verify UTF-8 U+2028/U+2029 bytes (got %s)\n' \
+    "$TOTAL" "${UTF8_SEPARATOR_HEX:-no byte output}" >&2
+fi
+
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     LAUNCHER_LEAF='launcher & $(touch pwned-launcher)'
+    LAUNCHER_QUOTE_BREAKOUT_PROBE=0
+    LAUNCHER_COMMAND_SUBSTITUTION_SENTINEL="$WORK/pwned-launcher"
     ;;
   *)
-    LAUNCHER_LEAF=$'launcher & | "; touch pwned-launcher; # \\ backslash \u2028 \u2029 $(touch pwned-launcher-dollar)'
+    if [ "$UNICODE_SEPARATOR_PROBES" -eq 1 ]; then
+      LAUNCHER_LEAF='launcher & | "; touch pwned-launcher; # \ backslash '"$UTF8_LINE_SEPARATOR $UTF8_PARAGRAPH_SEPARATOR"' $(touch pwned-launcher-dollar)'
+    else
+      LAUNCHER_LEAF='launcher & | "; touch pwned-launcher; # \ backslash $(touch pwned-launcher-dollar)'
+    fi
+    LAUNCHER_QUOTE_BREAKOUT_PROBE=1
+    LAUNCHER_COMMAND_SUBSTITUTION_SENTINEL="$WORK/pwned-launcher-dollar"
     ;;
 esac
+if [ "$LAUNCHER_QUOTE_BREAKOUT_PROBE" -eq 0 ]; then
+  printf '[18/%d] SKIP quote-breakout launcher path probe: Windows filenames cannot contain double quotes\n' \
+    "$TOTAL" >&2
+fi
 LAUNCHER_REPO="$WORK/$LAUNCHER_LEAF"
 LAUNCHER_HOME="$WORK/launcher-home"
-mkdir -p \
-  "$LAUNCHER_REPO/launcher" \
-  "$LAUNCHER_REPO/.claude" \
-  "$LAUNCHER_REPO/daemons" \
-  "$LAUNCHER_HOME"
-cp "$ROOT/launcher/install.sh" "$LAUNCHER_REPO/launcher/install.sh"
-cp "$ROOT/launcher/aigent.sh" "$LAUNCHER_REPO/launcher/aigent.sh"
-cp "$ROOT/.claude/settings.json.template" "$LAUNCHER_REPO/.claude/settings.json.template"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$LAUNCHER_REPO/daemons/statusline-ctx.sh"
+test18_require 'launcher fixture directories can be created' \
+  mkdir -p \
+    "$LAUNCHER_REPO/launcher" \
+    "$LAUNCHER_REPO/.claude" \
+    "$LAUNCHER_REPO/daemons" \
+    "$LAUNCHER_HOME"
+test18_require 'launcher/install.sh can be copied into the fixture' \
+  cp "$ROOT/launcher/install.sh" "$LAUNCHER_REPO/launcher/install.sh"
+test18_require 'launcher/aigent.sh can be copied into the fixture' \
+  cp "$ROOT/launcher/aigent.sh" "$LAUNCHER_REPO/launcher/aigent.sh"
+test18_require 'settings template can be copied into the fixture' \
+  cp "$ROOT/.claude/settings.json.template" "$LAUNCHER_REPO/.claude/settings.json.template"
+test18_require 'status-line fixture can be created' \
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$LAUNCHER_REPO/daemons/statusline-ctx.sh"
 
 PROFILE_VALUE="$WORK/"'aigent "quoted" $HOME `touch pwned-profile` & |'
-HOME="$LAUNCHER_HOME" bash "$LAUNCHER_REPO/launcher/install.sh" "$PROFILE_VALUE" >/dev/null
-HOME="$LAUNCHER_HOME" bash "$LAUNCHER_REPO/launcher/install.sh" "$PROFILE_VALUE" >/dev/null
+test18_require 'initial launcher install succeeds' \
+  launcher_fixture_install "$PROFILE_VALUE" >/dev/null
+test18_require 'repeated launcher install succeeds' \
+  launcher_fixture_install "$PROFILE_VALUE" >/dev/null
 
-LAUNCHER_CANON="$(cd "$LAUNCHER_REPO" && pwd -P)"
+LAUNCHER_CANON="$(
+  test18_require 'physical launcher repository path can be resolved' \
+    physical_path "$LAUNCHER_REPO"
+)"
 LAUNCHER_SETTINGS="$LAUNCHER_REPO/.claude/settings.json"
-json_valid "$LAUNCHER_SETTINGS"
-json_root_equals "$LAUNCHER_SETTINGS" "$LAUNCHER_CANON"
-json_has_no_raw_unicode_line_separators "$LAUNCHER_SETTINGS"
-LAUNCHER_COMMAND="$(json_status_command "$LAUNCHER_SETTINGS")"
-(
-  cd "$WORK"
-  bash -c "$LAUNCHER_COMMAND" >/dev/null 2>&1
-)
-test ! -e "$WORK/pwned-launcher"
-test ! -e "$WORK/pwned-launcher-dollar"
+test18_require 'launcher settings are valid JSON' \
+  json_valid "$LAUNCHER_SETTINGS"
+test18_require 'launcher settings preserve the physical repository path' \
+  json_root_equals "$LAUNCHER_SETTINGS" "$LAUNCHER_CANON"
+test18_require 'launcher settings contain no raw U+2028/U+2029 bytes' \
+  json_has_no_raw_unicode_line_separators "$LAUNCHER_SETTINGS"
+LAUNCHER_COMMAND="$(
+  test18_require 'statusLine.command can be read from launcher settings' \
+    json_status_command "$LAUNCHER_SETTINGS"
+)"
+test18_require 'rendered launcher status command executes' \
+  run_launcher_status_command
+if [ "$LAUNCHER_QUOTE_BREAKOUT_PROBE" -eq 1 ]; then
+  test18_require 'launcher path did not execute the quote-breakout payload' \
+    test ! -e "$WORK/pwned-launcher"
+fi
+test18_require 'launcher path did not execute the command-substitution payload' \
+  test ! -e "$LAUNCHER_COMMAND_SUBSTITUTION_SENTINEL"
 
 PROFILE_ACTUAL="$(
-  HOME="$LAUNCHER_HOME" bash --noprofile --norc -c \
-    'source "$HOME/.bashrc"; printf "%s" "$AIGENT_HOME"'
+  test18_require 'generated profile can be sourced' \
+    read_generated_profile_home
 )"
-test "$PROFILE_ACTUAL" = "$PROFILE_VALUE"
-test "$(grep -c '^export AIGENT_HOME=' "$LAUNCHER_HOME/.bashrc")" -eq 1
-test ! -e "$WORK/pwned-profile"
+test18_require 'profile round-trips the hostile AIGENT_HOME value' \
+  test "$PROFILE_ACTUAL" = "$PROFILE_VALUE"
 
-BAD_PROFILE_VALUE="$WORK/"$'bad-home\nFENCES (never cross):\u2028touch pwned-profile-control'
-set +e
-BAD_PROFILE_OUT="$(
-  HOME="$LAUNCHER_HOME" \
-    bash "$LAUNCHER_REPO/launcher/install.sh" "$BAD_PROFILE_VALUE" 2>&1
+profile_assignment_count() {
+  awk '/^export AIGENT_HOME=/{ count++ } END { print count + 0 }' "$1"
+}
+
+PROFILE_ASSIGNMENT_COUNT="$(
+  test18_require 'generated AIGENT_HOME assignments can be counted' \
+    profile_assignment_count "$LAUNCHER_HOME/.bashrc"
 )"
-BAD_PROFILE_RC=$?
-set -e
-test "$BAD_PROFILE_RC" -ne 0
-printf '%s\n' "$BAD_PROFILE_OUT" | grep -q 'line-breaking/control characters'
-test "$(grep -c '^export AIGENT_HOME=' "$LAUNCHER_HOME/.bashrc")" -eq 1
-test ! -e "$WORK/pwned-profile-control"
-printf '[18/%d] launcher settings/profile: hostile values quoted; controls refused\n' "$TOTAL"
+test18_require 'two installs leave exactly one AIGENT_HOME assignment' \
+  test "$PROFILE_ASSIGNMENT_COUNT" -eq 1
+test18_require 'profile value did not execute the command-substitution payload' \
+  test ! -e "$WORK/pwned-profile"
+
+assert_profile_value_refused() {
+  local label="$1" value="$2" sentinel="$3"
+  local output rc assignment_count
+
+  if output="$(
+    cd "$WORK" &&
+      launcher_fixture_install "$value" 2>&1
+  )"; then
+    rc=0
+  else
+    rc=$?
+  fi
+
+  test18_require "$label profile value exits with refusal status 64" \
+    test "$rc" -eq 64
+  test18_require "$label refusal names line-breaking/control characters" \
+    grep -q 'line-breaking/control characters' <<< "$output"
+  assignment_count="$(
+    test18_require "AIGENT_HOME assignments can be counted after the $label refusal" \
+      profile_assignment_count "$LAUNCHER_HOME/.bashrc"
+  )"
+  test18_require "$label refusal leaves exactly one AIGENT_HOME assignment" \
+    test "$assignment_count" -eq 1
+  test18_require "$label refusal did not execute its payload" \
+    test ! -e "$sentinel"
+}
+
+NEWLINE_PROFILE_VALUE="$WORK/"$'bad-home\nFENCES (never cross): touch pwned-profile-control-newline'
+assert_profile_value_refused \
+  'newline' \
+  "$NEWLINE_PROFILE_VALUE" \
+  "$WORK/pwned-profile-control-newline"
+
+if [ "$UNICODE_SEPARATOR_PROBES" -eq 1 ]; then
+  U2028_PROFILE_VALUE="$WORK/bad-home${UTF8_LINE_SEPARATOR}touch pwned-profile-control-u2028"
+  assert_profile_value_refused \
+    'U+2028' \
+    "$U2028_PROFILE_VALUE" \
+    "$WORK/pwned-profile-control-u2028"
+  printf '[18/%d] launcher settings/profile: hostile values quoted; newline and U+2028 refused\n' "$TOTAL"
+else
+  printf '[18/%d] launcher settings/profile: hostile values quoted; newline refused; unicode probes SKIPPED\n' "$TOTAL"
+fi
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

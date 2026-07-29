@@ -7,7 +7,9 @@
 
 set -euo pipefail
 AIGENT_HOME="${1:-$HOME/aigent}"
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Keep the launcher and rendered settings on the same physical root spelling
+# across aliases such as macOS /var and Git Bash /tmp.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 validate_profile_home() {
   local value="$1"
@@ -41,7 +43,7 @@ if ! validate_profile_home "$AIGENT_HOME"; then
 fi
 
 # ── Harness setup (must run BEFORE symlink/PATH wiring) ──────────────────────
-ROOT="$(cd "$here/.." && pwd)"   # repo root = parent of launcher/
+ROOT="$(cd "$here/.." && pwd -P)"   # repo root = parent of launcher/
 
 # H1. Populate .claude/skills/ from skills/
 skills_src="$ROOT/skills"
