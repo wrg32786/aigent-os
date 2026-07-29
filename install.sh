@@ -320,6 +320,12 @@ copy_missing_tree() {
   done < <(cd "$source" && find . -type f -print0)
 }
 
+unsafeRawPromoteProcedureTree() {
+  local source="$1" destination="$2" reason="$3"
+  [[ -n "$reason" ]] || fail "unsafeRawPromoteProcedureTree requires a reason"
+  copy_missing_tree "$source" "$destination" 1
+}
+
 seed_nightly_templates() {
   local template_root="$SRC/daemons/templates/nightly"
   if [[ ! -d "$template_root" ]]; then
@@ -375,6 +381,18 @@ if [[ "$MODE" == "copy" ]]; then
   for dir in "${COPY_DIRS[@]}"; do
     [[ -d "$SRC/$dir" ]] || continue
     case "$dir" in
+      system)
+        unsafeRawPromoteProcedureTree \
+          "$SRC/$dir" \
+          "$TARGET/$dir" \
+          "system documents are reviewed multiline procedures loaded by the operating prompt"
+        ;;
+      skills)
+        unsafeRawPromoteProcedureTree \
+          "$SRC/$dir" \
+          "$TARGET/$dir" \
+          "top-level skill trees are reviewed multiline procedures copied into the installed framework"
+        ;;
       hooks|daemons) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
       *)             copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 ;;
     esac
@@ -391,9 +409,30 @@ fi
 START_MARKER='<!-- aigent-os:start -->'
 END_MARKER='<!-- aigent-os:end -->'
 MANAGED_BLOCK="$AIGENT_TMP/CLAUDE.managed.md"
+
+unsafeRawProcedureFile() {
+  local source="$1" reason="$2"
+  [[ -n "$reason" ]] || fail "unsafeRawProcedureFile requires a reason"
+  cat "$source"
+}
+
+unsafeRawInstallProcedureFile() {
+  local source="$1" destination="$2" reason="$3"
+  [[ -n "$reason" ]] || fail "unsafeRawInstallProcedureFile requires a reason"
+  cp "$source" "$destination"
+}
+
+unsafeRawPromoteProcedureFile() {
+  local source="$1" destination="$2" reason="$3"
+  [[ -n "$reason" ]] || fail "unsafeRawPromoteProcedureFile requires a reason"
+  copy_missing_file "$source" "$destination" 1
+}
+
 {
   printf '%s\n' "$START_MARKER"
-  cat "$SRC/CLAUDE.md"
+  unsafeRawProcedureFile \
+    "$SRC/CLAUDE.md" \
+    "the framework CLAUDE.md is operator-reviewed multiline procedure text installed verbatim"
   printf '\n%s\n' "$END_MARKER"
 } > "$MANAGED_BLOCK"
 
@@ -405,7 +444,10 @@ else
   # so the refresh branch would overwrite through it) is refused up front.
   require_symlink_safe "$TARGET/CLAUDE.md"
   if [[ ! -f "$TARGET/CLAUDE.md" ]]; then
-    cp "$MANAGED_BLOCK" "$TARGET/CLAUDE.md"
+    unsafeRawInstallProcedureFile \
+      "$MANAGED_BLOCK" \
+      "$TARGET/CLAUDE.md" \
+      "the marker-wrapped framework procedure is intentionally installed with its authored structure"
     printf '  [ok] CLAUDE.md created with managed aigent-OS block\n'
   else
     # STAMP's second-precision backup name is hard but not impossible to
@@ -420,9 +462,13 @@ else
       !managed    { print }
     ' "$TARGET/CLAUDE.md" > "$CLEAN_CLAUDE"
     {
-      cat "$CLEAN_CLAUDE"
+      unsafeRawProcedureFile \
+        "$CLEAN_CLAUDE" \
+        "installer refresh preserves operator-authored multiline text outside managed markers"
       [[ ! -s "$CLEAN_CLAUDE" ]] || printf '\n'
-      cat "$MANAGED_BLOCK"
+      unsafeRawProcedureFile \
+        "$MANAGED_BLOCK" \
+        "installer refresh appends the reviewed marker-wrapped framework procedure verbatim"
     } > "$TARGET/CLAUDE.md"
     printf '  [ok] CLAUDE.md managed block refreshed (backup saved)\n'
   fi
@@ -442,7 +488,11 @@ if [[ -f "$RULES_SRC" ]]; then
   # in-place mode SRC and TARGET canonicalize to the same directory, so a
   # blind cp here would target itself and fail hard on BSD/Windows cp.
   if [[ "$(abspath "$RULES_SRC")" != "$(abspath "$RULES_DST")" ]]; then
-    copy_missing_file "$RULES_SRC" "$RULES_DST" 1 || true
+    unsafeRawPromoteProcedureFile \
+      "$RULES_SRC" \
+      "$RULES_DST" \
+      "the post-compact rule is reviewed multiline procedure text promoted into Claude's runtime" \
+      || true
   fi
 fi
 
@@ -450,8 +500,8 @@ fi
 # the skill ships), so it reuses copy_missing_tree(sensitive=1) rather than
 # copy_missing_file -- same per-file quarantine/symlink handling, walked
 # recursively. This is the runtime location Claude Code actually resolves
-# slash commands from; the plain top-level skills/ COPY_DIRS entry above is
-# just the inert framework-source mirror and stays non-sensitive.
+# slash commands from. The top-level skills/ mirror is procedure-bearing too
+# and therefore goes through its own reason-gated promotion above.
 skills_new=0
 skills_existing=0
 if [[ -d "$SRC/skills" ]]; then
@@ -465,7 +515,10 @@ if [[ -d "$SRC/skills" ]]; then
     else
       ((skills_new += 1))
     fi
-    copy_missing_tree "$skill_dir" "$skill_dst" 1
+    unsafeRawPromoteProcedureTree \
+      "$skill_dir" \
+      "$skill_dst" \
+      "skill directories contain reviewed multiline procedures promoted into Claude's runtime"
   done
   shopt -u nullglob
 fi
@@ -474,6 +527,12 @@ printf '  [ok] Skills: %d new, %d existing directories processed\n' "$skills_new
 # .claude/agents/*.md are the dispatchable subagent definitions Claude Code
 # loads directly (vault/agents/ is just the docs source) -- trusted content
 # exactly like a hook, so sensitive=1 here too.
+unsafeRawInstallAgentDefinition() {
+  local source="$1" destination="$2" reason="$3"
+  [[ -n "$reason" ]] || fail "unsafeRawInstallAgentDefinition requires a reason"
+  copy_missing_file "$source" "$destination" 1
+}
+
 agents_new=0
 if [[ -d "$SRC/vault/agents" ]]; then
   shopt -s nullglob
@@ -482,7 +541,11 @@ if [[ -d "$SRC/vault/agents" ]]; then
     if head -20 "$agent_file" | grep -q '^name:' && head -20 "$agent_file" | grep -q '^tools:'; then
       destination="$TARGET/.claude/agents/$(basename "$agent_file")"
       [[ -f "$destination" ]] || ((agents_new += 1))
-      copy_missing_file "$agent_file" "$destination" 1 || true
+      unsafeRawInstallAgentDefinition \
+        "$agent_file" \
+        "$destination" \
+        "agent definitions are operator-authored multiline procedure text promoted into Claude's runtime directory" \
+        || true
     fi
   done
   shopt -u nullglob
@@ -494,11 +557,106 @@ SETTINGS_DST="$TARGET/.claude/settings.json"
 RENDERED_TMPL="$AIGENT_TMP/settings.rendered.json"
 [[ -f "$SETTINGS_SRC" ]] || fail "missing settings template: $SETTINGS_SRC"
 
-json_path="${TARGET//\\/\\\\}"
-json_path="${json_path//\"/\\\"}"
-while IFS= read -r line || [[ -n "$line" ]]; do
-  printf '%s\n' "${line//__AIGENT_ROOT__/$json_path}"
-done < "$SETTINGS_SRC" > "$RENDERED_TMPL"
+render_settings_template() {
+  local source="$1" destination="$2" root="$3"
+
+  if command -v python3 >/dev/null 2>&1; then
+    MSYS2_ENV_CONV_EXCL=AIGENT_SETTINGS_RENDER_ROOT \
+      AIGENT_SETTINGS_RENDER_ROOT="$root" \
+      python3 - "$source" "$destination" <<'PY'
+import json
+import os
+import sys
+
+source, destination = sys.argv[1:3]
+root = os.environ["AIGENT_SETTINGS_RENDER_ROOT"]
+token = "__AIGENT_ROOT__"
+replacements = 0
+
+def shell_double_quoted(value):
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+
+def replace(value):
+    global replacements
+    if isinstance(value, str):
+        count = value.count(token)
+        if not count:
+            return value
+        replacements += count
+        if value == token:
+            return root
+        return value.replace(token, shell_double_quoted(root))
+    if isinstance(value, list):
+        return [replace(item) for item in value]
+    if isinstance(value, dict):
+        if any(token in key for key in value):
+            raise ValueError("settings placeholder is not allowed in an object key")
+        return {key: replace(item) for key, item in value.items()}
+    return value
+
+with open(source, encoding="utf-8") as fh:
+    rendered = replace(json.load(fh))
+if replacements == 0:
+    raise ValueError("settings template contains no __AIGENT_ROOT__ placeholder")
+with open(destination, "w", encoding="ascii", newline="\n") as fh:
+    json.dump(rendered, fh, ensure_ascii=True, indent=2)
+    fh.write("\n")
+PY
+  elif command -v node >/dev/null 2>&1; then
+    MSYS2_ENV_CONV_EXCL=AIGENT_SETTINGS_RENDER_ROOT \
+      AIGENT_SETTINGS_RENDER_ROOT="$root" \
+      node - "$source" "$destination" <<'JS'
+const fs = require('fs');
+const [source, destination] = process.argv.slice(2);
+const root = process.env.AIGENT_SETTINGS_RENDER_ROOT;
+const token = '__AIGENT_ROOT__';
+let replacements = 0;
+
+const shellDoubleQuoted = value => value
+  .replace(/\\/g, '\\\\')
+  .replace(/"/g, '\\"')
+  .replace(/\$/g, '\\$')
+  .replace(/`/g, '\\`');
+
+const replace = value => {
+  if (typeof value === 'string') {
+    const count = value.split(token).length - 1;
+    if (!count) return value;
+    replacements += count;
+    return value === token
+      ? root
+      : value.split(token).join(shellDoubleQuoted(root));
+  }
+  if (Array.isArray(value)) return value.map(replace);
+  if (value && typeof value === 'object') {
+    if (Object.keys(value).some(key => key.includes(token))) {
+      throw new Error('settings placeholder is not allowed in an object key');
+    }
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replace(item)]));
+  }
+  return value;
+};
+
+const rendered = replace(JSON.parse(fs.readFileSync(source, 'utf8')));
+if (!replacements) throw new Error('settings template contains no __AIGENT_ROOT__ placeholder');
+const output = (JSON.stringify(rendered, null, 2) + '\n')
+  .replace(/\u2028/g, '\\u2028')
+  .replace(/\u2029/g, '\\u2029');
+fs.writeFileSync(destination, output, 'utf8');
+JS
+  else
+    printf 'rendering settings.json requires python3 or node\n' >&2
+    return 69
+  fi
+}
+
+render_settings_template "$SETTINGS_SRC" "$RENDERED_TMPL" "$TARGET" \
+  || fail "could not render a valid settings template"
 
 require_symlink_safe "$SETTINGS_DST"
 if [[ ! -f "$SETTINGS_DST" ]]; then

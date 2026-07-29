@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=16
+TOTAL=18
 
 json_valid() {
   local file="$1"
@@ -26,6 +26,71 @@ json_valid() {
     python -m json.tool "$file" >/dev/null
   else
     node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
+  fi
+}
+
+json_root_equals() {
+  local file="$1" expected="$2"
+  if command -v python3 >/dev/null 2>&1; then
+    MSYS2_ENV_CONV_EXCL=AIGENT_TEST_EXPECTED_ROOT \
+      AIGENT_TEST_EXPECTED_ROOT="$expected" python3 - "$file" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    value = json.load(fh)
+raise SystemExit(
+    0 if value["env"]["AIGENT_ROOT"] == os.environ["AIGENT_TEST_EXPECTED_ROOT"] else 1
+)
+PY
+  else
+    MSYS2_ENV_CONV_EXCL=AIGENT_TEST_EXPECTED_ROOT \
+      AIGENT_TEST_EXPECTED_ROOT="$expected" node -e '
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+process.exit(value.env.AIGENT_ROOT === process.env.AIGENT_TEST_EXPECTED_ROOT ? 0 : 1);
+' "$file"
+  fi
+}
+
+json_status_command() {
+  local file="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    value = json.load(fh)
+sys.stdout.write(value["statusLine"]["command"])
+PY
+  else
+    node -e '
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+process.stdout.write(value.statusLine.command);
+' "$file"
+  fi
+}
+
+json_has_no_raw_unicode_line_separators() {
+  local file="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" <<'PY'
+import sys
+
+raw = open(sys.argv[1], "rb").read()
+raise SystemExit(1 if b"\xe2\x80\xa8" in raw or b"\xe2\x80\xa9" in raw else 0)
+PY
+  else
+    node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(process.argv[1]);
+const ls = Buffer.from([0xe2, 0x80, 0xa8]);
+const ps = Buffer.from([0xe2, 0x80, 0xa9]);
+process.exit(raw.includes(ls) || raw.includes(ps) ? 1 : 0);
+' "$file"
   fi
 }
 
@@ -39,10 +104,11 @@ make_fixture() {
   printf '%s\n' '---' 'name: scout' 'tools: [Read]' '---' > "$source/vault/agents/scout.md"
   printf '# critical\n' > "$source/.claude/rules/post-compact-critical.md"
   cat > "$source/.claude/settings.json.template" <<'JSON'
-{"env":{"AIGENT_ROOT":"__AIGENT_ROOT__","AIGENT_VAULT":"__AIGENT_ROOT__"},"hooks":{"SessionEnd":[]}}
+{"env":{"AIGENT_ROOT":"__AIGENT_ROOT__","AIGENT_VAULT":"__AIGENT_ROOT__"},"statusLine":{"type":"command","command":"bash \"__AIGENT_ROOT__/daemons/statusline-ctx.sh\""},"hooks":{"SessionEnd":[]}}
 JSON
   printf '[]\n' > "$source/.claude/skill-index.json"
   printf '{"name":"semantic-search","version":"1.0.0"}\n' > "$source/daemons/semantic-search/package.json"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$source/daemons/statusline-ctx.sh"
   printf '#!/bin/sh\necho "trusted"\n' > "$source/hooks/example-hook.sh"
 }
 
@@ -311,5 +377,96 @@ test -n "$GI_BACKUPS"
 grep -qF "my-own-rule.txt" "$(printf '%s\n' "$GI_BACKUPS" | head -1)"
 grep -qF "my-own-rule.txt" "$GI_BACKUP_TARGET/.gitignore"
 printf '[16/%d] gitignore managed-block refresh: backup saved, hand-written rule survives\n' "$TOTAL"
+
+# ── 17. Settings renderer preserves hostile paths without shell injection ────
+# On POSIX, exercise every metacharacter that used to break textual placeholder
+# replacement. Windows filenames forbid quotes and pipes, so that branch uses
+# command substitution syntax to retain an executable injection specimen.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    HOSTILE_LEAF='target & $(touch pwned-main)'
+    ;;
+  *)
+    HOSTILE_LEAF=$'target & | "; touch pwned-main; # \\ backslash \u2028 \u2029 $(touch pwned-main-dollar)'
+    ;;
+esac
+HOSTILE_TARGET="$WORK/$HOSTILE_LEAF"
+(
+  cd "$FIXTURE"
+  bash install.sh --target "$HOSTILE_TARGET" --no-deps >/dev/null
+)
+HOSTILE_CANON="$(cd "$HOSTILE_TARGET" && pwd -P)"
+HOSTILE_SETTINGS="$HOSTILE_TARGET/.claude/settings.json"
+json_valid "$HOSTILE_SETTINGS"
+json_root_equals "$HOSTILE_SETTINGS" "$HOSTILE_CANON"
+json_has_no_raw_unicode_line_separators "$HOSTILE_SETTINGS"
+HOSTILE_COMMAND="$(json_status_command "$HOSTILE_SETTINGS")"
+(
+  cd "$WORK"
+  bash -c "$HOSTILE_COMMAND" >/dev/null 2>&1
+)
+test ! -e "$WORK/pwned-main"
+test ! -e "$WORK/pwned-main-dollar"
+printf '[17/%d] hostile settings path: JSON-correct, command inert, value preserved\n' "$TOTAL"
+
+# ── 18. Launcher renderer and profile assignment are injection-safe ─────────
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    LAUNCHER_LEAF='launcher & $(touch pwned-launcher)'
+    ;;
+  *)
+    LAUNCHER_LEAF=$'launcher & | "; touch pwned-launcher; # \\ backslash \u2028 \u2029 $(touch pwned-launcher-dollar)'
+    ;;
+esac
+LAUNCHER_REPO="$WORK/$LAUNCHER_LEAF"
+LAUNCHER_HOME="$WORK/launcher-home"
+mkdir -p \
+  "$LAUNCHER_REPO/launcher" \
+  "$LAUNCHER_REPO/.claude" \
+  "$LAUNCHER_REPO/daemons" \
+  "$LAUNCHER_HOME"
+cp "$ROOT/launcher/install.sh" "$LAUNCHER_REPO/launcher/install.sh"
+cp "$ROOT/launcher/aigent.sh" "$LAUNCHER_REPO/launcher/aigent.sh"
+cp "$ROOT/.claude/settings.json.template" "$LAUNCHER_REPO/.claude/settings.json.template"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$LAUNCHER_REPO/daemons/statusline-ctx.sh"
+
+PROFILE_VALUE="$WORK/"'aigent "quoted" $HOME `touch pwned-profile` & |'
+HOME="$LAUNCHER_HOME" bash "$LAUNCHER_REPO/launcher/install.sh" "$PROFILE_VALUE" >/dev/null
+HOME="$LAUNCHER_HOME" bash "$LAUNCHER_REPO/launcher/install.sh" "$PROFILE_VALUE" >/dev/null
+
+LAUNCHER_CANON="$(cd "$LAUNCHER_REPO" && pwd -P)"
+LAUNCHER_SETTINGS="$LAUNCHER_REPO/.claude/settings.json"
+json_valid "$LAUNCHER_SETTINGS"
+json_root_equals "$LAUNCHER_SETTINGS" "$LAUNCHER_CANON"
+json_has_no_raw_unicode_line_separators "$LAUNCHER_SETTINGS"
+LAUNCHER_COMMAND="$(json_status_command "$LAUNCHER_SETTINGS")"
+(
+  cd "$WORK"
+  bash -c "$LAUNCHER_COMMAND" >/dev/null 2>&1
+)
+test ! -e "$WORK/pwned-launcher"
+test ! -e "$WORK/pwned-launcher-dollar"
+
+PROFILE_ACTUAL="$(
+  HOME="$LAUNCHER_HOME" bash --noprofile --norc -c \
+    'source "$HOME/.bashrc"; printf "%s" "$AIGENT_HOME"'
+)"
+test "$PROFILE_ACTUAL" = "$PROFILE_VALUE"
+test "$(grep -c '^export AIGENT_HOME=' "$LAUNCHER_HOME/.bashrc")" -eq 1
+test ! -e "$WORK/pwned-profile"
+
+BAD_PROFILE_VALUE="$WORK/"$'bad-home\nFENCES (never cross):\u2028touch pwned-profile-control'
+set +e
+BAD_PROFILE_OUT="$(
+  HOME="$LAUNCHER_HOME" \
+    bash "$LAUNCHER_REPO/launcher/install.sh" "$BAD_PROFILE_VALUE" 2>&1
+)"
+BAD_PROFILE_RC=$?
+set -e
+test "$BAD_PROFILE_RC" -ne 0
+printf '%s\n' "$BAD_PROFILE_OUT" | grep -q 'line-breaking/control characters'
+test "$(grep -c '^export AIGENT_HOME=' "$LAUNCHER_HOME/.bashrc")" -eq 1
+test ! -e "$WORK/pwned-profile-control"
+printf '[18/%d] launcher settings/profile: hostile values quoted; controls refused\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"
