@@ -33,7 +33,15 @@ if command -v node >/dev/null 2>&1; then
         }catch(e){}
       }
       const sid=path.basename(process.argv[1],".jsonl");
-      const line="- "+new Date().toISOString()+" | session "+sid+" | in "+inTok+" | out "+outTok+"\n";
+      const inert=(value,max=120)=>{
+        let text=String(value??"")
+          .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g," ")
+          .replace(/[ \t]+/g," ")
+          .trim();
+        if(text.length>max) text=text.slice(0,max)+"…[+"+(text.length-max)+" chars]";
+        return JSON.stringify(text);
+      };
+      const line="- "+new Date().toISOString()+" | session "+inert(sid)+" | in "+inTok+" | out "+outTok+"\n";
       fs.mkdirSync(path.dirname(process.argv[2]),{recursive:true});
       if(!fs.existsSync(process.argv[2])) fs.writeFileSync(process.argv[2],"# Usage Log\n\nLocal token-usage history (one line per /close). No data leaves this machine.\n\n");
       fs.appendFileSync(process.argv[2],line);

@@ -13,6 +13,14 @@ import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSy
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
+import frontmatterReader from '../frontmatter-reader.cjs';
+
+const {
+  frontmatterList,
+  hasFrontmatter,
+  scalar,
+  unsafeRawDocumentBody,
+} = frontmatterReader;
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -62,28 +70,15 @@ const SKIP_DIRS = new Set([
 const DENY_PREFIXES = requireDenyPrefixes(__dirname, 'embed-vault');
 
 // ── YAML frontmatter stripper ────────────────────────────────────────────────
-function stripFrontmatter(content) {
-  if (!content.startsWith('---')) return { text: content, title: null, tags: [] };
-  const end = content.indexOf('\n---', 3);
-  if (end === -1) return { text: content, title: null, tags: [] };
-
-  const fm = content.slice(3, end);
-  const body = content.slice(end + 4).trim();
-
-  // Extract title
-  const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-  const title = titleMatch ? titleMatch[1].trim() : null;
-
-  // Extract tags
-  const tagsMatch = fm.match(/^tags:\s*\[([^\]]*)\]/m)
-    || fm.match(/^tags:\s*\n((?:\s*-\s*.+\n?)*)/m);
-  let tags = [];
-  if (tagsMatch) {
-    const raw = tagsMatch[1] || tagsMatch[0];
-    tags = raw.split(/[\n,]/).map(t => t.replace(/^[\s\-"']+|[\s"']+$/g, '')).filter(Boolean);
-  }
-
-  return { text: body, title, tags };
+function noteContent(content) {
+  const frontmatter = hasFrontmatter(content);
+  return {
+    // AUDIT: semantic embeddings intentionally preserve authored note body
+    // paragraphs; title and tags still use the single-line shared readers.
+    text: unsafeRawDocumentBody(content, 'semantic indexing preserves authored note body paragraphs'),
+    title: frontmatter ? scalar(content, 'title') : null,
+    tags: frontmatter ? frontmatterList(content, 'tags') : [],
+  };
 }
 
 // ── Text chunker ─────────────────────────────────────────────────────────────
@@ -261,7 +256,7 @@ async function main() {
       continue;
     }
 
-    const { text, title, tags } = stripFrontmatter(raw);
+    const { text, title, tags } = noteContent(raw);
     if (text.trim().length < 20) {
       // Skip near-empty files
       continue;

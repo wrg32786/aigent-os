@@ -143,6 +143,11 @@ jobs:
       # loop is framework-agnostic -- plain scripts and node:test files both exit
       # non-zero on failure (verified with a deliberately failing node:test file:
       # run directly, exit 1), so `set -e` catches either.
+      - name: Rendering-boundary structural guard canary
+        run: |
+          test -s daemons/tests/render-boundary-guard.test.mjs
+          grep -q 'RENDER_BOUNDARY_STRUCTURAL_GUARD_V1' daemons/tests/render-boundary-guard.test.mjs
+
       - name: Daemons test suite (all of daemons/tests, discovery)
         run: |
           set -euo pipefail

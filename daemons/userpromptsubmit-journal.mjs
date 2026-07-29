@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, statSync, renameSync, existsSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import { seatOf, memRoot, logErr, readStdin } from './lifecycle-common.mjs';
+import { unsafeRawJournalPrompt } from './raw-acquisitions.mjs';
 
 const MAX_BYTES = Number(process.env.LIFECYCLE_JOURNAL_MAX_BYTES) || 16 * 1024 * 1024;
 
@@ -42,8 +43,10 @@ try {
   const seat = seatOf(root); // single-operator default 'operator'; AIGENT_SEAT_ID override for forks
   // Non-string prompt (structured content): journal its JSON form rather than
   // dropping — capture-at-landing means capture whatever landed.
-  const prompt = typeof payload.prompt === 'string' ? payload.prompt
-    : ('prompt' in payload && payload.prompt != null ? JSON.stringify(payload.prompt) : '');
+  const prompt = unsafeRawJournalPrompt(
+    payload,
+    'the write-ahead journal intentionally preserves the complete operator prompt',
+  );
   if (!prompt) process.exit(0); // no prompt key at all — benign hook noise
 
   // Codex finding #23: raw prompts are as sensitive as anything in the vault —

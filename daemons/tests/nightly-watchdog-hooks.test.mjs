@@ -259,8 +259,8 @@ test('mutation proof: SessionStart persists and surfaces a missing-pass alert ex
   const input = JSON.stringify({ source: 'startup', cwd: root });
   const broken = runNode(SESSIONSTART, [], { root, input });
   assert.equal(broken.status, 0, broken.stderr);
-  assert.match(broken.stderr, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
-  assert.match(broken.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.match(broken.stderr, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
+  assert.match(broken.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
 
   const firstEvents = readFileSync(ledger, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
   assert.equal(
@@ -281,8 +281,8 @@ test('mutation proof: SessionStart persists and surfaces a missing-pass alert ex
 
   const repeated = runNode(SESSIONSTART, [], { root, input });
   assert.equal(repeated.status, 0, repeated.stderr);
-  assert.doesNotMatch(repeated.stderr, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
-  assert.match(repeated.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.doesNotMatch(repeated.stderr, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
+  assert.match(repeated.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   const repeatedEvents = readFileSync(ledger, 'utf8').trim().split(/\r?\n/);
   assert.equal(repeatedEvents.length, firstEvents.length);
 
@@ -294,7 +294,7 @@ test('mutation proof: SessionStart persists and surfaces a missing-pass alert ex
   write(root, 'vault/memory/runtime/NIGHTLY_LOG.md', protocolBlock('PASS', expected));
   const restored = runNode(SESSIONSTART, [], { root, input });
   assert.equal(restored.status, 0, restored.stderr);
-  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   proof('RESTORE sessionstart-no-fire', restored);
 });
 
@@ -339,11 +339,11 @@ test('mutation proof: an unreadable alert ledger cannot suppress SessionStart or
 
   const restoredStartup = runNode(SESSIONSTART, [], { root, input: startupInput });
   assert.equal(restoredStartup.status, 0, restoredStartup.stderr);
-  assert.match(restoredStartup.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.match(restoredStartup.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   assert.match(restoredStartup.stdout, /\[CLOCK\]|SESSIONSTART/i);
   const restoredClear = runNode(SESSIONSTART, [], { root, input: clearInput });
   assert.equal(restoredClear.status, 0, restoredClear.stderr);
-  assert.match(restoredClear.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.match(restoredClear.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   assert.match(restoredClear.stdout, /\[CLOCK\]|RESUME/i);
   proof('RESTORE readable-ledger startup', restoredStartup);
   proof('RESTORE readable-ledger clear', restoredClear);
@@ -356,7 +356,7 @@ test('mutation proof: a failed leg stays visible without optional external trans
   const broken = recordDream(brokenFixture.root);
   assert.equal(broken.status, 1);
   assert.match(broken.stdout, /NIGHTLY_CHECKPOINT RED/);
-  assert.match(broken.stderr, /\[NIGHTLY-ALERT: NIGHTLY:LEG_FAIL:dream\]/);
+  assert.match(broken.stderr, /\[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"\]/);
 
   const ledger = path.join(
     brokenFixture.root,
@@ -374,7 +374,7 @@ test('mutation proof: a failed leg stays visible without optional external trans
     input: JSON.stringify({ source: 'startup', cwd: brokenFixture.root }),
   });
   assert.equal(startup.status, 0, startup.stderr);
-  assert.match(startup.stdout, /\[NIGHTLY-ALERT: NIGHTLY:LEG_FAIL:dream\]/);
+  assert.match(startup.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"\]/);
   proof('BREAK local-only-leg', broken);
   proof('BREAK local-only-session-start', startup);
 
@@ -528,20 +528,20 @@ test('mutation proof: a fired-and-failed nightly reaches SessionStart boot outpu
   );
   const failed = runNode(SESSIONSTART, [], { root, input });
   assert.equal(failed.status, 0, failed.stderr);
-  assert.match(failed.stdout, /\[NIGHTLY-ALERT: NIGHTLY:PASS_FAILED\]/);
+  assert.match(failed.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:PASS_FAILED"\]/);
   // Named, not merely coded — an alert that cannot say WHICH leg failed sends a human back
   // to the log to find out, which is the friction the alert exists to remove.
   assert.match(failed.stdout, /heat-index/);
   // The point of separating structure from verdict: a pass that DID fire must never be
   // reported as one that never ran.
-  assert.doesNotMatch(failed.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.doesNotMatch(failed.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   proof('BREAK sessionstart-pass-failed', failed);
 
   // RESTORE: same block, every checkpoint green — the alert must clear from boot output.
   write(root, 'vault/memory/runtime/NIGHTLY_LOG.md', protocolBlock('PASS', expected));
   const restored = runNode(SESSIONSTART, [], { root, input });
   assert.equal(restored.status, 0, restored.stderr);
-  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: NIGHTLY:PASS_FAILED\]/);
-  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: NIGHTLY:NO_FIRE\]/);
+  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:PASS_FAILED"\]/);
+  assert.doesNotMatch(restored.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
   proof('RESTORE sessionstart-pass-failed', restored);
 });

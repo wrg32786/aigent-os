@@ -20,6 +20,8 @@
 // capsule missing these fields is not merely less polite; it is missing the
 // only thing that tells a reader it is not in charge.
 
+import { scalar } from '../lifecycle-common.mjs';
+
 // Frontmatter keys, in the order they should be emitted. Values are fixed:
 // these are properties of what a capsule IS, not per-capsule choices.
 export const FRAMING_FIELDS = Object.freeze({
@@ -55,21 +57,15 @@ export function framingBanner(prefix = '> ') {
   return FRAMING_LINES.map((line) => `${prefix}${line}`).join('\n');
 }
 
-function frontmatterOf(doc) {
-  return String(doc || '').match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1] || '';
-}
-
 // Verdict shape mirrors the other hygiene checks: ok plus the specific misses,
 // so a failure names what to add rather than only that something is absent.
 export function checkFraming(doc) {
   const source = String(doc || '');
-  const frontmatter = frontmatterOf(source);
   const missingFields = [];
   const wrongFields = [];
   for (const key of FRAMING_KEYS) {
-    const value = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim()
-      ?.replace(/^['"]|['"]$/g, '');
-    if (value === undefined) missingFields.push(key);
+    const value = scalar(source, key);
+    if (value === null) missingFields.push(key);
     else if (value !== FRAMING_FIELDS[key]) wrongFields.push(`${key}=${value}`);
   }
   // The resolved/pending split is what pending_policy is a policy ABOUT. A

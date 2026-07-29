@@ -94,6 +94,10 @@ function makeSandbox(name, denyFileText) {
   for (const file of ['deny-list.mjs', 'embed-vault.js', 'search-vault.js']) {
     copyFileSync(path.join(SEM, file), path.join(sem, file));
   }
+  copyFileSync(
+    path.join(DAEMONS, 'frontmatter-reader.cjs'),
+    path.join(root, 'daemons', 'frontmatter-reader.cjs'),
+  );
   if (denyFileText !== null) writeFileSync(path.join(sem, 'index-deny.json'), denyFileText);
 
   const stub = path.join(root, 'node_modules', '@xenova', 'transformers');

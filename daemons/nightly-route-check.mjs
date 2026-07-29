@@ -10,6 +10,7 @@ import {
   NIGHTLY_CHECKPOINTS, NIGHTLY_PROTOCOL,
 } from './nightly-pass.mjs';
 import { defaultNightlyRoot } from './nightly-paths.mjs';
+import { scalar } from './lifecycle-common.mjs';
 
 export const NIGHTLY_ROUTE_ALIAS = 'nightly-close-parity';
 export const NIGHTLY_ROUTE_SENTINEL = `NIGHTLY_LOCAL_PROTOCOL: ${NIGHTLY_PROTOCOL}`;
@@ -29,8 +30,9 @@ function fileText(file, failures, label) {
 
 function requireProduction(text, failures, label, required = []) {
   if (!text) return;
-  const production = /^status:[^\n]*\bPRODUCTION\b/im.test(text);
-  const invalid = /^status:[^\n]*\b(?:FAIL|STUB)\b/im.test(text);
+  const status = scalar(text, 'status') || '';
+  const production = /\bPRODUCTION\b/i.test(status);
+  const invalid = /\b(?:FAIL|STUB)\b/i.test(status);
   if (!production || invalid) failures.push(`${label} is not PRODUCTION`);
   for (const token of required) {
     if (!text.includes(token)) failures.push(`${label} missing contract token ${token}`);

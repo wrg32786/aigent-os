@@ -37,7 +37,9 @@ import { mkdirSync, openSync, closeSync, readdirSync, rmSync, statSync, writeSyn
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { memRoot as resolveMemRoot, readStdin, logErr } from './lifecycle-common.mjs';
+import {
+  inert, memRoot as resolveMemRoot, readStdin, logErr,
+} from './lifecycle-common.mjs';
 
 const SESSION_DIR_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -104,7 +106,7 @@ function pruneStaleSessions(baseDir, now = Date.now()) {
 }
 
 export function editChecklist(filePath) {
-  return `[GateGuard] Before editing ${filePath}, present these facts:
+  return `[GateGuard] Before editing path ${inert(filePath)}, present these facts:
 
 1. List the files that import or require this one (use Grep).
 2. Name the public functions or exports this change affects.
@@ -117,7 +119,7 @@ Present the facts, then retry the same operation.
 }
 
 export function writeChecklist(filePath) {
-  return `[GateGuard] Before creating ${filePath}, present these facts:
+  return `[GateGuard] Before creating path ${inert(filePath)}, present these facts:
 
 1. Name the file and line that will call this new file.
 2. Confirm no existing file already serves this purpose (use Glob).

@@ -26,7 +26,7 @@ CANDIDATES="$CANDIDATES" \
 DAEMON_ERR_LOG="$DAEMON_ERR_LOG" \
 TIER2_OBS_LOG="$TIER2_OBS_LOG" \
 python3 <<'PYEOF' 2>>"$DAEMON_ERR_LOG"
-import os, re, sys
+import json, os, re, sys
 from datetime import datetime, timezone, timedelta
 
 prompt = os.environ.get("INPUT", "")
@@ -45,15 +45,33 @@ candidates_path = fix_path(candidates_path)
 err_log = fix_path(err_log)
 tier2_obs_log = fix_path(tier2_obs_log)
 
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+def single_line(value):
+    """Remove every character that can create or control a rendered line."""
+    return re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str(value or ""))).strip()
+
+def bounded(value, limit):
+    """Single-line data with announced, rather than silent, truncation."""
+    text = single_line(value)
+    if len(text) > limit:
+        omitted = len(text) - limit
+        text = f"{text[:limit]}…[+{omitted} chars]"
+    return text
+
+def markdown_inert(value, limit=240):
+    """A quoted, bounded table cell that cannot introduce a column or line."""
+    return json.dumps(bounded(value, limit), ensure_ascii=True).replace("|", r"\u007c")
+
 def log_err(msg):
     """Append error to daemon log before raising/returning."""
     try:
         with open(err_log, "a", encoding="utf-8") as f:
             ts = datetime.now(timezone.utc).isoformat()
-            f.write(f"[memory-capture] {ts} {msg}\n")
+            f.write(f"[memory-capture] {ts} {markdown_inert(msg, 500)}\n")
     except Exception:
         pass  # err_log itself unavailable — last resort: stderr
-    print(f"[memory-capture] {msg}", file=sys.stderr)
+    print(f"[memory-capture] {markdown_inert(msg, 500)}", file=sys.stderr)
 
 def log_tier2_obs(pattern_name, confidence, trigger_text, banked):
     """Append one observation line to .tier2-observations.log (best-effort)."""
@@ -61,9 +79,12 @@ def log_tier2_obs(pattern_name, confidence, trigger_text, banked):
         return
     try:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        snippet = trigger_text.replace("\n", " ")[:80]
+        snippet = markdown_inert(trigger_text, 80)
         banked_str = "yes" if banked else "no"
-        line = f"{ts} | {pattern_name} | {confidence} | {snippet} | banked={banked_str}\n"
+        line = (
+            f"{ts} | {markdown_inert(pattern_name, 80)}"
+            f" | {markdown_inert(confidence, 40)} | {snippet} | banked={banked_str}\n"
+        )
         with open(tier2_obs_log, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception as e:
@@ -180,7 +201,7 @@ except Exception as e:
 # backlog cap and it dedupes. Leaving it out of this pattern would let the cap be
 # walked straight past whenever the injection scan is down.
 row_re = re.compile(
-    r"^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*\"(.*?)\"\s*\|.*?\|\s*(unscanned|staged|promoted|skipped|superseded)\s*\|",
+    r'^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*("(?:\\.|[^"\\])*")\s*\|.*?\|\s*(unscanned|staged|promoted|skipped|superseded)\s*\|',
     re.MULTILINE
 )
 staged_count = 0
@@ -190,7 +211,10 @@ window_24h = now_utc - timedelta(hours=24)
 
 for m in row_re.finditer(content):
     row_date_str = m.group(1)
-    row_phrase = m.group(2)
+    try:
+        row_phrase = json.loads(m.group(2))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        row_phrase = m.group(2)[1:-1]
     row_status = m.group(3)
     if row_status in ("staged", "unscanned"):
         staged_count += 1
@@ -219,14 +243,9 @@ for pattern, ptype, confidence, label in PATTERNS:
         # Tier 2 non-match: no observation needed (only log fires, not misses)
         continue
 
-    phrase_stem = m.group(1).strip()
-    # Truncate to 200 chars with ellipsis
-    if len(phrase_stem) > 200:
-        phrase_stem = phrase_stem[:197] + "..."
+    phrase_stem = bounded(m.group(1), 200)
     # Reconstruct full source phrase from match
-    source_phrase = m.group(0).strip()
-    if len(source_phrase) > 200:
-        source_phrase = source_phrase[:197] + "..."
+    source_phrase = bounded(m.group(0), 200)
     norm = normalize(source_phrase)
 
     # Dedupe: same phrase still staged within 24h → skip
@@ -243,12 +262,13 @@ for pattern, ptype, confidence, label in PATTERNS:
         break
 
     dest = suggested_destination(ptype, phrase_stem)
-    # Escape any pipes in source phrase (would break markdown table)
-    source_escaped = source_phrase.replace("|", "&#124;")
+    # Render the source as a JSON-quoted, bounded table cell. This is a
+    # persistence boundary: the candidates file is later read into procedures.
+    source_cell = markdown_inert(source_phrase, 240)
     # Born `unscanned`, NOT `staged`. Only a clean pass of the injection guard
     # below promotes it. If that guard cannot run, this row stays visibly
     # unscanned instead of silently joining the promotable set.
-    row = f'| {today} | "{source_escaped}" | {ptype} | {confidence} | {dest} | unscanned | null | Auto-captured from prompt |'
+    row = f'| {today} | {source_cell} | {ptype} | {confidence} | {dest} | unscanned | null | Auto-captured from prompt |'
     rows_to_append.append((norm, row))
 
     # Tier 2 observability: log every fire as banked=yes

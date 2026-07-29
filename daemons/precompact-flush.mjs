@@ -35,9 +35,35 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { seatOf, memRoot, logErr, readStdin } from './lifecycle-common.mjs';
+import {
+  capsuleValue,
+  inert,
+  logErr,
+  memRoot,
+  readStdin,
+  seatOf,
+  unsafeRawBodySection,
+  unsafeRawCapsuleDocument,
+} from './lifecycle-common.mjs';
 
 const STOP_WRITER = join(dirname(fileURLToPath(import.meta.url)), 'stop-capsule-writer.mjs');
+
+function inertBodyLines(value, maximum = 1200, maximumRows = 12) {
+  const source = String(value ?? '');
+  const selected = source.slice(0, maximum);
+  const rows = selected.split(/\r\n|[\n\r\u0085\u2028\u2029]/u);
+  const rendered = rows
+    .slice(0, maximumRows)
+    .map((line) => `  ${inert(line, 240)}`);
+  if (source.length > maximum || rows.length > maximumRows) {
+    const remainingChars = Math.max(0, source.length - maximum);
+    const remainingRows = Math.max(0, rows.length - maximumRows);
+    rendered.push(
+      `  [TRUNCATED: +${remainingChars} source chars and at least +${remainingRows} rows remain in capsule]`,
+    );
+  }
+  return rendered.join('\n');
+}
 
 // Resolve the operator's active capsule from the ONE pointer at
 // BODY_STATE.json's state.last_capsule (the same pointer the stop-capsule
@@ -49,28 +75,17 @@ function activeCapsule(root) {
   try {
     const cap = JSON.parse(readFileSync(path.join(MEM, 'BODY_STATE.json'), 'utf8'))?.state?.last_capsule ?? null;
     if (!cap?.path) return { path: null, dangling: false };
-    const p = path.isAbsolute(cap.path) ? cap.path : path.join(root, cap.path);
+    const p = path.resolve(path.isAbsolute(cap.path) ? cap.path : path.join(root, cap.path));
+    const capsulesRoot = path.join(MEM, 'capsules');
+    const relative = path.relative(capsulesRoot, p);
+    if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+      return { path: p, dangling: false, outside: true };
+    }
     if (existsSync(p)) return { path: p, dangling: false };
     return { path: p, dangling: true };
   } catch {
     return { path: null, dangling: false };
   }
-}
-
-function frontmatterField(doc, field) {
-  const m = doc.match(new RegExp(`^${field}: (.*)$`, 'm'));
-  if (!m) return null;
-  try { return JSON.parse(m[1]); } catch { return m[1].trim(); }
-}
-
-function sectionContent(doc, heading) {
-  const idx = doc.indexOf(`## ${heading}`);
-  if (idx === -1) return '';
-  const start = doc.indexOf('\n', idx) + 1;
-  const end = doc.indexOf('\n## ', start);
-  return doc.slice(start, end === -1 ? doc.length : end)
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .trim();
 }
 
 try {
@@ -151,7 +166,7 @@ try {
     // key the hint off it.
     const timeoutHint = /ETIMEDOUT/i.test(flushWhy)
       ? ' (timeout-kill: the capsule write is atomic and may still have landed — a retry that reads "already current" means it did)' : '';
-    const reason = `pre-compact capsule flush FAILED (${flushWhy})${timeoutHint} — compaction blocked (strict mode) so it can never `
+    const reason = `pre-compact capsule flush FAILED (${inert(flushWhy, 300)})${timeoutHint} — compaction blocked (strict mode) so it can never `
       + `proceed over an unflushed capsule. Finish the turn and retry /compact; if this persists check `
       + `<memRoot>/.daemon-errors.log. Emergency override: LIFECYCLE_KILL_STOP_WRITER=1, or unset LIFECYCLE_PRECOMPACT_STRICT.`;
     try { writeSync(1, JSON.stringify({ decision: 'block', reason })); } catch { /* exit code still blocks */ }
@@ -171,32 +186,44 @@ try {
   } else if (flush === 'killed') {
     out.push(`[PRECOMPACT:capsule-toc] NOTE: capsule writer disabled (LIFECYCLE_KILL_STOP_WRITER) — staleness unknown; treat the capsule below as last-known-good.`);
   } else if (flush === 'unobserved') {
-    out.push(`[PRECOMPACT:capsule-toc] WARNING: pre-compact flush had nothing observable to flush (${flushWhy}) — the capsule below may be stale by one or more turns; the utterance journal holds the raw prompts.`);
+    out.push(`[PRECOMPACT:capsule-toc] WARNING: pre-compact flush had nothing observable to flush (${inert(flushWhy, 300)}) — the capsule below may be stale by one or more turns; the utterance journal holds the raw prompts.`);
   } else if (flush === 'fail') {
-    out.push(`[PRECOMPACT:capsule-toc] WARNING: pre-compact capsule flush FAILED (${flushWhy}) — the capsule below may be stale; the utterance journal holds the raw prompts. Check <memRoot>/.daemon-errors.log if this persists.`);
+    out.push(`[PRECOMPACT:capsule-toc] WARNING: pre-compact capsule flush FAILED (${inert(flushWhy, 300)}) — the capsule below may be stale; the utterance journal holds the raw prompts. Check <memRoot>/.daemon-errors.log if this persists.`);
   }
-  if (cap.path && !cap.dangling) {
-    const doc = readFileSync(cap.path, 'utf8');
+  if (cap.path && !cap.dangling && !cap.outside) {
+    const doc = unsafeRawCapsuleDocument(
+      cap.path,
+      'precompact builds a bounded table of contents from shared-reader capsule values',
+    );
     const rel = path.relative(root, cap.path).replace(/\\/g, '/');
-    out.push(`[PRECOMPACT:capsule-toc] ${seat} — active capsule survives this compaction at ${rel}`);
+    out.push(`[PRECOMPACT:capsule-toc] ${inert(seat, 80)} — active capsule survives this compaction at ${inert(rel)}`);
     out.push(`> [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.`);
-    const obj = frontmatterField(doc, 'objective');
-    const next = frontmatterField(doc, 'next_valid_action');
-    const waiting = frontmatterField(doc, 'waiting_on');
-    if (obj) out.push(`objective: ${obj}`);
-    if (next) out.push(`next_valid_action: ${next}`);
-    if (waiting && waiting !== 'null') out.push(`waiting_on: ${waiting}`);
-    const gates = sectionContent(doc, 'Pending-Gates');
-    if (gates) out.push(`Pending-Gates (MUST survive refresh):\n${gates.slice(0, 1200)}`);
+    const obj = capsuleValue(doc, 'objective');
+    const next = capsuleValue(doc, 'next_valid_action');
+    const waiting = capsuleValue(doc, 'waiting_on');
+    if (obj) out.push(`objective: ${inert(obj)}`);
+    if (next) out.push(`next_valid_action: ${inert(next)}`);
+    if (waiting && waiting !== 'null') out.push(`waiting_on: ${inert(waiting)}`);
+    const gates = unsafeRawBodySection(
+      doc,
+      'Pending-Gates',
+      'precompact preserves authored gate rows but renders every row through inert',
+    );
+    if (gates) {
+      out.push(`Pending-Gates (MUST survive refresh; quoted data rows):\n${inertBodyLines(gates)}`);
+    }
     out.push(`Sections on disk (pull on demand, never from memory): ` +
       ['Done (don\'t redo)', 'Historical-Errors → Resolutions', 'Historical-Rejected-Approaches',
         'Files-Read / Files-Modified', 'Operating-Facts', 'Pending-Gates', 'Claimed-Rows']
-        .map((s) => `${rel}#${s}`).join(' · '));
+        .map((s) => inert(`${rel}#${s}`)).join(' · '));
+  } else if (cap.outside) {
+    logErr(root, 'precompact-flush', `OUTSIDE capsule pointer refused: ${cap.path}`);
+    out.push(`[PRECOMPACT:capsule-toc] ${inert(seat, 80)} — WARNING: the active-capsule pointer resolves outside the capsules directory (${inert(cap.path)}); it was not read.`);
   } else if (cap.dangling) {
     logErr(root, 'precompact-flush', `DANGLING capsule pointer: ${cap.path} is gone (something deleted it under an active pointer)`);
-    out.push(`[PRECOMPACT:capsule-toc] ${seat} — WARNING: the active-capsule pointer targets ${cap.path} which NO LONGER EXISTS (deleted externally). Resume from the latest session log + live memory after this compaction.`);
+    out.push(`[PRECOMPACT:capsule-toc] ${inert(seat, 80)} — WARNING: the active-capsule pointer targets ${inert(cap.path)} which NO LONGER EXISTS (deleted externally). Resume from the latest session log + live memory after this compaction.`);
   } else {
-    out.push(`[PRECOMPACT:capsule-toc] ${seat} — no active capsule on disk; resume from the latest`
+    out.push(`[PRECOMPACT:capsule-toc] ${inert(seat, 80)} — no active capsule on disk; resume from the latest`
       + ` session log + live memory after this compaction. Run /resume if orientation is thin.`);
   }
   // writeSync (not stdout.write): the ToC is the compactor's re-grounding

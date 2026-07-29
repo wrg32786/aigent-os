@@ -112,13 +112,21 @@ writeFileSync(transcript, [
 // ── embedded newlines collapsed (no section corruption) ─────────────────────
 {
   const t5 = path.join(SANDBOX, 'zl6.jsonl');
+  const hostileBreaks = '\n\u0000\u0085\u2028\u2029';
   writeFileSync(t5, [
-    JSON.stringify({ type: 'user', message: { content: 'line one\n## Fake Section\nline two' } }),
+    JSON.stringify({ type: 'user', message: { content: `line one${hostileBreaks}## Fake Section${hostileBreaks}line two` } }),
     JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }),
   ].join('\n') + '\n');
   const r5 = run('stop-capsule-writer.mjs', ['--worker', JSON.stringify({ __root: SANDBOX, session_id: 'zl6', transcript_path: t5 })]);
   const cap5 = readFileSync(path.join(SANDBOX, readPointer().path), 'utf8');
-  check('embedded newlines collapsed in [OPERATOR] bullet (no section corruption)', (r5.stdout || '').includes('flushed') && /\[OPERATOR\] line one ## Fake Section line two/.test(cap5) && !cap5.includes('\n## Fake Section'));
+  const operatorLine = cap5.split(/\r?\n/).find((line) => line.includes('[OPERATOR]')) || '';
+  check(
+    'complete line-breaking set collapsed in [OPERATOR] bullet (no section corruption)',
+    (r5.stdout || '').includes('flushed')
+      && /\[OPERATOR\] line one +## Fake Section +line two/.test(operatorLine)
+      && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(operatorLine)
+      && !cap5.includes('\n## Fake Section'),
+  );
 }
 
 rmSync(TMP, { recursive: true, force: true });

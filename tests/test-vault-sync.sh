@@ -151,7 +151,7 @@ ERROR_LOG="$FAIL_WORK/vault/memory/.daemon-errors.log"
 [[ -f "$ERROR_LOG" ]] || fail 'push failure did not create daemon error log'
 [[ "$(wc -l < "$ERROR_LOG" | tr -d ' ')" == '1' ]] \
   || fail 'push failure did not produce exactly one log line'
-grep -q '\[vault-sync\] git push failed:' "$ERROR_LOG" \
+grep -Fq 'tag="vault-sync" message="git push failed:' "$ERROR_LOG" \
   || fail 'push failure log line is missing or malformed'
 
 # An explicit but unavailable pushRemote is authoritative. Never fall back to
@@ -170,7 +170,7 @@ ROUTE_OUT="$(run_cycle "$ROUTE_WORK" 'wrong remote' 2>&1)"
   || fail 'invalid pushRemote created a local commit'
 [[ "$(git --git-dir="$ROUTE_BARE" rev-parse refs/heads/main)" == "$ROUTE_REMOTE_BEFORE" ]] \
   || fail 'invalid pushRemote fell back to origin'
-grep -q '\[vault-sync\].*selects unavailable push remote unavailable' \
+grep -Fq 'tag="vault-sync" message="branch.main.pushRemote selects unavailable push remote unavailable' \
   "$ROUTE_WORK/vault/memory/.daemon-errors.log" \
   || fail 'invalid pushRemote refusal was not logged'
 printf '[3/%d] push failure: logged once, never threw, local commit retained\n' "$TOTAL"
@@ -194,7 +194,7 @@ LINK_OUT="$(run_cycle "$LINK_WORK" 'symlink refusal' 2>&1)"
   || fail 'symlink refusal changed the remote'
 [[ "$(git hash-object "$OUTSIDE_FILE")" == "$OUTSIDE_BEFORE" ]] \
   || fail 'symlink refusal touched the outside target'
-grep -qi '\[vault-sync\].*refusing to write through symlink' \
+grep -Eiq 'tag="vault-sync" message=".*refusing to write through symlink' \
   "$LINK_WORK/vault/memory/.daemon-errors.log" \
   || fail 'symlink refusal was not logged'
 
@@ -221,7 +221,7 @@ GIT_LINK_OUT="$(run_cycle "$GIT_LINK_WORK" 'git symlink refusal' 2>&1)"
   || fail 'git-control symlink refusal changed the remote'
 [[ "$(git hash-object "$GIT_OUTSIDE_DIR/sentinel")" == "$GIT_OUTSIDE_BEFORE" ]] \
   || fail 'git-control symlink refusal touched the outside target'
-grep -qi '\[vault-sync\].*refusing to write through symlink' \
+grep -Eiq 'tag="vault-sync" message=".*refusing to write through symlink' \
   "$GIT_LINK_WORK/vault/memory/.daemon-errors.log" \
   || fail 'git-control symlink refusal was not logged'
 printf '[4/%d] symlink outside root: refused, outside target untouched\n' "$TOTAL"

@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateCapsuleText } from '../capsule-verb.mjs';
 import { FRAMING_KEYS } from '../memory-hygiene/resume-framing.mjs';
@@ -24,6 +25,8 @@ const DAEMON = process.env.SCW_DAEMON
 const CAPSULE_VERB = path.join(DAEMONS, 'capsule-verb.mjs');
 const CONTENT_GATE = path.join(DAEMONS, 'capsule-content-gate.mjs');
 const LIFECYCLE_COMMON = path.join(DAEMONS, 'lifecycle-common.mjs');
+const FRONTMATTER_READER = path.join(DAEMONS, 'frontmatter-reader.cjs');
+const RAW_ACQUISITIONS = path.join(DAEMONS, 'raw-acquisitions.mjs');
 const RESUME_FRAMING = path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs');
 const ATOMIC_STATE = path.join(DAEMONS, 'memory-hygiene', 'atomic-state.cjs');
 
@@ -61,9 +64,10 @@ function makeFixture() {
 function runWorker(fixture, events, {
   daemon = DAEMON,
   sessionId = '01234567-test-session',
+  transcriptName = `${sessionId}.jsonl`,
   env = {},
 } = {}) {
-  const transcriptPath = path.join(fixture.root, `${sessionId}.jsonl`);
+  const transcriptPath = path.join(fixture.root, transcriptName);
   writeFileSync(transcriptPath, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
   const payload = {
     __root: fixture.root,
@@ -85,7 +89,10 @@ function runWorker(fixture, events, {
       ...env,
     },
   });
-  const statePath = path.join(fixture.memory, 'runtime', 'stop-writer', `${sessionId}.json`);
+  const sessionToken = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionId)
+    ? sessionId
+    : `session-${createHash('sha256').update(sessionId).digest('hex').slice(0, 12)}`;
+  const statePath = path.join(fixture.memory, 'runtime', 'stop-writer', `${sessionToken}.json`);
   const state = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))
     : null;
@@ -262,6 +269,8 @@ function writeInstrumentedDaemon(fixture, {
   const daemon = path.join(daemonDir, 'stop-capsule-writer.mjs');
   copyFileSync(DAEMON, daemon);
   copyFileSync(LIFECYCLE_COMMON, path.join(daemonDir, 'lifecycle-common.mjs'));
+  copyFileSync(FRONTMATTER_READER, path.join(daemonDir, 'frontmatter-reader.cjs'));
+  copyFileSync(RAW_ACQUISITIONS, path.join(daemonDir, 'raw-acquisitions.mjs'));
   copyFileSync(RESUME_FRAMING, path.join(hygieneDir, 'resume-framing.mjs'));
   copyFileSync(ATOMIC_STATE, path.join(hygieneDir, 'atomic-state.cjs'));
 
@@ -284,6 +293,45 @@ test('fresh assistant-only autosave names an unknown objective instead of the le
     for (const anchor of ANCHORS) {
       assert.equal(result.doc.split(anchor).length - 1, 1, `${anchor} must be preserved exactly once`);
     }
+  });
+});
+
+test('hostile session ids cannot create capsule paths or frontmatter structure', () => {
+  withFixture((fixture) => {
+    const sessionId = 'x\nstatus: resolved\n## FORGED';
+    const result = runWorker(fixture, [assistantEvent()], {
+      sessionId,
+      transcriptName: 'safe-transcript.jsonl',
+    });
+    assertWorkerFlushed(result);
+    const token = bodyPointer(fixture).session_id;
+    assert.match(token, /^session-[0-9a-f]{12}$/);
+    assert.equal(path.dirname(result.capsulePath), fixture.capsules);
+    assert.match(path.basename(result.capsulePath), new RegExp(`-auto-${token}\\.md$`));
+    assert.doesNotMatch(result.doc, /^(?:## FORGED|status: resolved)$/m);
+    assert.equal(frontmatterKeys(result.doc).filter((key) => key === 'status').length, 1);
+  });
+});
+
+test('mutable stop-writer state cannot redirect capsule reads or writes outside capsules', () => {
+  withFixture((fixture) => {
+    const sessionId = 'outside-state';
+    const outside = path.join(fixture.base, 'outside.md');
+    const sentinel = 'OUTSIDE_SENTINEL\n';
+    writeFileSync(outside, sentinel);
+    const runtime = path.join(fixture.memory, 'runtime', 'stop-writer');
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(path.join(runtime, `${sessionId}.json`), JSON.stringify({
+      offset: 0,
+      capsule_path: outside,
+      last_delta_sha: null,
+    }));
+
+    const result = runWorker(fixture, [assistantEvent()], { sessionId });
+    assertWorkerFlushed(result);
+    assert.equal(readFileSync(outside, 'utf8'), sentinel);
+    assert.equal(path.dirname(result.capsulePath), fixture.capsules);
+    assert.match(errorLog(fixture), /outside capsule state path refused/);
   });
 });
 

@@ -23,6 +23,16 @@ import { runResumeVerb } from '../resume-verb.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(__dirname, '..', 'resume-verb.mjs');
 const REINJECT = path.join(__dirname, '..', 'sessionstart-reinject.mjs');
+const STRUCTURAL_GUARD = path.join(__dirname, 'render-boundary-guard.test.mjs');
+
+test('the rendering-boundary structural guard exists with its fixed marker', () => {
+  assert.equal(existsSync(STRUCTURAL_GUARD), true, 'render-boundary structural guard was deleted');
+  assert.match(
+    readFileSync(STRUCTURAL_GUARD, 'utf8'),
+    /RENDER_BOUNDARY_STRUCTURAL_GUARD_V1/,
+    'render-boundary structural guard marker is missing',
+  );
+});
 
 function capsuleDoc({
   id = '2026-07-21-test-capsule',

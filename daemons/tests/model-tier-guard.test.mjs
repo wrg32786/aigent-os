@@ -67,7 +67,10 @@ writeFileSync(path.join(RUNTIME, '.claude', 'agents', 'Lyra.md'), agentDoc('Lyra
 {
   const r = run(dispatch('Lyra', 'opus'), RUNTIME);
   check('wrong model: DEFAULT advisory, exit 0', r.status === 0, `status=${r.status}`);
-  check('wrong model: names the agent, required tier, and what was sent', /\[MODEL-TIER\] Lyra is defined to run on model: "sonnet"/.test(r.stdout) && /this dispatch specified opus/.test(r.stdout), JSON.stringify(r.stdout));
+  check('wrong model: names quoted agent, tier, and request data',
+    /\[MODEL-TIER\] agent "Lyra" is defined to run on model "sonnet"/.test(r.stdout)
+      && /this dispatch specified "opus"/.test(r.stdout),
+    JSON.stringify(r.stdout));
 }
 {
   const r = run(dispatch('Lyra'), RUNTIME); // model omitted entirely
@@ -98,7 +101,9 @@ mkdirSync(path.join(SOURCE, 'vault', 'agents'), { recursive: true });
 writeFileSync(path.join(SOURCE, 'vault', 'agents', 'Newton.md'), agentDoc('Newton', 'haiku'));
 {
   const r = run(dispatch('Newton', 'opus'), SOURCE);
-  check('vault/agents/ fallback resolves when .claude/agents/ is absent', r.status === 0 && /Newton is defined to run on model: "haiku"/.test(r.stdout), JSON.stringify(r.stdout));
+  check('vault/agents/ fallback resolves when .claude/agents/ is absent',
+    r.status === 0 && /agent "Newton" is defined to run on model "haiku"/.test(r.stdout),
+    JSON.stringify(r.stdout));
 }
 
 // ── no agent-def directory at all -- never throws, never blocks ─────────────

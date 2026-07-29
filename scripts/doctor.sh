@@ -128,6 +128,12 @@ fi
 # Claude Code loads dispatchable subagents ONLY from .claude/agents/. The defs live
 # in vault/agents/ as docs; if they were never copied here, the operator reads
 # "delegate to Lyra/Iris/Hypatia/Echo" but has nothing to spawn and does it all itself.
+unsafeRawRepairAgentDefinition() {
+  local source="$1" destination="$2" reason="$3"
+  [ -n "$reason" ] || return 1
+  cp -n "$source" "$destination" 2>/dev/null
+}
+
 AGENTS_DIR="$ROOT/.claude/agents"
 AGENTS_SRC="$ROOT/vault/agents"
 agent_count=0
@@ -139,7 +145,11 @@ elif [ "$FIX" -eq 1 ] && [ -d "$AGENTS_SRC" ]; then
   for agent_file in "$AGENTS_SRC"/*.md; do
     [ -f "$agent_file" ] || continue
     if head -20 "$agent_file" | grep -q '^name:' && head -20 "$agent_file" | grep -q '^tools:'; then
-      cp -n "$agent_file" "$AGENTS_DIR/$(basename "$agent_file")" 2>/dev/null || true
+      unsafeRawRepairAgentDefinition \
+        "$agent_file" \
+        "$AGENTS_DIR/$(basename "$agent_file")" \
+        "doctor --fix promotes operator-authored multiline agent procedure text into Claude's runtime directory" \
+        || true
     fi
   done
   agent_count=$(find "$AGENTS_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')

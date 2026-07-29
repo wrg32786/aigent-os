@@ -703,6 +703,33 @@ test('wiring: the capture script runs the injection gate on the staging path', (
   assert.match(capture, /INJECTION_SCAN_DID_NOT_RUN/, 'a failed scan must be recorded loudly');
 });
 
+test('capture persistence quotes and collapses line-breaking prompt data', (t) => {
+  const bash = spawnSync('bash', ['--version'], { encoding: 'utf8' });
+  const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
+  if (bash.status !== 0 || python.status !== 0) {
+    t.skip('needs bash and python3, which memory-capture.sh itself requires');
+    return;
+  }
+
+  const root = fixture('capture-boundary');
+  mkdirSync(path.join(root, 'memory'), { recursive: true });
+  const candidates = path.join(root, 'memory', 'MEMORY_CANDIDATES.md');
+  writeFileSync(candidates, '## Candidates\n\n(empty at ship — `/digest` populates and updates this section)\n');
+  const capture = path.join(REPO, 'daemons', 'memory-capture.sh');
+  const run = spawnSync('bash', [capture], {
+    input: 'remember that alpha\u000bbeta\u0085gamma\u2028delta\u2029epsilon|column',
+    encoding: 'utf8',
+    env: { ...process.env, AIGENT_ROOT: root, CLAUDE_PROJECT_DIR: root },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const persisted = readFileSync(candidates, 'utf8');
+  const row = persisted.split(/\r?\n/).find((line) => /^\| \d{4}-\d{2}-\d{2} \|/.test(line));
+  assert.ok(row, persisted);
+  assert.doesNotMatch(row, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+  assert.doesNotMatch(row, /epsilon\|column/);
+  assert.match(row, /\| "remember that alpha beta gamma delta epsilon\\u007ccolumn" \|/);
+});
+
 // The claims above read the script as text. This one RUNS it, twice, and is the
 // only version that can distinguish "the failure path is written down" from "the
 // failure path works". Red half first: node removed from PATH, so the scan

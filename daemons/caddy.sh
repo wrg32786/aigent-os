@@ -129,6 +129,13 @@ if not isinstance(prompt, str) or not prompt.strip():
     raise SystemExit(0)
 prompt_lower = prompt.lower()
 
+LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+def inert(value, maximum=500):
+    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
+    if len(rendered) > maximum:
+        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
+    return json.dumps(rendered, ensure_ascii=True)
+
 try:
     with open(os.environ["INDEX"], encoding="utf-8") as handle:
         skills = json.load(handle)
@@ -142,6 +149,8 @@ for skill in skills:
     if not isinstance(skill, dict):
         continue
     name = str(skill.get("name", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        continue
     score = 0
     matched = []
     for value in skill.get("triggers", []):
@@ -158,7 +167,7 @@ for skill in skills:
 scores.sort(key=lambda item: (-item[0], item[1]))
 top = [item for item in scores if item[0] >= 2][:2]
 for _, name, why, _ in top:
-    print(f"[CADDY] /{name} - {why}")
+    print(f"[CADDY] /{name} - {inert(why)}")
 
 stopwords = {
     "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "and", "in", "for", "on",
@@ -188,7 +197,10 @@ if not top:
     taxonomy_matches.sort(key=lambda item: (-item[0], item[1]))
     if taxonomy_matches:
         _, path_value, description, skill_ref = taxonomy_matches[0]
-        print(f"[CADDY:taxonomy] {skill_ref} ({path_value}) — {description} — [LEDGER]")
+        print(
+            f"[CADDY:taxonomy] skill={inert(skill_ref, 120)} path={inert(path_value, 200)} "
+            f"description={inert(description)} — [LEDGER]"
+        )
     else:
         session_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "unknown"))[:80]
         flag = Path(os.environ["ROOT"]) / ".aigent" / "cache" / f"caddy-gap-{session_id}"
@@ -211,7 +223,7 @@ try:
         objective, chain = parts[2].lower(), parts[3]
         overlap = sum(1 for word in words if word in re.findall(r"\w+", objective))
         if overlap >= 3 and chain:
-            print(f"[CADDY:chain] Prior chain for a similar objective: {chain} (see SKILL_CHAINS)")
+            print(f"[CADDY:chain] Prior chain for a similar objective: {inert(chain)} (see SKILL_CHAINS)")
             break
 except OSError:
     pass

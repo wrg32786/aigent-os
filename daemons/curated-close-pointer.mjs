@@ -4,16 +4,18 @@
 // selects the newest valid capsule by created_at) — this stamp is an
 // audit/orientation hint only.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { memRoot, seatOf } from './lifecycle-common.mjs';
+import {
+  inert, memRoot, scalar, seatOf, unsafeRawCapsuleDocument,
+} from './lifecycle-common.mjs';
 
 const require = createRequire(import.meta.url);
 const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
 
 function fail(message) {
-  console.error(`[curated-close-pointer] REFUSED: ${message}`);
+  console.error(`[curated-close-pointer] REFUSED: ${inert(message)}`);
   process.exit(1);
 }
 
@@ -46,12 +48,11 @@ if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
 
 if (!existsSync(capsulePath)) fail(`capsule not found: ${capsulePath}`);
 
-const doc = readFileSync(capsulePath, 'utf8');
-const frontmatter = doc.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1] || '';
-const field = (key) => {
-  const raw = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim() || '';
-  return raw.replace(/^['"]|['"]$/g, '');
-};
+const doc = unsafeRawCapsuleDocument(
+  capsulePath,
+  'curated pointer stamping returns only shared-reader scalars from this capsule',
+);
+const field = (key) => scalar(doc, key) || '';
 const id = field('id') || path.basename(capsulePath, '.md');
 const pointer = {
   id,
@@ -79,4 +80,4 @@ try {
 }
 if (missingState) fail('BODY_STATE.json has no .state — pointer not stamped');
 
-console.log(`[curated-close-pointer] STAMPED ${seat}: ${id}`);
+console.log(`[curated-close-pointer] STAMPED seat=${inert(seat, 80)} capsule=${inert(id, 160)}`);

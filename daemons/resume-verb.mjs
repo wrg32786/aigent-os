@@ -30,21 +30,11 @@
 // library on source=clear. A settings.json still naming this file directly as its
 // own SessionStart(clear) hook must no-op rather than double-inject the procedure.
 
-import { readFileSync } from 'node:fs';
 import {
-  memRoot, logErr, selectCapsule, rejectionSummary, bodySection, markCapsuleConsumed, inert,
+  capsuleValue, inert, logErr, markCapsuleConsumed, memRoot, rejectionSummary, scalar,
+  selectCapsule, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
-
-function frontmatterScalar(doc, key) {
-  const fmMatch = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!fmMatch) return null;
-  const m = fmMatch[1].match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
-  if (!m) return null;
-  let v = m[1].trim();
-  try { const parsed = JSON.parse(v); if (typeof parsed === 'string') return parsed; } catch { /* raw scalar */ }
-  return v.replace(/^['"]|['"]$/g, '');
-}
 
 // SLOT-1: capsule selection. selectCapsule() is the ONE authority — no pointer
 // fallback, no auxiliary completion gate.
@@ -57,7 +47,12 @@ function loadCapsule(projectRoot) {
   const { capsule: newest, rejected } = selectCapsule(memRoot(projectRoot));
   if (!newest) return { loaded: null, rejected };
   let doc;
-  try { doc = readFileSync(newest.path, 'utf8'); } catch (e) {
+  try {
+    doc = unsafeRawCapsuleDocument(
+      newest.path,
+      'resume loads the selected capsule before returning only shared-reader values',
+    );
+  } catch (e) {
     logErr(projectRoot, 'resume-verb', `capsule unreadable: ${e?.message || e}`);
     return { loaded: null, rejected };
   }
@@ -75,11 +70,11 @@ function loadCapsule(projectRoot) {
     logErr(projectRoot, 'resume-verb', `mark-consumed FAILED for ${newest.path}: ${e?.message || e} — next resume will replay this capsule`);
   }
   return { rejected, loaded: {
-    id: frontmatterScalar(doc, 'id') ?? newest.id,
+    id: scalar(doc, 'id') ?? newest.id,
     path: newest.path,
-    objective: frontmatterScalar(doc, 'objective') || bodySection(doc, 'objective'),
-    waiting_on: frontmatterScalar(doc, 'waiting_on') || bodySection(doc, 'waiting_on'),
-    next_valid_action: frontmatterScalar(doc, 'next_valid_action') || bodySection(doc, 'next_valid_action'),
+    objective: capsuleValue(doc, 'objective'),
+    waiting_on: capsuleValue(doc, 'waiting_on'),
+    next_valid_action: capsuleValue(doc, 'next_valid_action'),
     // PROVENANCE. Selection orders by created_at and stops there — there is no
     // staleness rule in the selector, so the newest active capsule stays
     // selectable however old it gets, and one written weeks ago arrives looking
@@ -89,8 +84,8 @@ function loadCapsule(projectRoot) {
     // Whether this came from the capsule verb or the Stop-hook autosave. Read
     // from a STRUCTURED field, never by matching the placeholder wording: the
     // wording is free to change, and prose is the first thing a reader collapses.
-    autosave: frontmatterScalar(doc, 'trigger') === 'stop-delta'
-      || /(^|[,[\s])autosave([,\]\s]|$)/.test(frontmatterScalar(doc, 'tags') || ''),
+    autosave: scalar(doc, 'trigger') === 'stop-delta'
+      || /(^|[,[\s])autosave([,\]\s]|$)/.test(scalar(doc, 'tags') || ''),
   } };
 }
 

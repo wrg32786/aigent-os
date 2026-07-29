@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import {
-  existsSync, readFileSync, renameSync, writeFileSync,
+  existsSync, renameSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,9 @@ import {
 import {
   defaultNightlyRoot, resolveNightlyPaths,
 } from './nightly-paths.mjs';
+import {
+  collapseLineBreaking, inert, unsafeRawMemoryDocument,
+} from './lifecycle-common.mjs';
 
 const DAY_MS = 86_400_000;
 const OUTCOMES = new Set(['HELD', 'DRIFTED', 'REVERSED', 'STILL UNCLEAR']);
@@ -24,7 +27,7 @@ function sha256(value) {
 }
 
 function clean(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
+  return collapseLineBreaking(value || '').replace(/[ \t]+/g, ' ').trim();
 }
 
 function decisionEntries(text) {
@@ -102,6 +105,7 @@ export function appendDecisionOutcome({
         .test(source)) {
     throw new Error('durable direct operator source ref is required');
   }
+  const renderedSource = inert(source, 240);
   if (!/^[0-9a-f]{64}$/i.test(String(expectedFileSha || ''))) {
     throw new Error('expected DECISION_OUTCOMES SHA-256 is required');
   }
@@ -123,7 +127,10 @@ export function appendDecisionOutcome({
   if (!existsSync(logFile) || !existsSync(outcomeFile)) {
     throw new Error('decision ledger files are required');
   }
-  const decisionLog = readFileSync(logFile, 'utf8');
+  const decisionLog = unsafeRawMemoryDocument(
+    logFile,
+    'nightly decision matching parses authored ledger entries without rendering the document',
+  );
   const wantedTitle = clean(decisionTitle);
   const matches = decisionEntries(decisionLog).filter((entry) => (
     entry.date === decisionDate
@@ -136,10 +143,17 @@ export function appendDecisionOutcome({
     );
   }
   const decision = matches[0];
-  const before = readFileSync(outcomeFile, 'utf8');
+  const renderedDecisionTitle = inert(decision.title, 240);
+  const before = unsafeRawMemoryDocument(
+    outcomeFile,
+    'nightly outcome updates preserve authored ledger sections outside the targeted decision',
+  );
   const blocks = outcomeBlocks(before).filter((block) => (
     block.date === decisionDate
-    && block.title.toLowerCase() === decision.title.toLowerCase()
+    && (
+      block.title.toLowerCase() === decision.title.toLowerCase()
+      || block.title.toLowerCase() === renderedDecisionTitle.toLowerCase()
+    )
   ));
   if (blocks.length > 1) {
     throw new Error(`outcome entry is ambiguous: matches=${blocks.length}`);
@@ -154,7 +168,10 @@ export function appendDecisionOutcome({
   );
   if (existingCheck) {
     if (existingCheck[1].toUpperCase() !== normalizedOutcome
-        || !existingBlock.body.includes(`Operator source: ${source}`)) {
+        || (
+          !existingBlock.body.includes(`Operator source: ${renderedSource}`)
+          && !existingBlock.body.includes(`Operator source: ${source}`)
+        )) {
       throw new Error(
         `${normalizedInterval}-day outcome already exists with different evidence`,
       );
@@ -173,7 +190,7 @@ export function appendDecisionOutcome({
   }
   const entry = [
     `**${normalizedInterval}-day check (${asOf}):** ${normalizedOutcome}`,
-    `Operator source: ${source}`,
+    `Operator source: ${renderedSource}`,
   ].join('\n');
   let after;
   if (existingBlock) {
@@ -181,23 +198,29 @@ export function appendDecisionOutcome({
     after = `${before.slice(0, existingBlock.start)}${body}\n\n${entry}\n`
       + before.slice(existingBlock.end);
   } else {
-    after = `${before.trimEnd()}\n\n## ${decisionDate} — ${decision.title}`
+    after = `${before.trimEnd()}\n\n## ${decisionDate} — ${renderedDecisionTitle}`
       + ` (logged in DECISION_LOG)\n\n${entry}\n`;
   }
-  if (sha256(readFileSync(outcomeFile, 'utf8'))
+  if (sha256(unsafeRawMemoryDocument(
+    outcomeFile,
+    'nightly outcome compare-and-swap hashes exact authored ledger bytes without rendering them',
+  ))
       !== String(expectedFileSha).toLowerCase()) {
     throw new Error('DECISION_OUTCOMES compare-and-swap hash changed immediately before write');
   }
   const temp = `${outcomeFile}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(temp, after, 'utf8');
   renameSync(temp, outcomeFile);
-  const verified = readFileSync(outcomeFile, 'utf8');
+  const verified = unsafeRawMemoryDocument(
+    outcomeFile,
+    'nightly outcome post-write verification parses exact authored ledger bytes without rendering them',
+  );
   const verifiedBlock = outcomeBlocks(verified).find((block) => (
     block.date === decisionDate
-    && block.title.toLowerCase() === decision.title.toLowerCase()
+    && block.title.toLowerCase() === renderedDecisionTitle.toLowerCase()
   ));
   if (!verifiedBlock
-      || matchingChecks(verifiedBlock.body, normalizedInterval, source).length !== 1) {
+      || matchingChecks(verifiedBlock.body, normalizedInterval, renderedSource).length !== 1) {
     throw new Error('post-write outcome verification did not find exactly one new check');
   }
   return {
@@ -206,7 +229,7 @@ export function appendDecisionOutcome({
     duplicate: false,
     output: `DECISION_OUTCOME PASS appended=1`
       + ` decision=${decisionDate} interval=${normalizedInterval}`
-      + ` outcome=${normalizedOutcome} source=${source}`,
+      + ` outcome=${normalizedOutcome} source=${renderedSource}`,
   };
 }
 
@@ -242,9 +265,7 @@ if (direct) {
     process.stdout.write(result.output + '\n');
     process.exit(0);
   } catch (error) {
-    process.stderr.write(
-      `DECISION_OUTCOME FAIL ${String(error?.message || error).replace(/[\r\n]+/g, ' ')}\n`,
-    );
+    process.stderr.write(`DECISION_OUTCOME FAIL ${inert(error?.message || error, 500)}\n`);
     process.exit(1);
   }
 }

@@ -10,13 +10,51 @@
 // bookkeeping competes with that selection.
 
 import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
+import frontmatterReader from './frontmatter-reader.cjs';
+
+export const {
+  bodySection,
+  capsuleValue,
+  collapseLineBreaking,
+  frontmatterList,
+  hasFrontmatter,
+  scalar,
+  scalarHasUnsupportedInlineComment,
+  scalarIsUnquotedYamlNull,
+  unsafeRawBodySection,
+  unsafeRawCapsuleValue,
+  unsafeRawDocumentBody,
+  unsafeRawRewriteScalar,
+  unsafeRawScalar,
+} = frontmatterReader;
+
+function requireRawReason(reason, accessor) {
+  if (typeof reason !== 'string' || reason.trim().length === 0) {
+    throw new TypeError(`${accessor} requires a non-empty reason string`);
+  }
+}
+
+export function unsafeRawCapsuleDocument(capsulePath, reason) {
+  requireRawReason(reason, 'unsafeRawCapsuleDocument');
+  return readFileSync(capsulePath, 'utf8');
+}
+
+export function unsafeRawMemoryDocument(memoryPath, reason) {
+  requireRawReason(reason, 'unsafeRawMemoryDocument');
+  return readFileSync(memoryPath, 'utf8');
+}
 
 // Resolve an explicit identity override first, then use the single-operator
 // default. A single vault needs no path-based identity table.
 export function seatOf(root) {
   const override = process.env.AIGENT_SEAT_ID;
-  if (typeof override === 'string' && override.trim().length > 0) return override.trim();
+  if (typeof override === 'string' && override.trim().length > 0) {
+    const value = collapseLineBreaking(override).replace(/[ \t]+/g, ' ').trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(value)) return value;
+    return `seat-${createHash('sha256').update(override).digest('hex').slice(0, 12)}`;
+  }
   return 'operator';
 }
 
@@ -34,24 +72,6 @@ export function memRoot(root) {
     if (existsSync(p)) return p;
   }
   return path.join(String(base), 'vault', 'memory');
-}
-
-// Hand-authored capsules carry objective / waiting_on / next_valid_action as
-// `## <key>` body sections instead of frontmatter scalars; both shapes are valid
-// capsule fields. Captures until the next heading of any level.
-// The key is a machine name (`next_valid_action`) but a hand-authored heading is
-// prose (`## Next valid action`), so an underscore in the key must also match a
-// space in the heading. Normalizing that separator keeps prose-heading capsules
-// eligible for the same validation as frontmatter-backed capsules.
-export function bodySection(doc, key) {
-  const heading = String(key)
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    .replace(/_/g, '[ _]');
-  const match = String(doc).match(
-    new RegExp(`^#{1,6}[ \\t]+${heading}[ \\t]*\\r?\\n([\\s\\S]*?)(?=^#{1,6}[ \\t]|(?![\\s\\S]))`, 'mi'),
-  );
-  const value = match?.[1]?.trim();
-  return value || null;
 }
 
 // A capsule a previous resume already spent. `active` is the only selectable
@@ -95,25 +115,16 @@ export function selectCapsule(memoryRoot) {
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
-    try { doc = readFileSync(full, 'utf8'); } catch { note(name, 'unreadable'); continue; }
-    const frontmatter = doc.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1];
-    if (!frontmatter) { note(name, 'no-frontmatter'); continue; }
-    const scalar = (key) => {
-      const match = frontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
-      if (!match) return null;
-      const raw = match[1].trim();
-      try {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed === 'string') return parsed;
-      } catch { /* raw scalar */ }
-      return raw.replace(/^['"]|['"]$/g, '');
-    };
-    const id = scalar('id');
-    const createdRaw = scalar('created_at');
+    try {
+      doc = unsafeRawCapsuleDocument(full, 'capsule selection needs the complete document for shared field readers');
+    } catch { note(name, 'unreadable'); continue; }
+    if (!hasFrontmatter(doc)) { note(name, 'no-frontmatter'); continue; }
+    const id = scalar(doc, 'id');
+    const createdRaw = scalar(doc, 'created_at');
     const created = Date.parse(String(createdRaw));
-    const status = scalar('status');
-    const objective = scalar('objective') || bodySection(doc, 'objective');
-    const nextAction = scalar('next_valid_action') || bodySection(doc, 'next_valid_action');
+    const status = scalar(doc, 'status');
+    const objective = capsuleValue(doc, 'objective');
+    const nextAction = capsuleValue(doc, 'next_valid_action');
 
     // Spent capsules are labelled apart from junk. The caller must be able to
     // tell "nothing to resume from" (a fresh install, correct) from "everything
@@ -121,13 +132,17 @@ export function selectCapsule(memoryRoot) {
     // threw away capsules somebody wrote" (a defect).
     if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
     if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
-    if (!id) { note(name, 'no-id'); continue; }
+    if (!id || !id.trim()) { note(name, 'no-id'); continue; }
     if (!Number.isFinite(created)) { note(name, 'bad-created_at', createdRaw || '(absent)'); continue; }
     // The field-level reason matters most here: "missing next_valid_action" on a
     // capsule that plainly has one is the signal that surfaces a matcher defect
     // in a day instead of never.
-    if (!objective || !nextAction) {
-      note(name, 'missing-required-field', !objective ? 'objective' : 'next_valid_action');
+    if (!objective || !objective.trim() || !nextAction || !nextAction.trim()) {
+      note(
+        name,
+        'missing-required-field',
+        (!objective || !objective.trim()) ? 'objective' : 'next_valid_action',
+      );
       continue;
     }
     if (!best || created > best.created) {
@@ -148,21 +163,16 @@ export function newestValidCapsule(memoryRoot) {
   return { ...capsule, rejected };
 }
 
-// Anything that could end a line and start a new one: C0/C1 controls, CR, LF,
-// NEL, and the Unicode line/paragraph separators. JSON.stringify escapes the
-// first two groups but passes U+2028/U+2029 through verbatim, so they are
-// neutralized here rather than left to it.
-const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
-
 // The rendering boundary between capsule content and prompt structure.
 //
 // Values read off a capsule are DATA. They are attacker-controllable in the
 // scenario this design already assumes — a capsules directory is just files, and
 // anything that can write one can choose every byte of its frontmatter — so a
 // value must never be able to contribute STRUCTURE to a generated procedure.
-// Rendered raw, a frontmatter scalar carrying "\n" (which the scalar readers
-// JSON.parse into a real newline) begins its own line, and a line of its own is
-// all a forged instruction needs to look like one of ours.
+// Historically, rendering a decoded frontmatter scalar carrying "\n" raw began
+// its own line, and a line of its own is all a forged instruction needs to look
+// like one of ours. Safe readers now collapse that structure too; inert remains
+// the required quoting and bounding boundary.
 //
 // Three properties, each load-bearing:
 //   1. Single line. Every line-breaking character becomes a space, so the value
@@ -173,7 +183,7 @@ const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 //      the fences out of the reader's attention entirely.
 // Truncation is announced, not silent: a value trimmed here is still evidence.
 export function inert(value, max = 500) {
-  let s = String(value ?? '').replace(LINE_BREAKING, ' ').replace(/[ \t]+/g, ' ').trim();
+  let s = collapseLineBreaking(value ?? '').replace(/[ \t]+/g, ' ').trim();
   if (s.length > max) s = `${s.slice(0, max)}…[+${s.length - max} chars]`;
   return JSON.stringify(s);
 }
@@ -188,15 +198,21 @@ export function inert(value, max = 500) {
 // summary is the unit that must be safe to print, whoever prints it.
 export function rejectionSummary(rejected) {
   if (!Array.isArray(rejected) || !rejected.length) return null;
+  const maximumGroups = 12;
   const byReason = new Map();
   for (const r of rejected) {
     const key = r.detail ? `${r.reason} (${inert(r.detail, 120)})` : String(r.reason);
     if (!byReason.has(key)) byReason.set(key, []);
     byReason.get(key).push(inert(r.name, 120));
   }
-  return [...byReason.entries()]
+  const groups = [...byReason.entries()]
     .sort((a, b) => b[1].length - a[1].length)
     .map(([reason, names]) => `${names.length}x ${reason}: ${names.length <= 3 ? names.join(', ') : `e.g. ${names[0]}`}`);
+  const rendered = groups.slice(0, maximumGroups);
+  if (groups.length > maximumGroups) {
+    rendered.push(`[TRUNCATED: +${groups.length - maximumGroups} rejection groups omitted]`);
+  }
+  return rendered;
 }
 
 // The write half of the consume contract. The selector above only ever picks
@@ -208,17 +224,19 @@ export function rejectionSummary(rejected) {
 // step, the next boot takes the documented degraded path (re-derive from live
 // memory) — a loud fresh start, never a silent replay.
 export function markCapsuleConsumed(capsulePath) {
-  const doc = readFileSync(capsulePath, 'utf8');
-  // Operate on the frontmatter block ONLY — a body line quoting "status: active"
-  // must never be rewritten.
-  const fm = doc.match(/^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!fm) return false;
-  // (\r?) keeps CRLF capsules markable: multiline $ matches before \n only, so
-  // without capturing the \r a capsule saved with Windows line endings would
-  // not match.
-  const marked = fm[0].replace(/^(status:[ \t]*)(['"]?)active\2[ \t]*(\r?)$/m, '$1resumed$3');
-  if (marked === fm[0]) return false; // not active — already spent, nothing to mark
-  writeFileSync(capsulePath, marked + doc.slice(fm[0].length));
+  const doc = unsafeRawCapsuleDocument(
+    capsulePath,
+    'status mutation preserves the complete capsule outside the active frontmatter token',
+  );
+  const marked = unsafeRawRewriteScalar(
+    doc,
+    'status',
+    'active',
+    'resumed',
+    'consume transition preserves every byte outside the leading status scalar',
+  );
+  if (marked === doc) return false; // not active — already spent, nothing to mark
+  writeFileSync(capsulePath, marked);
   return true;
 }
 
@@ -230,7 +248,7 @@ export function readStdin() {
 }
 
 export function logErr(root, tag, msg) {
-  const line = `${new Date().toISOString()} [${tag}] ${msg}\n`;
+  const line = `${new Date().toISOString()} tag=${inert(tag, 80)} message=${inert(msg, 1000)}\n`;
   try {
     appendFileSync(path.join(memRoot(String(root || process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || ''))
       , '.daemon-errors.log'), line);
