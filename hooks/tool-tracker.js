@@ -14,6 +14,11 @@ const SECRET_PATTERNS = [
   [/([a-z][a-z0-9+.-]*:\/\/[^\s:/]+:)[^@\s]+@/gi, '$1[REDACTED]@'],
 ];
 
+// A captured value is persisted in a Markdown list and later summarized into
+// model-facing orientation. Collapse every character that can create a visual
+// or physical line boundary before it reaches either renderer.
+const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
 function redact(value) {
   let text = String(value ?? '');
   for (const [pattern, replacement] of SECRET_PATTERNS) {
@@ -23,7 +28,16 @@ function redact(value) {
 }
 
 function compact(value, limit = 160) {
-  return redact(value).replace(/\s+/g, ' ').trim().slice(0, limit);
+  const text = redact(value)
+    .replace(LINE_BREAKING, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}…[truncated ${text.length - limit} chars]`;
+}
+
+function inert(value, limit = 160) {
+  return JSON.stringify(compact(value, limit));
 }
 
 function classifyBash(command) {
@@ -41,8 +55,8 @@ function classifyBash(command) {
 function relativePath(filePath, root) {
   const fp = String(filePath ?? '').replace(/\\/g, '/');
   const normalizedRoot = String(root ?? '').replace(/\\/g, '/').replace(/\/$/, '');
-  if (!normalizedRoot) return compact(fp);
-  return compact(fp.startsWith(`${normalizedRoot}/`) ? fp.slice(normalizedRoot.length + 1) : fp);
+  if (!normalizedRoot) return fp;
+  return fp.startsWith(`${normalizedRoot}/`) ? fp.slice(normalizedRoot.length + 1) : fp;
 }
 
 function describeTool(tool, input, env = process.env) {
@@ -53,16 +67,16 @@ function describeTool(tool, input, env = process.env) {
     case 'Bash':
       return classifyBash(input.command);
     case 'Agent':
-      return compact(input.description || 'agent dispatch');
+      return input.description || 'agent dispatch';
     case 'TaskCreate':
     case 'TaskUpdate':
-      return compact(input.subject || input.taskId || 'task update');
+      return input.subject || input.taskId || 'task update';
     case 'Skill':
-      return compact(input.skill || 'skill invocation');
+      return input.skill || 'skill invocation';
     default:
       if (tool.startsWith('mcp__')) {
         const parts = tool.split('__');
-        return compact(`${parts[1] || 'mcp'}/${parts[2] || 'tool'}`);
+        return `${parts[1] || 'mcp'}/${parts[2] || 'tool'}`;
       }
       return '';
   }
@@ -82,7 +96,7 @@ function formatCapture(event, env = process.env, now = new Date()) {
   const description = describeTool(tool, input, env);
   if (!description) return '';
   const time = now.toTimeString().slice(0, 8);
-  return `- ${time} | ${compact(tool, 80)} | ${description}`;
+  return `- ${time} | ${inert(tool, 80)} | ${inert(description, 160)}`;
 }
 
 function main() {
@@ -107,5 +121,6 @@ module.exports = {
   compact,
   describeTool,
   formatCapture,
+  inert,
   redact,
 };

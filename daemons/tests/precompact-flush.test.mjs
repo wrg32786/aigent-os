@@ -13,7 +13,7 @@
 //     to decision:block + exit 2
 //
 // Mostly black-box against the shipped daemon in place. The fail-class matrix
-// copies the SHIPPED bytes of precompact-flush.mjs + lifecycle-common.mjs into
+// copies the SHIPPED bytes of precompact-flush.mjs + its shared readers into
 // a temp dir WITHOUT stop-capsule-writer.mjs — the only way to make the worker
 // spawn genuinely fail without touching the repo tree; the bytes under test are
 // still exactly what ships.
@@ -46,7 +46,7 @@ mkdirSync(path.join(MEM, 'runtime', 'stop-writer'), { recursive: true });
 writeFileSync(path.join(MEM, 'BODY_STATE.json'), JSON.stringify({ state: {} }));
 
 // ── syntax ────────────────────────────────────────────────────────────────────
-for (const f of ['lifecycle-common.mjs', 'precompact-flush.mjs']) {
+for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'precompact-flush.mjs']) {
   const r = spawnSync(process.execPath, ['--check', path.join(DAEMONS, f)], { encoding: 'utf8' });
   check(`syntax ${f}`, r.status === 0, r.stderr?.trim().split('\n')[0] ?? '');
 }
@@ -61,7 +61,9 @@ writeFileSync(transcript, [
   const r = run(JSON.stringify({ session_id: 'pc1', cwd: SANDBOX, transcript_path: transcript }));
   check('flush OK: exit 0', r.status === 0, `status=${r.status} stderr=${JSON.stringify(r.stderr?.slice(0, 120))}`);
   check('flush OK: ToC header printed', /\[PRECOMPACT:capsule-toc\] flush OK/.test(r.stdout || ''), JSON.stringify(r.stdout?.slice(0, 120)));
-  check('flush OK: capsule survival pointer + REFERENCE ONLY fence', /active capsule survives this compaction at memory\/capsules\//.test(r.stdout) && /\[REFERENCE ONLY\]/.test(r.stdout));
+  check('flush OK: quoted capsule survival pointer + REFERENCE ONLY fence',
+    /active capsule survives this compaction at "memory\/capsules\//.test(r.stdout)
+      && /\[REFERENCE ONLY\]/.test(r.stdout));
   check('flush OK: objective + next_valid_action surfaced', /objective: .*Compact-eve directive/.test(r.stdout) && /next_valid_action: /.test(r.stdout));
   check('flush OK: section anchors are POINTERS on disk, not content', /Sections on disk \(pull on demand, never from memory\)/.test(r.stdout) && /#Pending-Gates/.test(r.stdout));
 }
@@ -102,7 +104,9 @@ writeFileSync(transcript, [
 {
   const BROKEN = path.join(TMP, 'daemons-no-worker');
   mkdirSync(BROKEN, { recursive: true });
-  for (const f of ['precompact-flush.mjs', 'lifecycle-common.mjs']) copyFileSync(path.join(DAEMONS, f), path.join(BROKEN, f));
+  for (const f of ['precompact-flush.mjs', 'lifecycle-common.mjs', 'frontmatter-reader.cjs']) {
+    copyFileSync(path.join(DAEMONS, f), path.join(BROKEN, f));
+  }
   // stop-capsule-writer.mjs deliberately absent → the worker spawn genuinely fails.
   const soft = run(JSON.stringify({ session_id: 'pcx', cwd: SANDBOX, transcript_path: transcript }), {}, BROKEN);
   check('observed flush failure, DEFAULT: warns + exit 0 (compaction never gated)', soft.status === 0 && /WARNING: pre-compact capsule flush FAILED/.test(soft.stdout) && !/"decision"/.test(soft.stdout), `status=${soft.status}`);

@@ -24,6 +24,7 @@ import path from 'node:path';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { seatOf, memRoot, logErr, readStdin } from './lifecycle-common.mjs';
+import { unsafeRawSessionEndReason } from './raw-acquisitions.mjs';
 
 const STOP_WRITER = join(dirname(fileURLToPath(import.meta.url)), 'stop-capsule-writer.mjs');
 // lock-defer is NOT benign here: at SessionEnd there is no next turn to retry —
@@ -45,7 +46,10 @@ try {
     process.exit(0);
   }
   const seat = seatOf(root); // single-operator default 'operator'; AIGENT_SEAT_ID override for forks
-  const reason = String(payload.reason || 'unknown');
+  const reason = unsafeRawSessionEndReason(
+    payload,
+    'the session-end journal intentionally preserves the complete lifecycle reason',
+  );
 
   let flush = 'error:spawn';
   try {

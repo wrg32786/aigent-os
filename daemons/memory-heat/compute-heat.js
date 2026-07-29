@@ -24,6 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { scalar } = require('../frontmatter-reader.cjs');
 
 const SCRIPT_DIR = __dirname;
 
@@ -103,13 +104,10 @@ function walkVault(dir, baseDir = dir, out = []) {
   return out;
 }
 
-function readFrontmatterPin(absPath) {
+function readPin(absPath) {
   try {
     const content = fs.readFileSync(absPath, 'utf8');
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!fmMatch) return null;
-    const pinMatch = fmMatch[1].match(/^pin:\s*(.+)$/m);
-    return pinMatch ? pinMatch[1].trim() : null;
+    return scalar(content, 'pin');
   } catch {
     return null;
   }
@@ -215,7 +213,7 @@ function computeScores(vaultPaths, reads, backlinks, pinList) {
     const readCount = reads.get(rel) || 0;
     const backlinkCount = backlinks.get(rel) || 0;
 
-    const pin = readFrontmatterPin(abs);
+    const pin = readPin(abs);
     const isPinCritical = pin === 'critical' || pinList.has(rel);
 
     const readScore = normalize01(readCount, maxReads);

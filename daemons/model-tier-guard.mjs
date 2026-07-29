@@ -30,15 +30,9 @@
 
 import { readFileSync, existsSync, readdirSync, writeSync } from 'node:fs';
 import path from 'node:path';
-import { readStdin, logErr } from './lifecycle-common.mjs';
-
-function frontmatterScalar(doc, key) {
-  const fm = doc.match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1];
-  if (!fm) return null;
-  const m = fm.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
-  if (!m) return null;
-  return m[1].trim().replace(/^['"]|['"]$/g, '') || null;
-}
+import {
+  inert, readStdin, logErr, scalar,
+} from './lifecycle-common.mjs';
 
 // Runtime installs get .claude/agents/; this repo's own source tree (and any
 // fork exercising the hook before running install.sh) only has vault/agents/.
@@ -61,9 +55,9 @@ function findAgentDef(root, subagentType) {
   for (const file of entries) {
     let doc;
     try { doc = readFileSync(path.join(dir, file), 'utf8'); } catch { continue; }
-    const name = frontmatterScalar(doc, 'name');
+    const name = scalar(doc, 'name');
     if (name && name.trim().toLowerCase() === wanted) {
-      return { file, name, model: frontmatterScalar(doc, 'model') };
+      return { file, name, model: scalar(doc, 'model') };
     }
   }
   return null;
@@ -87,9 +81,10 @@ try {
 
   if (requestedModel && requestedModel.toLowerCase() === def.model.toLowerCase()) process.exit(0); // matched -- silent, no noise on the happy path
 
-  const actual = requestedModel || '(none -- silently inherits the caller\'s model)';
-  const reason = `[MODEL-TIER] ${def.name} is defined to run on model: "${def.model}" (${def.file}); this dispatch specified ${actual}. `
-    + `Add model: "${def.model}" to this Agent call before dispatching ${def.name}.`;
+  const actual = requestedModel ? inert(requestedModel, 80) : '(none -- silently inherits the caller\'s model)';
+  const reason = `[MODEL-TIER] agent ${inert(def.name, 120)} is defined to run on model ${inert(def.model, 80)} `
+    + `(${inert(def.file, 160)}); this dispatch specified ${actual}. `
+    + `Add model ${inert(def.model, 80)} to this Agent call before dispatching ${inert(def.name, 120)}.`;
 
   if (process.env.AIGENT_MODEL_GUARD === 'enforce') {
     // Mirrors precompact-flush.mjs's opt-in strict gate: benign by default,

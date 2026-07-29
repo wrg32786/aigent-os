@@ -13,6 +13,7 @@ import {
   normalizeTimeZone,
   resolveNightlyPaths,
 } from './nightly-paths.mjs';
+import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 const ALERT_REF = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
 
@@ -72,16 +73,18 @@ export function readActiveNightlyAlerts(root = defaultNightlyRoot(), options) {
 }
 
 function sanitize(value, max = 240) {
-  return String(value ?? '')
-    .replace(/[\r\n\t]+/g, ' ')
+  let result = collapseLineBreaking(value ?? '')
     .replace(/\s{2,}/g, ' ')
-    .trim()
-    .slice(0, max);
+    .trim();
+  if (result.length > max) {
+    result = `${result.slice(0, max)}…[+${result.length - max} chars]`;
+  }
+  return result;
 }
 
 export function formatNightlyAlertLine(event) {
-  return `[NIGHTLY-ALERT: ${sanitize(event.code, 80)}] ${sanitize(event.summary, 160)}`
-    + ` — evidence: ${sanitize(event.evidence, 220)}`;
+  return `[NIGHTLY-ALERT: ${inert(event.code, 80)}] summary=${inert(event.summary, 160)}`
+    + ` — evidence=${inert(event.evidence, 220)}`;
 }
 
 function writeLocalDelivery(stderr, line) {
@@ -217,7 +220,7 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   if (parsed.errors.length) {
     lines.push(
       `[NIGHTLY-ALERT: ALERT_LEDGER_INVALID] ${parsed.errors.length} ledger issue(s)`
-      + ` — ${String(parsed.file).replace(/\\/g, '/')}`,
+      + ` — file=${inert(String(parsed.file).replace(/\\/g, '/'))}`,
     );
   }
   for (const alert of parsed.alerts.slice(0, limit)) {

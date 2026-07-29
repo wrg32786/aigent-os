@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   defaultNightlyRoot, resolveNightlyPaths,
 } from './nightly-paths.mjs';
+import { frontmatterList } from './lifecycle-common.mjs';
 
 const DAY_MS = 86_400_000;
 
@@ -66,19 +67,7 @@ function noteAliases(file, vaultRoot) {
   const base = path.basename(file, '.md');
   const aliases = new Set([relative, base]);
   const text = readFileSync(file, 'utf8');
-  const frontmatter = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-  if (frontmatter) {
-    let inAliases = false;
-    for (const line of frontmatter[1].split(/\r?\n/)) {
-      if (/^aliases:[ \t]*$/i.test(line)) {
-        inAliases = true;
-        continue;
-      }
-      const item = inAliases ? line.match(/^[ \t]+-[ \t]+(.+?)\s*$/) : null;
-      if (item) aliases.add(item[1].replace(/^["']|["']$/g, '').trim());
-      else if (inAliases && /^\S/.test(line)) inAliases = false;
-    }
-  }
+  for (const alias of frontmatterList(text, 'aliases')) aliases.add(alias);
   return [...aliases];
 }
 

@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, '..', '..');
 const HEAT_MODULE = path.join(REPO_ROOT, 'daemons', 'memory-heat', 'compute-heat.js');
+const FRONTMATTER_READER = path.join(REPO_ROOT, 'daemons', 'frontmatter-reader.cjs');
 const GITIGNORE = path.join(REPO_ROOT, '.gitignore');
 const tempRoots = [];
 
@@ -174,6 +176,7 @@ test('mutation proof: rename failure is named, preserves the prior index, and re
     .replace(cleanupLine, '/* mutation: cleanup removed */')
     .replace(reportLine, '/* mutation: report removed */');
   assert.notEqual(mutated, source);
+  copyFileSync(FRONTMATTER_READER, path.join(root, 'frontmatter-reader.cjs'));
   const brokenModule = write(root, 'modules/compute-heat-broken.cjs', mutated);
   const runner = atomicRunner(root);
   const brokenOutput = path.join(root, 'broken', 'vault', 'memory', 'HEAT_INDEX.json');

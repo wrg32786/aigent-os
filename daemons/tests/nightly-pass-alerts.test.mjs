@@ -246,7 +246,7 @@ test('mutation proof: alert delivery is an append-only local signal and retries 
   rmSync(ledger, { recursive: true, force: true });
   const restored = runNode(runner, [root], { root });
   assert.equal(restored.status, 0, restored.stderr);
-  assert.match(restored.stderr, /\[NIGHTLY-ALERT: NIGHTLY:LOCAL_PROOF\]/);
+  assert.match(restored.stderr, /\[NIGHTLY-ALERT: "NIGHTLY:LOCAL_PROOF"\]/);
   const result = JSON.parse(restored.stdout);
   assert.equal(result.first.delivery.local, 'stderr');
   assert.equal(result.first.delivery.session_start, 'pending');

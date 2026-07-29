@@ -31,7 +31,14 @@
 
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
-import { memRoot as resolveMemRoot, newestValidCapsule } from './lifecycle-common.mjs';
+import {
+  capsuleValue,
+  inert,
+  memRoot as resolveMemRoot,
+  newestValidCapsule,
+  unsafeRawCapsuleDocument,
+  unsafeRawMemoryDocument,
+} from './lifecycle-common.mjs';
 import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
 import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
@@ -50,7 +57,7 @@ function readStdin() {
 function logErr(root, msg) {
   try {
     appendFileSync(path.join(memRoot(String(root)), '.daemon-errors.log'),
-      `${new Date().toISOString()} [sessionstart-reinject] ${msg}\n`);
+      `${new Date().toISOString()} tag="sessionstart-reinject" message=${inert(msg, 1000)}\n`);
   } catch { /* truly nowhere to log */ }
 }
 
@@ -69,25 +76,13 @@ function coordinationActive() {
   }
 }
 
-function frontmatterScalar(doc, field) {
-  const fm = String(doc).match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1];
-  if (!fm) return null;
-  const match = fm.match(new RegExp(`^${field}:[ \\t]*(.*)$`, 'm'));
-  if (!match) return null;
-  const value = match[1].trim();
-  try {
-    const parsed = JSON.parse(value);
-    if (typeof parsed === 'string') return parsed;
-  } catch { /* raw scalar */ }
-  return value.replace(/^['"]|['"]$/g, '');
-}
-
 try {
   let payload = {};
   try { payload = JSON.parse(readStdin() || '{}'); } catch { /* non-JSON */ }
   const root = process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || payload.cwd || '';
   if (!root) process.exit(0);
   const source = String(payload.source || 'startup');
+  const renderedSource = inert(source, 80);
 
   // CLOCK — ground the waking session in real day/time BEFORE any orientation. A
   // bare wake fires no UserPromptSubmit, so a prompt-time clock injection can't
@@ -110,7 +105,7 @@ try {
     const nightlyAlerts = formatNightlyBootAlerts(root);
     if (nightlyAlerts.length) process.stdout.write(nightlyAlerts.join('\n') + '\n');
   } catch (error) {
-    const detail = String(error?.message || error).replace(/[\r\n]+/g, ' ').slice(0, 300);
+    const detail = inert(error?.message || error, 300);
     logErr(root, `nightly watchdog/alert read failed: ${detail}`);
     process.stderr.write(`[NIGHTLY-ALERT: ALERT_SURFACE_FAILED] ${detail}\n`);
     process.stdout.write(
@@ -123,7 +118,7 @@ try {
   // A live coordination cycle (if a fork wires one) owns the lifecycle — including
   // across a clear, so this check runs before the source==='clear' branch below.
   if (coordinationActive()) {
-    process.stdout.write(`[SESSIONSTART:reinject] session (${source}) — a coordinated multi-agent cycle is LIVE. `
+    process.stdout.write(`[SESSIONSTART:reinject] session (${renderedSource}) — a coordinated multi-agent cycle is LIVE. `
       + `Follow its conductor; control legs run FULLY. Warm-start orientation deferred until the cycle closes.\n`);
     process.exit(0);
   }
@@ -144,30 +139,37 @@ try {
   const corePath = [path.join(path.dirname(MEM), 'identity-core.md'), path.join(root, 'identity-core.md')]
     .find((p) => existsSync(p));
   if (corePath) {
-    out.push(readFileSync(corePath, 'utf8').trim());
+    // AUDIT: identity-core is operator-authored instruction text by design, not
+    // a data field. Its complete authored structure is the feature being loaded.
+    out.push(unsafeRawMemoryDocument(
+      corePath,
+      'identity-core is operator-authored procedure text whose multiline structure is intentional',
+    ).trim());
   } else {
-    out.push(`[SESSIONSTART:reinject] session (${source}).`);
+    out.push(`[SESSIONSTART:reinject] session (${renderedSource}).`);
   }
 
   // NEWEST ACTIVE CAPSULE — the same selector resume-verb.mjs uses; no pointer.
   const newest = newestValidCapsule(MEM);
   if (newest) {
     try {
-      const doc = readFileSync(newest.path, 'utf8');
+      const doc = unsafeRawCapsuleDocument(
+        newest.path,
+        'warm orientation reads the selected capsule before returning only shared-reader values',
+      );
       const rel = path.relative(root, newest.path).replace(/\\/g, '/');
-      const obj = frontmatterScalar(doc, 'objective');
-      const next = frontmatterScalar(doc, 'next_valid_action');
-      const waiting = frontmatterScalar(doc, 'waiting_on');
+      const obj = capsuleValue(doc, 'objective');
+      const next = capsuleValue(doc, 'next_valid_action');
+      const waiting = capsuleValue(doc, 'waiting_on');
       out.push('');
-      out.push(`🔁 NEWEST ACTIVE CAPSULE (created_at) — pull sections on demand, never assume: ${rel}`);
+      out.push(`🔁 NEWEST ACTIVE CAPSULE (created_at) — pull sections on demand, never assume: ${inert(rel)}`);
       out.push(`> [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.`);
       // Per-field budget: this is a POINTER, not the capsule body — bound each
       // field so a verbose capsule can't bloat every session-start payload; the
       // full text stays on disk.
-      const budget = (s, n) => { s = String(s); return s.length > n ? s.slice(0, n - 1).trimEnd() + '… [full in capsule]' : s; };
-      if (obj) out.push(`   objective: ${budget(obj, 240)}`);
-      if (next) out.push(`   next_valid_action: ${budget(next, 400)}`);
-      if (waiting && waiting !== 'null') out.push(`   waiting_on: ${budget(waiting, 200)}`);
+      if (obj) out.push(`   objective: ${inert(obj, 240)}`);
+      if (next) out.push(`   next_valid_action: ${inert(next, 400)}`);
+      if (waiting && waiting !== 'null') out.push(`   waiting_on: ${inert(waiting, 200)}`);
       out.push(`   sections: Done (don't redo) · Historical-Errors → Resolutions · Historical-Rejected-Approaches · Files-Read / Files-Modified · Operating-Facts · Pending-Gates · Claimed-Rows`);
       out.push(`   Pending-Gates + Claimed-Rows are LIVE classes — re-verify each against memory before resuming them.`);
       // Named rulings, not a mood. "Reference only" tells a reader what the
@@ -189,16 +191,19 @@ try {
     const heat = JSON.parse(readFileSync(path.join(MEM, 'HEAT_INDEX.json'), 'utf8'));
     const top = (heat.hot_top_20 ?? heat.hot ?? []).slice(0, TOP_LINKS)
       .map((e) => (typeof e === 'string' ? e : e.name ?? e.note ?? e.path)).filter(Boolean);
-    if (top.length) out.push(`Hot notes: ${top.map((n) => `[[${n}]]`).join(' · ')}`);
+    if (top.length) out.push(`Hot notes (quoted paths): ${top.map((n) => inert(n, 160)).join(' · ')}`);
   } catch { /* no heat index yet — fine */ }
 
   // Latest session-log hint: first meaningful heading after the title.
   try {
-    const lines = readFileSync(path.join(MEM, 'SESSION_LOG.md'), 'utf8').split('\n');
+    const lines = unsafeRawMemoryDocument(
+      path.join(MEM, 'SESSION_LOG.md'),
+      'session-log orientation selects one heading and renders it through inert',
+    ).split('\n');
     for (const l of lines) {
       const t = l.trim();
       if (t.startsWith('## ') || t.startsWith('### ')) {
-        out.push(`Last session-log entry: ${t.replace(/^#+\s*/, '').slice(0, 160)}`);
+        out.push(`Last session-log entry: ${inert(t.replace(/^#+\s*/, ''), 160)}`);
         break;
       }
     }

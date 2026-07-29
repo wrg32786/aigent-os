@@ -55,6 +55,33 @@ test('missing required field is refused by name', () => {
   assert.ok(problems.some((p) => p.includes('frontmatter id must be non-empty')));
 });
 
+test('JSON-quoted whitespace is empty for every required capsule value', () => {
+  for (const field of ['objective', 'waiting_on', 'next_valid_action']) {
+    const text = VALID.replace(
+      new RegExp(`^${field}:.*$`, 'm'),
+      `${field}: "   "`,
+    );
+    const result = validateCapsuleText(text);
+    assert.match(result.problems.join('\n'), new RegExp(`${field} must be non-empty`));
+  }
+});
+
+test('a comment-only required scalar is empty, while a quoted hash is data', () => {
+  for (const field of ['id', 'objective', 'waiting_on', 'next_valid_action']) {
+    const text = VALID.replace(
+      new RegExp(`^${field}:.*$`, 'm'),
+      `${field}: # YAML comment, not a value`,
+    );
+    const result = validateCapsuleText(text);
+    assert.match(result.problems.join('\n'), new RegExp(`${field} must be non-empty`));
+  }
+  const quoted = VALID.replace(/^waiting_on:.*$/m, 'waiting_on: "# real value"');
+  assert.doesNotMatch(
+    validateCapsuleText(quoted).problems.join('\n'),
+    /waiting_on must be non-empty/,
+  );
+});
+
 test('bare YAML null waiting_on is refused (not a resumable receipt)', () => {
   const nullWaiting = VALID.replace('waiting_on: "verification"', 'waiting_on: null');
   const { problems } = validateCapsuleText(nullWaiting);

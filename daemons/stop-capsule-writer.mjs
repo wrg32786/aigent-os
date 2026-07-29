@@ -26,15 +26,18 @@
 // there is exactly one writer of exactly one pointer now, unconditionally.
 
 import {
-  readFileSync, writeFileSync, mkdirSync, existsSync, openSync, readSync,
-  closeSync, statSync, renameSync, rmSync, appendFileSync, writeSync,
+  readFileSync, writeFileSync, mkdirSync, existsSync, openSync,
+  closeSync, statSync, renameSync, rmSync, appendFileSync, writeSync, realpathSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { memRoot as resolveMemRoot } from './lifecycle-common.mjs';
+import {
+  inert, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
+} from './lifecycle-common.mjs';
+import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
 
 const require = createRequire(import.meta.url);
@@ -57,7 +60,8 @@ function readStdin() {
 function logErr(root, msg) {
   try {
     appendFileSync(path.join(memRoot(String(root || process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || ''))
-      , '.daemon-errors.log'), `${new Date().toISOString()} [stop-capsule-writer] ${msg}\n`);
+      , '.daemon-errors.log'),
+    `${new Date().toISOString()} tag="stop-capsule-writer" message=${inert(msg, 1000)}\n`);
   } catch { /* truly nowhere to log */ }
 }
 
@@ -106,9 +110,15 @@ try {
   const payload = JSON.parse(process.argv[3] || '{}');
   const root = String(payload.__root || '');
   workerRoot = root;
-  const sid = String(payload.session_id || '');
+  const rawSid = String(payload.session_id || '');
   const transcriptPath = String(payload.transcript_path || '');
-  if (!root || !sid) { outcome = 'noop:bad-payload'; process.exit(0); }
+  if (!root || !rawSid) { outcome = 'noop:bad-payload'; process.exit(0); }
+  // Session ids cross three structural boundaries: lock/state filenames,
+  // capsule filenames, and the capsule's id scalar. Keep ordinary harness ids
+  // readable; map every other byte sequence to a stable constrained token.
+  const sidIsConstrained = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawSid);
+  const sid = sidIsConstrained ? rawSid : `session-${sha12(rawSid)}`;
+  const capsuleSid = sidIsConstrained ? sid.slice(0, 8) : sid;
   if (!transcriptPath || !existsSync(transcriptPath)) { outcome = 'noop:no-transcript'; process.exit(0); }
 
   // Content gate — lazy + fail-open, zero deps: the ONE vocabulary for
@@ -193,11 +203,12 @@ try {
     logErr(root, `transcript shrank (${state.offset} -> ${size}) for ${sid} — offset reset to 0`);
     state.offset = 0;
   }
-  const fd = openSync(transcriptPath, 'r');
-  const buf = Buffer.alloc(size - state.offset);
-  readSync(fd, buf, 0, buf.length, state.offset);
-  closeSync(fd);
-  const chunk = buf.toString('utf8');
+  const chunk = unsafeRawTranscriptDelta(
+    transcriptPath,
+    state.offset,
+    size,
+    'the stop writer parses the complete multiline transcript delta before rendering stored fields',
+  );
 
   // ── extract the delta ──────────────────────────────────────────────────────
   const filesRead = new Set();
@@ -207,6 +218,11 @@ try {
   const utterances = [];
   let latestRequest = null;
   let lastAssistantText = null;
+
+  // Persisted capsule bullets are a precursor to later orientation. Reuse the
+  // render boundary for its complete control collapse and announced bound, then
+  // store the decoded single-line value in the existing capsule schema.
+  const storedData = (value, maximum = 240) => JSON.parse(inert(value, maximum));
 
   // Speaker-aware classification. A close-time sweep can grep [OPERATOR] for
   // unbanked human directives, so [OPERATOR] must be PRECISE — over-tagging agent
@@ -218,7 +234,7 @@ try {
   // capsule-content-gate.mjs), and OPERATOR only for a genuine human utterance.
   // `human` also gates the objective so it can never be a peer envelope.
   const classify = (s) => {
-    const t = s.replace(/\s+/g, ' ').trim(); // collapse first (raw "\n## " would corrupt section parsing)
+    const t = storedData(s, 2000);
     let m;
     // [^\]]*\] consumes any "@ <timestamp>" suffix a relay might add before the ]
     if ((m = t.match(/^\[room from ([\w-]+)[^\]]*\]\s*/i))) return { who: `RELAY:${m[1].toLowerCase()}`, human: false, t: t.slice(m[0].length) };
@@ -241,7 +257,7 @@ try {
   };
   const tagUtterance = (cl) => {
     if (utterances.length >= 12) return; // bound a paste-bomb turn
-    utterances.push(`[${cl.who}] ${cl.t.slice(0, 240)}`);
+    utterances.push(`[${cl.who}] ${storedData(cl.t, 240)}`);
   };
 
   // Harness wrapper blocks pollute the objective if left in (reminders are
@@ -264,13 +280,13 @@ try {
       const c = ev.message?.content;
       if (typeof c === 'string') {
         const clean = stripMeta(c);
-        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
+        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(clean, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
           if (b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
-            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = clean.slice(0, 300); tagUtterance(cl); }
+            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(clean, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = typeof b.content === 'string'
@@ -281,7 +297,7 @@ try {
                     && !Array.isArray(x) && x.type === 'text' && typeof x.text === 'string')
                   .map((x) => x.text).join(' ')
                 : '';
-            if (txt) errors.push(txt.replace(/\s+/g, ' ').slice(0, 200));
+            if (txt) errors.push(storedData(txt, 200));
           }
         }
       }
@@ -291,20 +307,20 @@ try {
       for (const b of content) {
         if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
         if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-          lastAssistantText = b.text.trim();
+          lastAssistantText = storedData(b.text, 240);
         }
         if (b.type !== 'tool_use') continue;
         const input = b.input ?? {};
         if (b.name === 'Read' || b.name === 'Grep' || b.name === 'Glob') {
           const p = input.file_path || input.path;
-          if (p) filesRead.add(String(p));
+          if (p) filesRead.add(storedData(p, 240));
         } else if (b.name === 'Edit' || b.name === 'Write' || b.name === 'NotebookEdit') {
-          if (input.file_path) filesModified.add(String(input.file_path));
+          if (input.file_path) filesModified.add(storedData(input.file_path, 240));
         } else if (/(^|_)board_claim$/i.test(String(b.name || ''))
           && typeof input.task_id === 'string' && input.task_id.trim()) {
           // Generic match on any *_board_claim tool (an optional task-board MCP,
           // whatever it is named) rather than one hardcoded server name.
-          claimedRows.add(input.task_id.trim());
+          claimedRows.add(storedData(input.task_id, 160));
         }
       }
     }
@@ -326,8 +342,32 @@ try {
   // ── locate or create the operator's ONE active capsule ────────────────────
   const capDir = path.join(MEM, 'capsules');
   mkdirSync(capDir, { recursive: true });
+  const capDirResolved = path.resolve(capDir);
+  const capDirReal = realpathSync(capDir);
+  const isWithinCapsules = (candidate, resolveLinks = false) => {
+    let resolved;
+    try {
+      resolved = resolveLinks ? realpathSync(candidate) : path.resolve(candidate);
+    } catch {
+      return false;
+    }
+    const base = resolveLinks ? capDirReal : capDirResolved;
+    const relative = path.relative(base, resolved);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
   const dateStr = new Date().toISOString().slice(0, 10);
   let capPath = state.capsule_path;
+  if (capPath) {
+    const resolved = path.resolve(String(capPath));
+    const contained = isWithinCapsules(resolved)
+      && (!existsSync(resolved) || isWithinCapsules(resolved, true));
+    if (!contained) {
+      logErr(root, `outside capsule state path refused: ${inert(capPath, 300)}`);
+      capPath = null;
+    } else {
+      capPath = resolved;
+    }
+  }
   if (capPath && !existsSync(capPath)) {
     // Pointed-to capsule vanished (external delete / archive pass). Recreating
     // silently would erase the session's history unaudited.
@@ -335,7 +375,7 @@ try {
     capPath = null;
   }
   if (!capPath) {
-    capPath = path.join(capDir, `${dateStr}-auto-${sid.slice(0, 8)}.md`);
+    capPath = path.join(capDir, `${dateStr}-auto-${capsuleSid}.md`);
   }
 
   // Only a real operator utterance establishes the objective. A claim identifies
@@ -375,7 +415,7 @@ try {
 
   function skeleton() {
     return `---
-id: ${dateStr}-auto-${sid.slice(0, 8)}
+id: ${dateStr}-auto-${capsuleSid}
 parent_capsule_id: null
 status: active
 objective: ${JSON.stringify(objective)}
@@ -417,7 +457,14 @@ ${ANCHORS.rows}
 `;
   }
 
-  let doc = existsSync(capPath) ? readFileSync(capPath, 'utf8') : skeleton();
+  // AUDIT: the stop writer is a document transformer. It must preserve body
+  // sections it does not own while applying anchored changes to owned fields.
+  let doc = existsSync(capPath)
+    ? unsafeRawCapsuleDocument(
+      capPath,
+      'stop writer preserves unowned capsule body sections during anchored mutation',
+    )
+    : skeleton();
 
   // A bullet minus its `- ` prefix and volatile HH:MM stamp — dedup must not be
   // defeated by re-processing a span at a different wall-clock minute (a
@@ -457,7 +504,7 @@ ${ANCHORS.rows}
   mergeUnder(ANCHORS.errors, errors.map((e) => `- ${ts} ${e} → (unresolved at capture; check next Done bullet)`));
   mergeUnder(ANCHORS.rows, [...claimedRows].map((r) => `- ${r} (claimed this session — re-verify against memory at reinject)`));
   if (lastAssistantText) {
-    mergeUnder(ANCHORS.done, [`- ${ts} ${lastAssistantText.replace(/\s+/g, ' ').slice(0, 240)}`]);
+    mergeUnder(ANCHORS.done, [`- ${ts} ${lastAssistantText}`]);
   }
 
   // Refresh live frontmatter fields. objective moves only on a real operator
@@ -466,24 +513,13 @@ ${ANCHORS.rows}
   // Contract fields are touched ONLY on the writer's own autosave capsules (an
   // exact `autosave` tag plus trigger `stop-delta`) — deliberate/curated capsules
   // own their frontmatter outright. Body bullets can never confer ownership.
-  const frontmatterValue = (source, key) => {
-    const leadingFrontmatter = String(source)
-      .match(/^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1] || '';
-    const raw = leadingFrontmatter.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'))?.[1]?.trim();
-    if (!raw) return '';
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed === 'string') return parsed;
-    } catch { /* plain YAML scalar */ }
-    return raw.replace(/\s+#.*$/, '').replace(/^['"]|['"]$/g, '').trim();
-  };
-  const autosaveTag = frontmatterValue(doc, 'tags')
+  const autosaveTag = (scalar(doc, 'tags') || '')
     .replace(/^\[|\]$/g, '')
     .split(',')
     .map((tag) => tag.trim().replace(/^['"]|['"]$/g, '').toLowerCase())
     .includes('autosave');
   const writerOwnedAutosave = autosaveTag
-    && frontmatterValue(doc, 'trigger').toLowerCase() === 'stop-delta';
+    && (scalar(doc, 'trigger') || '').toLowerCase() === 'stop-delta';
   if (writerOwnedAutosave) {
     if (humanRequest) {
       doc = doc.replace(/^objective: .*$/m, `objective: ${JSON.stringify(objective)}`);
@@ -559,7 +595,7 @@ ${ANCHORS.rows}
     path: path.relative(root, capPath).replace(/\\/g, '/'),
     // Read from the exact final document so a retained objective on a rolling
     // autosave cannot be replaced in the pointer by this delta's unknown marker.
-    objective: frontmatterValue(doc, 'objective') || objective,
+    objective: scalar(doc, 'objective') || objective,
     status: 'active',
     created_at: new Date().toISOString(),
     trigger: 'stop-delta',
