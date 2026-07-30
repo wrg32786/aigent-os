@@ -36,19 +36,40 @@ Write-Host "  ${dim}your operator is waking up...${reset}"
 Write-Host ""
 
 $marker = Join-Path $AigentHome '.aigent\first-run-done'
+$runner = Join-Path $AigentHome 'daemons\pty-runner.mjs'
+$script:LaunchUnmanaged = $args -ccontains '--no-deps'
+$script:ClaudeExitCode = 0
+
+function Invoke-AigentClaude {
+  param([string[]]$ClaudeArgs)
+
+  if ($script:LaunchUnmanaged) {
+    & claude @ClaudeArgs
+  } else {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $node) {
+      [Console]::Error.WriteLine('DEGRADED:auto-clear-node-pty-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged')
+      & claude @ClaudeArgs
+    } else {
+      & $node.Source $runner '--' @ClaudeArgs
+    }
+  }
+  $script:ClaudeExitCode = $LASTEXITCODE
+}
 
 if (-not (Test-Path $marker)) {
   # First boot: the guided Day-1 flow. /start owns install-check -> /operator-setup
   # interview -> first win, then writes the marker itself. We also write it as a
   # fallback so a mid-flow exit never re-triggers the whole intro.
   New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
-  claude "/start"
+  Invoke-AigentClaude -ClaudeArgs @('/start')
   if (-not (Test-Path $marker)) { New-Item -ItemType File -Force $marker | Out-Null }
 } else {
   # Returning operator: never cold-start. Warm-resume the latest session and orient.
-  claude --continue "/open"
+  Invoke-AigentClaude -ClaudeArgs @('--continue', '/open')
 }
 
 Write-Host ""
-Write-Host "  ${dim}Tip: next time, say ""close up"" before you quit — your AIgent banks the session so it remembers everything.${reset}"
+Write-Host ('  {0}Tip: next time, say "close up" before you quit — your AIgent banks the session so it remembers everything.{1}' -f $dim, $reset)
 Write-Host ""
+if ($script:ClaudeExitCode -ne 0) { exit $script:ClaudeExitCode }
