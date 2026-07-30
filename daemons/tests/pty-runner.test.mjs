@@ -16,6 +16,7 @@ import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import {
   AutoClearTransport,
   acquireRunnerLock,
@@ -237,11 +238,10 @@ class ScriptedPty {
       this.signals.push(signal);
       return;
     }
-    if (this.teardownShape === 'kill-then-linger' && this.dataHandlers.size > 0) {
-      this.helperNoise.push(
-        'AttachConsole failed\n    at conpty-helper.js:1:1',
-      );
-    }
+    // No handler-conditioned noise here: measured on real node-pty (93b9d2a
+    // review, F1), the helper crash follows kill-then-linger regardless of
+    // handler disposal. flushHelper() below models the true mechanism —
+    // noise iff the parent has not exited promptly after the kill.
     this.killed = true;
   }
 
@@ -1512,4 +1512,89 @@ test('optional dependency manifest and lock pin node-pty exactly at 1.1.0', () =
   assert.equal(manifest.dependencies['node-pty'], '1.1.0');
   assert.equal(lock.packages[''].dependencies['node-pty'], '1.1.0');
   assert.equal(lock.packages['node_modules/node-pty'].version, '1.1.0');
+});
+
+test('ConPTY helper noise follows kill-then-linger, not handler disposal (93b9d2a review F1)', () => {
+  // Measured on real node-pty (independent review of 93b9d2a, four invocation
+  // shapes): the helper crashes whenever the parent lingers after kill(),
+  // handler disposal does NOT prevent it, and a promptly-exiting parent is
+  // clean even with handlers attached. The fake must encode that mechanism.
+
+  // Direction 1: lingering parent crashes even with every handler disposed.
+  const linger = new ScriptedPty({ teardownShape: 'kill-then-linger' });
+  const subscription = linger.onData(() => {});
+  subscription.dispose();
+  assert.equal(linger.dataHandlers.size, 0);
+  linger.kill();
+  linger.flushHelper();
+  assert.equal(linger.helperNoise.length, 1);
+
+  // Direction 2: prompt parent exit is clean even with handlers attached.
+  const prompt = new ScriptedPty({ teardownShape: 'kill-then-linger' });
+  prompt.onData(() => {});
+  prompt.kill();
+  prompt.parentExited = true;
+  prompt.flushHelper();
+  assert.equal(prompt.helperNoise.length, 0);
+});
+
+test('launcher degraded line names node itself when node is missing (93b9d2a review F2)', () => {
+  // Resolve bash to an ABSOLUTE path: the child env below carries a stub-only
+  // PATH, and on Windows spawnSync resolves the command against the CHILD env,
+  // so a bare 'bash' would fail to launch (measured: status null, a false red).
+  const bashProbe = spawnSync(
+    'bash',
+    ['-c', 'cygpath -w "$(command -v bash)" 2>/dev/null || command -v bash'],
+    { encoding: 'utf8' },
+  );
+  const bashPath = (bashProbe.stdout || '').trim();
+  if (bashProbe.status !== 0 || !bashPath) {
+    // Named residue: no bash on this host, the sh branch cannot be exercised.
+    assert.fail('bash unavailable — the F2 launcher branch has no vantage on this host');
+  }
+
+  const launcherSource = fs
+    .readFileSync(fileURLToPath(new URL('../../launcher/aigent.sh', import.meta.url)), 'utf8')
+    .replace(/\r\n/g, '\n'); // working tree may be CRLF on Windows; the index form is LF
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aigent-f2-home-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aigent-f2-bin-'));
+  try {
+    fs.mkdirSync(path.join(home, '.aigent'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.aigent', 'first-run-done'), '');
+    const launcherCopy = path.join(home, 'aigent.sh');
+    fs.writeFileSync(launcherCopy, launcherSource);
+    const stub = path.join(bin, 'claude');
+    fs.writeFileSync(stub, '#!/bin/sh\necho CLAUDE_STUB_RAN\n');
+    fs.chmodSync(stub, 0o755);
+
+    // Precondition, proven not assumed: with the stub-only PATH the script
+    // world genuinely has no node. Refuses loudly instead of false-passing.
+    const nodeProbe = spawnSync(bashPath, ['-c', 'command -v node || echo __NO_NODE__'], {
+      encoding: 'utf8',
+      env: { PATH: bin },
+    });
+    assert.match(nodeProbe.stdout, /__NO_NODE__/);
+
+    const run = spawnSync(bashPath, [launcherCopy], {
+      encoding: 'utf8',
+      env: { PATH: bin, AIGENT_HOME: home, HOME: home },
+    });
+
+    // PATH carries only the claude stub, so `command -v node` fails inside
+    // the launcher by construction — this drives the node-missing branch.
+    assert.equal(run.status, 0);
+    assert.match(run.stdout, /CLAUDE_STUB_RAN/);
+    assert.match(run.stderr, /DEGRADED:auto-clear-node-unavailable /);
+    assert.doesNotMatch(run.stderr, /DEGRADED:auto-clear-node-pty-unavailable/);
+
+    // The ps1 branch is not executed here (no PowerShell vantage in this
+    // suite) — its token is bound by text to the sh branch. Named residue.
+    const ps1 = fs
+      .readFileSync(fileURLToPath(new URL('../../launcher/aigent.ps1', import.meta.url)), 'utf8');
+    assert.match(ps1, /DEGRADED:auto-clear-node-unavailable /);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
 });

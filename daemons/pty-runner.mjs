@@ -1815,9 +1815,14 @@ export class ManagedPtyRunner {
     this.closed = true;
     this.exitCode = Number.isInteger(exitCode) ? exitCode : 1;
 
-    // Disposal before kill is load-bearing on ConPTY.  Leaving the data
-    // carrier attached while the parent lingers after p.kill() produces a
-    // helper AttachConsole stack trace that looks like a real harness failure.
+    // PROMPT PARENT EXIT is the load-bearing guard against the ConPTY
+    // helper's AttachConsole stack trace. Measured four ways on real node-pty
+    // (independent review of 93b9d2a, F1): the helper crashes whenever the
+    // parent lingers after kill() — handler disposal does NOT prevent it
+    // (4/4 crashed disposed-and-lingering), and a promptly-exiting parent is
+    // clean even with handlers still attached. shutdown() therefore always
+    // ends in exitFn below; the disposal here is ordinary resource hygiene,
+    // not the crash guard.
     this._disposeHandlers();
     try { this.transport?.close?.(); } catch { /* acquireLock=false carrier */ }
     if (this.outerLockHandle) {

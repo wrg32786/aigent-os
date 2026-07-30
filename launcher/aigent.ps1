@@ -48,7 +48,7 @@ function Invoke-AigentClaude {
   } else {
     $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
     if (-not $node) {
-      [Console]::Error.WriteLine('DEGRADED:auto-clear-node-pty-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged')
+      [Console]::Error.WriteLine('DEGRADED:auto-clear-node-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged')
       & claude @ClaudeArgs
     } else {
       & $node.Source $runner '--' @ClaudeArgs

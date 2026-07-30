@@ -27,7 +27,7 @@ launch_claude() {
   if [ "$unmanaged" -eq 1 ]; then
     claude "$@"
   elif ! command -v node >/dev/null 2>&1; then
-    printf '%s\n' 'DEGRADED:auto-clear-node-pty-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged' >&2
+    printf '%s\n' 'DEGRADED:auto-clear-node-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged' >&2
     claude "$@"
   else
     node "$AIGENT_HOME/daemons/pty-runner.mjs" -- "$@"
