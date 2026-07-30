@@ -4,7 +4,7 @@ All notable changes to aigent-OS are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-For changes to the kernel itself (the 15 numbered system documents and extended specs), see [`system/CHANGELOG.md`](system/CHANGELOG.md).
+For changes to the kernel itself (the 16 numbered system documents and extended specs), see [`system/CHANGELOG.md`](system/CHANGELOG.md).
 
 ## [Unreleased]
 

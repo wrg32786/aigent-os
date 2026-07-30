@@ -14,7 +14,7 @@ version: "0.4"
 
 ## Why somatic
 
-The AIgent already has anatomy: a kernel (system docs 00–14), memory (the `memory/` directory), hooks (Caddy), and skills. What was missing was **body state** — a unified read of operational pressure across all five dimensions at once.
+The AIgent already has anatomy: a kernel (system docs 00–15, this one included), memory (the `memory/` directory), hooks (Caddy), and skills. What was missing was **body state** — a unified read of operational pressure across all five dimensions at once.
 
 Without body state, "how am I doing?" is vibes. With body state, it's thresholds. The difference is whether instincts are informed or guessed.
 

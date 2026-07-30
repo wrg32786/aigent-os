@@ -99,7 +99,7 @@ The lifecycle is two verbs, and both fire automatically at their hook points; yo
 2. **Work normally.** Skills and hooks route tasks, capture privacy-safe action metadata, and update durable notes when appropriate. A rolling, best-effort capsule autosave runs on every `Stop` (`daemons/stop-capsule-writer.mjs`).
 3. **`/context-capsule`** reconciles and writes a resume-ready capsule, then stops; invoke it for a deliberate mid-session checkpoint or a clean end-of-thread finalize. The autosave already covers the case where you just walk away.
 
-`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage; the context-pressure sensor nudges a capsule-then-clear as the window fills.
+`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage so you can watch the window fill; when you `/clear`, the rolling capsule autosave means nothing needs saving first, and the resume verb re-grounds the fresh window automatically.
 
 ## State layout
 

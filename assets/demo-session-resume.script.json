@@ -1,10 +1,10 @@
 {
-  "title": "aigent-OS, Auto-Refresh: the session refreshes its own context",
-  "ariaLabel": "A Claude Code session reaches 60% context, automatically writes its capsule, gets /clear injected, runs the resume verb, and picks up exactly where it left off with fresh context at 10%, no human input at any step.",
+  "title": "aigent-OS, Auto-Refresh: clear the window, lose nothing",
+  "ariaLabel": "A Claude Code session reaches 60% context with its capsule already autosaved; the operator runs /clear, the resume verb re-grounds the fresh window, and it picks up exactly where it left off at 10% context. The only thing typed was /clear.",
   "turns": [
     {
       "speaker": "sys",
-      "lines": ["[context 60%: auto-refresh threshold reached]"]
+      "lines": ["[context 60%: capsule already autosaved this turn]"]
     },
     {
       "speaker": "ai",
@@ -20,7 +20,7 @@
     },
     {
       "speaker": "sys",
-      "lines": ["[/clear injected: context window reset to empty]"]
+      "lines": ["[operator runs /clear: context window reset to empty]"]
     },
     {
       "speaker": "sys",

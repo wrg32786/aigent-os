@@ -31,7 +31,7 @@ message of a fresh install" means run `/start`, not greet as the AIgent.
 
 ## What This Is
 
-**aigent-OS** is an AI Operating System — a structured framework that defines how an AI agent operates as a strategic advisor and operator. The kernel is 15 numbered documents (00–14) plus a handful of extended specs in `system/` that together form a complete system prompt and operational manual.
+**aigent-OS** is an AI Operating System — a structured framework that defines how an AI agent operates as a strategic advisor and operator. The kernel is 16 numbered documents (00–15) plus a handful of extended specs in `system/` that together form a complete system prompt and operational manual.
 
 ## Architecture
 
