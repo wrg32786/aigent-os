@@ -21,8 +21,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const EVALS = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(EVALS, '..');
+const RUNNER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// A fixture install must drive THIS runner, not a copied implementation whose
+// mistakes could drift away from it. AIGENT_ROOT is already caddy's install-root
+// contract; honoring it here lets self-tests replace the install and corpora while
+// the default production invocation stays on the repository containing this file.
+const ROOT = path.resolve(process.env.AIGENT_ROOT || RUNNER_ROOT);
+const EVALS = path.join(ROOT, 'evals');
 const JSON_OUT = process.argv.includes('--json');
 
 const results = [];
@@ -54,6 +59,50 @@ function loadCorpus(name) {
   catch (e) { return { __error: e?.message || String(e) }; }
 }
 
+// Child diagnostics can contain entire tracebacks or tool dumps. Keeping them is
+// necessary to explain a red row; keeping them unbounded can turn one failure into
+// an unreadable or secret-spilling report. Collapse line breaks, then take a small
+// prefix so stderr is visible without becoming a second log transport.
+function diagnosticExcerpt(value, limit, empty) {
+  const compact = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!compact) return empty;
+  return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+}
+
+const stdoutExcerpt = (value) => diagnosticExcerpt(value, 120, '(silent)');
+const stderrExcerpt = (value) => diagnosticExcerpt(value, 160, '(empty)');
+
+// Taxonomy's `skill=` value is a heterogeneous ledger reference, not a bare name.
+// Only its explicit backticked slash commands declare routable identities. Inferring
+// names from wiki labels, prose, parentheticals, or plugin refs would merely move
+// the substring bug inward under a new normalization rule.
+function taxonomyIdentities(skillRef) {
+  const names = new Set();
+  for (const match of skillRef.matchAll(/`\/([A-Za-z0-9_.-]{1,80})`/g)) names.add(match[1]);
+  return names;
+}
+
+// Parse only caddy's two positive routing record formats. Its stdout also carries
+// reminders, chain hints, descriptions, errors, and a miss line that literally
+// names `/skill-recall`; none of those are routing identities. Exact records make
+// exact comparison possible and prevent text adjacent to a record from voting.
+function parseRoutingRecords(out) {
+  const records = [];
+  for (const match of out.matchAll(/^\[CADDY\] \/([A-Za-z0-9_.-]{1,80}) - /gm)) {
+    records.push({ source: 'scorer', name: match[1] });
+  }
+  for (const match of out.matchAll(
+    /^\[CADDY:taxonomy\] skill=("(?:\\.|[^"\\])*") path="(?:\\.|[^"\\])*" description="(?:\\.|[^"\\])*" — \[LEDGER\]\r?$/gm,
+  )) {
+    let skillRef;
+    // A malformed JSON field is corrupt router output, not permission to scan the
+    // rest of the line and accidentally recover a plausible-looking substring.
+    try { skillRef = JSON.parse(match[1]); } catch { continue; }
+    for (const name of taxonomyIdentities(skillRef)) records.push({ source: 'taxonomy', name });
+  }
+  return records;
+}
+
 // ── Suite 1: skill recall ─────────────────────────────────────────────────────
 // Routes a prompt through the real caddy hook and asserts which skill it named.
 // `must_not_suggest` is as load-bearing as `expected_skill`: a router that fires
@@ -68,6 +117,7 @@ function runSkillRecall() {
   try { index = JSON.parse(readFileSync(path.join(ROOT, '.claude', 'skill-index.json'), 'utf8')); }
   catch (e) { record('skill-recall', '-', 'unrunnable', `no skill-index.json: ${e?.message}`); return; }
   const known = new Set(index.map((s) => s.name));
+  const stderrById = new Map();
 
   for (const c of uniqueCases) {
     // A case naming a skill this install does not have cannot be evaluated. It is
@@ -94,8 +144,28 @@ function runSkillRecall() {
       encoding: 'utf8',
       timeout: 15_000,
     });
-    if (proc.error) { record('skill-recall', c.id, 'harness-error', `caddy.sh did not execute: ${proc.error.message}`); continue; }
     const out = proc.stdout || '';
+    const stderr = proc.stderr || '';
+    stderrById.set(c.id, stderr);
+    const stderrDetail = `; stderr: ${stderrExcerpt(stderr)}`;
+
+    // spawnSync can return a nonzero status, a kill signal, a timeout error, or
+    // more than one at once. Any of them means stdout may be partial and MUST NOT
+    // be scored as a routing answer; `requires` cannot excuse machinery failure.
+    if (proc.error || proc.signal || proc.status !== 0) {
+      const termination = [];
+      if (typeof proc.status === 'number' && proc.status !== 0) termination.push(`exit code ${proc.status}`);
+      if (proc.signal) termination.push(`signal ${proc.signal}`);
+      if (proc.error) termination.push(`spawn error: ${proc.error.message}`);
+      // A null status without an accompanying signal/error is still not a
+      // successful child. Name the missing fact instead of printing "exit null".
+      if (!termination.length) termination.push('exit status unavailable');
+      record('skill-recall', c.id, 'harness-error',
+        `caddy.sh terminated with ${termination.join(', ')}${stderrDetail}`);
+      continue;
+    }
+    const routingRecords = parseRoutingRecords(out);
+    const routedNames = new Set(routingRecords.map((row) => row.name));
 
     // A case with neither a positive nor a negative expectation asserts NOTHING:
     // both branches below are skipped, must_not_suggest is empty in every case,
@@ -103,7 +173,7 @@ function runSkillRecall() {
     // cannot fail is worse than an absent one, because it inflates the pass count.
     if (!c.expect_no_match && !c.expected_skill) {
       record('skill-recall', c.id, 'harness-error',
-        'case declares neither expected_skill nor expect_no_match — it asserts nothing and can never fail');
+        `case declares neither expected_skill nor expect_no_match — it asserts nothing and can never fail${stderrDetail}`);
       continue;
     }
 
@@ -122,14 +192,14 @@ function runSkillRecall() {
       .find((k) => c[k] !== undefined && !Array.isArray(c[k]));
     if (badShape) {
       record('skill-recall', c.id, 'harness-error',
-        `${badShape} must be an array; a bare string spreads into single characters that match anything`);
+        `${badShape} must be an array; a bare string spreads into single characters that match anything${stderrDetail}`);
       continue;
     }
     const emptyNeedle = [...(c.acceptable_alternatives || []), ...(c.must_not_suggest || [])]
       .some((s) => typeof s !== 'string' || s === '');
     if (emptyNeedle) {
       record('skill-recall', c.id, 'harness-error',
-        'acceptable_alternatives/must_not_suggest contains an empty or non-string entry — it matches every response and cannot fail');
+        `acceptable_alternatives/must_not_suggest contains an empty or non-string entry — it matches every response and cannot fail${stderrDetail}`);
       continue;
     }
 
@@ -138,18 +208,23 @@ function runSkillRecall() {
       // the correct answer — asserting silence here would fail on healthy output
       // and teach the next reader to delete the case.
       if (!/No skill match/i.test(out)) {
-        record('skill-recall', c.id, 'fail', `expected a no-match; caddy said: ${out.trim().slice(0, 120) || '(silent)'}`);
+        record('skill-recall', c.id, 'fail',
+          `expected a no-match; caddy said: ${stdoutExcerpt(out)}${stderrDetail}`);
         continue;
       }
     } else if (c.expected_skill) {
       const accepted = [c.expected_skill, ...(c.acceptable_alternatives || [])];
-      if (!accepted.some((s) => out.includes(s))) {
-        record('skill-recall', c.id, 'fail', `expected "${c.expected_skill}"; caddy said: ${out.trim().slice(0, 120) || '(silent)'}`);
+      if (!accepted.some((name) => routedNames.has(name))) {
+        record('skill-recall', c.id, 'fail',
+          `expected "${c.expected_skill}"; caddy said: ${stdoutExcerpt(out)}${stderrDetail}`);
         continue;
       }
     }
-    const bad = (c.must_not_suggest || []).find((s) => out.includes(s));
-    if (bad) { record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"`); continue; }
+    const bad = (c.must_not_suggest || []).find((name) => routedNames.has(name));
+    if (bad) {
+      record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"${stderrDetail}`);
+      continue;
+    }
     // PRESENCE of the scorer's own line, never ABSENCE of a miss marker. caddy has
     // TWO resolvers: the trigger scorer prints "[CADDY] /name - why", and when it
     // finds nothing a SKILL_LEDGER taxonomy fallback prints "[CADDY:taxonomy] ...".
@@ -158,7 +233,9 @@ function runSkillRecall() {
     // WHEN the scorer misses, its output is byte-identical whether the scorer is
     // healthy or completely dead. A corpus drifting toward taxonomy-resolved prompts
     // would let scorer coverage reach zero with every gate still green.
-    record('skill-recall', c.id, 'pass', '', { matched: /^\[CADDY\] \//m.test(out) });
+    record('skill-recall', c.id, 'pass', '', {
+      matched: routingRecords.some((row) => row.source === 'scorer'),
+    });
   }
   // A no-match assertion is satisfied by a router that is COMPLETELY DEAD: total
   // failure emits the same "No skill match" the case expects. Measured — with the
@@ -180,7 +257,7 @@ function runSkillRecall() {
     for (const r of mine) {
       if (negativeIds.has(r.id) && r.status === 'pass') {
         r.status = 'harness-error';
-        r.detail = 'no-match assertion is unverifiable: zero positive cases passed this run, so a dead router would satisfy it identically';
+        r.detail = `no-match assertion is unverifiable: zero positive cases passed this run, so a dead router would satisfy it identically; stderr: ${stderrExcerpt(stderrById.get(r.id))}`;
       }
     }
   }

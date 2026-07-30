@@ -1,0 +1,22 @@
+[
+  {
+    "id": "fixture-cr-001",
+    "capsule_status": null,
+    "expected_offer_resume": false
+  },
+  {
+    "id": "fixture-cr-002",
+    "capsule_status": null,
+    "expected_offer_resume": false
+  },
+  {
+    "id": "fixture-cr-003",
+    "capsule_status": null,
+    "expected_offer_resume": false
+  },
+  {
+    "id": "fixture-cr-004",
+    "capsule_status": null,
+    "expected_offer_resume": false
+  }
+]

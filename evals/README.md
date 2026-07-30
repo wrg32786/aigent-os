@@ -7,7 +7,9 @@ created: 2026-05-08
 
 # Eval Harness
 
-Structured test definitions for the aigent-OS cognitive layer behaviors. Each file covers a distinct capability. Tests are run manually today; a future eval daemon will automate scoring.
+Structured test definitions for the aigent-OS cognitive layer behaviors. Each
+file covers a distinct capability. The runner automates skill routing and capsule
+resume cases; model-backed contradiction cases remain a declared harness gap.
 
 ## Test files
 
@@ -17,7 +19,7 @@ Structured test definitions for the aigent-OS cognitive layer behaviors. Each fi
 | `contradiction-tests.json` | Belief consistency — does the system correctly detect contradictions in working memory? |
 | `capsule-resume-tests.json` | Capsule lifecycle — does the system correctly offer or suppress resume based on capsule status? |
 
-## How to run (manual)
+## Manual scoring
 
 For each test in a file:
 
@@ -27,6 +29,26 @@ For each test in a file:
 4. Score: PASS / FAIL / PARTIAL.
 
 Record results in `results/YYYY-MM-DD.md` (create `results/` dir when first run).
+
+## Automated runner
+
+Run the executable corpora with:
+
+```bash
+node evals/run-evals.mjs
+```
+
+Pass `--json` for a machine-readable report. For hermetic runner tests,
+`AIGENT_ROOT=/path/to/fixture` selects an alternate install root; its corpora
+must live under `$AIGENT_ROOT/evals/`. The runner implementation still comes
+from this repository, so a fixture cannot accidentally test a copied scorer.
+
+The F017 integrity self-test is discovered with the rest of `daemons/tests/`
+and can also be run directly:
+
+```bash
+node daemons/tests/eval-runner-integrity.test.mjs
+```
 
 ## Scoring criteria
 
@@ -54,9 +76,12 @@ Before a cognitive layer change is merged via `/meta-improve`, run all affected 
 - contradiction: 3/3 PASS (zero false positives tolerated)
 - capsule-resume: 5/5 PASS (lifecycle correctness is binary)
 
-## Future: eval daemon
+## Automation status
 
-A `/run-evals` skill will automate scoring by replaying test inputs through sub-agents and comparing outputs to expected values. Scorecard written to `results/`. Caddy reflex fires if regression score drops below threshold after a `/meta-improve` merge.
+`run-evals.mjs` replays executable cases through the real caddy and capsule
+selector, then exits nonzero on behavioral drift, undeclared prerequisites,
+stale gap declarations, harness errors, or coverage-floor failures. Contradiction
+cases stay visible as declared unrunnable rows until a model harness exists.
 
 ## Related
 

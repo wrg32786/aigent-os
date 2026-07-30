@@ -1,0 +1,68 @@
+[
+  {
+    "id": "f017-v1-nonzero-token",
+    "prompt": "F017 vector V1",
+    "expected_skill": "skill-recall",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-v2-stderr-only",
+    "prompt": "F017 vector V2",
+    "expected_skill": "skill-recall",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-v3-forward",
+    "prompt": "F017 vector V3 forward",
+    "expected_skill": "seo",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-v3-inverse",
+    "prompt": "F017 vector V3 inverse",
+    "expected_skill": "seo-research",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-v4-dead-router-miss",
+    "prompt": "F017 vector V4",
+    "expected_skill": "skill-recall",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-guard-signal",
+    "prompt": "F017 guard signal",
+    "expected_skill": "skill-recall",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-guard-description",
+    "prompt": "F017 guard description",
+    "expected_skill": "skill-recall",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-guard-taxonomy-substring",
+    "prompt": "F017 guard taxonomy substring",
+    "expected_skill": "seo",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-control-scorer-a",
+    "prompt": "F017 control scorer A",
+    "expected_skill": "control",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-control-scorer-b",
+    "prompt": "F017 control scorer B",
+    "expected_skill": "seo",
+    "must_not_suggest": []
+  },
+  {
+    "id": "f017-control-taxonomy",
+    "prompt": "F017 control taxonomy",
+    "expected_skill": "seo",
+    "must_not_suggest": []
+  }
+]
