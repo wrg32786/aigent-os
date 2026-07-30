@@ -99,7 +99,7 @@ The capsule is best-effort autosave, never a gate; you never wait on it, and it 
 
 **Set up your context counter (do this once):**
 
-Run `/statusline` in Claude Code and enable the context usage display. This adds a live indicator showing how full your context is. When it approaches the limit, the built-in context-pressure sensor already nudges you: a soft nudge toward a checkpoint-then-clear at 60%, a mandatory `/clear` at 75%. You can also do it yourself any time:
+Run `/statusline` in Claude Code and enable the context usage display. This adds a live indicator showing how full your context is. When it fills up, `/clear` without fear — the rolling capsule autosave means nothing needs saving first, and the resume verb re-grounds the fresh window automatically. You can also checkpoint deliberately any time:
 
 1. Run `/context-capsule` (banks a clean checkpoint)
 2. `/clear` (or start a fresh conversation)
