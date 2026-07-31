@@ -339,6 +339,238 @@ function makeFixture(name) {
   };
 }
 
+function makeThresholdWiringProbe(name, env) {
+  const fixture = makeFixture(name);
+  const pty = new ScriptedPty();
+  const stdin = new ScriptedStream();
+  const stdout = new ScriptedStream();
+  const stderr = new ScriptedStream();
+  const processLike = new ScriptedStream();
+  const constructed = [];
+  let managedSpawnCount = 0;
+  let unmanagedSpawnCount = 0;
+
+  const result = runPtySession({
+    childArgs: ['--continue', '/open'],
+    command: 'claude',
+    root: fixture.root,
+    cwd: fixture.cwd,
+    env,
+    fsImpl: fs,
+    stdin,
+    stdout,
+    stderr,
+    processLike,
+    platform: 'linux',
+    homeDir: fixture.homeDir,
+    loadNodePtyFn: () => ({
+      ok: true,
+      module: {
+        spawn() {
+          managedSpawnCount += 1;
+          return pty;
+        },
+      },
+    }),
+    runUnmanagedFn: () => {
+      unmanagedSpawnCount += 1;
+      return CHILD_EXIT_CODE;
+    },
+    acquireRunnerLockFn: () => ({ path: 'run3-threshold-wiring-lock' }),
+    releaseRunnerLockFn: () => {},
+    readKillSwitchFn: () => ({ active: false, code: null, detail: null }),
+    readBootReceiptFn: () => ({
+      ok: true,
+      receipt: readJson(fixture.bootPath),
+    }),
+    createTransportFn: (options) => {
+      constructed.push({ ...options });
+      return new AutoClearTransport({
+        ...options,
+        now: fixture.clock,
+        pressureFreshnessMs: 120_000,
+        selectCapsuleFn: () => fixture.selection,
+        readPressureFn: () => ({ ...fixture.pressure }),
+        idFactory: ({ sessionId, bootSequence }) => (
+          `run3-${sessionId}-${bootSequence}`
+        ),
+      });
+    },
+    exitFn: () => {},
+    runnerOptions: {
+      scheduleTick: () => null,
+      clearTick: () => {},
+      scheduleCommit: () => null,
+      clearCommit: () => {},
+      scheduleWatchdog: () => null,
+      clearWatchdog: () => {},
+      exitFn: () => {},
+    },
+  });
+
+  return {
+    fixture,
+    result,
+    stderr,
+    constructed,
+    bindTransport() {
+      writeJson(fixture.bootPath, {
+        boot_sequence: 11,
+        session_id: SESSION_ID,
+        source: 'startup',
+        observed_at: new Date(fixture.clock.ms()).toISOString(),
+      });
+      return result.runner.tick();
+    },
+    observed() {
+      return {
+        line: Buffer.concat(stderr.writes).toString('utf8'),
+        mode: result.mode,
+        runnerPresent: Boolean(result.runner),
+        managedSpawnCount,
+        transportConstructionCount: constructed.length,
+        unmanagedSpawnCount,
+      };
+    },
+    close() {
+      result.runner?.shutdown({ exitCode: 0, killChild: true });
+      fs.rmSync(fixture.base, { recursive: true, force: true });
+    },
+  };
+}
+
+function resolveBashForLauncherVector() {
+  const probe = spawnSync(
+    'bash',
+    ['-c', 'cygpath -w "$(command -v bash)" 2>/dev/null || command -v bash'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(
+    probe.status,
+    0,
+    `RUN3 launcher vectors require bash: ${probe.stderr || probe.error || ''}`,
+  );
+  const resolved = (probe.stdout || '').trim();
+  assert.notEqual(resolved, '', 'RUN3 launcher vectors require a resolved bash path');
+  return resolved;
+}
+
+function pathForBashLauncherVector(bashPath, target) {
+  const probe = spawnSync(
+    bashPath,
+    [
+      '-c',
+      'cygpath -u "$1" 2>/dev/null || printf "%s" "$1"',
+      'run3-path',
+      target,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(
+    probe.status,
+    0,
+    `RUN3 launcher path conversion failed: ${probe.stderr || probe.error || ''}`,
+  );
+  return (probe.stdout || '').trim();
+}
+
+function resolvePowerShellForLauncherVector() {
+  const candidates = process.platform === 'win32'
+    ? ['pwsh', 'powershell.exe']
+    : ['pwsh', 'powershell'];
+  for (const candidate of candidates) {
+    const probe = spawnSync(
+      candidate,
+      ['-NoLogo', '-NoProfile', '-Command', 'exit 0'],
+      { encoding: 'utf8' },
+    );
+    // V4 pass-through: execute the ps1 contract when this host exposes a
+    // PowerShell vantage; the source assertion remains mandatory everywhere.
+    if (probe.status === 0) return candidate;
+  }
+  return null;
+}
+
+function runLauncherCapture({
+  frontDoor,
+  operatorArgs,
+  returning,
+  powerShellCommand = null,
+}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `run3-${frontDoor}-launcher-`));
+  const daemonDirectory = path.join(home, 'daemons');
+  const marker = path.join(home, '.aigent', 'first-run-done');
+  const capturePrefix = 'RUN3_LAUNCH_ARGV:';
+  try {
+    fs.mkdirSync(daemonDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(daemonDirectory, 'pty-runner.mjs'),
+      `process.stdout.write('${capturePrefix}' + Buffer.from(JSON.stringify(process.argv.slice(2))).toString('base64') + '\\n');\n`,
+    );
+    // V4/V5 launcher shape: select the committed returning or first-run fixed
+    // prefix before comparing the complete spawned argv.
+    if (returning) {
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, '');
+    }
+
+    let executable;
+    let invocation;
+    let launcherHome = home;
+    if (frontDoor === 'sh') {
+      executable = resolveBashForLauncherVector();
+      launcherHome = pathForBashLauncherVector(executable, home);
+      invocation = [
+        pathForBashLauncherVector(
+          executable,
+          path.join(REPOSITORY_ROOT, 'launcher', 'aigent.sh'),
+        ),
+        ...operatorArgs,
+      ];
+    } else {
+      executable = powerShellCommand;
+      invocation = [
+        '-NoLogo',
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        path.join(REPOSITORY_ROOT, 'launcher', 'aigent.ps1'),
+        ...operatorArgs,
+      ];
+    }
+
+    const run = spawnSync(executable, invocation, {
+      cwd: REPOSITORY_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AIGENT_HOME: launcherHome,
+        HOME: launcherHome,
+        // V4/V5 compare launcher argv, not Git-for-Windows' POSIX-path
+        // translation of the literal fixed slash commands.
+        MSYS2_ARG_CONV_EXCL: '/start;/open',
+        USERPROFILE: home,
+      },
+    });
+    assert.equal(
+      run.status,
+      0,
+      `${frontDoor} launcher failed: ${run.stderr || run.error || run.stdout}`,
+    );
+    const match = (run.stdout || '').match(
+      new RegExp(`${capturePrefix}([A-Za-z0-9+/=]+)`),
+    );
+    assert.ok(
+      match,
+      `${frontDoor} launcher did not expose captured argv: ${run.stdout}`,
+    );
+    return JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 function persistentProjection(fixture) {
   return {
     capsule: fs.readFileSync(fixture.capsulePath, 'utf8'),
@@ -1475,6 +1707,200 @@ test('a malformed boot baseline fails closed before the PTY spawn', () => {
   }
 });
 
+test('V1 threshold-applied: env=15 reaches the production transport constructor', () => {
+  const env = {};
+  env.AIGENT_PRESSURE_THRESHOLD_PCT = '15';
+  const probe = makeThresholdWiringProbe('run3-v1-threshold-applied', env);
+  try {
+    probe.bindTransport();
+    assert.equal(probe.constructed.length, 1);
+    assert.equal(probe.constructed[0].pressureThresholdPct, 15);
+  } finally {
+    probe.close();
+  }
+
+  for (const [raw, expected] of [['5', 5], ['95', 95]]) {
+    const boundaryEnv = {};
+    boundaryEnv.AIGENT_PRESSURE_THRESHOLD_PCT = raw;
+    const boundaryProbe = makeThresholdWiringProbe(
+      `run3-v1-threshold-boundary-${raw}`,
+      boundaryEnv,
+    );
+    try {
+      boundaryProbe.bindTransport();
+      assert.equal(boundaryProbe.constructed.length, 1);
+      assert.equal(boundaryProbe.constructed[0].pressureThresholdPct, expected);
+    } finally {
+      boundaryProbe.close();
+    }
+  }
+});
+
+test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarmed', () => {
+  const env = {};
+  env.AIGENT_PRESSURE_THRESHOLD_PCT = 'abc';
+  const probe = makeThresholdWiringProbe('run3-v2-threshold-invalid', env);
+  try {
+    assert.deepEqual(probe.observed(), {
+      line: 'DEGRADED:auto-clear-threshold-invalid abc\n',
+      mode: 'degraded',
+      runnerPresent: false,
+      managedSpawnCount: 0,
+      transportConstructionCount: 0,
+      unmanagedSpawnCount: 1,
+    });
+  } finally {
+    probe.close();
+  }
+
+  const otherInvalidValues = ['', '4', '96', '15.5', '1e1', 15];
+  for (const [index, raw] of otherInvalidValues.entries()) {
+    const invalidEnv = {};
+    invalidEnv.AIGENT_PRESSURE_THRESHOLD_PCT = raw;
+    const invalidProbe = makeThresholdWiringProbe(
+      `run3-v2-threshold-invalid-${index}`,
+      invalidEnv,
+    );
+    try {
+      assert.deepEqual(invalidProbe.observed(), {
+        line: `DEGRADED:auto-clear-threshold-invalid ${String(raw)}\n`,
+        mode: 'degraded',
+        runnerPresent: false,
+        managedSpawnCount: 0,
+        transportConstructionCount: 0,
+        unmanagedSpawnCount: 1,
+      });
+    } finally {
+      invalidProbe.close();
+    }
+  }
+});
+
+test('V3 threshold-unset-default: absent env passes 80 to the production constructor', () => {
+  const env = {};
+  delete env.AIGENT_PRESSURE_THRESHOLD_PCT;
+  const probe = makeThresholdWiringProbe('run3-v3-threshold-default', env);
+  try {
+    probe.bindTransport();
+    assert.equal(probe.constructed.length, 1);
+    assert.equal(probe.constructed[0].pressureThresholdPct, 80);
+  } finally {
+    probe.close();
+  }
+});
+
+test('V4 pass-through: literal -- suffix follows fixed args for sh and ps1', () => {
+  const opaqueArgs = [
+    '--model',
+    'haiku',
+    'two words',
+    'opaque;value=$HOME',
+    '--',
+    'tail',
+  ];
+  const operatorArgs = ['ignored-before-separator', '--', ...opaqueArgs];
+  const powerShellCommand = resolvePowerShellForLauncherVector();
+  const powershell = fs.readFileSync(
+    path.join(REPOSITORY_ROOT, 'launcher', 'aigent.ps1'),
+    'utf8',
+  );
+  const powershellCode = powershell.replace(/^[ \t]*#.*$/gm, '');
+  const powershellSourceBound = (
+    /\$claudePassthroughArgs\s*=\s*@\(\)/.test(powershellCode)
+    && /\$afterSeparator\s*=\s*\$false/.test(powershellCode)
+    && /foreach \(\$arg in \$args\)/.test(powershellCode)
+    && /if \(\$arg -ceq '--no-deps'\)[\s\S]*?continue[\s\S]*?\} elseif \(\$afterSeparator\)[\s\S]*?\$claudePassthroughArgs \+= \[string\]\$arg[\s\S]*?\} elseif \(\$arg -ceq '--'\)[\s\S]*?\$afterSeparator = \$true/.test(powershellCode)
+    && /Invoke-AigentClaude -ClaudeArgs \(@\('\/start'\) \+ \$claudePassthroughArgs\)/.test(powershellCode)
+    && /Invoke-AigentClaude -ClaudeArgs \(@\('--continue', '\/open'\) \+ \$claudePassthroughArgs\)/.test(powershellCode)
+  );
+
+  const observed = {
+    shellFirstRun: runLauncherCapture({
+      frontDoor: 'sh',
+      operatorArgs,
+      returning: false,
+    }),
+    shellReturning: runLauncherCapture({
+      frontDoor: 'sh',
+      operatorArgs,
+      returning: true,
+    }),
+    powershellFirstRun: powerShellCommand === null
+      ? null
+      : runLauncherCapture({
+        frontDoor: 'ps1',
+        operatorArgs,
+        returning: false,
+        powerShellCommand,
+      }),
+    powershellReturning: powerShellCommand === null
+      ? null
+      : runLauncherCapture({
+        frontDoor: 'ps1',
+        operatorArgs,
+        returning: true,
+        powerShellCommand,
+      }),
+    powershellSourceBound,
+  };
+  assert.deepEqual(observed, {
+    shellFirstRun: ['--', '/start', ...opaqueArgs],
+    shellReturning: ['--', '--continue', '/open', ...opaqueArgs],
+    powershellFirstRun: powerShellCommand === null
+      ? null
+      : ['--', '/start', ...opaqueArgs],
+    powershellReturning: powerShellCommand === null
+      ? null
+      : ['--', '--continue', '/open', ...opaqueArgs],
+    powershellSourceBound: true,
+  });
+});
+
+test('V5 no-dash-dash unchanged: decoy args leave both fixed command shapes byte-identical', () => {
+  const decoyArgs = ['--model', 'opus', 'two words', 'opaque;value=$HOME'];
+  const powerShellCommand = resolvePowerShellForLauncherVector();
+  assert.deepEqual(
+    {
+      shellFirstRun: runLauncherCapture({
+        frontDoor: 'sh',
+        operatorArgs: decoyArgs,
+        returning: false,
+      }),
+      shellReturning: runLauncherCapture({
+        frontDoor: 'sh',
+        operatorArgs: decoyArgs,
+        returning: true,
+      }),
+      powershellFirstRun: powerShellCommand === null
+        ? null
+        : runLauncherCapture({
+          frontDoor: 'ps1',
+          operatorArgs: decoyArgs,
+          returning: false,
+          powerShellCommand,
+        }),
+      powershellReturning: powerShellCommand === null
+        ? null
+        : runLauncherCapture({
+          frontDoor: 'ps1',
+          operatorArgs: decoyArgs,
+          returning: true,
+          powerShellCommand,
+        }),
+    },
+    {
+      shellFirstRun: ['--', '/start'],
+      shellReturning: ['--', '--continue', '/open'],
+      powershellFirstRun: powerShellCommand === null
+        ? null
+        : ['--', '/start'],
+      powershellReturning: powerShellCommand === null
+        ? null
+        : ['--', '--continue', '/open'],
+    },
+  );
+});
+
 test('all three existing launchers remain the managed front door with an explicit no-deps bypass', () => {
   const shell = fs.readFileSync(
     path.join(REPOSITORY_ROOT, 'launcher', 'aigent.sh'),
@@ -1491,16 +1917,25 @@ test('all three existing launchers remain the managed front door with an explici
 
   assert.match(shell, /--no-deps/);
   assert.match(shell, /node "\$AIGENT_HOME\/daemons\/pty-runner\.mjs" -- "\$@"/);
-  assert.match(shell, /launch_claude "\/start"/);
-  assert.match(shell, /launch_claude --continue "\/open"/);
+  assert.match(
+    shell,
+    /launch_claude "\/start" \$\{operator_args\[0\]\+"\$\{operator_args\[@\]\}"\}/,
+  );
+  assert.match(
+    shell,
+    /launch_claude --continue "\/open" \$\{operator_args\[0\]\+"\$\{operator_args\[@\]\}"\}/,
+  );
 
   assert.match(powershell, /-ccontains '--no-deps'/);
   assert.match(powershell, /daemons\\pty-runner\.mjs/);
   assert.match(powershell, /& \$node\.Source \$runner '--' @ClaudeArgs/);
-  assert.match(powershell, /Invoke-AigentClaude -ClaudeArgs @\('\/start'\)/);
   assert.match(
     powershell,
-    /Invoke-AigentClaude -ClaudeArgs @\('--continue', '\/open'\)/,
+    /Invoke-AigentClaude -ClaudeArgs \(@\('\/start'\) \+ \$claudePassthroughArgs\)/,
+  );
+  assert.match(
+    powershell,
+    /Invoke-AigentClaude -ClaudeArgs \(@\('--continue', '\/open'\) \+ \$claudePassthroughArgs\)/,
   );
 
   assert.match(command, /aigent\.ps1" %\*/i);

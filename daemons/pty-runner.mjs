@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
   AutoClearTransport,
+  DEFAULT_PRESSURE_THRESHOLD_PCT,
   RunnerLockError,
   acquireRunnerLock,
   evaluateCheckpointFreshness,
@@ -40,6 +41,7 @@ const optionalRequire = createRequire(
 
 export const DEGRADED_NODE_PTY = 'DEGRADED:auto-clear-node-pty-unavailable';
 export const DEGRADED_NODE_PTY_LINE = `${DEGRADED_NODE_PTY} checkpoint/recovery available; auto-clear unavailable; launching unmanaged`;
+export const DEGRADED_PRESSURE_THRESHOLD_INVALID = 'DEGRADED:auto-clear-threshold-invalid';
 export const UNMANAGED_AUTO_CLEAR_OFF = 'UNMANAGED:auto-clear-disabled';
 export const CLEAR_CONTROL_INPUT = '/clear\r';
 export const DEFAULT_RUNNER_TICK_MS = 100;
@@ -2138,6 +2140,43 @@ export function runPtySession({
   runnerOptions = {},
 } = {}) {
   const memoryRoot = resolveMemoryRoot(root);
+  const thresholdConfigured = hasOwn(env, 'AIGENT_PRESSURE_THRESHOLD_PCT');
+  const thresholdRaw = env.AIGENT_PRESSURE_THRESHOLD_PCT;
+  const parsedThreshold = Number(thresholdRaw);
+  // V2 threshold-invalid-refuses: only a decimal integer in the committed
+  // 5-95 gate range may arm production automation.
+  const thresholdValid = !thresholdConfigured || (
+    typeof thresholdRaw === 'string'
+    && /^[0-9]+$/.test(thresholdRaw)
+    && parsedThreshold >= 5
+    && parsedThreshold <= 95
+  );
+  // V2 threshold-invalid-refuses: a bad operator value must stay loud and
+  // unmanaged; falling through would arm the wrong gate population.
+  if (!thresholdValid) {
+    try {
+      stderr.write(
+        `${DEGRADED_PRESSURE_THRESHOLD_INVALID} ${oneLine(thresholdRaw)}\n`,
+      );
+    } catch { /* visible if possible */ }
+    return {
+      mode: 'degraded',
+      code: DEGRADED_PRESSURE_THRESHOLD_INVALID,
+      exitCode: runUnmanagedFn({
+        command,
+        args: childArgs,
+        cwd,
+        env,
+        platform,
+        fsImpl,
+      }),
+    };
+  }
+  // V3 threshold-unset-default: the production constructor receives the
+  // committed 80 default explicitly when the environment surface is absent.
+  const pressureThresholdPct = thresholdConfigured
+    ? parsedThreshold
+    : DEFAULT_PRESSURE_THRESHOLD_PCT;
   if (forceUnmanaged) {
     return {
       mode: 'unmanaged',
@@ -2308,6 +2347,9 @@ export function runPtySession({
     env,
     log,
     acquireLock: false,
+    // V1 threshold-applied: bind the validated operator value at the real
+    // AutoClearTransport construction site, including every later rebind.
+    pressureThresholdPct,
   });
   let runner;
   try {

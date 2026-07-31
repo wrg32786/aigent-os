@@ -19,8 +19,23 @@ marker="$AIGENT_HOME/.aigent/first-run-done"
 claude_status=0
 
 unmanaged=0
+forward_operator_args=0
+# V5 no-dash-dash unchanged: without the literal separator this stays empty,
+# so the fixed /start and --continue /open command shapes do not move.
+operator_args=()
 for arg in "$@"; do
-  [ "$arg" = "--no-deps" ] && unmanaged=1
+  # V4 pass-through: --no-deps is the launcher-owned exception and is never
+  # handed to Claude, even when it appears after the separator.
+  if [ "$arg" = "--no-deps" ]; then
+    unmanaged=1
+  # V4 pass-through: after the first literal separator, preserve every other
+  # argument as one ordered array element.
+  elif [ "$forward_operator_args" -eq 1 ]; then
+    operator_args+=("$arg")
+  # V4 pass-through: only a literal -- opens the forwarded suffix.
+  elif [ "$arg" = "--" ]; then
+    forward_operator_args=1
+  fi
 done
 
 launch_claude() {
@@ -36,10 +51,13 @@ launch_claude() {
 
 if [ ! -f "$marker" ]; then
   mkdir -p "$(dirname "$marker")"
-  launch_claude "/start" || claude_status=$?
+  # V5 no-dash-dash unchanged: the [0]+ guard expands to zero words safely
+  # under stock macOS Bash 3 + nounset, while preserving a present empty arg.
+  launch_claude "/start" ${operator_args[0]+"${operator_args[@]}"} || claude_status=$?
   [ -f "$marker" ] || : > "$marker"
 else
-  launch_claude --continue "/open" || claude_status=$?
+  # V5 no-dash-dash unchanged: use the same old-Bash-safe zero-word guard.
+  launch_claude --continue "/open" ${operator_args[0]+"${operator_args[@]}"} || claude_status=$?
 fi
 
 printf "\n  Tip: next time, say \"close up\" before you quit — your AIgent banks the session so it remembers everything.\n\n"

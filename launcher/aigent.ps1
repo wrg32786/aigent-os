@@ -40,6 +40,24 @@ $runner = Join-Path $AigentHome 'daemons\pty-runner.mjs'
 $script:LaunchUnmanaged = $args -ccontains '--no-deps'
 $script:ClaudeExitCode = 0
 
+# V5 no-dash-dash unchanged: this array stays empty until a literal separator,
+# preserving the fixed first-run and returning command shapes.
+$claudePassthroughArgs = @()
+$afterSeparator = $false
+foreach ($arg in $args) {
+  # V4 pass-through: --no-deps remains launcher-owned on either side of --.
+  if ($arg -ceq '--no-deps') {
+    continue
+  # V4 pass-through: preserve each post-separator argument in its original
+  # order; splatting later retains argument boundaries.
+  } elseif ($afterSeparator) {
+    $claudePassthroughArgs += [string]$arg
+  # V4 pass-through: only the first literal -- opens the forwarded suffix.
+  } elseif ($arg -ceq '--') {
+    $afterSeparator = $true
+  }
+}
+
 function Invoke-AigentClaude {
   param([string[]]$ClaudeArgs)
 
@@ -62,11 +80,11 @@ if (-not (Test-Path $marker)) {
   # interview -> first win, then writes the marker itself. We also write it as a
   # fallback so a mid-flow exit never re-triggers the whole intro.
   New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
-  Invoke-AigentClaude -ClaudeArgs @('/start')
+  Invoke-AigentClaude -ClaudeArgs (@('/start') + $claudePassthroughArgs)
   if (-not (Test-Path $marker)) { New-Item -ItemType File -Force $marker | Out-Null }
 } else {
   # Returning operator: never cold-start. Warm-resume the latest session and orient.
-  Invoke-AigentClaude -ClaudeArgs @('--continue', '/open')
+  Invoke-AigentClaude -ClaudeArgs (@('--continue', '/open') + $claudePassthroughArgs)
 }
 
 Write-Host ""
