@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Clean-install RUNTIME test for the optional semantic-search feature.
-# Board 0c73e570 (Review #001, Lane 2).
 #
 # ── WHY A RUNTIME TEST AND NOT AN INSTALL TEST ────────────────────────────────
 # The defect this exists to catch: `npm ci/install --ignore-scripts` EXITS 0
@@ -81,7 +80,7 @@ PROBE
 if ! OUT="$(cd "$WORK" && node probe.mjs 2>&1)"; then
   printf '%s\n' "$OUT" >&2
   fail "semantic search cannot RUN on a clean --ignore-scripts install.
-      This is the board-0c73e570 defect: npm exited 0, so install.sh reports
+      npm exited 0, so install.sh reports
       '[ok] Semantic search dependencies installed', while the advertised
       feature is dead. Fix the install (see daemons/semantic-search/package.json
       overrides) or make install.sh degrade loudly -- never report it installed."

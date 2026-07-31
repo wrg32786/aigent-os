@@ -47,9 +47,17 @@ PASS=0
 WARN=0
 FAIL=0
 
-pass()  { echo "  [ok]   $1"; PASS=$((PASS + 1)); }
-warn()  { echo "  [warn] $1"; WARN=$((WARN + 1)); }
-fail()  { echo "  [fail] $1"; FAIL=$((FAIL + 1)); }
+# Every line of a message carries the tag. A multi-line message used to print its
+# tag on the first line only, so continuation lines were indistinguishable from
+# unlabelled output and a grep for '[warn]' under-counted a real warning. Tagging
+# per line keeps each line independently greppable and attributable. Single-line
+# output is byte-identical to the previous form, and the counter still counts
+# MESSAGES, not lines.
+_emit() { printf '%s\n' "$2" | while IFS= read -r _line; do printf '  %s%s\n' "$1" "$_line"; done; }
+
+pass()  { _emit '[ok]   ' "$1"; PASS=$((PASS + 1)); }
+warn()  { _emit '[warn] ' "$1"; WARN=$((WARN + 1)); }
+fail()  { _emit '[fail] ' "$1"; FAIL=$((FAIL + 1)); }
 
 echo ""
 echo "  aigent-OS Doctor"
@@ -243,8 +251,8 @@ fi
 
 # -- 9. Semantic search: does it LOAD, not does a directory exist ---------------
 # ⚑ THIS CHECK USED TO BE `[ -d node_modules ]` -> "semantic search ready".
-# Board 0c73e570: install.sh installs with --ignore-scripts (a deliberate security
-# control), under which npm exits 0 and CREATES node_modules while sharp's native
+# install.sh installs with --ignore-scripts (a deliberate security control),
+# under which npm exits 0 and CREATES node_modules while sharp's native
 # binary is never built -- and @xenova/transformers imports sharp at top level.
 # So the directory is present and the feature is dead, and this doctor -- the exact
 # thing the README sends people to when something is wrong -- reported "ready".
@@ -256,9 +264,9 @@ if [ "$NODE_OK" -eq 1 ]; then
     pass "semantic search verified -- @xenova/transformers loads"
   else
     warn "DEGRADED:semantic-search-unavailable -- node_modules is present but the module
-       does not load, so semantic search will NOT work (everything else is fine).
-       Usually a native dependency that needs a build step --ignore-scripts blocks.
-       Retry: cd daemons/semantic-search && npm install   (review package.json first)"
+does not load, so semantic search will NOT work (everything else is fine).
+Usually a native dependency that needs a build step --ignore-scripts blocks.
+Retry: cd daemons/semantic-search && npm install   (review package.json first)"
   fi
 else
   warn "semantic search install check skipped (Node not available)"

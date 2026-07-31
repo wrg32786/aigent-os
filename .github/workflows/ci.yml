@@ -204,3 +204,49 @@ jobs:
       - name: Web-install regression suite
         shell: bash
         run: bash tests/test-web-install.sh
+
+  # Optional semantic-search feature: does it actually RUN after the standard
+  # install, not merely resolve. The defect this guards is an installer that
+  # exits 0 while the feature is dead (npm --ignore-scripts leaves sharp's native
+  # binary unbuilt, and @xenova/transformers imports sharp at top level). No other
+  # job can see it: the installer suites run --no-deps, so the doctor check only
+  # ever reaches its node_modules-missing branch. Without this job a transformers
+  # bump or a dropped `sharp` override in daemons/semantic-search/package.json
+  # re-breaks a clean install silently.
+  #
+  # Its OWN job because it needs the npm registry and the HuggingFace model CDN,
+  # while the validate/installer gates are deliberately hermetic. Kept to
+  # ubuntu-latest on purpose: sharp 0.33 publishes a prebuilt for linux-x64, and
+  # widening to the 3-OS matrix would assert platforms this change has not
+  # measured. macos/darwin and windows coverage is unmeasured, not claimed.
+  semantic-search-runtime:
+    name: Semantic search runs on a clean install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clean-install runtime test (real embedding)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! out="$(bash tests/test-semantic-search-runtime.sh 2>&1)"; then
+            printf '%s\n' "$out"
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          # The test SKIPs (exit 0) when node is missing or too old, and says so
+          # loudly. If this job accepted a zero exit it would quietly become a
+          # no-op the day the runner image changed -- which is the same class of
+          # defect the test exists to catch. Demand the measured PASS line.
+          printf '%s\n' "$out" | grep -q '^PASS: semantic search installs AND runs' || {
+            echo "GATE DID NOT MEASURE THE FEATURE: no PASS line (skipped, or output changed)."
+            exit 1
+          }

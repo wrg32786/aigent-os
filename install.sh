@@ -899,7 +899,7 @@ else
       npm install --silent --ignore-scripts
     fi
 
-    # ⚑ VERIFY, DO NOT ASSUME (board 0c73e570). This used to print
+    # ⚑ VERIFY, DO NOT ASSUME. This used to print
     # "[ok] Semantic search dependencies installed" on npm's exit code alone.
     # Measured 2026-07-30: `npm install --ignore-scripts` exits 0 while sharp's
     # native binary is never built, and @xenova/transformers imports sharp at
