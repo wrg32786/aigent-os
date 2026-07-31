@@ -10,8 +10,15 @@
 // touched by the pruning pass.
 //
 // Every case runs against a throwaway HOME so no real operator state is read
-// or written. Skipped entirely when jq is unavailable (the script itself
-// degrades to a display-only no-op in that case, by design).
+// or written. Skipped entirely when the tooling these cases need is absent —
+// jq, or the bash that would answer whether jq is there (the script itself
+// degrades to a display-only no-op without jq, by design).
+//
+// ⚑ A SKIP HERE IS NOT A PASS, and CI now enforces that: the daemons-suite step
+// in ci.yml fails the build on any non-zero skip count, because this file
+// reported `pass 0 / skipped 4` and exit 0 on a jq-less machine for as long as
+// nobody looked (board 85d22ad1). If these are skipping, the runner is missing
+// something and the answer is to install it, never to let the gate absorb it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, rmSync } from 'node:fs';
@@ -23,7 +30,50 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(__dirname, '..', 'statusline-ctx.sh');
 
-const hasJq = spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status === 0;
+// Two absences, reported separately (board 85d22ad1, AC-4). The single
+// `spawnSync('bash', …).status === 0` this replaces read false when jq was
+// missing AND when bash could not be spawned at all, and labelled both
+// "jq unavailable" — a correct skip with a possibly-wrong reason. The reason is
+// the only thing a reader gets, so it has to name what is actually absent.
+//
+// `.error` is the spawn failing (no bash); a non-zero `.status` is bash running
+// and not finding jq. Distinct facts, distinct sentences.
+const bashProbe = spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' });
+// The happy path MUST be `false`, never `null`. node:test does not treat this
+// option as a truthiness test: measured on node v24.15.0, `false` and
+// `undefined` RUN, while `null`, `''`, and `true` all SKIP. An earlier revision
+// ended this chain in `null`, so on a machine where jq IS present all four tests
+// below skipped silently with no reason string, on a runner whose install step
+// had just logged "jq already present: jq-1.7" (board 6efdf2dc).
+// The refactor that introduced it was making the skip REASON more precise,
+// splitting "bash unavailable" from "jq unavailable", which was a real
+// improvement, and it changed the happy-path VALUE on the way past. Better
+// message, broken mechanism.
+const skipReason = bashProbe.error
+  ? `bash unavailable (${bashProbe.error.code || 'spawn failed'}) — jq presence unknown`
+  : bashProbe.status !== 0
+    ? 'jq unavailable'
+    : false;
+
+// REGRESSION GUARD for board 6efdf2dc. Runs on every machine, jq or not, and is
+// never itself skippable — a guard gated on the condition it protects would be
+// dark in exactly the situation that matters.
+// It pins the SHAPE of skipReason rather than its value, so it holds on a
+// jq-present runner and a jq-less laptop alike: either a non-empty string (a
+// real, reportable reason) or strictly `false` (run the tests). `null`, `''`,
+// and `undefined` are the three values that silently changed behaviour here, and
+// two of them skip while reading as "no reason to skip".
+test('skipReason is a non-empty string or strictly false, never a falsy skip', () => {
+  if (typeof skipReason === 'string') {
+    assert.ok(skipReason.length > 0, 'a string reason must be non-empty; "" SKIPS while reading as no-reason');
+    return;
+  }
+  assert.strictEqual(
+    skipReason, false,
+    `skipReason must be false when the tests should RUN, got ${JSON.stringify(skipReason)}. `
+    + 'node:test skips on null/""/true and runs on false/undefined; this option is not a truthiness test.',
+  );
+});
 
 function freshHome() {
   return mkdtempSync(path.join(tmpdir(), 'statusline-ctx-test-'));
@@ -43,7 +93,7 @@ const PAYLOAD = JSON.stringify({
   context_window: { used_percentage: 42.5 },
 });
 
-test('writes the sensor file atomically with a numeric used_percentage', { skip: !hasJq && 'jq unavailable' }, () => {
+test('writes the sensor file atomically with a numeric used_percentage', { skip: skipReason }, () => {
   const home = freshHome();
   try {
     const res = run(PAYLOAD, home);
@@ -64,7 +114,7 @@ test('writes the sensor file atomically with a numeric used_percentage', { skip:
   }
 });
 
-test('malformed payload and hostile session_id write nothing', { skip: !hasJq && 'jq unavailable' }, () => {
+test('malformed payload and hostile session_id write nothing', { skip: skipReason }, () => {
   const home = freshHome();
   try {
     for (const bad of [
@@ -84,7 +134,7 @@ test('malformed payload and hostile session_id write nothing', { skip: !hasJq &&
   }
 });
 
-test('delegates the visible line to an existing statusline script unchanged', { skip: !hasJq && 'jq unavailable' }, () => {
+test('delegates the visible line to an existing statusline script unchanged', { skip: skipReason }, () => {
   const home = freshHome();
   try {
     mkdirSync(path.join(home, '.claude'), { recursive: true });
@@ -102,7 +152,7 @@ test('delegates the visible line to an existing statusline script unchanged', { 
   }
 });
 
-test('prunes >7-day-idle *.json but never the sensor\'s *.state files', { skip: !hasJq && 'jq unavailable' }, () => {
+test('prunes >7-day-idle *.json but never the sensor\'s *.state files', { skip: skipReason }, () => {
   const home = freshHome();
   try {
     const dir = path.join(home, '.claude', 'ctx-refresh');
