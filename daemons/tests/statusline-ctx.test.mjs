@@ -39,11 +39,41 @@ const SCRIPT = path.join(__dirname, '..', 'statusline-ctx.sh');
 // `.error` is the spawn failing (no bash); a non-zero `.status` is bash running
 // and not finding jq. Distinct facts, distinct sentences.
 const bashProbe = spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' });
+// The happy path MUST be `false`, never `null`. node:test does not treat this
+// option as a truthiness test: measured on node v24.15.0, `false` and
+// `undefined` RUN, while `null`, `''`, and `true` all SKIP. An earlier revision
+// ended this chain in `null`, so on a machine where jq IS present all four tests
+// below skipped silently with no reason string, on a runner whose install step
+// had just logged "jq already present: jq-1.7" (board 6efdf2dc).
+// The refactor that introduced it was making the skip REASON more precise,
+// splitting "bash unavailable" from "jq unavailable", which was a real
+// improvement, and it changed the happy-path VALUE on the way past. Better
+// message, broken mechanism.
 const skipReason = bashProbe.error
   ? `bash unavailable (${bashProbe.error.code || 'spawn failed'}) — jq presence unknown`
   : bashProbe.status !== 0
     ? 'jq unavailable'
-    : null;
+    : false;
+
+// REGRESSION GUARD for board 6efdf2dc. Runs on every machine, jq or not, and is
+// never itself skippable — a guard gated on the condition it protects would be
+// dark in exactly the situation that matters.
+// It pins the SHAPE of skipReason rather than its value, so it holds on a
+// jq-present runner and a jq-less laptop alike: either a non-empty string (a
+// real, reportable reason) or strictly `false` (run the tests). `null`, `''`,
+// and `undefined` are the three values that silently changed behaviour here, and
+// two of them skip while reading as "no reason to skip".
+test('skipReason is a non-empty string or strictly false, never a falsy skip', () => {
+  if (typeof skipReason === 'string') {
+    assert.ok(skipReason.length > 0, 'a string reason must be non-empty; "" SKIPS while reading as no-reason');
+    return;
+  }
+  assert.strictEqual(
+    skipReason, false,
+    `skipReason must be false when the tests should RUN, got ${JSON.stringify(skipReason)}. `
+    + 'node:test skips on null/""/true and runs on false/undefined; this option is not a truthiness test.',
+  );
+});
 
 function freshHome() {
   return mkdtempSync(path.join(tmpdir(), 'statusline-ctx-test-'));
