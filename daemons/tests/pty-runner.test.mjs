@@ -29,6 +29,7 @@ import {
   DEGRADED_NODE_PTY,
   InputOwnershipTracker,
   ManagedPtyRunner,
+  loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
   runPtySession,
@@ -1539,6 +1540,44 @@ test('semantic-search no longer carries node-pty — transport owns its own depe
   assert.equal(manifest.dependencies['node-pty'], undefined);
   assert.equal(lock.packages['']?.dependencies?.['node-pty'], undefined);
   assert.equal(lock.packages['node_modules/node-pty'], undefined);
+});
+
+test('runner anchor pins node-pty resolution to transport-deps — source-bound', () => {
+  // Every behavioral test injects loadNodePtyFn, so no committed vector
+  // exercises the REAL createRequire anchor (R26 finding on d88cc19): a
+  // regression repointing it — e.g. back to semantic-search, where a stale
+  // local node_modules can mask the break — would ship green. This vector
+  // pins the anchor in source.
+  const source = fs.readFileSync(
+    path.join(REPOSITORY_ROOT, 'daemons', 'pty-runner.mjs'),
+    'utf8',
+  );
+  // Comments stripped so a description of the rule cannot satisfy the rule;
+  // the stripping blinds this vector to comment-class defects — named
+  // residue, accepted.
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(
+    code,
+    /createRequire\(\s*new URL\('\.\/transport-deps\/package\.json', import\.meta\.url\)/,
+  );
+  assert.doesNotMatch(code, /createRequire\([^)]*semantic-search/);
+});
+
+test('loadNodePty default path resolves the real transport-deps install when present', (t) => {
+  const installed = fs.existsSync(
+    path.join(REPOSITORY_ROOT, 'daemons', 'transport-deps', 'node_modules', 'node-pty'),
+  );
+  if (!installed) {
+    // Hermetic vantage: the real-resolution vector did NOT run here. Loud
+    // skip so a hermetic green is never read as anchor coverage.
+    t.skip('transport-deps/node_modules absent — real anchor resolution not exercised at this vantage');
+    return;
+  }
+  const result = loadNodePty();
+  assert.equal(result.ok, true);
+  assert.equal(typeof result.module.spawn, 'function');
 });
 
 test('ConPTY helper noise follows kill-then-linger, not handler disposal (93b9d2a review F1)', () => {
