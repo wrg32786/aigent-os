@@ -161,8 +161,60 @@ jobs:
           echo "Running ${#files[@]} daemons test files"
           for f in "${files[@]}"; do
             echo "::group::$f"
-            node "$f"
+            if ! out="$(node "$f" 2>&1)"; then
+              printf '%s\n' "$out"
+              echo "::endgroup::"
+              exit 1
+            fi
+            printf '%s\n' "$out"
             echo "::endgroup::"
+
+            # A SKIP IS NOT A PASS -- the same refusal as the empty-glob guard
+            # above, one level down. That guard catches "ran zero FILES and
+            # exited 0"; this catches "ran zero TESTS in a file and exited 0".
+            #
+            # node:test reports a skipped test in its summary and still exits 0.
+            # Measured on the dev machine 2026-07-31: statusline-ctx.test.mjs
+            # gates 4 tests on `command -v jq`, jq was absent, and the file
+            # reported `pass 0 / skipped 4` with EXIT CODE 0. The whole file was
+            # vacuous and the gate read green. The skip reason WAS printed --
+            # `# jq unavailable` on each line -- so the log was never blind; only
+            # the exit code was, and the exit code is the only thing CI reads.
+            #
+            # Anchored on `skipped N` at end-of-line so a test whose NAME
+            # contains "skipped" cannot trip it (verified against
+            # stop-capsule-writer.test.mjs, which has exactly that).
+            #
+            # `|| true` on the pipelines: under `pipefail` a non-matching grep
+            # would abort the step, turning "no summary line" into a crash
+            # instead of a zero.
+            #
+            # ⚑ THIS SUITE IS MIXED, so the check is GATED ON BEING APPLICABLE
+            # rather than assuming every file reports. Plain scripts (e.g.
+            # stop-capsule-writer.classify.test.mjs, which ends "…: PASS") emit
+            # no summary at all; node:test files emit `tests N`. Keying off
+            # `tests N` tells "this file reported and skipped none" apart from
+            # "this file does not report" -- without it, an absent summary reads
+            # as zero and the gate fails OPEN.
+            #
+            # That distinction is not theoretical: the first version of this
+            # guard was "green" on a plain script and I had proven nothing,
+            # because it never parsed a number at all.
+            reported="$(printf '%s\n' "$out" | grep -cE '^.{0,4}tests [0-9]+$' || true)"
+            skipped="$(printf '%s\n' "$out" | grep -E 'skipped [0-9]+$' | tail -1 | grep -oE '[0-9]+$' || true)"
+            if [ "${reported:-0}" -ne 0 ] && [ -z "$skipped" ]; then
+              echo "$f printed a node:test summary but no parseable skip count."
+              echo "Refusing to guess: the reporter format changed, or output was truncated."
+              exit 1
+            fi
+            if [ "${skipped:-0}" -ne 0 ]; then
+              echo "$f reported ${skipped} SKIPPED test(s), and exited 0."
+              echo "Refusing to report a green gate for tests that never ran."
+              echo "Each skip prints its own reason above. Either provide what the"
+              echo "test needs on this runner, or delete the test -- a permanently"
+              echo "skipped test is a claim nobody is checking."
+              exit 1
+            fi
           done
 
       - name: Codex adapter tests
