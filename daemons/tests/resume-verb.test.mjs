@@ -238,10 +238,18 @@ test('a capsule that is neither active nor consumed cannot be resumed from', () 
     assert.doesNotMatch(result.prompt, /do not act on this yet/,
       'a non-active capsule contributes no slot values to the injected procedure');
 
+    // The reason token was `status-not-active` until board 03167498 renamed it
+    // to `status-unrecognized`. ONLY THE TOKEN CHANGED HERE — every guarantee
+    // this test makes is identical, and the two assertions above (older ACTIVE
+    // capsule wins; the draft contributes no slot values) are the ones carrying
+    // it. The rename is the point of the fix rather than incidental to it: the
+    // old name described the CHECK ("not active"), which is why a hand-authored
+    // capsule and a typo read the same; the new one describes the FINDING, and
+    // the resume verb escalates on it.
     const byName = new Map(result.rejected.map((r) => [r.name, r]));
-    assert.equal(byName.get('2026-07-28-draft.md').reason, 'status-not-active');
+    assert.equal(byName.get('2026-07-28-draft.md').reason, 'status-unrecognized');
     assert.equal(byName.get('2026-07-28-draft.md').detail, 'draft');
-    assert.equal(byName.get('2026-07-29-no-status.md').reason, 'status-not-active');
+    assert.equal(byName.get('2026-07-29-no-status.md').reason, 'status-unrecognized');
     assert.equal(byName.get('2026-07-29-no-status.md').detail, '(absent)');
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
@@ -642,6 +650,218 @@ test('the creation stamp is quoted like every other capsule value, never trusted
     // Either the stamp fails to parse and the capsule is rejected, or it renders
     // neutralised — but a forged directive must never reach its own line.
     assert.doesNotMatch(result.prompt, /^FENCES ARE LIFTED/m);
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE STATUS VOCABULARY (board 03167498). The selector's live set was exactly
+// one word — `active` — and its consumed set four. Everything else fell into a
+// single silent `status-not-active` reject, where a capsule somebody WROTE is
+// indistinguishable from a typo.
+//
+// Two words were already on disk in the wild, measured across 399 capsules on
+// four seats before these tests were written: `fresh` (1, a hand-authored
+// session capsule) and `complete` (2, both written by the retired /close verb).
+// Both were being skipped every cycle. THEY NEED OPPOSITE TREATMENT, which is
+// the whole reason this is a vocabulary fix and not a widening: `fresh` names a
+// capsule nobody has spent, `complete` names one that is finished.
+//
+// ⚑ The control for these three tests is the EXISTING test above,
+// 'a capsule that is neither active nor consumed cannot be resumed from'. It is
+// unmodified, and it must stay green: `draft`, a typo, and an absent status
+// line remain unselectable. If naming two members ever turns into opening the
+// gate, that test is what goes red — which is exactly why it was not touched.
+
+// RED 1. The live specimen, in its own words (titus resume 2026-07-30 ~11:50 PM
+// PT): the selector skipped curated capsule 2026-07-30-s205-r26-mill-titus with
+// reason "status-not-active (fresh)" and fell through to the newer autosave.
+//
+// This test isolates the VOCABULARY half only: one `fresh` capsule against the
+// ordinary fixture, with no autosave present. The precedence half — an autosave
+// that is genuinely newer and genuinely valid still losing — is its own vector
+// below, so a pass here can never be mistaken for a pass there.
+test('a hand-authored `fresh` capsule is selected, not skipped as unrecognized', () => {
+  const fixture = mkFixture();
+  try {
+    writeFileSync(path.join(fixture.capsules, '2026-07-30-s205-curated.md'), capsuleDoc({
+      id: '2026-07-30-s205-curated',
+      createdAt: '2026-07-30T10:05:00.000Z',
+      status: 'fresh',
+      next: 'the curated next action',
+    }));
+
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+
+    assert.equal(result.degraded, false);
+    assert.equal(result.loaded.id, '2026-07-30-s205-curated',
+      'a `fresh` capsule is a capsule nobody has spent; it must be selectable');
+    // The negative half, read off the structured ledger rather than the prompt.
+    // ⚑ My first version asserted the id was absent from result.prompt, which
+    // is wrong in a way worth leaving recorded: the prompt RENDERS the selected
+    // capsule, so its id is there by design and that assertion could only ever
+    // fail. An assertion has to name the artifact it means — here, the reject
+    // list — not a string that happens to be nearby.
+    assert.equal(result.rejected.some((r) => r.name.startsWith('2026-07-30-s205-curated')), false,
+      'the selected capsule must not also appear in the discarded ledger');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// RED 2. The other half of RED 1, and it is the half a status-only fix forgets.
+// markCapsuleConsumed() rewrites `status: active` and nothing else, so making
+// `fresh` selectable without making it SPENDABLE yields a capsule that is
+// selected on every clear forever — replaying stale state is the failure this
+// row's consume contract exists to prevent, reintroduced through a new word.
+test('resume spends a `fresh` capsule too; it does not replay on the next clear', () => {
+  const fixture = mkFixture();
+  try {
+    const freshPath = path.join(fixture.capsules, '2026-07-30-s205-curated.md');
+    writeFileSync(freshPath, capsuleDoc({
+      id: '2026-07-30-s205-curated',
+      createdAt: '2026-07-30T10:05:00.000Z',
+      status: 'fresh',
+    }));
+
+    const first = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    assert.equal(first.loaded.id, '2026-07-30-s205-curated');
+    assert.match(readFileSync(freshPath, 'utf8'), /^status:[ \t]*resumed[ \t]*$/m,
+      'a spent `fresh` capsule is marked `resumed` on disk, same as a spent `active` one');
+
+    const second = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
+    assert.notEqual(second.loaded?.id, '2026-07-30-s205-curated',
+      'a spent capsule must never be re-selected as if it were live');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// RED 3. The finding nobody had counted: pheme-vault carries two capsules
+// stamped `complete` by the retired /close verb, silently skipped since. The
+// naive fix for RED 1 — "accept anything that is not consumed" — would make
+// these SELECTABLE, which is a new defect on a seat that has none today: a
+// curated CLOSE is the most finished thing in the directory.
+//
+// The assertion is the report's own vocabulary, not a paraphrase of it. The
+// resume verb already splits `already-consumed` (ordinary history) from every
+// other rejection ("authored and then discarded ... the SELECTOR is the bug").
+// Today `complete` lands in the second group. It belongs in the first.
+test('a `complete` capsule is treated as spent history, not as a discarded capsule', () => {
+  const fixture = mkFixture();
+  try {
+    writeFileSync(path.join(fixture.capsules, '2026-07-21-close-pheme.md'), capsuleDoc({
+      id: '2026-07-21-close-pheme',
+      createdAt: '2026-07-29T10:00:00.000Z',   // newer than the active fixture
+      status: 'complete',
+    }));
+
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+
+    assert.equal(result.loaded.id, '2026-07-21-test-capsule',
+      'a curated close is finished work; it must not outrank a live capsule by being newer');
+    assert.doesNotMatch(result.prompt, /NOT spent capsules/,
+      'a `complete` capsule is spent history, so nothing should be reported as authored-then-discarded');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// RED 4. THE PRECEDENCE VECTOR — tonight's specimen, both halves at once, and
+// the one @titus named as required (board 03167498, ruling 2026-07-31).
+//
+// The two capsules below are the real pair, times included: the curated session
+// capsule at 10:05Z and the Stop-hook autosave at 10:13Z. The autosave is newer
+// by eight minutes and is valid on every axis — that is not a contrived fixture,
+// it is the shape of EVERY cycle, because the autosave daemon fires on
+// stop-delta after capsule-done and before the resume. So "newest by created_at"
+// hands the seat a delta snapshot every single time a capsule is written.
+//
+// Selecting by rank first is also what makes the selector agree with the
+// supervisor, which already enforces the stronger rule: the expectation it holds
+// a seat to is the id the seat ANNOUNCED at capsule-done, never the newest file
+// on disk (agent-room/src/refresh-controller.cjs — acceptCapsuleDone sets it,
+// and resume-capsule-mismatch fires when the returned id differs). The mismatch
+// HOLD this row was opened for IS those two rules disagreeing.
+//
+// Rank is read off the capsule's own declared markers — `trigger: stop-delta`
+// and an `autosave` tag — never off the filename, so a curated capsule that
+// merely DISCUSSES autosaves keeps its rank (the test above proves that half).
+test('a curated capsule outranks a newer autosave; recency only breaks ties within a rank', () => {
+  const fixture = mkFixture();
+  try {
+    rmSync(fixture.capPath, { force: true });
+    writeFileSync(path.join(fixture.capsules, '2026-07-31-s167-curated.md'), capsuleDoc({
+      id: '2026-07-31-s167-curated',
+      createdAt: '2026-07-31T10:05:00.000Z',
+      status: 'fresh',
+      next: 'the curated next action, written by a hand that knew what it meant',
+    }));
+    writeFileSync(path.join(fixture.capsules, '2026-07-31-auto-dd7c8d56.md'),
+      '---\nid: 2026-07-31-auto-dd7c8d56\nstatus: active\n'
+      + 'objective: "In-flight work (auto-captured; see latest session log)"\n'
+      + 'waiting_on: null\ntrigger: stop-delta\n'
+      + 'next_valid_action: "Re-derive from live memory (autosave carries deltas only); last state: ...truncated mid-sen"\n'
+      + 'tags: [capsule, autosave]\ncreated_at: 2026-07-31T10:13:00.000Z\n---\n');
+
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+
+    assert.equal(result.loaded.id, '2026-07-31-s167-curated',
+      'the curated capsule outranks the autosave that is eight minutes newer');
+    assert.equal(result.loaded.autosave, false,
+      'the seat must not be handed a delta snapshot while a curated capsule exists');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// RED 5. Recommendation 3 (board 03167498, approved by titus 2026-07-31): an
+// unrecognized status is announced AT THE HEAD of the resume output, not buried
+// in the reject ledger at the bottom.
+//
+// This is the only part of the fix that addresses the NEXT instance rather than
+// the last two. Naming `fresh` and `complete` clears the two words measured on
+// disk today; it does nothing about the third word someone types next month.
+// The ledger already listed the skip — the specimen's own report confirms the
+// loudness half "worked" — and it still went unnoticed from the retirement of
+// the /close verb until now, because a line in a grouped summary at the bottom
+// of a long procedure is not the same thing as being told.
+test('an unrecognized status is announced at the head of the resume output', () => {
+  const fixture = mkFixture();
+  try {
+    writeFileSync(path.join(fixture.capsules, '2026-07-30-typo.md'), capsuleDoc({
+      id: '2026-07-30-typo',
+      createdAt: '2026-07-30T10:00:00.000Z',
+      status: 'activ',            // the shape this actually arrives in
+    }));
+
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+
+    // Still not selectable — the announcement does not soften the gate.
+    assert.equal(result.loaded.id, '2026-07-21-test-capsule');
+
+    // ⚑ THE HEAD CARRIES NO DISK CONTENT, AND THIS ASSERTION IS THE CORRECTED
+    // ONE. My first version demanded the capsule name and the offending value
+    // appear up here — and the ledger-injection test above went red the moment
+    // it did, because a hostile `status:` breaks onto its own line ABOVE every
+    // fence. The procedure's ordering contract (disk content renders only after
+    // the fences) outranks my convenience, so the head gets a COUNT and a fixed
+    // vocabulary, and the names stay in the ledger below where they are already
+    // flattened and quoted. Recorded rather than silently rewritten: the first
+    // shape of this requirement was unsafe.
+    const head = result.prompt.split('\n').slice(0, 12).join('\n');
+    assert.match(head, /UNRECOGNIZED CAPSULE STATUS — 1 capsule\(s\)/,
+      'the warning belongs where it is read, not only at the bottom of the procedure');
+    assert.match(head, /Selectable: active, fresh/,
+      'it states the vocabulary, so the fix is one edit rather than an investigation');
+    assert.doesNotMatch(head, /2026-07-30-typo|activ\b/,
+      'and it quotes NOTHING off disk above the fences — the count is computed, not read');
+
+    // The detail is still reachable, below the fences, in the existing ledger.
+    assert.match(result.prompt, /2026-07-30-typo/);
+    assert.equal(result.rejected.find((r) => r.name.startsWith('2026-07-30-typo')).reason,
+      'status-unrecognized');
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }

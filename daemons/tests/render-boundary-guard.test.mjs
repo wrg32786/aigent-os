@@ -1349,6 +1349,18 @@ const JS_SAFE_READER_ALLOWLIST = [
   },
   {
     file: 'daemons/lifecycle-common.mjs',
+    accessor: 'scalar',
+    needle: "scalar(doc, 'trigger')",
+    reason: 'rank classification tests the trigger token for equality and never renders it',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
+    accessor: 'scalar',
+    needle: "scalar(doc, 'tags')",
+    reason: 'rank classification regex-tests the tag list and never renders it',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
     accessor: 'capsuleValue',
     needle: "capsuleValue(doc, 'objective')",
     reason: 'selection returns a single-line value whose prompt consumers apply inert',

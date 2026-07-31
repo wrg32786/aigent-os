@@ -78,7 +78,45 @@ export function memRoot(root) {
 // state; every status here marks a capsule kept for the record, not for replay.
 // It is tracked as its own rejection reason so the ledger below can separate
 // ordinary history from a capsule that was authored and then thrown away.
-export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
+// `complete` is here because the retired /close verb stamped it, and a curated
+// close is the most finished thing in the directory. Measured before it was
+// added: two such capsules sit in the wild, silently rejected every cycle since
+// that verb retired, because nothing in either set named the word.
+export const CONSUMED_STATUSES = new Set([
+  'resumed', 'resolved', 'consumed', 'superseded', 'complete',
+]);
+
+// The LIVE set: a capsule nobody has spent yet. It was implicit and its only
+// member was `active` (board 03167498), which made the reader's vocabulary one
+// word wide while the writers' was wider — a hand-authored `fresh` capsule went
+// into the same silent reject bucket as a typo, and the seat resumed off an
+// autosave delta instead. Measured across 399 capsules on four seats: `fresh`
+// and `complete` were the only two words outside the sets, and they needed
+// OPPOSITE homes, which is why this is a named vocabulary and not a widening.
+//
+// ⚑ THIS IS A CLOSED SET ON PURPOSE. Everything outside LIVE ∪ CONSUMED stays
+// unselectable — a draft, a typo, a fork's own vocabulary, an absent status
+// line. resume-verb.test.mjs's 'neither active nor consumed cannot be resumed
+// from' is the control that proves adding members never became opening a gate;
+// it is deliberately unmodified. Add a word here only after measuring that a
+// writer really emits it, and only into the set that matches what it MEANS.
+export const LIVE_STATUSES = new Set(['active', 'fresh']);
+
+// Rank, not recency. An autosave is a delta snapshot wearing a capsule's schema
+// (Stop-hook, `trigger: stop-delta`); a curated capsule is a hand's account of
+// where the work stands. The autosave daemon fires AFTER capsule-done and
+// before the resume, so on a pure created_at ordering it wins every cycle a
+// capsule is actually written — which is the mismatch this row was opened for:
+// the supervisor holds the seat to the id it ANNOUNCED at capsule-done, while
+// the selector was handing back the newest file. Ranking curated above autosave
+// makes the reader agree with the expectation the fleet already enforces.
+//
+// Read off the capsule's OWN declared markers, never the filename: a curated
+// capsule that merely discusses autosaves keeps its rank.
+export function isAutosaveCapsule({ trigger, tags }) {
+  return trigger === 'stop-delta'
+    || /(^|[,[\s])autosave([,\]\s]|$)/.test(tags || '');
+}
 
 // Resume has one selector: the valid active capsule with the newest frontmatter
 // created_at. Any unreadable or malformed candidate is ignored; hook callers
@@ -123,6 +161,8 @@ export function selectCapsule(memoryRoot) {
     const createdRaw = scalar(doc, 'created_at');
     const created = Date.parse(String(createdRaw));
     const status = scalar(doc, 'status');
+    const trigger = scalar(doc, 'trigger');
+    const tags = scalar(doc, 'tags');
     const objective = capsuleValue(doc, 'objective');
     const nextAction = capsuleValue(doc, 'next_valid_action');
 
@@ -131,7 +171,17 @@ export function selectCapsule(memoryRoot) {
     // here is already spent" (the ordinary end of a cycle) from "the selector
     // threw away capsules somebody wrote" (a defect).
     if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
-    if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
+    // ⚑ LOUD, and distinctly so. This is where a hand-authored capsule used to
+    // die quietly: one `status-not-active` line in a ledger, indistinguishable
+    // from a typo, for as long as nobody looked. A word the writers use and the
+    // readers do not is a vocabulary gap that costs a cycle at most IF it is
+    // announced — and a month if it is not. The reason string is what the
+    // resume verb escalates on, so the NEXT new word surfaces on first contact
+    // instead of degrading the seat to an autosave in silence.
+    if (!LIVE_STATUSES.has(status)) {
+      note(name, 'status-unrecognized', status || '(absent)');
+      continue;
+    }
     if (!id || !id.trim()) { note(name, 'no-id'); continue; }
     if (!Number.isFinite(created)) { note(name, 'bad-created_at', createdRaw || '(absent)'); continue; }
     // The field-level reason matters most here: "missing next_valid_action" on a
@@ -145,8 +195,13 @@ export function selectCapsule(memoryRoot) {
       );
       continue;
     }
-    if (!best || created > best.created) {
-      best = { path: full, id, created, createdRaw };
+    // RANK FIRST, RECENCY SECOND. rank 0 = curated, rank 1 = autosave delta.
+    // A lower rank always wins; created_at only breaks ties WITHIN a rank, so a
+    // curated capsule is never displaced by an autosave written eight minutes
+    // later — which was the every-cycle case, not an edge one.
+    const rank = isAutosaveCapsule({ trigger, tags }) ? 1 : 0;
+    if (!best || rank < best.rank || (rank === best.rank && created > best.created)) {
+      best = { path: full, id, created, createdRaw, rank };
     }
   }
 
@@ -228,14 +283,23 @@ export function markCapsuleConsumed(capsulePath) {
     capsulePath,
     'status mutation preserves the complete capsule outside the active frontmatter token',
   );
-  const marked = unsafeRawRewriteScalar(
-    doc,
-    'status',
-    'active',
-    'resumed',
-    'consume transition preserves every byte outside the leading status scalar',
-  );
-  if (marked === doc) return false; // not active — already spent, nothing to mark
+  // ⚑ EVERY LIVE STATUS, not just `active`. This half is what a vocabulary fix
+  // forgets: making a word SELECTABLE without making it SPENDABLE yields a
+  // capsule that is chosen on every clear forever, replaying stale state — the
+  // exact failure the consume contract exists to prevent, reintroduced through
+  // a new word. The two sets are read from one place so they cannot drift.
+  let marked = doc;
+  for (const live of LIVE_STATUSES) {
+    marked = unsafeRawRewriteScalar(
+      doc,
+      'status',
+      live,
+      'resumed',
+      'consume transition preserves every byte outside the leading status scalar',
+    );
+    if (marked !== doc) break;
+  }
+  if (marked === doc) return false; // not live — already spent, nothing to mark
   writeFileSync(capsulePath, marked);
   return true;
 }

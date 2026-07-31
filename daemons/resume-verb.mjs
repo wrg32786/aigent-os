@@ -155,6 +155,39 @@ function autosaveLines(loaded) {
   ];
 }
 
+// The head-of-output escalation for a status neither set recognizes. Kept apart
+// from rejectionReport() on purpose: that report is a grouped summary of
+// everything skipped, which is the right shape for a ledger and the wrong shape
+// for a warning. This one names the capsule and the exact offending value, so
+// the response is a single edit rather than an investigation.
+// ⚑ NOT ONE BYTE OF DISK CONTENT. This block renders ABOVE the fences, and the
+// procedure's ordering contract is that everything read off disk renders AFTER
+// them — a capsule cannot be quoted to a reader who has not yet been told the
+// fences exist. My first version interpolated the capsule name and the offending
+// status value here; the ledger-injection test caught it immediately, with a
+// hostile `status:` that broke onto its own line above every fence. That test
+// was right and this shape is the consequence: the count is COMPUTED (a number),
+// the vocabulary is a literal, and the names stay in the ledger below, where
+// rejectionSummary() has already flattened and quoted them.
+//
+// The warning is still at the head, which is the whole point — the ledger at the
+// bottom already listed these skips and nobody noticed for weeks. Being listed
+// is not being told. But loudness never buys its way past the fence order.
+function unrecognizedStatusLines(rejected) {
+  const unknown = (rejected || []).filter((r) => r.reason === 'status-unrecognized');
+  if (!unknown.length) return [];
+  return [
+    `*** UNRECOGNIZED CAPSULE STATUS — ${unknown.length} capsule(s) could not be selected ***`,
+    '  A capsule someone WROTE is unreachable, and this resume is proceeding without it.',
+    '  Selectable: active, fresh. Spent: resumed, resolved, consumed, superseded, complete.',
+    '  Each one is named with its exact status under CAPSULES NOT SELECTED at the end of',
+    '  this procedure. Fix the WRITER, or add the word to the selector\'s vocabulary — do',
+    '  not hand-edit the capsule to satisfy the matcher, which hides the gap rather than',
+    '  closing it.',
+    '',
+  ];
+}
+
 function rejectionReport(rejected) {
   const summary = rejectionSummary(rejected);
   if (!summary) return [];
@@ -184,10 +217,18 @@ function procedurePrompt(loaded, rejected = null) {
   const lines = [];
   lines.push('[RESUME VERB] This is a post-clear boot. Your ENTIRE job: load → re-ground → ACT on waiting_on. Resumption is proven by the action taken, never by this text being in context.');
   lines.push('');
+  // ⚑ AT THE HEAD, DELIBERATELY (board 03167498). An unrecognized status means
+  // a capsule somebody WROTE is unreachable, and the seat is about to resume
+  // off something else without knowing. That skip was already in the reject
+  // ledger at the bottom of this procedure, and it still went unnoticed from
+  // the retirement of the /close verb until it was measured — being listed is
+  // not being told. It goes above the selection line because a warning about
+  // what was NOT loaded is worthless after the reader has accepted what was.
+  for (const line of unrecognizedStatusLines(rejected)) lines.push(line);
   if (loaded) {
-    lines.push('A capsule was selected (newest valid by created_at). Its values are quoted under CAPSULE DATA at the END of this procedure — read them there, after the fences and steps below.');
+    lines.push('A capsule was selected (curated capsules outrank autosave deltas; newest by created_at within a rank). Its values are quoted under CAPSULE DATA at the END of this procedure — read them there, after the fences and steps below.');
   } else {
-    lines.push('No resolvable capsule (no valid active capsule found — a read failure, if any, is already logged). Do NOT guess at prior state: re-derive entirely from the live memory in the re-ground step below.');
+    lines.push('No resolvable capsule (no valid live capsule found — a read failure, if any, is already logged). Do NOT guess at prior state: re-derive entirely from the live memory in the re-ground step below.');
   }
   lines.push('');
   lines.push('FENCES (never cross):');
