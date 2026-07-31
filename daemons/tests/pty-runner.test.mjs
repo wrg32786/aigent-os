@@ -434,6 +434,7 @@ class RunnerHarness {
       lockState: 'free',
       pauseBeforeControlWrite: false,
       teardownShape: 'normal',
+      stdinTty: false,
       ...options,
     };
     this.fixture = makeFixture(
@@ -441,6 +442,10 @@ class RunnerHarness {
     );
     this.scheduler = new ManualScheduler();
     this.stdin = new ScriptedStream();
+    // start() takes input ownership only on a TTY (pty-runner.mjs isTTY guard),
+    // so raw-mode vectors must opt in — the fake defaults to isTTY=false and
+    // every pre-existing test runs with the raw-mode path dormant.
+    if (this.options.stdinTty) this.stdin.isTTY = true;
     this.stdout = new ScriptedStream({ columns: 100, rows: 30 });
     this.stderr = new ScriptedStream();
     this.processLike = new ScriptedStream();
@@ -1596,5 +1601,77 @@ test('launcher degraded line names node itself when node is missing (93b9d2a rev
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test('an ambiguous control-write failure keeps the hold and never retries (leg-3 ponytail)', () => {
+  // The commit-site catch (runner-control-write-ambiguous) implements the
+  // at-most-once rule at the write itself: _writeControl marks the attempt
+  // BEFORE pty.write, so once the throw lands the write may or may not have
+  // reached the child — ambiguity is terminal, hold until receipt or watchdog,
+  // never resubmit. Neutering the `submitted` disjunction in that catch sends
+  // this same failure down the retry-allowed abort path and every phase/hold
+  // assertion below goes red.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    harness.attemptAutomaticClear();
+    assert.equal(harness.runner.phase, 'prepared');
+
+    harness.pty.failWritesRemaining = 1; // the control write itself throws
+    harness.flushControl(); // commitClearSubmission runs here
+
+    const observed = harness.snapshot();
+    assert.equal(harness.runner.phase, 'submitted');
+    assert.equal(observed.holdActive, true);
+    assert.equal(observed.lastDecision?.code, 'runner-control-write-ambiguous');
+    assert.equal(
+      observed.events.some((entry) => entry.startsWith('submission-ambiguous')),
+      true,
+    );
+    // The throw preceded the fake's record: zero PHYSICAL writes landed, and
+    // exactly one attempt was made.
+    assert.deepEqual(observed.automaticWrites, []);
+    assert.equal(harness.runner.controlWriteAttempts, 1);
+
+    // Never retry: further ticks may not attempt a second write.
+    harness.drive();
+    harness.drive();
+    assert.equal(harness.runner.phase, 'submitted');
+    assert.equal(harness.runner.controlWriteAttempts, 1);
+    assert.deepEqual(harness.snapshot().automaticWrites, []);
+
+    // The watchdog is the release path (TTL = fuse): hold clears, still no write.
+    harness.fireWatchdog();
+    const released = harness.snapshot();
+    assert.equal(released.holdActive, false);
+    assert.equal(harness.runner.controlWriteAttempts, 1);
+    assert.deepEqual(released.automaticWrites, []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('teardown restores the operator terminal to its pre-start raw state (leg-3 ponytail)', () => {
+  // start() records stdin.isRaw before forcing raw mode; _disposeHandlers hands
+  // the recorded value back on the way out. Neuter the stdinWasRaw write-back
+  // in _disposeHandlers and the post-shutdown assertion goes red: the
+  // operator's terminal would stay raw after the runner exits.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+    stdinTty: true,
+  });
+  try {
+    assert.equal(harness.stdin.isRaw, true); // raw mode forced at start()
+    harness.shutdown();
+    assert.equal(harness.stdin.isRaw, false); // pre-start state restored
+  } finally {
+    harness.cleanup();
   }
 });
