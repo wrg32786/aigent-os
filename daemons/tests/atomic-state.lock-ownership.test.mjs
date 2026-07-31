@@ -42,6 +42,77 @@ function backdate(lockFile, ms) {
 }
 
 describe('atomic-state lock ownership', () => {
+  it('a committed successor is not deleted by a contender that observed the prior stale marker', () => {
+    const { dir, target } = freshTarget();
+    const lockFile = lockPathFor(target);
+    const successorToken = 'committed-successor-token';
+    try {
+      const expired = acquireLock(target, { timeoutMs: 500 });
+      backdate(lockFile, 20_000);
+
+      // Commit the exact bad interleaving at the old mechanism's boundary:
+      // A has obtained the stale marker's stat; before A acts on that decision,
+      // B removes it and commits a fresh successor marker at the same pathname.
+      // Returning A's already-observed stat makes this deterministic rather
+      // than asking a scheduler to hit a nanosecond-wide production race.
+      let committed = false;
+      const fsImpl = new Proxy(fs, {
+        get(base, property) {
+          if (property === 'statSync') {
+            return (candidate, ...args) => {
+              const observed = base.statSync(candidate, ...args);
+              if (!committed && candidate === lockFile) {
+                committed = true;
+                base.unlinkSync(lockFile);
+                base.writeFileSync(lockFile, JSON.stringify({
+                  pid: process.pid,
+                  token: successorToken,
+                  at: new Date().toISOString(),
+                }));
+              }
+              return observed;
+            };
+          }
+          const value = Reflect.get(base, property);
+          return typeof value === 'function' ? value.bind(base) : value;
+        },
+      });
+
+      let acquired = null;
+      let refused = null;
+      try {
+        acquired = acquireLock(target, {
+          fsImpl, timeoutMs: 40, staleMs: 1_000, pollMs: 5,
+        });
+      } catch (error) {
+        refused = error;
+      }
+
+      assert.equal(committed, true, 'setup: the successor interleaving must have committed');
+      assert.equal(
+        refused?.code,
+        'ELOCKTIMEOUT',
+        `the stale contender acquired after deleting the committed successor (${acquired?.token || 'no token'})`,
+      );
+      assert.equal(
+        JSON.parse(fs.readFileSync(lockFile, 'utf8')).token,
+        successorToken,
+        'the stale contender replaced or deleted the committed successor marker',
+      );
+
+      // The expired handle is now a non-owner; its release must be a loud,
+      // typed refusal and must leave the successor untouched.
+      assert.throws(
+        () => releaseLock(expired),
+        (error) => error.code === 'ELOCKOWNERSHIP' && /refus/i.test(error.message),
+        'the expired owner release did not report its ownership refusal',
+      );
+      assert.equal(JSON.parse(fs.readFileSync(lockFile, 'utf8')).token, successorToken);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('a slow holder does NOT delete the lock of the writer that broke it', () => {
     const { dir, target } = freshTarget();
     try {
@@ -53,7 +124,11 @@ describe('atomic-state lock ownership', () => {
       assert.notEqual(breaker.token, slow.token, 'setup: each acquisition must stamp a distinct token');
 
       // The slow holder finally reaches its finally-block.
-      releaseLock(slow);
+      assert.throws(
+        () => releaseLock(slow),
+        (error) => error.code === 'ELOCKOWNERSHIP' && /refus/i.test(error.message),
+        'the expired holder must report that it no longer owns the marker',
+      );
 
       assert.equal(
         fs.existsSync(lockPathFor(target)),
@@ -83,6 +158,14 @@ describe('atomic-state lock ownership', () => {
     try {
       const handle = acquireLock(target, { timeoutMs: 500 });
       assert.equal(fs.existsSync(lockPathFor(target)), true);
+      assert.match(
+        handle.token,
+        new RegExp(`^${process.pid}-[0-9a-f]{24}$`),
+        'owner token must contain the acquiring pid plus fresh random bytes',
+      );
+      const marker = JSON.parse(fs.readFileSync(lockPathFor(target), 'utf8'));
+      assert.equal(marker.pid, process.pid);
+      assert.equal(marker.token, handle.token);
       releaseLock(handle);
       assert.equal(fs.existsSync(lockPathFor(target)), false, 'a lock the caller does own was not released');
     } finally {
@@ -107,20 +190,29 @@ describe('atomic-state lock ownership', () => {
     }
   });
 
-  // A tokenless marker (the write inside acquireLock is best-effort) must not
-  // wedge the file. This pins the deliberate fall-through in releaseLock so a
-  // later tightening cannot turn an unresolvable case into a permanent lock.
-  it('a marker with no token still releases, rather than wedging the state file', () => {
+  // Ownership must be proved before deletion. A damaged marker is not proof of
+  // ownership, so release refuses; once genuinely stale, the guarded recovery
+  // path can still reclaim it without weakening release into a blind unlink.
+  it('an unverifiable release refuses loudly, then stale recovery reclaims the dead marker', () => {
     const { dir, target } = freshTarget();
     try {
       const handle = acquireLock(target, { timeoutMs: 500 });
       fs.writeFileSync(lockPathFor(target), '');
-      releaseLock(handle);
+      assert.throws(
+        () => releaseLock(handle),
+        (error) => error.code === 'ELOCKOWNERSHIP' && /unverifiable|refus/i.test(error.message),
+        'release must name the ownership refusal when the marker cannot prove its token',
+      );
       assert.equal(
         fs.existsSync(lockPathFor(target)),
-        false,
-        'an unreadable marker must fall through to release, not hold the lock for staleMs',
+        true,
+        'an unverifiable marker must not be blindly deleted',
       );
+      backdate(lockPathFor(target), 20_000);
+      const recovered = acquireLock(target, { staleMs: 1_000, timeoutMs: 500 });
+      assert.equal(recovered.brokeStale, true, 'a genuinely dead damaged marker must be recoverable');
+      releaseLock(recovered);
+      assert.equal(fs.existsSync(lockPathFor(target)), false, 'recovered lock must release normally');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

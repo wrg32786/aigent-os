@@ -30,9 +30,10 @@
 // library on source=clear. A settings.json still naming this file directly as its
 // own SessionStart(clear) hook must no-op rather than double-inject the procedure.
 
+import path from 'node:path';
 import {
   capsuleValue, inert, logErr, markCapsuleConsumed, memRoot, rejectionSummary, scalar,
-  selectCapsule, unsafeRawCapsuleDocument,
+  readContainedCapsuleDocument, selectCapsule,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 
@@ -43,17 +44,25 @@ import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 // is the whole point: the no-capsule case is exactly where the reasons matter
 // most, so the ledger has to survive the failure path rather than be dropped
 // with it.
-function loadCapsule(projectRoot) {
-  const { capsule: newest, rejected } = selectCapsule(memRoot(projectRoot));
+function loadCapsule(projectRoot, { fsImpl } = {}) {
+  const memoryRoot = memRoot(projectRoot);
+  const capsulesRoot = path.join(memoryRoot, 'capsules');
+  const filesystem = fsImpl ? { fsImpl } : undefined;
+  const { capsule: newest, rejected } = selectCapsule(memoryRoot, filesystem);
   if (!newest) return { loaded: null, rejected };
   let doc;
   try {
-    doc = unsafeRawCapsuleDocument(
+    doc = readContainedCapsuleDocument(
+      capsulesRoot,
       newest.path,
-      'resume loads the selected capsule before returning only shared-reader values',
+      'resume-reread',
+      filesystem,
     );
   } catch (e) {
-    logErr(projectRoot, 'resume-verb', `capsule unreadable: ${e?.message || e}`);
+    if (e?.code === 'ECAPSULEPATH') {
+      rejected.push({ name: path.basename(newest.path), reason: e.reason, detail: e.stage });
+    }
+    logErr(projectRoot, 'resume-verb', `capsule re-read refused/unreadable: ${e?.message || e}`);
     return { loaded: null, rejected };
   }
   // A capsule consumed by this resume is spent HERE, at load — not by the model
@@ -63,7 +72,7 @@ function loadCapsule(projectRoot) {
   try {
     // A false return is always an anomaly here (the selector just verified this
     // capsule is active): the marker could not find the status line it needs.
-    if (!markCapsuleConsumed(newest.path)) {
+    if (!markCapsuleConsumed(newest.path, memoryRoot, filesystem)) {
       logErr(projectRoot, 'resume-verb', `mark-consumed NO-OP on active capsule ${newest.path} — next resume will replay it silently`);
     }
   } catch (e) {
@@ -223,10 +232,10 @@ function procedurePrompt(loaded, rejected = null) {
   return lines.join('\n');
 }
 
-export function runResumeVerb({ projectRoot, source, sessionId }) {
+export function runResumeVerb({ projectRoot, source, sessionId, fsImpl }) {
   let loaded = null;
   let rejected = null;
-  try { ({ loaded, rejected } = loadCapsule(projectRoot)); } catch (e) {
+  try { ({ loaded, rejected } = loadCapsule(projectRoot, { fsImpl })); } catch (e) {
     logErr(projectRoot, 'resume-verb', `loadCapsule threw: ${e?.stack || e}`);
     loaded = null;
   }

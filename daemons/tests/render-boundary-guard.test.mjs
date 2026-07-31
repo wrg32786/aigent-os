@@ -1172,18 +1172,14 @@ function pythonVariableDelimiterParsers(source) {
   return findings;
 }
 
-// Selector and consume operations need the complete capsule document so the
-// shared reader can inspect fields and preserve all unrelated bytes.
+// The contained lifecycle reader acquires the complete capsule only after its
+// adjacent realpath/lstat guard. Shared readers then inspect fields, and consume
+// preserves all unrelated bytes.
 const JS_RAW_ALLOWLIST = [
   {
     file: 'daemons/lifecycle-common.mjs',
-    accessor: 'unsafeRawCapsuleDocument',
-    reason: 'capsule selection needs the complete document for shared field readers',
-  },
-  {
-    file: 'daemons/lifecycle-common.mjs',
-    accessor: 'unsafeRawCapsuleDocument',
-    reason: 'status mutation preserves the complete capsule outside the active frontmatter token',
+    accessor: 'unsafeRawContainedCapsuleDocument',
+    reason: 'contained capsule touch needs the complete document after its adjacent path check',
   },
   {
     file: 'daemons/lifecycle-common.mjs',
@@ -1197,13 +1193,9 @@ const JS_RAW_ALLOWLIST = [
     accessor: 'unsafeRawCapsuleDocument',
     reason: 'curated pointer stamping returns only shared-reader scalars from this capsule',
   },
-  // Resume and warm orientation acquire bytes before every rendered field goes
-  // through the shared reader and inert boundary.
-  {
-    file: 'daemons/resume-verb.mjs',
-    accessor: 'unsafeRawCapsuleDocument',
-    reason: 'resume loads the selected capsule before returning only shared-reader values',
-  },
+  // Warm orientation acquires bytes before every rendered field goes through
+  // the shared reader and inert boundary. Resume uses the contained lifecycle
+  // reader audited above.
   {
     file: 'daemons/sessionstart-reinject.mjs',
     accessor: 'unsafeRawCapsuleDocument',
@@ -1499,14 +1491,21 @@ const JS_SAFE_READER_ALLOWLIST = [
   },
 ];
 
-// This is the implementation of the reason-gated file accessor itself, not a
-// bypassing consumer.
+// These are the implementations of reason-gated file accessors, not bypassing
+// consumers. The injected-filesystem form is reachable only after the adjacent
+// realpath/lstat containment check audited above.
 const JS_DIRECT_READ_ALLOWLIST = [
   {
     file: 'daemons/lifecycle-common.mjs',
     rule: 'direct-capsule-read',
     needle: "return readFileSync(capsulePath, 'utf8');",
     reason: 'unsafeRawCapsuleDocument validates the reason before this byte read',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
+    rule: 'direct-capsule-read',
+    needle: "return fsImpl.readFileSync(capsulePath, 'utf8');",
+    reason: 'the contained raw accessor validates its reason after an adjacent realpath and lstat guard',
   },
 ];
 

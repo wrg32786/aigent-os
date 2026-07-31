@@ -51,12 +51,106 @@ function lockPathFor(target) {
   return `${target}.lock`;
 }
 
-// Exclusive create is the whole mechanism: 'wx' succeeds for exactly one caller
-// and throws EEXIST for every other. A lock older than staleMs is treated as
-// abandoned (the holder crashed) and broken once -- without that, a single crash
-// would wedge the state file until someone deleted the lock by hand.
+function readMarker(file, fsImpl) {
+  let raw = null;
+  let marker = null;
+  try {
+    raw = fsImpl.readFileSync(file, 'utf8');
+    try { marker = JSON.parse(raw); } catch { marker = null; }
+  } catch { /* absent/unreadable */ }
+  return {
+    raw,
+    marker,
+    token: marker && typeof marker.token === 'string' ? marker.token : null,
+  };
+}
+
+function ownershipFailure(lockFile, detail) {
+  const failure = new Error(`ATOMIC_STATE ownership refusal on ${lockFile}: ${detail}`);
+  failure.code = 'ELOCKOWNERSHIP';
+  return failure;
+}
+
+function markerFingerprint(marker) {
+  const identity = marker.token
+    ? ['token', marker.token]
+    : ['raw', marker.raw];
+  return sha(JSON.stringify(identity)).slice(0, 24);
+}
+
+function reapPrefixForLock(lockFile) {
+  return `${lockFile}.reap-`;
+}
+
+function newReapPath(lockFile, expected) {
+  const operationToken = `${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
+  return `${reapPrefixForLock(lockFile)}${operationToken}-${markerFingerprint(expected)}`;
+}
+
+function reapEntries(lockFile, fsImpl) {
+  const directory = path.dirname(lockFile);
+  const basenamePrefix = path.basename(reapPrefixForLock(lockFile));
+  let names = [];
+  try { names = fsImpl.readdirSync(directory); } catch { return []; }
+  return names.flatMap((name) => {
+    if (!name.startsWith(basenamePrefix)) return [];
+    const suffix = name.slice(basenamePrefix.length);
+    const match = suffix.match(/^\d+-[0-9a-f]{24}-([0-9a-f]{24})$/);
+    return match ? [{ file: path.join(directory, name), expectedFingerprint: match[1] }] : [];
+  });
+}
+
+// A rename moves one exact directory entry to an operation-unique quarantine.
+// From that point onward the actor touches only its own quarantine pathname,
+// never the canonical lock pathname. If it moved the expected generation it
+// deletes the quarantine; if a successor won the race, it restores it. The
+// expected fingerprint in the quarantine name lets any later acquirer finish
+// either action after a crash, without guessing ownership or deleting a newer
+// canonical marker.
+function recoverReaps(lockFile, fsImpl) {
+  let changed = false;
+  for (const entry of reapEntries(lockFile, fsImpl)) {
+    const moved = readMarker(entry.file, fsImpl);
+    if (markerFingerprint(moved) === entry.expectedFingerprint) {
+      try { fsImpl.unlinkSync(entry.file); changed = true; } catch { /* another helper finished */ }
+      continue;
+    }
+    if (!fsImpl.existsSync(lockFile)) {
+      try { fsImpl.renameSync(entry.file, lockFile); changed = true; } catch { /* canonical won */ }
+    }
+  }
+  return { changed, remaining: reapEntries(lockFile, fsImpl).length };
+}
+
+function guardedDelete(lockFile, expected, fsImpl) {
+  const reapFile = newReapPath(lockFile, expected);
+  try {
+    fsImpl.renameSync(lockFile, reapFile);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+
+  const moved = readMarker(reapFile, fsImpl);
+  const matches = expected.token
+    ? moved.token === expected.token
+    : moved.raw === expected.raw;
+  if (matches) {
+    try { fsImpl.unlinkSync(reapFile); } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+    return true;
+  }
+  recoverReaps(lockFile, fsImpl);
+  return false;
+}
+
+// Exclusive create is the acquisition mechanism: 'wx' succeeds for exactly one
+// caller and throws EEXIST for every other. A lock older than staleMs is treated
+// as abandoned (the holder crashed) and broken through guardedDelete -- without
+// recovery, a single crash would wedge the state file until manual cleanup.
 //
-// Every acquisition stamps a fresh random TOKEN into the marker, and that token
+// Every acquisition stamps a fresh pid+random TOKEN into the marker, and that token
 // is what makes release safe -- see releaseLock. A pid would not do: pids are
 // reused, and one process can legitimately hold the same lock twice in sequence,
 // so a pid comparison would match in exactly the case that has to fail.
@@ -73,28 +167,68 @@ function acquireLock(target, options = {}) {
   let brokeStale = false;
 
   for (;;) {
+    fsImpl.mkdirSync(path.dirname(lockFile), { recursive: true });
+    const recovered = recoverReaps(lockFile, fsImpl);
+    if (recovered.remaining) {
+      if (now() >= deadline) {
+        const failure = new Error(`ATOMIC_STATE lock timeout after ${timeoutMs}ms on ${lockFile}`);
+        failure.code = 'ELOCKTIMEOUT';
+        throw failure;
+      }
+      sleepSync(pollMs);
+      continue;
+    }
     try {
-      fsImpl.mkdirSync(path.dirname(lockFile), { recursive: true });
-      const token = crypto.randomBytes(8).toString('hex');
+      const token = `${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
       const fd = fsImpl.openSync(lockFile, 'wx');
-      let stamped = true;
       try {
         fsImpl.writeSync(fd, JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() }));
-      } catch { stamped = false; /* the marker content is an aid, not the lock */ }
-      fsImpl.closeSync(fd);
-      // `stamped` is carried so release can tell "my token is not on disk because
-      // someone replaced it" from "my token was never written at all".
-      return { lockFile, brokeStale, token, stamped };
+      } finally {
+        fsImpl.closeSync(fd);
+      }
+      // A reaper can move the prior generation after our pre-check but before
+      // this exclusive create. Never commit while any such quarantine remains:
+      // roll our speculative marker back through the same token-owned boundary,
+      // help finish restore/delete, and honor the caller's deadline.
+      if (recoverReaps(lockFile, fsImpl).remaining) {
+        guardedDelete(lockFile, { token }, fsImpl);
+        recoverReaps(lockFile, fsImpl);
+        if (now() >= deadline) {
+          const failure = new Error(`ATOMIC_STATE lock timeout after ${timeoutMs}ms on ${lockFile}`);
+          failure.code = 'ELOCKTIMEOUT';
+          throw failure;
+        }
+        sleepSync(pollMs);
+        continue;
+      }
+      if (readMarker(lockFile, fsImpl).token !== token) {
+        continue;
+      }
+      return { lockFile, brokeStale, token, stamped: true };
     } catch (error) {
       if (error && error.code !== 'EEXIST') throw error;
+      if (recoverReaps(lockFile, fsImpl).remaining) {
+        if (now() >= deadline) {
+          const failure = new Error(`ATOMIC_STATE lock timeout after ${timeoutMs}ms on ${lockFile}`);
+          failure.code = 'ELOCKTIMEOUT';
+          throw failure;
+        }
+        sleepSync(pollMs);
+        continue;
+      }
+      let observed = null;
       let age = 0;
-      try { age = now() - fsImpl.statSync(lockFile).mtimeMs; } catch { age = 0; }
+      try {
+        // Read BEFORE stat. A successor committed after stat returns is exactly
+        // the interleaving guardedDelete's rename quarantine must catch.
+        observed = readMarker(lockFile, fsImpl);
+        observed.stat = fsImpl.statSync(lockFile);
+        age = now() - observed.stat.mtimeMs;
+      } catch { age = 0; }
       if (age > staleMs) {
-        try {
-          fsImpl.unlinkSync(lockFile);
-          brokeStale = true;
-          continue;
-        } catch { /* another waiter broke it first */ }
+        if (!guardedDelete(lockFile, observed, fsImpl)) continue;
+        brokeStale = true;
+        continue;
       }
       if (now() >= deadline) {
         const failure = new Error(`ATOMIC_STATE lock timeout after ${timeoutMs}ms on ${lockFile}`);
@@ -118,21 +252,27 @@ function acquireLock(target, options = {}) {
 // and refusal-rate defect rather than a corruption one, but a lock that quietly
 // stops excluding is worse than one that never claimed to.
 //
-// So compare tokens. If the marker on disk carries a different token, the lock
-// is someone else's now and we leave it alone.
+// So compare tokens through the same rename-quarantine boundary used by stale
+// takeover. A mismatch/unreadable marker is a typed, loud refusal; it is never a
+// reason to fall through to unlink.
 function releaseLock(handle, options = {}) {
   const { fsImpl = fs } = options;
-  if (!handle || !handle.lockFile) return;
-  if (handle.token && handle.stamped) {
-    let onDisk = null;
-    try { onDisk = JSON.parse(fsImpl.readFileSync(handle.lockFile, 'utf8')); } catch { onDisk = null; }
-    // An unreadable or tokenless marker falls through to the unlink. That keeps
-    // the old behaviour for the one case we cannot resolve, and it is the safer
-    // direction: releasing a lock we might still own beats wedging the state
-    // file for staleMs on every caller that follows.
-    if (onDisk && typeof onDisk.token === 'string' && onDisk.token !== handle.token) return;
+  if (!handle || !handle.lockFile || !handle.token) {
+    throw ownershipFailure(handle?.lockFile || '<unknown>', 'unverifiable owner handle; refusing delete');
   }
-  try { fsImpl.unlinkSync(handle.lockFile); } catch { /* already gone */ }
+  recoverReaps(handle.lockFile, fsImpl);
+  const onDisk = readMarker(handle.lockFile, fsImpl);
+  if (onDisk.token !== handle.token) {
+    const detail = onDisk.token
+      ? `token changed to ${onDisk.token}; refusing non-owner delete`
+      : 'marker missing or unverifiable; refusing delete';
+    throw ownershipFailure(handle.lockFile, detail);
+  }
+  const deleted = guardedDelete(handle.lockFile, { token: handle.token }, fsImpl);
+  if (!deleted) {
+    throw ownershipFailure(handle.lockFile, 'ownership drifted at delete boundary; refusing delete');
+  }
+  return { released: true, code: 'RELEASED' };
 }
 
 function readOrNull(target, fsImpl) {

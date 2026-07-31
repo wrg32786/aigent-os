@@ -26,8 +26,8 @@
 // there is exactly one writer of exactly one pointer now, unconditionally.
 
 import {
-  readFileSync, writeFileSync, mkdirSync, existsSync, openSync,
-  closeSync, statSync, renameSync, rmSync, appendFileSync, writeSync, realpathSync,
+  readFileSync, writeFileSync, mkdirSync, existsSync,
+  statSync, renameSync, rmSync, appendFileSync, writeSync, realpathSync,
 } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -41,7 +41,9 @@ import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
 
 const require = createRequire(import.meta.url);
-const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
+const {
+  acquireLock, releaseLock, atomicUpdateJson,
+} = require('./memory-hygiene/atomic-state.cjs');
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -94,9 +96,21 @@ if (process.argv[2] !== '--worker') {
   }
 } else {
 // ── worker: parse transcript delta, anchored-merge into the active capsule ───
-let lockFd = null;
-let lockPath = null;
+let lockHandle = null;
 let workerRoot = '';
+function releaseWorkerLock() {
+  if (!lockHandle) return;
+  const owned = lockHandle;
+  lockHandle = null;
+  try {
+    releaseLock(owned);
+  } catch (error) {
+    // Ownership drift is a refusal, not permission to delete whatever marker
+    // now occupies the pathname. Keep it loud while preserving Stop's exit-0
+    // contract.
+    logErr(workerRoot, `lock release refused (${error?.code || 'ELOCK'}): ${error?.message || error}`);
+  }
+}
 // Machine-readable outcome for a synchronous invoker (a precompact flush, if a
 // fork wires one) — exit-0 alone must never read as "flushed" (no-transcript /
 // no-delta / lock-defer all exit 0). fs.writeSync on fd 1 is synchronous even on
@@ -165,30 +179,27 @@ try {
   const RUNTIME = path.join(MEM, 'runtime', 'stop-writer');
   mkdirSync(RUNTIME, { recursive: true });
 
-  // Single-writer lock per session. Loser defers to next turn (offset untouched =
-  // no data loss). Stale locks (>30s — a killed worker) are stolen.
-  lockPath = path.join(RUNTIME, `${sid}.lock`);
+  // Single-writer lock per session. The shared primitive stamps a unique owner
+  // token and performs stale takeover through its guarded identity boundary.
+  // Losers defer immediately (offset untouched = no data loss).
+  const lockTarget = path.join(RUNTIME, sid);
   try {
-    lockFd = openSync(lockPath, 'wx');
-  } catch {
-    try {
-      const age = Date.now() - statSync(lockPath).mtimeMs;
-      if (age > 30_000) {
-        rmSync(lockPath, { force: true });
-        lockFd = openSync(lockPath, 'wx');
-      } else {
-        outcome = 'noop:lock-defer';
-        process.exit(0); // live writer holds it — defer, don't lose
-      }
-    } catch { outcome = 'noop:lock-defer'; process.exit(0); }
+    lockHandle = acquireLock(lockTarget, {
+      timeoutMs: 0,
+      staleMs: 30_000,
+      pollMs: 1,
+    });
+  } catch (error) {
+    if (error?.code !== 'ELOCKTIMEOUT') {
+      logErr(root, `lock acquisition failed (${error?.code || 'ELOCK'}): ${error?.message || error}`);
+    }
+    outcome = 'noop:lock-defer';
+    process.exit(0); // live/ambiguous writer holds it — defer, don't lose
   }
   // process.exit() SKIPS finally blocks — release the lock on the 'exit' event,
   // which fires even for explicit exits (all early-exit paths below leak the
   // lock otherwise, deferring every later writer to the 30s stale-steal).
-  process.on('exit', () => {
-    try { closeSync(lockFd); } catch {}
-    try { rmSync(lockPath, { force: true }); } catch {}
-  });
+  process.on('exit', releaseWorkerLock);
 
   const stateFile = path.join(RUNTIME, `${sid}.json`);
   let state = { offset: 0, capsule_path: null, last_delta_sha: null };
@@ -627,8 +638,7 @@ ${ANCHORS.rows}
   outcome = 'error:worker';
   logErr(workerRoot, `worker: ${e?.stack || e}`);
 } finally {
-  if (lockFd !== null) { try { closeSync(lockFd); } catch {} }
-  if (lockPath) { try { rmSync(lockPath, { force: true }); } catch {} }
+  releaseWorkerLock();
 }
 process.exit(0);
 }
