@@ -148,6 +148,21 @@ jobs:
           test -s daemons/tests/render-boundary-guard.test.mjs
           grep -q 'RENDER_BOUNDARY_STRUCTURAL_GUARD_V1' daemons/tests/render-boundary-guard.test.mjs
 
+      # TEMPORARY — board 6efdf2dc. Remove with the fix.
+      # Prints the jq probe's raw result at the node-spawn vantage, the only
+      # place the defect is visible: `command -v jq` succeeds in a step and fails
+      # one spawn later inside `node --test`. Two explanations on this lane were
+      # already confident and wrong, so this asserts nothing and emits only
+      # values, plus controls whose answers are known by construction.
+      # Placed immediately BEFORE the daemons suite so it measures the same job,
+      # runner, and step shell as the failure. Exits 0 unconditionally: a failed
+      # step skips every later step in its job (board c0981f24), and a diagnostic
+      # must never dark the thing it is diagnosing.
+      - name: DIAGNOSTIC (6efdf2dc) jq probe at the node-spawn vantage
+        run: |
+          command -v jq && jq --version || echo "step shell: jq NOT on PATH"
+          node daemons/tests/_diag-jq-vantage.mjs
+
       - name: Daemons test suite (all of daemons/tests, discovery)
         run: |
           set -euo pipefail
