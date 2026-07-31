@@ -349,6 +349,12 @@ function makeThresholdWiringProbe(name, env) {
   const constructed = [];
   let managedSpawnCount = 0;
   let unmanagedSpawnCount = 0;
+  // V2 ordering spies: the refusal path's "before any PTY, runner lock, or
+  // transport exists" claim is only falsifiable if moving the invalid-check
+  // below either call site produces a nonzero count here.
+  let nodePtyLoadCount = 0;
+  let runnerLockAcquireCount = 0;
+  let runnerLockReleaseCount = 0;
 
   const result = runPtySession({
     childArgs: ['--continue', '/open'],
@@ -363,21 +369,27 @@ function makeThresholdWiringProbe(name, env) {
     processLike,
     platform: 'linux',
     homeDir: fixture.homeDir,
-    loadNodePtyFn: () => ({
-      ok: true,
-      module: {
-        spawn() {
-          managedSpawnCount += 1;
-          return pty;
+    loadNodePtyFn: () => {
+      nodePtyLoadCount += 1;
+      return {
+        ok: true,
+        module: {
+          spawn() {
+            managedSpawnCount += 1;
+            return pty;
+          },
         },
-      },
-    }),
+      };
+    },
     runUnmanagedFn: () => {
       unmanagedSpawnCount += 1;
       return CHILD_EXIT_CODE;
     },
-    acquireRunnerLockFn: () => ({ path: 'run3-threshold-wiring-lock' }),
-    releaseRunnerLockFn: () => {},
+    acquireRunnerLockFn: () => {
+      runnerLockAcquireCount += 1;
+      return { path: 'run3-threshold-wiring-lock' };
+    },
+    releaseRunnerLockFn: () => { runnerLockReleaseCount += 1; },
     readKillSwitchFn: () => ({ active: false, code: null, detail: null }),
     readBootReceiptFn: () => ({
       ok: true,
@@ -430,7 +442,13 @@ function makeThresholdWiringProbe(name, env) {
         managedSpawnCount,
         transportConstructionCount: constructed.length,
         unmanagedSpawnCount,
+        nodePtyLoadCount,
+        runnerLockAcquireCount,
+        runnerLockReleaseCount,
       };
+    },
+    orderingSpyCounts() {
+      return { nodePtyLoadCount, runnerLockAcquireCount };
     },
     close() {
       result.runner?.shutdown({ exitCode: 0, killChild: true });
@@ -499,6 +517,7 @@ function runLauncherCapture({
 }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `run3-${frontDoor}-launcher-`));
   const daemonDirectory = path.join(home, 'daemons');
+  const binDirectory = path.join(home, 'bin');
   const marker = path.join(home, '.aigent', 'first-run-done');
   const capturePrefix = 'RUN3_LAUNCH_ARGV:';
   try {
@@ -506,6 +525,23 @@ function runLauncherCapture({
     fs.writeFileSync(
       path.join(daemonDirectory, 'pty-runner.mjs'),
       `process.stdout.write('${capturePrefix}' + Buffer.from(JSON.stringify(process.argv.slice(2))).toString('base64') + '\\n');\n`,
+    );
+    // A `claude` shim shadows any real claude on PATH: the unmanaged branch
+    // (--no-deps, or a node-less host) is captured instead of live-firing a
+    // real CLI from inside the test suite.
+    fs.mkdirSync(binDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(binDirectory, 'claude-argv.mjs'),
+      `process.stdout.write('${capturePrefix}' + Buffer.from(JSON.stringify(process.argv.slice(2))).toString('base64') + '\\n');\n`,
+    );
+    fs.writeFileSync(
+      path.join(binDirectory, 'claude'),
+      '#!/usr/bin/env bash\nexec node "$(dirname "$0")/claude-argv.mjs" "$@"\n',
+    );
+    fs.chmodSync(path.join(binDirectory, 'claude'), 0o755);
+    fs.writeFileSync(
+      path.join(binDirectory, 'claude.cmd'),
+      '@node "%~dp0claude-argv.mjs" %*\r\n',
     );
     // V4/V5 launcher shape: select the committed returning or first-run fixed
     // prefix before comparing the complete spawned argv.
@@ -550,6 +586,7 @@ function runLauncherCapture({
         // V4/V5 compare launcher argv, not Git-for-Windows' POSIX-path
         // translation of the literal fixed slash commands.
         MSYS2_ARG_CONV_EXCL: '/start;/open',
+        PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`,
         USERPROFILE: home,
       },
     });
@@ -1715,6 +1752,13 @@ test('V1 threshold-applied: env=15 reaches the production transport constructor'
     probe.bindTransport();
     assert.equal(probe.constructed.length, 1);
     assert.equal(probe.constructed[0].pressureThresholdPct, 15);
+    // Positive control for the V2 ordering spies: the managed path must
+    // provably route through both spied call sites, or V2's zero-count
+    // assertions could go green with miswired spies.
+    assert.deepEqual(probe.orderingSpyCounts(), {
+      nodePtyLoadCount: 1,
+      runnerLockAcquireCount: 1,
+    });
   } finally {
     probe.close();
   }
@@ -1748,6 +1792,9 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
       managedSpawnCount: 0,
       transportConstructionCount: 0,
       unmanagedSpawnCount: 1,
+      nodePtyLoadCount: 0,
+      runnerLockAcquireCount: 0,
+      runnerLockReleaseCount: 0,
     });
   } finally {
     probe.close();
@@ -1769,6 +1816,9 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
         managedSpawnCount: 0,
         transportConstructionCount: 0,
         unmanagedSpawnCount: 1,
+        nodePtyLoadCount: 0,
+        runnerLockAcquireCount: 0,
+        runnerLockReleaseCount: 0,
       });
     } finally {
       invalidProbe.close();
@@ -1853,6 +1903,54 @@ test('V4 pass-through: literal -- suffix follows fixed args for sh and ps1', () 
       ? null
       : ['--', '--continue', '/open', ...opaqueArgs],
     powershellSourceBound: true,
+  });
+});
+
+test('V4 pass-through: --no-deps after -- is consumed by the launcher, never forwarded', () => {
+  const operatorArgs = ['--', '--model', 'haiku', '--no-deps', 'tail'];
+  const forwarded = ['--model', 'haiku', 'tail'];
+  const powerShellCommand = resolvePowerShellForLauncherVector();
+  const observed = {
+    shellFirstRun: runLauncherCapture({
+      frontDoor: 'sh',
+      operatorArgs,
+      returning: false,
+    }),
+    shellReturning: runLauncherCapture({
+      frontDoor: 'sh',
+      operatorArgs,
+      returning: true,
+    }),
+    powershellFirstRun: powerShellCommand === null
+      ? null
+      : runLauncherCapture({
+        frontDoor: 'ps1',
+        operatorArgs,
+        returning: false,
+        powerShellCommand,
+      }),
+    powershellReturning: powerShellCommand === null
+      ? null
+      : runLauncherCapture({
+        frontDoor: 'ps1',
+        operatorArgs,
+        returning: true,
+        powerShellCommand,
+      }),
+  };
+  // --no-deps flips the launch unmanaged, so the captured vector is the
+  // `claude` shim's own argv: no runner `--` prefix, and no --no-deps even
+  // though it sat after the separator. A launcher that forwards it (or one
+  // that stays managed and forwards it) turns every comparison red.
+  assert.deepEqual(observed, {
+    shellFirstRun: ['/start', ...forwarded],
+    shellReturning: ['--continue', '/open', ...forwarded],
+    powershellFirstRun: powerShellCommand === null
+      ? null
+      : ['/start', ...forwarded],
+    powershellReturning: powerShellCommand === null
+      ? null
+      : ['--continue', '/open', ...forwarded],
   });
 });
 
