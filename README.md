@@ -32,7 +32,7 @@ If aigent-OS saves you time, [star the repo](https://github.com/wrg32786/aigent-
 <img src="assets/demo-session-resume.svg" alt="A session at 60% context has already autosaved its capsule; the operator runs /clear, the resume verb re-grounds the fresh window, and it comes back at 10% context knowing exactly where it left off" width="100%"/>
 </div>
 
-Only one thing above was typed: `/clear`. Everything around it is automatic — the session reaches 60% context with its capsule already autosaved, the operator clears the window, and the fresh context comes back at 10% already knowing the objective, what it's waiting on, and the exact next step, with room to keep working. That's [Auto-Refresh](#-auto-refresh): the mechanism below, with the exact files that do it.
+Only one thing above was typed: `/clear`. Everything around it is automatic: the session reaches 60% context with its capsule already autosaved, the operator clears the window, and the fresh context comes back at 10% already knowing the objective, what it's waiting on, and the exact next step, with room to keep working. That's [Auto-Refresh](#-auto-refresh): the mechanism below, with the exact files that do it.
 
 **aigent-OS is a 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system**, one operator, one Claude, running on your own machine. No database, no server, no build step: drop the files in, run `bash install.sh`, and the next session already knows who it is and what it's working on. The framework also ships tools for maintaining itself: a nightly self-maintenance routine you can run against your own vault, and a hook that spots a new skill file and prompts you to enroll it. The publish half, deciding what a local install has learned that's worth graduating to this repo, sanitizing it, and opening the pull request, is designed and not built. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
@@ -157,9 +157,9 @@ install.sh                         One-line installer
 
 *(Some earlier docs called this the self-refresh reflex; Auto-Refresh is the name going forward.)*
 
-Auto-Refresh is what manages your AI's memory **and** its context for you: both, automatically — the only thing you ever type is `/clear` itself. Paired with `claude --continue` as the warm-resume transport, a session carries its own context and its own memory across every boundary Claude Code has: a closed terminal, a compaction, a `/clear`. You stop being the thing that remembers where you were.
+Auto-Refresh is what manages your AI's memory **and** its context for you: both, automatically; the only thing you ever type is `/clear` itself. Paired with `claude --continue` as the warm-resume transport, a session carries its own context and its own memory across every boundary Claude Code has: a closed terminal, a compaction, a `/clear`. You stop being the thing that remembers where you were.
 
-> **Where the boundary sits today:** in our own multi-agent deployment (Pantheon), a private supervisor also *initiates* the clear — the full capsule → `/clear` → resume cycle runs unattended end-to-end. That clear-initiating transport is not part of this standalone repository: here, automatic checkpointing and post-clear recovery ship, and the `/clear` itself is yours (or Claude Code's own compaction). Bringing that transport into the public core — or shipping it as an official extension with an end-to-end install proof — is on the roadmap.
+> **Where the boundary sits today:** in our own multi-agent deployment (Pantheon), a private supervisor also *initiates* the clear: the full capsule → `/clear` → resume cycle runs unattended end-to-end. That clear-initiating transport is not part of this standalone repository: here, automatic checkpointing and post-clear recovery ship, and the `/clear` itself is yours (or Claude Code's own compaction). Bringing that transport into the public core (or shipping it as an official extension with an end-to-end install proof) is on the roadmap.
 
 Two halves, both automatic:
 
