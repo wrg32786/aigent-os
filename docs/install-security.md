@@ -95,7 +95,7 @@ or:
 npm install --silent --ignore-scripts
 ```
 
-inside `daemons/semantic-search/`. npm may contact configured registries and resolve the dependency lock. `--ignore-scripts` disables lifecycle scripts (`preinstall`/`install`/`postinstall`) for this package and every transitive dependency, so a compromised transitive dependency -- or a `daemons/semantic-search/package.json` that already existed in the target before this install ran -- cannot execute arbitrary code as a side effect of dependency resolution. The bundled semantic-search package has no lifecycle scripts of its own, so this changes nothing for a normal install. Review `package.json` and the lock file before enabling this step in a high-trust environment regardless.
+inside `daemons/semantic-search/` and `daemons/transport-deps/` (two independent optional dependency roots: the embeddings feature and the auto-clear transport's node-pty, respectively). npm may contact configured registries and resolve each dependency lock. `--ignore-scripts` disables lifecycle scripts (`preinstall`/`install`/`postinstall`) for each package and every transitive dependency, so a compromised transitive dependency -- or a package.json under `daemons/` that already existed in the target before this install ran -- cannot execute arbitrary code as a side effect of dependency resolution. Neither bundled package has lifecycle scripts of its own, so this changes nothing for a normal install. Review each `package.json` and lock file before enabling this step in a high-trust environment regardless.
 
 Skip it with:
 

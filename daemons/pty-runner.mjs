@@ -8,10 +8,12 @@
 // replaced.  This runner supplies that ownership without moving any lifecycle
 // decision out of AutoClearTransport.
 //
-// node-pty is intentionally loaded at runtime from the repository's existing
-// optional-dependency package.  A no-deps install must still launch Claude:
-// checkpoint and recovery hooks remain useful while automatic clear reports a
-// loud, named degraded state.
+// node-pty is intentionally loaded at runtime from the transport's own
+// minimal dependency root (daemons/transport-deps — node-pty is its ONLY
+// dependency, so transport availability never couples to another subsystem's
+// install health; closure package §6).  A no-deps install must still launch
+// Claude: checkpoint and recovery hooks remain useful while automatic clear
+// reports a loud, named degraded state.
 //
 // All mutable boundaries are injectable.  Deterministic tests use a scripted
 // PTY, clock, scheduler, receipt reader, kill-switch reader, and transport.
@@ -33,7 +35,7 @@ import {
 import { memRoot as resolveMemoryRoot } from './lifecycle-common.mjs';
 
 const optionalRequire = createRequire(
-  new URL('./semantic-search/package.json', import.meta.url),
+  new URL('./transport-deps/package.json', import.meta.url),
 );
 
 export const DEGRADED_NODE_PTY = 'DEGRADED:auto-clear-node-pty-unavailable';

@@ -875,31 +875,40 @@ printf '  [ok] Generated local state excluded from git\n'
 
 if [[ "$NO_DEPS" -eq 1 ]]; then
   printf '  [skip] Optional dependencies (--no-deps)\n'
-elif [[ ! -f "$TARGET/daemons/semantic-search/package.json" ]]; then
-  printf '  [skip] No semantic-search package found\n'
 elif ! command -v node >/dev/null 2>&1; then
-  printf '  [warn] Node.js not found; semantic search was not installed\n'
+  printf '  [warn] Node.js not found; optional dependencies were not installed\n'
 else
   NODE_MAJOR="$(node --version | sed 's/^v//' | cut -d. -f1)"
   if ! [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || ((NODE_MAJOR < 18)); then
-    printf '  [warn] Node.js 18+ is required for semantic search; found %s\n' "$(node --version)"
+    printf '  [warn] Node.js 18+ is required for optional dependencies; found %s\n' "$(node --version)"
   else
-    printf '  Installing optional semantic-search dependencies (network access may occur)...\n'
-    pushd "$TARGET/daemons/semantic-search" >/dev/null
-    # --ignore-scripts disables lifecycle scripts for
-    # this package AND every transitive dependency. Without it, installing
-    # into a target that already had its own daemons/semantic-search/
-    # package.json (or a compromised transitive dependency) could execute
-    # an attacker-controlled preinstall/install/postinstall script. The
-    # bundled semantic-search package (see package.json) has no lifecycle
-    # scripts of its own, so this is a no-op for the legitimate install path.
-    if [[ -f package-lock.json ]]; then
-      npm ci --silent --ignore-scripts
-    else
-      npm install --silent --ignore-scripts
-    fi
-    popd >/dev/null
-    printf '  [ok] Semantic search dependencies installed\n'
+    # Two independent optional dependency roots, installed identically:
+    #   semantic-search — embeddings feature (@xenova/transformers tree)
+    #   transport-deps  — auto-clear transport's node-pty, its sole dependency
+    # Separate roots keep the transport's availability decoupled from the
+    # install health of semantic-search's script-bearing dependency tree.
+    for DEP_DIR in semantic-search transport-deps; do
+      if [[ ! -f "$TARGET/daemons/$DEP_DIR/package.json" ]]; then
+        printf '  [skip] No %s package found\n' "$DEP_DIR"
+        continue
+      fi
+      printf '  Installing optional %s dependencies (network access may occur)...\n' "$DEP_DIR"
+      pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
+      # --ignore-scripts disables lifecycle scripts for
+      # this package AND every transitive dependency. Without it, installing
+      # into a target that already had its own package.json under
+      # daemons/ (or a compromised transitive dependency) could execute
+      # an attacker-controlled preinstall/install/postinstall script. Neither
+      # bundled package (see each package.json) has lifecycle scripts of its
+      # own, so this is a no-op for the legitimate install path.
+      if [[ -f package-lock.json ]]; then
+        npm ci --silent --ignore-scripts
+      else
+        npm install --silent --ignore-scripts
+      fi
+      popd >/dev/null
+      printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+    done
   fi
 fi
 

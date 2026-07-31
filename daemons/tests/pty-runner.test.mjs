@@ -1510,13 +1510,35 @@ test('optional dependency manifest and lock pin node-pty exactly at 1.1.0', () =
   const packageDirectory = path.join(
     REPOSITORY_ROOT,
     'daemons',
-    'semantic-search',
+    'transport-deps',
   );
   const manifest = readJson(path.join(packageDirectory, 'package.json'));
   const lock = readJson(path.join(packageDirectory, 'package-lock.json'));
   assert.equal(manifest.dependencies['node-pty'], '1.1.0');
   assert.equal(lock.packages[''].dependencies['node-pty'], '1.1.0');
   assert.equal(lock.packages['node_modules/node-pty'].version, '1.1.0');
+  // The transport root must stay minimal: node-pty is its ONLY dependency.
+  // A second dependency here recreates the shared-failure-domain coupling the
+  // placement review removed (closure package §6).
+  assert.deepEqual(Object.keys(manifest.dependencies), ['node-pty']);
+});
+
+test('semantic-search no longer carries node-pty — transport owns its own dependency root', () => {
+  // Placement review verdict MOVE (closure package §6): the transport consumed
+  // exactly one package from semantic-search while that package's other
+  // script-bearing deps are what breaks under npm ci --ignore-scripts.
+  // Re-adding node-pty here silently re-couples transport availability to an
+  // unrelated subsystem's install health.
+  const packageDirectory = path.join(
+    REPOSITORY_ROOT,
+    'daemons',
+    'semantic-search',
+  );
+  const manifest = readJson(path.join(packageDirectory, 'package.json'));
+  const lock = readJson(path.join(packageDirectory, 'package-lock.json'));
+  assert.equal(manifest.dependencies['node-pty'], undefined);
+  assert.equal(lock.packages['']?.dependencies?.['node-pty'], undefined);
+  assert.equal(lock.packages['node_modules/node-pty'], undefined);
 });
 
 test('ConPTY helper noise follows kill-then-linger, not handler disposal (93b9d2a review F1)', () => {
