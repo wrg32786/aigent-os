@@ -898,8 +898,36 @@ else
     else
       npm install --silent --ignore-scripts
     fi
-    popd >/dev/null
-    printf '  [ok] Semantic search dependencies installed\n'
+
+    # ⚑ VERIFY, DO NOT ASSUME (board 0c73e570). This used to print
+    # "[ok] Semantic search dependencies installed" on npm's exit code alone.
+    # Measured 2026-07-30: `npm install --ignore-scripts` exits 0 while sharp's
+    # native binary is never built, and @xenova/transformers imports sharp at
+    # top level -- so the installer reported success over a feature that could
+    # not load at all, on every clean install, while the README promised the
+    # optional Node features install automatically. npm's exit code cannot see
+    # this; only loading the module can.
+    #
+    # An IMPORT is checked rather than a full embedding on purpose: it catches
+    # exactly this failure class (native module missing at load) at zero network
+    # and no model download. The stronger claim -- that it actually EMBEDS -- is
+    # asserted by tests/test-semantic-search-runtime.sh.
+    #
+    # NEVER report installed-when-unusable. On failure this degrades LOUDLY and
+    # names the feature, so the reader knows which capability they do not have.
+    if node -e 'import("@xenova/transformers").then(()=>process.exit(0)).catch(()=>process.exit(1))' >/dev/null 2>&1; then
+      popd >/dev/null
+      printf '  [ok] Semantic search installed and verified (module loads)\n'
+    else
+      popd >/dev/null
+      printf '  [DEGRADED:semantic-search-unavailable] Dependencies resolved, but the\n'
+      printf '      module could not load, so semantic search will NOT work. Everything\n'
+      printf '      else in aigent-OS is unaffected.\n'
+      printf '      Likely cause: a native dependency needs a build step that --ignore-scripts\n'
+      printf '      blocks on this platform. To retry, inside daemons/semantic-search run:\n'
+      printf '        npm install    (without --ignore-scripts; review package.json first)\n'
+      printf '      Please report your platform: https://github.com/wrg32786/aigent-os/issues\n'
+    fi
   fi
 fi
 

@@ -10,5 +10,23 @@
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2"
+  },
+  "_overrides_note": [
+    "LOAD-BEARING FOR THE INSTALLER, NOT A VERSION BUMP FOR ITS OWN SAKE (board 0c73e570).",
+    "install.sh installs this package with --ignore-scripts, which is a deliberate security",
+    "control (see CHANGELOG and docs/install-security.md): it stops a compromised transitive",
+    "dependency executing a lifecycle script during install. @xenova/transformers pulls sharp",
+    "transitively, and sharp 0.32.x fetches/builds its native binary from an INSTALL SCRIPT.",
+    "Under --ignore-scripts that script never runs, npm still exits 0, and the binary is absent",
+    "-- then transformers imports sharp at top level and the whole feature is dead while the",
+    "installer reports success.",
+    "sharp 0.33+ ships its platform binaries as PREBUILT OPTIONAL DEPENDENCIES (@img/sharp-*)",
+    "resolved by normal dependency resolution, so it needs no install script at all. Pinning",
+    "the transitive sharp to ^0.33.5 makes the feature work UNDER the security flag instead of",
+    "asking anyone to weaken it. Removing this override silently re-breaks a clean install --",
+    "tests/test-semantic-search-runtime.sh is what catches that."
+  ],
+  "overrides": {
+    "sharp": "^0.33.5"
   }
 }

@@ -241,12 +241,24 @@ else
   warn "Node.js not found -- semantic search and hook automation will be skipped (optional)"
 fi
 
-# -- 9. Semantic search node_modules -------------------------------------------
+# -- 9. Semantic search: does it LOAD, not does a directory exist ---------------
+# ⚑ THIS CHECK USED TO BE `[ -d node_modules ]` -> "semantic search ready".
+# Board 0c73e570: install.sh installs with --ignore-scripts (a deliberate security
+# control), under which npm exits 0 and CREATES node_modules while sharp's native
+# binary is never built -- and @xenova/transformers imports sharp at top level.
+# So the directory is present and the feature is dead, and this doctor -- the exact
+# thing the README sends people to when something is wrong -- reported "ready".
+# A directory is evidence that an install RAN, never that a feature WORKS.
 if [ "$NODE_OK" -eq 1 ]; then
-  if [ -d "$ROOT/daemons/semantic-search/node_modules" ]; then
-    pass "daemons/semantic-search/node_modules found -- semantic search ready"
-  else
+  if [ ! -d "$ROOT/daemons/semantic-search/node_modules" ]; then
     warn "daemons/semantic-search/node_modules missing -- run: cd daemons/semantic-search && npm install"
+  elif ( cd "$ROOT/daemons/semantic-search" && node -e 'import("@xenova/transformers").then(()=>process.exit(0)).catch(()=>process.exit(1))' >/dev/null 2>&1 ); then
+    pass "semantic search verified -- @xenova/transformers loads"
+  else
+    warn "DEGRADED:semantic-search-unavailable -- node_modules is present but the module
+       does not load, so semantic search will NOT work (everything else is fine).
+       Usually a native dependency that needs a build step --ignore-scripts blocks.
+       Retry: cd daemons/semantic-search && npm install   (review package.json first)"
   fi
 else
   warn "semantic search install check skipped (Node not available)"
