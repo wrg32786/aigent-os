@@ -1193,14 +1193,6 @@ const JS_RAW_ALLOWLIST = [
     accessor: 'unsafeRawCapsuleDocument',
     reason: 'curated pointer stamping returns only shared-reader scalars from this capsule',
   },
-  // Warm orientation acquires bytes before every rendered field goes through
-  // the shared reader and inert boundary. Resume uses the contained lifecycle
-  // reader audited above.
-  {
-    file: 'daemons/sessionstart-reinject.mjs',
-    accessor: 'unsafeRawCapsuleDocument',
-    reason: 'warm orientation reads the selected capsule before returning only shared-reader values',
-  },
   // identity-core is the one intentional, operator-authored multiline procedure
   // loaded during warm orientation.
   {
@@ -1430,19 +1422,19 @@ const JS_SAFE_READER_ALLOWLIST = [
     reason: 'tags determine an autosave label and are never rendered verbatim',
   },
   {
-    file: 'daemons/sessionstart-reinject.mjs',
+    file: 'daemons/sessionstart-capsule-block.mjs',
     accessor: 'capsuleValue',
     needle: "capsuleValue(doc, 'objective')",
     reason: 'warm orientation immediately renders this capsule value through inert',
   },
   {
-    file: 'daemons/sessionstart-reinject.mjs',
+    file: 'daemons/sessionstart-capsule-block.mjs',
     accessor: 'capsuleValue',
     needle: "capsuleValue(doc, 'next_valid_action')",
     reason: 'warm orientation immediately renders this capsule value through inert',
   },
   {
-    file: 'daemons/sessionstart-reinject.mjs',
+    file: 'daemons/sessionstart-capsule-block.mjs',
     accessor: 'capsuleValue',
     needle: "capsuleValue(doc, 'waiting_on')",
     reason: 'warm orientation immediately renders this capsule value through inert',

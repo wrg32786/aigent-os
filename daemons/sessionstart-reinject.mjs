@@ -14,8 +14,16 @@
 //   1. CLOCK line — ground the waking session in real day/time before any orientation.
 //   2. identity line — <vault root>/identity-core.md if present, else a fallback.
 //   3. NEWEST ACTIVE CAPSULE — the valid capsule with the newest frontmatter
-//      created_at, via lifecycle-common.mjs's newestValidCapsule(). NEVER full
-//      content, and never a pointer — resume selection has exactly one authority.
+//      created_at, via sessionstart-capsule-block.mjs's newestCapsuleBlock(),
+//      which selects through lifecycle-common.mjs's selectCapsule() (the same
+//      authority newestValidCapsule() wraps). NEVER full content, and never a
+//      pointer — resume selection has exactly one authority. The warm-
+//      orientation touch re-validates containment immediately before reading
+//      (readContainedCapsuleDocument) rather than trusting selection's stale
+//      verdict — split into its own module because this file is a bare
+//      top-level script with no main-module guard: importing it directly
+//      (rather than spawning it) would run the whole hook body, stdin read
+//      included.
 //   4. top-N heat-ranked wikilinks from HEAT_INDEX.json (token-budgeted)
 //   5. the latest SESSION_LOG.md heading, as a cold-start seed
 //
@@ -32,17 +40,14 @@
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  capsuleValue,
   inert,
   memRoot as resolveMemRoot,
-  newestValidCapsule,
-  unsafeRawCapsuleDocument,
   unsafeRawMemoryDocument,
 } from './lifecycle-common.mjs';
 import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
 import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
-import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
+import { newestCapsuleBlock } from './sessionstart-capsule-block.mjs';
 
 const TOP_LINKS = 5;
 
@@ -149,42 +154,8 @@ try {
     out.push(`[SESSIONSTART:reinject] session (${renderedSource}).`);
   }
 
-  // NEWEST ACTIVE CAPSULE — the same selector resume-verb.mjs uses; no pointer.
-  const newest = newestValidCapsule(MEM);
-  if (newest) {
-    try {
-      const doc = unsafeRawCapsuleDocument(
-        newest.path,
-        'warm orientation reads the selected capsule before returning only shared-reader values',
-      );
-      const rel = path.relative(root, newest.path).replace(/\\/g, '/');
-      const obj = capsuleValue(doc, 'objective');
-      const next = capsuleValue(doc, 'next_valid_action');
-      const waiting = capsuleValue(doc, 'waiting_on');
-      out.push('');
-      out.push(`🔁 NEWEST ACTIVE CAPSULE (created_at) — pull sections on demand, never assume: ${inert(rel)}`);
-      out.push(`> [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.`);
-      // Per-field budget: this is a POINTER, not the capsule body — bound each
-      // field so a verbose capsule can't bloat every session-start payload; the
-      // full text stays on disk.
-      if (obj) out.push(`   objective: ${inert(obj, 240)}`);
-      if (next) out.push(`   next_valid_action: ${inert(next, 400)}`);
-      if (waiting && waiting !== 'null') out.push(`   waiting_on: ${inert(waiting, 200)}`);
-      out.push(`   sections: Done (don't redo) · Historical-Errors → Resolutions · Historical-Rejected-Approaches · Files-Read / Files-Modified · Operating-Facts · Pending-Gates · Claimed-Rows`);
-      out.push(`   Pending-Gates + Claimed-Rows are LIVE classes — re-verify each against memory before resuming them.`);
-      // Named rulings, not a mood. "Reference only" tells a reader what the
-      // document is; these tell it what to DO when the document and the live
-      // state disagree, which is the moment the framing actually gets tested.
-      for (const line of FRAMING_LINES) out.push(`   ${line}`);
-    } catch (e) {
-      logErr(root, `newest capsule unreadable: ${e?.message || e}`);
-      out.push('');
-      out.push(`⚠ Newest capsule became unreadable (logged). Orient from the latest session log; run /open for full orientation.`);
-    }
-  } else {
-    out.push('');
-    out.push(`No valid active capsule. Run /open to orient.`);
-  }
+  // NEWEST ACTIVE CAPSULE — see sessionstart-capsule-block.mjs.
+  out.push(...newestCapsuleBlock(root, MEM, { logErr }));
 
   // Heat-ranked wikilinks (token-budgeted: names only).
   try {
