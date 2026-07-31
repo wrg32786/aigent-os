@@ -131,7 +131,7 @@ TARGET="$(abspath "$TARGET")"
 MODE="copy"
 [[ "$SRC" == "$TARGET" ]] && MODE="in-place"
 
-COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals)
+COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals launcher)
 
 # ── Symlink-escape guard ──────────────────────────────────────────────────────
 # A pre-seeded symlink inside TARGET -- e.g. a file named "CLAUDE.md" that is
@@ -374,6 +374,9 @@ seed_nightly_templates() {
 
 if [[ "$MODE" == "copy" ]]; then
   printf '\n  Copying framework files without overwriting user files...\n'
+  launcher_shell="$TARGET/launcher/aigent.sh"
+  launcher_shell_missing=0
+  [[ -e "$launcher_shell" || -L "$launcher_shell" ]] || launcher_shell_missing=1
   # Seed sanitized canonical inputs before the general vault tree. The normal
   # no-clobber copy then preserves these product templates instead of importing
   # development-vault staging content.
@@ -398,6 +401,12 @@ if [[ "$MODE" == "copy" ]]; then
     esac
     printf '  [ok] %s/\n' "$dir"
   done
+  # Git records this front door as 100644; launcher/install.sh makes it
+  # executable too. Restore that contract only for a newly copied file.
+  if [[ "$launcher_shell_missing" -eq 1 && -f "$launcher_shell" ]] \
+    && path_is_symlink_safe "$launcher_shell"; then
+    chmod +x "$launcher_shell"
+  fi
 
 else
   printf '\n  Activating this checkout in place; source files already exist.\n'
