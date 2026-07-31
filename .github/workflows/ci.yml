@@ -148,6 +148,29 @@ jobs:
           test -s daemons/tests/render-boundary-guard.test.mjs
           grep -q 'RENDER_BOUNDARY_STRUCTURAL_GUARD_V1' daemons/tests/render-boundary-guard.test.mjs
 
+      # jq is what statusline-ctx.test.mjs gates its four cases on, and the
+      # ubuntu runner does NOT ship it. Measured, not assumed: run 30619697841
+      # on this branch reported `# jq unavailable` (not `bash unavailable` --
+      # the probe distinguishes them), so bash ran fine and jq was genuinely
+      # missing. Those four tests had therefore never executed in CI, and never
+      # executed on the dev machine either; the skip-count gate below is what
+      # made that visible on its first fire.
+      #
+      # ⚑ THIS MAKES FOUR NEVER-EXECUTED TESTS RUN FOR THE FIRST TIME, and
+      # their outcome is genuinely UNKNOWN. A red here is a real finding about
+      # statusline-ctx.sh, not a regression from this line -- the tests have
+      # simply never been given the chance to fail. That is the point.
+      - name: Install jq (statusline-ctx tests gate on it)
+        run: |
+          set -euo pipefail
+          if command -v jq >/dev/null 2>&1; then
+            echo "jq already present: $(jq --version)"
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq jq
+            echo "jq installed: $(jq --version)"
+          fi
+
       - name: Daemons test suite (all of daemons/tests, discovery)
         run: |
           set -euo pipefail
