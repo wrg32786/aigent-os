@@ -13,6 +13,15 @@ import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, write
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import frontmatterReader from './frontmatter-reader.cjs';
+// NAMESPACE import, not a named one, and the call site below is guarded. The
+// content gate is OPTIONAL infrastructure: the stop-writer lazy-imports it inside
+// try/catch so a broken gate never takes down a turn, and the suites substitute a
+// stub or throwing gate to prove that. A static NAMED import is a hard dependency
+// — it fails at module load with "does not provide an export named resumeBlockers"
+// against any instrumented tree, which is exactly what stop-capsule-writer.test
+// ("a throwing content gate is logged but the capsule still lands") and
+// precompact-flush.test caught. Fail-open applies to this consumer too.
+import * as capsuleGate from './capsule-content-gate.mjs';
 
 export const {
   bodySection,
@@ -112,6 +121,7 @@ export function selectCapsule(memoryRoot) {
   } catch { return none('capsules-dir-unreadable'); }
 
   let best = null;
+  let fallback = null;
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
@@ -145,12 +155,45 @@ export function selectCapsule(memoryRoot) {
       );
       continue;
     }
+    // Presence is not resumability. The stop-writer honestly reports when a Stop
+    // delta captured no objective and no next action; that report is correct
+    // output and its contract is deliberate (never invent an objective the human
+    // did not say). Such a capsule is still a legitimate LAST RESORT — resume-verb
+    // brands it loudly and explains how to read it — but being newest it was
+    // OUTRANKING every curated capsule on the seat, measured 2026-08-01 on three
+    // of four live seats.
+    //
+    // So this DEMOTES rather than rejects: fallback tier, never the preferred
+    // pick. Rejecting outright would have deleted the loud-autosave path that
+    // resume-verb:87 and its tests already ship — the safety feature this change
+    // exists to serve.
+    let placeholders = [];
+    try {
+      placeholders = typeof capsuleGate.resumeBlockers === 'function'
+        ? capsuleGate.resumeBlockers({ objective, next_valid_action: nextAction })
+        : [];
+    } catch { placeholders = []; }   // broken gate → behave exactly as before the gate existed
+    if (placeholders.length) {
+      if (!fallback || created > fallback.created) {
+        fallback = { path: full, id, created, createdRaw, why: placeholders[0] };
+      }
+      continue;
+    }
     if (!best || created > best.created) {
       best = { path: full, id, created, createdRaw };
     }
   }
 
-  if (best) return { capsule: best, rejected };
+  // A curated capsule always wins. Record the demotion so the ledger shows the
+  // placeholder was seen and passed over — a silent demotion reads exactly like
+  // the placeholder never existing.
+  if (best) {
+    if (fallback) note(path.basename(fallback.path), 'placeholder-demoted', fallback.why);
+    return { capsule: best, rejected };
+  }
+  // Nothing curated survives: the placeholder is better than resuming blind, and
+  // resume-verb brands it "*** AUTOSAVE, NOT A CURATED CAPSULE ***" on the way out.
+  if (fallback) return { capsule: fallback, rejected, fellBackToPlaceholder: true };
   return { capsule: null, rejected, unavailable: entries.length ? 'all-candidates-rejected' : 'no-capsules-on-disk' };
 }
 
