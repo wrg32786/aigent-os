@@ -46,7 +46,7 @@ mkdirSync(path.join(MEM, 'runtime', 'stop-writer'), { recursive: true });
 writeFileSync(path.join(MEM, 'BODY_STATE.json'), JSON.stringify({ state: {} }));
 
 // ── syntax ────────────────────────────────────────────────────────────────────
-for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'precompact-flush.mjs']) {
+for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'precompact-flush.mjs', 'capsule-content-gate.mjs']) {
   const r = spawnSync(process.execPath, ['--check', path.join(DAEMONS, f)], { encoding: 'utf8' });
   check(`syntax ${f}`, r.status === 0, r.stderr?.trim().split('\n')[0] ?? '');
 }
@@ -104,7 +104,7 @@ writeFileSync(transcript, [
 {
   const BROKEN = path.join(TMP, 'daemons-no-worker');
   mkdirSync(BROKEN, { recursive: true });
-  for (const f of ['precompact-flush.mjs', 'lifecycle-common.mjs', 'frontmatter-reader.cjs']) {
+  for (const f of ['precompact-flush.mjs', 'lifecycle-common.mjs', 'frontmatter-reader.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, f), path.join(BROKEN, f));
   }
   // stop-capsule-writer.mjs deliberately absent → the worker spawn genuinely fails.

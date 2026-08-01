@@ -46,9 +46,34 @@ export const CEREMONY_PATTERNS = Object.freeze([
   /^comply with (any|the) supervisor-resume instruction\b/i, // echo of the resume verb's step text AS the whole action
 ]);
 
+// The writer's OWN "I captured nothing" placeholders. These are deliberate and
+// correct output — the writer must never invent an objective the human did not
+// say (see the e9253777 contract at stop-capsule-writer's objective assignment).
+// The defect is not that the writer emits them; it is that a capsule which
+// honestly declares it captured nothing was still treated as RESUMABLE.
+//
+// Every pattern below is TRANSCRIBED from the emitting source, not recalled:
+//   live tree  stop-capsule-writer.mjs:341-342
+//   candidate  stop-capsule-writer.mjs:404, :530
+// Two trees emit DIFFERENT placeholder strings, so both families are listed;
+// covering one tree only would fix one class of seat and leave the other.
+export const NOT_CAPTURED_PATTERNS = Object.freeze([
+  /^Unknown: no human objective was captured\b/i,   // live :341-342 (both variants)
+  /^No concrete next action was captured\b/i,       // both trees
+  /^In-flight work \(auto-captured\b/i,             // candidate :530 / live :472
+]);
+
 export function isInjectionEcho(s) {
   const t = String(s || '').trim();
   return !!t && INJECTION_TEMPLATES.some((re) => re.test(t));
+}
+
+// Start-anchored like the rest of this module, and for the same reason: a real
+// capsule may legitimately DISCUSS the placeholder (this fix's own row does).
+// Only text that IS the placeholder fails.
+export function isNotCaptured(s) {
+  const t = String(s || '').trim();
+  return !!t && NOT_CAPTURED_PATTERNS.some((re) => re.test(t));
 }
 
 export function isCeremonyAction(s) {
@@ -66,6 +91,29 @@ export function contentProblems(fields) {
   }
   if (isCeremonyAction(fields?.next_valid_action)) {
     problems.push('capsule next_valid_action opens with resume ceremony — a fresh session cannot act on it (content gate)');
+  }
+  return problems;
+}
+
+// ⚑ WRITABLE IS NOT RESUMABLE — and these must stay two separate questions.
+//
+// contentProblems() above is the WRITE-side gate: what may be written to disk.
+// The writer's "nothing was captured" placeholder is CORRECT to write — that is
+// the e9253777 contract (never invent an objective the human did not say), and
+// routing it through contentProblems() makes the writer reject its own honest
+// output. Measured: doing exactly that turned stop-capsule-writer.test.mjs and
+// precompact-flush.test.mjs red, because the writer lazy-imports
+// validateCapsuleText(), which calls contentProblems().
+//
+// resumeBlockers() is the READ-side gate: what may be RESUMED FROM. Same shared
+// vocabulary, different enforcement point, opposite answer for the same string.
+export function resumeBlockers(fields) {
+  const problems = [];
+  if (isNotCaptured(fields?.objective)) {
+    problems.push('capsule objective is the writer\'s own "nothing was captured" placeholder — honest, but not resumable');
+  }
+  if (isNotCaptured(fields?.next_valid_action)) {
+    problems.push('capsule next_valid_action is the writer\'s own "nothing was captured" placeholder — honest, but not resumable');
   }
   return problems;
 }
