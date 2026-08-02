@@ -118,5 +118,59 @@ console.log('stop-writer bare attachment');
     /page\.tsx/.test(fm(doc, 'objective')), `objective was ${fm(doc, 'objective')}`);
 }
 
+// ── LEADING PASTE TOKEN FUSED TO REAL WORDS (board d25a884e) ─────────────────
+// LIVE SPECIMEN THIS DEFENDS (pheme seat, 2026-08-02, fixture SYNTHESIZED —
+// the principal's verbatim words stay out of this public repo; the shape was:
+//   @"C:\Users\<user>\.claude\uploads\<sid>\<hash>-IMG_NNNN.PNG" <principal's real words about the image>
+// The @"path" prefix is the harness paste decoration, not speech. RULED
+// (titus, 2026-08-02, on-row): strip leading @-quoted/path-shaped attachment
+// token(s) when real text follows — the human words stand VERBATIM as the
+// objective. A LONE @-token is the 1043e52 placeholder class. A path (or @)
+// inside the sentence stays load-bearing speech.
+{
+  const doc = runWriter({
+    sid: 'bat-paste-fused',
+    userText: '@"C:\\Users\\w\\.claude\\uploads\\abc123\\9f2e-IMG_0001.PNG" the hat still looks cut off, fix it',
+  });
+  const obj = fm(doc, 'objective');
+  check('leading @"path" paste token is stripped; the words stand as the objective',
+    /the hat still looks cut off, fix it/.test(obj) && !/IMG_0001/.test(obj) && !/@"/.test(obj),
+    `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'bat-paste-lone',
+    userText: '@"C:\\Users\\w\\.claude\\uploads\\abc123\\9f2e-IMG_0002.PNG"',
+  });
+  const obj = fm(doc, 'objective');
+  check('a LONE @"path" paste token falls to the placeholder, same as 1043e52',
+    !/IMG_0002/.test(obj) && /Unknown|In-flight work/i.test(obj), `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'bat-paste-multi',
+    userText: '@"C:\\u\\a-1.png" @"C:\\u\\b-2.png" compare these two and tell me which is sharper',
+  });
+  const obj = fm(doc, 'objective');
+  check('MULTIPLE leading paste tokens all strip; the directive survives whole',
+    /compare these two and tell me which is sharper/.test(obj) && !/a-1\.png/.test(obj) && !/b-2\.png/.test(obj),
+    `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'bat-paste-neg-mid',
+    userText: 'load @"C:\\dev\\assets\\logo.svg" into the header and center it',
+  });
+  const obj = fm(doc, 'objective');
+  check('NEG: an @-path INSIDE the sentence is load-bearing speech, untouched',
+    /load/.test(obj) && /logo\.svg/.test(obj) && /center it/.test(obj), `objective was ${obj}`);
+}
+{
+  const doc = runWriter({ sid: 'bat-paste-neg-mention', userText: '@titus should review the deploy first' });
+  const obj = fm(doc, 'objective');
+  check('NEG: a leading @-mention is not path-shaped and is never stripped',
+    /@titus should review the deploy first/.test(obj), `objective was ${obj}`);
+}
+
 console.log(failures ? `\n${failures} FAILING` : '\nall green');
 process.exit(failures ? 1 : 0);
