@@ -918,6 +918,28 @@ export class AutoClearTransport {
     }
 
     if (this.state.state.startsWith('HOLD:telemetry-')) {
+      // sessionId binds once at session-bind and idle sessions go stale/missing
+      // by design, so once wedged here the dead session's telemetry can never
+      // freshen and the pressure re-check below can never see a new one. A
+      // receipt proving a later, different session cleared is real news
+      // regardless of telemetry state: rebind so the next observable is its
+      // own, rather than waiting forever on a session that will never post again.
+      const boot = this._readBootReceipt();
+      if (boot.ok
+        && boot.receipt.source === 'clear'
+        && boot.receipt.session_id !== this.sessionId
+        && (this.state.boot_sequence_at_start === null
+          || boot.receipt.boot_sequence > this.state.boot_sequence_at_start)) {
+        this.sessionId = boot.receipt.session_id;
+        const next = this._transition('idle', {
+          cycle_id: null,
+          boot_sequence_at_start: null,
+          clear_intent: null,
+          session_id: this.sessionId,
+        });
+        return resultFor(next, { transitioned: true, status: 'telemetry-recovered' });
+      }
+
       const resumeState = this._resumeStateFromHold();
       const pressure = this._pressureObservable();
       if (!pressure.ok) {
