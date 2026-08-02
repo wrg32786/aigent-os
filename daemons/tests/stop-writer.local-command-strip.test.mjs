@@ -126,14 +126,50 @@ console.log('stop-writer local-command strip');
   check('orphan-closer-only input falls through to the honest placeholder',
     /Unknown|In-flight work/i.test(obj), `objective was ${obj}`);
 }
+// ⚑ RETRACTED ASSERTION (R26, titus, 2026-08-02). This block previously asserted
+// that `stale stdout</local-command-stdout>now ship the hero fix` should strip to
+// "now ship the hero fix". That expectation was MY INVENTION, never a measured
+// specimen — and it is structurally indistinguishable from a human quoting the
+// literal tag mid-sentence (see MENTION-vs-USE below). Encoding it is what forced
+// the rule to be greedy, which mutilated real directives. Deleted, not weakened:
+// the only MEASURED orphan specimen is the closer-at-END-of-message case above.
+// Everything else is named residue rather than a guess baked into a test.
+
+// ── ⚑ MENTION vs USE — the R26 finding, reproduced from titus's exact inputs.
+//    A human QUOTING the literal tag must keep their whole directive. The prior
+//    rule ran `^[\s\S]*<\/...>` GREEDILY to the LAST tag-shaped substring
+//    anywhere in the message, so each of these was cut down to a fragment — worse
+//    than the placeholder, because a mangled objective still looks like speech.
+//    The old lcs-neg-mentions control covered the marker as WORDS and never as
+//    literal `<...>` syntax, so this class had ZERO coverage.
 {
   const doc = runWriter({
-    sid: 'lcs-orphan-closer-tail',
-    userText: 'stale stdout</local-command-stdout>now ship the hero fix',
+    sid: 'lcs-mention-quoted',
+    userText: 'the objective got set to "...disconnected.</local-command-stdout>" -- please fix the stop writer',
   });
   const obj = fm(doc, 'objective');
-  check('text AFTER an orphan closer is real speech and survives',
-    /now ship the hero fix/.test(obj) && !/stale stdout/.test(obj) && !/local-command/.test(obj),
+  check('MENTION: a human quoting the tag keeps the whole directive (not a fragment)',
+    /the objective got set to/.test(obj) && /please fix the stop writer/.test(obj),
+    `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'lcs-mention-prose',
+    userText: 'seeing this in prod logs: </local-command-stdout> repeatedly -- can you check why',
+  });
+  const obj = fm(doc, 'objective');
+  check('MENTION: a bare closer mid-prose does not eat the lead-in',
+    /seeing this in prod logs/.test(obj) && /can you check why/.test(obj),
+    `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'lcs-mention-sysreminder',
+    userText: 'the harness leaked a </system-reminder> into my capsule -- please strip it properly',
+  });
+  const obj = fm(doc, 'objective');
+  check('MENTION: same rule for a literal </system-reminder> mid-prose',
+    /the harness leaked/.test(obj) && /please strip it properly/.test(obj),
     `objective was ${obj}`);
 }
 

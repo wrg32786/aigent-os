@@ -283,10 +283,21 @@ try {
     // Everything up to the closer is block content, so it goes with the block.
     // ⚑ Deleting just the stray tag is the documented trap: it would leave
     // "Login successful. Remote Control disconnected." standing as the objective.
-    // Greedy to the LAST orphan closer, so several in one window clear in one
-    // pass; anchored at ^ so it can only ever consume a LEADING orphan and a
-    // human's text after the closer survives untouched.
-    .replace(/^[\s\S]*<\/(?:system-reminder|local-command-[^>]*)>/i, '')
+    // ⚑ MENTION vs USE (R26 finding, titus 2026-08-02). Anchored at BOTH ends:
+    // the orphan closer must TERMINATE the message. Anchoring only at ^ made this
+    // greedy to the last tag-shaped substring ANYWHERE, so a human QUOTING the
+    // literal tag was cut down to a fragment — `" -- please fix the stop writer"`
+    // survived alone as the objective. A mangled objective is WORSE than the
+    // placeholder: it still reads as speech, so nothing downstream can tell.
+    // Both-ends anchoring keeps the one MEASURED specimen (metis: block content
+    // then a closer, nothing after) and refuses every mention case.
+    // NAMED RESIDUE, not silently dropped: an orphan closer with block content
+    // before it AND human text after it stays untouched. That shape is
+    // structurally identical to a mid-sentence quotation, so syntax cannot split
+    // them — declining beats guessing, because guessing wrong eats the operator's
+    // real words. The earlier test asserting that shape SHOULD strip was my own
+    // invention, never a measured specimen; it is deleted, not weakened.
+    .replace(/^[\s\S]*<\/(?:system-reminder|local-command-[^>]*)>\s*$/i, '')
     .trim();
 
   for (const line of chunk.split('\n')) {
