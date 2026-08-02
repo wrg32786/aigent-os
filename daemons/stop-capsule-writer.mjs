@@ -274,6 +274,19 @@ try {
     // output standing as the objective — the artifact disappears and the defect
     // does not. Harness output is never a human utterance.
     .replace(/<local-command-[^>]*>[\s\S]*?(<\/local-command-[^>]*>|$)/gi, '')
+    // ORPHAN CLOSER — the mirror of the `|$` fallback above, and the half that
+    // fallback does NOT cover. The writer reads a DELTA WINDOW, so a window that
+    // begins mid-block carries the content plus a closer whose OPENER fell
+    // outside the window. The paired patterns cannot match that (after `<` they
+    // require a letter, not `/`), so before this line the metis specimen still
+    // reproduced byte-for-byte THROUGH the block-strip fix.
+    // Everything up to the closer is block content, so it goes with the block.
+    // ⚑ Deleting just the stray tag is the documented trap: it would leave
+    // "Login successful. Remote Control disconnected." standing as the objective.
+    // Greedy to the LAST orphan closer, so several in one window clear in one
+    // pass; anchored at ^ so it can only ever consume a LEADING orphan and a
+    // human's text after the closer survives untouched.
+    .replace(/^[\s\S]*<\/(?:system-reminder|local-command-[^>]*)>/i, '')
     .trim();
 
   for (const line of chunk.split('\n')) {

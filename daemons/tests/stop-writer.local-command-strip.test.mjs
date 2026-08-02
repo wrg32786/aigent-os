@@ -104,6 +104,39 @@ console.log('stop-writer local-command strip');
     `objective was ${obj}`);
 }
 
+// ── ORPHAN TRAILING CLOSER — the Stop writer reads a DELTA WINDOW, so a window
+//    that begins mid-block carries the content plus a closer with NO opener.
+//    That is byte-identical to the metis specimen, and the paired-block strip
+//    does not match it (after `<` it requires `l`, not `/`).
+//
+//    ⚑ Stripping just the orphan TAG is the same trap as the one-character fix:
+//    it would leave "Login successful. Remote Control disconnected." standing as
+//    the objective. If the opener fell outside the window then everything before
+//    the closer IS block content, so it swallows — the exact mirror of the
+//    unterminated-opener rule above. Losing a real objective to the honest
+//    placeholder is recoverable; publishing stdout as the objective is not.
+{
+  const doc = runWriter({
+    sid: 'lcs-orphan-closer',
+    userText: 'Login successful. Remote Control disconnected.</local-command-stdout>',
+  });
+  const obj = fm(doc, 'objective');
+  check('an orphan CLOSER swallows what precedes it (mirror of the unterminated-opener rule)',
+    !/local-command/.test(obj) && !/Login successful/.test(obj), `objective was ${obj}`);
+  check('orphan-closer-only input falls through to the honest placeholder',
+    /Unknown|In-flight work/i.test(obj), `objective was ${obj}`);
+}
+{
+  const doc = runWriter({
+    sid: 'lcs-orphan-closer-tail',
+    userText: 'stale stdout</local-command-stdout>now ship the hero fix',
+  });
+  const obj = fm(doc, 'objective');
+  check('text AFTER an orphan closer is real speech and survives',
+    /now ship the hero fix/.test(obj) && !/stale stdout/.test(obj) && !/local-command/.test(obj),
+    `objective was ${obj}`);
+}
+
 // ── NEGATIVE CONTROLS — must hold before AND after. A fix that breaks these is
 //    eating real user speech. ─────────────────────────────────────────────────
 {
