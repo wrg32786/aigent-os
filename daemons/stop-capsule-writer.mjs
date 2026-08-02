@@ -264,7 +264,16 @@ try {
   // frequently APPENDED after real user text, not prepended).
   const stripMeta = (s) => s
     .replace(/<system-reminder>[\s\S]*?(<\/system-reminder>|$)/gi, '')
-    .replace(/<local-command-[\s\S]*?>/gi, '')
+    // BLOCK, not tag — deliberately the same shape as the system-reminder line
+    // above, `|$` unterminated fallback included. The previous pattern matched
+    // only the OPENING tag, so `</local-command-stdout>` AND the command output
+    // between the tags both survived and became the objective. Live specimen,
+    // metis 2026-08-01:
+    //   objective: "Login successful. Remote Control disconnected.</local-command-stdout>"
+    // ⚑ Matching `</?` instead would delete the stray tag and leave the command
+    // output standing as the objective — the artifact disappears and the defect
+    // does not. Harness output is never a human utterance.
+    .replace(/<local-command-[^>]*>[\s\S]*?(<\/local-command-[^>]*>|$)/gi, '')
     .trim();
 
   for (const line of chunk.split('\n')) {
