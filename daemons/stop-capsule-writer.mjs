@@ -233,6 +233,32 @@ try {
   // INJECT:harness for a harness/supervisor injection (gated centrally in
   // capsule-content-gate.mjs), and OPERATOR only for a genuine human utterance.
   // `human` also gates the objective so it can never be a peer envelope.
+  // A turn that is ONLY a pasted path/attachment carries no directive. Live
+  // specimen, titus seat 2026-08-01: the whole turn was
+  //   C:\dev\cockpit\pasted\2026-08-01T22-35-23-688Z-image.png
+  // and it became the seat's stated objective.
+  // ⚑ RULED (titus, 2026-08-02): such a turn is NOT an objective; it falls to
+  // the honest placeholder. A path LOOKS like a real objective, so it beats a
+  // curated capsule on selection and poisons the resume — the 0d6fb75c class.
+  // The trade against e9253777 was accepted explicitly: honest-empty beats
+  // plausible-garbage.
+  // Deliberately narrow. The ENTIRE turn must be one path-shaped token: quoted
+  // (the quotes are the delimiter, so inner spaces are fine) or unquoted and
+  // whitespace-free. It must START with a path root and END in an extension, so
+  // a lone word ("continue") and a lone bare filename ("page.tsx") are NOT
+  // caught, and a path INSIDE a sentence stays a genuine OPERATOR directive.
+  // NOT covered, named rather than silently missed: an unquoted path containing
+  // spaces — indistinguishable from prose without guessing.
+  const isBareAttachment = (s) => {
+    const trimmed = String(s).trim();
+    if (!trimmed) return false;
+    const quoted = /^"([^"]+)"$/.exec(trimmed) || /^'([^']+)'$/.exec(trimmed);
+    const one = quoted ? quoted[1] : trimmed;
+    if (!quoted && /\s/.test(one)) return false;
+    if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/])/.test(one)) return false;
+    return /\.[A-Za-z0-9]{1,6}$/.test(one);
+  };
+
   const classify = (s) => {
     const t = storedData(s, 2000);
     let m;
@@ -253,6 +279,11 @@ try {
     // text the capsule OBJECTIVE verbatim. Gate them out of human-hood; they stay
     // recoverable as tagged utterances under Done.
     if (isInjectionEcho(t)) return { who: 'INJECT:harness', human: false, t };
+    // Not human-hood, so it can never reach `latestRequest` -> the objective,
+    // and it never pollutes the [OPERATOR] sweep. Its own tag, deliberately NOT
+    // an OPERATOR variant, since the sweep greps that prefix. Still recoverable
+    // under Done, exactly like a harness injection.
+    if (isBareAttachment(t)) return { who: 'ATTACHMENT', human: false, t };
     return { who: 'OPERATOR', human: true, t };
   };
   const tagUtterance = (cl) => {
@@ -274,6 +305,30 @@ try {
     // output standing as the objective — the artifact disappears and the defect
     // does not. Harness output is never a human utterance.
     .replace(/<local-command-[^>]*>[\s\S]*?(<\/local-command-[^>]*>|$)/gi, '')
+    // ORPHAN CLOSER — the mirror of the `|$` fallback above, and the half that
+    // fallback does NOT cover. The writer reads a DELTA WINDOW, so a window that
+    // begins mid-block carries the content plus a closer whose OPENER fell
+    // outside the window. The paired patterns cannot match that (after `<` they
+    // require a letter, not `/`), so before this line the metis specimen still
+    // reproduced byte-for-byte THROUGH the block-strip fix.
+    // Everything up to the closer is block content, so it goes with the block.
+    // ⚑ Deleting just the stray tag is the documented trap: it would leave
+    // "Login successful. Remote Control disconnected." standing as the objective.
+    // ⚑ MENTION vs USE (R26 finding, titus 2026-08-02). Anchored at BOTH ends:
+    // the orphan closer must TERMINATE the message. Anchoring only at ^ made this
+    // greedy to the last tag-shaped substring ANYWHERE, so a human QUOTING the
+    // literal tag was cut down to a fragment — `" -- please fix the stop writer"`
+    // survived alone as the objective. A mangled objective is WORSE than the
+    // placeholder: it still reads as speech, so nothing downstream can tell.
+    // Both-ends anchoring keeps the one MEASURED specimen (metis: block content
+    // then a closer, nothing after) and refuses every mention case.
+    // NAMED RESIDUE, not silently dropped: an orphan closer with block content
+    // before it AND human text after it stays untouched. That shape is
+    // structurally identical to a mid-sentence quotation, so syntax cannot split
+    // them — declining beats guessing, because guessing wrong eats the operator's
+    // real words. The earlier test asserting that shape SHOULD strip was my own
+    // invention, never a measured specimen; it is deleted, not weakened.
+    .replace(/^[\s\S]*<\/(?:system-reminder|local-command-[^>]*)>\s*$/i, '')
     .trim();
 
   for (const line of chunk.split('\n')) {
