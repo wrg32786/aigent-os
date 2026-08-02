@@ -45,6 +45,23 @@ const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
 
 const SELF = fileURLToPath(import.meta.url);
 
+// Instrument identity, stamped into every receipt (board d185aeea). The hash
+// names the BYTES that ran, not the tree they sat in: hooks spawn this file
+// per-invocation, so a checked-out tree label would lie whenever the working
+// file differs from HEAD. Computed once per spawn, BEFORE the top-level worker
+// body below can reach writeState; a failure degrades to 'unknown' rather than
+// blocking the receipt.
+const WRITER_IDENTITY = (() => {
+  try {
+    return {
+      writer_sha256: createHash('sha256').update(readFileSync(SELF)).digest('hex').slice(0, 16),
+      writer_mtime: statSync(SELF).mtime.toISOString(),
+    };
+  } catch {
+    return { writer_sha256: 'unknown', writer_mtime: 'unknown' };
+  }
+})();
+
 function memRoot(root) {
   return resolveMemRoot(root);
 }
@@ -723,12 +740,14 @@ process.exit(0);
 
 // Atomic-ish JSON state write (tmp+rename, direct-write fallback) — the same
 // discipline as the capsule doc; a torn state file causes duplicate-merge noise.
+// Every receipt leaves here carrying WRITER_IDENTITY; callers cannot omit it.
 function writeState(file, obj) {
+  const stamped = { ...obj, ...WRITER_IDENTITY };
   const tmp = file + '.tmp';
-  writeFileSync(tmp, JSON.stringify(obj, null, 1));
+  writeFileSync(tmp, JSON.stringify(stamped, null, 1));
   try { renameSync(tmp, file); } catch {
     try { rmSync(file, { force: true }); renameSync(tmp, file); } catch {
-      try { writeFileSync(file, JSON.stringify(obj, null, 1)); rmSync(tmp, { force: true }); } catch { /* next read falls back to defaults */ }
+      try { writeFileSync(file, JSON.stringify(stamped, null, 1)); rmSync(tmp, { force: true }); } catch { /* next read falls back to defaults */ }
     }
   }
 }
