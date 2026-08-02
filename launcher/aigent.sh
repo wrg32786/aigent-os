@@ -19,7 +19,6 @@ marker="$AIGENT_HOME/.aigent/first-run-done"
 if [ ! -f "$marker" ]; then
   mkdir -p "$(dirname "$marker")"
   claude "/start"
-  [ -f "$marker" ] || : > "$marker"
 else
   claude --continue "/open"
 fi
