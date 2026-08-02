@@ -258,6 +258,21 @@ try {
     if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/])/.test(one)) return false;
     return /\.[A-Za-z0-9]{1,6}$/.test(one);
   };
+  // Same root+extension bar as isBareAttachment, applied to each LEADING
+  // @-token only. Returns the remainder (trimmed) -- empty string when the turn
+  // was nothing but paste tokens.
+  const stripLeadingAttachments = (s0) => {
+    let t = String(s0).trim();
+    const tok = /^@(?:"([^"]+)"|'([^']+)'|(\S+))\s*/;
+    for (;;) {
+      const m = tok.exec(t);
+      if (!m) break;
+      const p = m[1] ?? m[2] ?? m[3];
+      if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/])/.test(p) || !/\.[A-Za-z0-9]{1,6}$/.test(p)) break;
+      t = t.slice(m[0].length).trim();
+    }
+    return t;
+  };
 
   const classify = (s) => {
     const t = storedData(s, 2000);
@@ -283,8 +298,17 @@ try {
     // and it never pollutes the [OPERATOR] sweep. Its own tag, deliberately NOT
     // an OPERATOR variant, since the sweep greps that prefix. Still recoverable
     // under Done, exactly like a harness injection.
-    if (isBareAttachment(t)) return { who: 'ATTACHMENT', human: false, t };
-    return { who: 'OPERATOR', human: true, t };
+    // A LEADING @-quoted/@-bare paste token is harness decoration fused onto
+    // real speech (live specimen, pheme seat 2026-08-02: @"...uploads...PNG"
+    // followed by a genuine directive became the objective verbatim, token and
+    // all). RULED (titus, 2026-08-02, board d25a884e): strip leading PATH-SHAPED
+    // @-token(s) when real text follows -- the words stand VERBATIM; if nothing
+    // follows, it is the 1043e52 placeholder class (the @ prefix must not let a
+    // lone paste escape that rule). An @-token that is not path-shaped
+    // (@titus, email @ 5pm) or not leading is speech and is never touched.
+    const bare = stripLeadingAttachments(t);
+    if (!bare || isBareAttachment(bare)) return { who: 'ATTACHMENT', human: false, t };
+    return { who: 'OPERATOR', human: true, t: bare };
   };
   const tagUtterance = (cl) => {
     if (utterances.length >= 12) return; // bound a paste-bomb turn
@@ -344,13 +368,13 @@ try {
       const c = ev.message?.content;
       if (typeof c === 'string') {
         const clean = stripMeta(c);
-        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(clean, 300); tagUtterance(cl); }
+        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
           if (b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
-            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(clean, 300); tagUtterance(cl); }
+            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = typeof b.content === 'string'
