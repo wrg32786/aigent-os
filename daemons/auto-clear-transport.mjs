@@ -361,11 +361,39 @@ export function evaluateCheckpointFreshness({
   // the writer's own link to the capsule it captured.  Requiring both avoids
   // inventing a second binding record or inferring identity from capsule names.
   if (normalizedPath(selection.capsule.path) !== normalizedPath(record.capsule_path)) {
-    return checkpointFailure('checkpoint-session-mismatch', {
-      selected_capsule: selection.capsule.path,
-      stop_writer_capsule: record.capsule_path,
-      session_id: sessionId,
-    });
+    // The plain call above picks by RESUME QUALITY: lifecycle-common's
+    // 2026-08-01 fix demotes a placeholder capsule below any curated capsule
+    // on disk, because for RESUME that heuristic is right.  It is wrong for
+    // THIS check, which only ever asks "does the checkpoint I just wrote
+    // still exist and still hold" -- never "is it also the best capsule on
+    // the seat".  Left unresolved, an honest contentless checkpoint on a
+    // reference install (which always has a curated capsule sitting on disk)
+    // held here on EVERY tick -- measured cycle 5, zero cycles ever counted.
+    // Retry naming the session's OWN capsule by path before concluding a real
+    // mismatch: identity binding beats the quality heuristic for this one
+    // selection (2026-08-03 fix; see selectCapsule's sessionCapsulePath).
+    let boundSelection = null;
+    try {
+      boundSelection = selectCapsuleFn(memRoot, { sessionCapsulePath: record.capsule_path });
+    } catch {
+      boundSelection = null; // selector rejected the retry -- fall through to the real mismatch below
+    }
+    const boundPath = boundSelection
+      && typeof boundSelection === 'object'
+      && boundSelection.capsule
+      && typeof boundSelection.capsule === 'object'
+      && typeof boundSelection.capsule.path === 'string'
+      ? boundSelection.capsule.path
+      : null;
+    if (boundPath && normalizedPath(boundPath) === normalizedPath(record.capsule_path)) {
+      selection = boundSelection;
+    } else {
+      return checkpointFailure('checkpoint-session-mismatch', {
+        selected_capsule: selection.capsule.path,
+        stop_writer_capsule: record.capsule_path,
+        session_id: sessionId,
+      });
+    }
   }
 
   const transcriptPath = transcriptPathFor({ cwd, sessionId, homeDir });
@@ -401,6 +429,11 @@ export function evaluateCheckpointFreshness({
     ok: true,
     capsule: clone(selection.capsule),
     rejected: hasOwn(selection, 'rejected') ? clone(selection.rejected) : [],
+    // Additive-only field: true exactly when the mismatch retry above resolved
+    // by session binding rather than the plain call already agreeing. Absent
+    // (undefined) on every path that existed before this fix, so no existing
+    // equality assertion on this shape changes.
+    sessionBound: Boolean(selection.sessionBound),
     record: clone(record),
     transcript: { path: transcriptPath, size: transcript.size },
   };
