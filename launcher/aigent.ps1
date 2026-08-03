@@ -39,11 +39,10 @@ $marker = Join-Path $AigentHome '.aigent\first-run-done'
 
 if (-not (Test-Path $marker)) {
   # First boot: the guided Day-1 flow. /start owns install-check -> /operator-setup
-  # interview -> first win, then writes the marker itself. We also write it as a
-  # fallback so a mid-flow exit never re-triggers the whole intro.
+  # interview -> first win, and writes the marker itself when setup completes.
+  # A run that dies early leaves no marker, so the next launch retries /start.
   New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
   claude "/start"
-  if (-not (Test-Path $marker)) { New-Item -ItemType File -Force $marker | Out-Null }
 } else {
   # Returning operator: never cold-start. Warm-resume the latest session and orient.
   claude --continue "/open"
