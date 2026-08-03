@@ -266,9 +266,13 @@ EXEC
     local dst="$2"   # destination path WITHOUT .icns extension
 
     # Approach A: iconutil iconset (highest fidelity; sips is always present).
-    local iconset
-    iconset="$(mktemp -d 2>/dev/null).iconset" || return 1
-    mkdir -p "$iconset" || { rm -rf "$iconset"; return 1; }
+    # The iconset lives INSIDE the mktemp-reserved directory: appending
+    # ".iconset" to the reserved name would create an unreserved sibling and
+    # leak the reserved dir itself.
+    local tmpdir iconset
+    tmpdir="$(mktemp -d 2>/dev/null)" || return 1
+    iconset="$tmpdir/AIgent.iconset"
+    mkdir -p "$iconset" || { rm -rf "$tmpdir"; return 1; }
     local sz
     for sz in 16 32 64 128 256 512; do
       sips -z "$sz" "$sz" "$src" --out "$iconset/icon_${sz}x${sz}.png"        2>/dev/null || true
@@ -276,10 +280,10 @@ EXEC
            --out "$iconset/icon_${sz}x${sz}@2x.png"                           2>/dev/null || true
     done
     if iconutil -c icns "$iconset" -o "${dst}.icns" 2>/dev/null; then
-      rm -rf "$iconset"
+      rm -rf "$tmpdir"
       return 0
     fi
-    rm -rf "$iconset"
+    rm -rf "$tmpdir"
 
     # Approach B: sips direct-to-icns (works on most macOS versions).
     sips -s format icns "$src" --out "${dst}.icns" 2>/dev/null && return 0

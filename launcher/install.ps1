@@ -33,14 +33,17 @@ if (Test-Path $skillsSrc) {
   }
 }
 
-# H2. Render .claude/settings.json from template (forward slashes, no BOM)
+# H2. Render .claude/settings.json from template (forward slashes, no BOM).
+# The renderer lives in render-settings.ps1 (shared with its regression test):
+# parse -> walk -> escape -> serialize, mirroring install.sh. The old bare-word
+# regex render matched the MIDDLE of the __AIGENT_ROOT__ token, wrapping every
+# rendered path in __ residue AND silently renaming the AIGENT_ROOT key itself.
+. (Join-Path $PSScriptRoot 'render-settings.ps1')
 $tplPath  = Join-Path $Root '.claude\settings.json.template'
 $jsonPath = Join-Path $Root '.claude\settings.json'
 if ((Test-Path $tplPath) -and (-not (Test-Path $jsonPath))) {
-  $rootFwd = $Root.Replace('\', '/')
-  $content = (Get-Content $tplPath -Raw) -replace 'AIGENT_ROOT', $rootFwd
-  [System.IO.File]::WriteAllText($jsonPath, $content)
-  Write-Host "  [harness] settings.json rendered ($rootFwd)"
+  Render-AigentSettings -TemplatePath $tplPath -DestinationPath $jsonPath -Root $Root
+  Write-Host "  [harness] settings.json rendered ($($Root.Replace('\', '/')))"
 }
 
 # H3. Vault runtime folders
@@ -54,11 +57,14 @@ Write-Host "  [harness] vault folders ensured"
 [Environment]::SetEnvironmentVariable('AIGENT_HOME', $AigentHome, 'User')
 
 # 2. PATH shim: ~/.aigent/bin/aigent.cmd -> the real launcher. Add bin to PATH.
+# cmd expands % even inside double quotes, so a % in the install path must be
+# serialized as %% or the shim points at a mangled path.
 $bin = Join-Path $env:USERPROFILE '.aigent\bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
+$launcherCmd = $launcher.Replace('%', '%%')
 @"
 @echo off
-call "$launcher" %*
+call "$launcherCmd" %*
 "@ | Set-Content -Encoding ascii (Join-Path $bin 'aigent.cmd')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*$bin*") {

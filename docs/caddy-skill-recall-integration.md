@@ -7,11 +7,11 @@ created: 2026-05-08
 
 # Caddy Skill Recall Integration
 
-How `/skill-recall` and the SKILL_LEDGER taxonomy are wired into Caddy's prompt-matching loop. **SHIPPED in S39**: taxonomy fallback and chain recall are live in `caddy.sh`.
+How `/skill-recall` and the SKILL_LEDGER taxonomy are wired into Caddy's prompt-matching loop. **SHIPPED in S39**: taxonomy fallback and chain recall are live in `daemons/caddy.sh` (re-verified against source and by live runs, 2026-08-02; see the implementation record below). One item remains open: the `taxonomy` mute class is not implemented, so these hints are currently always-on.
 
 See [[concepts/Caddy]] for Caddy's current architecture.
-See [[concepts/Capability Expansion Doctrine]] for the doctrine this serves.
 See [[memory/SKILL_LEDGER]] for the taxonomy being queried.
+The capability-expansion doctrine this serves lives in the private fleet vault; it is not shipped in this repository.
 
 ---
 
@@ -89,6 +89,8 @@ This fires at most once per session (track in a temp file keyed by session start
 
 ## Caddy class integration
 
+**Status: not yet implemented.** Hints from the taxonomy/chain block are currently always-on; this section remains the spec for the one open checklist item below.
+
 The mute system (`memory/CADDY_MUTES.json`) uses named classes. Add:
 
 - `taxonomy`: mutes SKILL_LEDGER taxonomy hints but leaves trigger-match hints active
@@ -115,17 +117,17 @@ Output format:
 
 ---
 
-## Implementation checklist
+## Implementation record
 
-When wiring this in `caddy.sh`:
+Verified against `daemons/caddy.sh` at source, plus two live runs, 2026-08-02:
 
-- [ ] Add `LEDGER="$ROOT/memory/SKILL_LEDGER.md"` near line 14 alongside existing path vars
-- [ ] Add `CHAINS="$ROOT/memory/SKILL_CHAINS.md"` similarly
-- [ ] Add `class_muted taxonomy` guard before new block
-- [ ] New Python block goes AFTER the existing `PYEOF` block (line ~155+)
-- [ ] Keep the new block's failure mode identical to existing: `2>/dev/null || exit 0`
-- [ ] Test: a prompt with a clear taxonomy match should surface `[CADDY:taxonomy]` hint
-- [ ] Test: a prompt with no match should surface the gap suggestion hint
+- [x] `LEDGER="$ROOT/memory/SKILL_LEDGER.md"` alongside the existing path vars (caddy.sh:111)
+- [x] `CHAINS="$ROOT/memory/SKILL_CHAINS.md"` (caddy.sh:112)
+- [ ] `class_muted taxonomy` guard: NOT implemented. The taxonomy, gap, and chain outputs live inside the shared Python block and are not individually mutable; the `taxonomy` class described above does not exist in `caddy.sh` today. This is the one open item.
+- [x] Taxonomy block runs inside the Python block, after trigger-match scoring, and only when trigger matching surfaced nothing (caddy.sh:179)
+- [x] Failure mode identical to existing: stderr to the daemon log, `|| true`, never blocks the prompt (caddy.sh:115)
+- [x] Test run 2026-08-02: a ledger-token prompt surfaced `[CADDY:taxonomy] ... path="automation.browser.harness" ... [LEDGER]`
+- [x] Test run 2026-08-02: a no-match prompt surfaced the gap suggestion; it fires once per session via `.aigent/cache/caddy-gap-<sid>`
 
 ---
 
@@ -141,7 +143,6 @@ When wiring this in `caddy.sh`:
 ## Related
 
 - [[concepts/Caddy]]: full Caddy architecture
-- [[concepts/Capability Expansion Doctrine]]: doctrine this wiring serves
 - [[memory/SKILL_LEDGER]]: the taxonomy file being queried
 - [[memory/SKILL_CHAINS]]: the chains file for prior sequence recall
 - [[memory/SKILL_GAPS]]: where gap detections should be logged

@@ -45,6 +45,14 @@ jobs:
           done < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
           test "$fail" -eq 0
 
+      # ubuntu runners ship pwsh, so the Windows installer's settings renderer
+      # is regression-tested here too (board 6c437b41: the old render wrapped
+      # every path in __ residue and renamed the AIGENT_ROOT key; the first fix
+      # emitted invalid JSON escapes for legal $ paths).
+      - name: Windows settings renderer regression
+        shell: pwsh
+        run: ./launcher/tests/install-render.test.ps1
+
       - name: Node hook tests
         run: node --test tests/tool-tracker.test.cjs
 
