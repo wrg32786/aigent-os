@@ -1776,7 +1776,19 @@ export class ManagedPtyRunner {
     // The seat is owed a capsule. Without this the transport sits in
     // checkpoint-requested until the session dies — the state it was found in on
     // a live standalone seat, 2026-08-04.
-    if (coreResult.action === 'request-checkpoint') {
+    //
+    // STATE-DRIVEN, NOT EDGE-TRIGGERED, and this distinction is the whole fix.
+    // action:'request-checkpoint' is returned ONLY on the pressure ->
+    // checkpoint-requested transition (auto-clear-transport.mjs:1012-1020). The
+    // state itself PERSISTS in auto-clear-cycle.json across relaunches. So a seat
+    // already sitting in checkpoint-requested — which is exactly how a seat that
+    // has been stuck presents — never re-emits the action, and an edge-triggered
+    // writer never fires for the one population that needs it most. Measured on
+    // the live seat 2026-08-04: the first version of this fix keyed on the action
+    // alone and did nothing, because the transition had happened in an earlier
+    // session. Keying on the state means a stuck seat recovers on its next tick.
+    if (coreResult.action === 'request-checkpoint'
+      || coreResult.state.state === 'checkpoint-requested') {
       try {
         this._writeCapsuleRequest();
       } catch (error) {
