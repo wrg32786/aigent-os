@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   AutoClearTransport,
+  CHECKPOINT_TAIL_TOLERANCE_BYTES,
   acquireRunnerLock,
   evaluateCheckpointFreshness,
   releaseRunnerLock,
@@ -947,9 +948,14 @@ class RunnerHarness {
       case 'checkpoint':
         this.guards.checkpoint = value;
         if (value === 'failed') {
+          // Must EXCEED the announcement budget to be real post-checkpoint
+          // activity. A ~26-byte line used to sit here; under the derived
+          // budget that is inside one capped acknowledgement and is correctly
+          // tolerated, so the checkpoint no longer failed and this guard
+          // silently stopped guarding.
           fs.appendFileSync(
             this.fixture.transcriptPath,
-            '\nactivity after checkpoint\n',
+            `\nactivity after checkpoint ${'x'.repeat(CHECKPOINT_TAIL_TOLERANCE_BYTES + 1)}\n`,
           );
         }
         break;
@@ -1861,7 +1867,7 @@ test('V4 pass-through: literal -- suffix follows fixed args for sh and ps1', () 
     && /foreach \(\$arg in \$args\)/.test(powershellCode)
     && /if \(\$arg -ceq '--no-deps'\)[\s\S]*?continue[\s\S]*?\} elseif \(\$afterSeparator\)[\s\S]*?\$claudePassthroughArgs \+= \[string\]\$arg[\s\S]*?\} elseif \(\$arg -ceq '--'\)[\s\S]*?\$afterSeparator = \$true/.test(powershellCode)
     && /Invoke-AigentClaude -ClaudeArgs \(@\('\/start'\) \+ \$claudePassthroughArgs\)/.test(powershellCode)
-    && /Invoke-AigentClaude -ClaudeArgs \(@\('--continue', '\/open'\) \+ \$claudePassthroughArgs\)/.test(powershellCode)
+    && /Invoke-AigentClaude -ClaudeArgs \(@\('--continue'\) \+ \$claudePassthroughArgs\)/.test(powershellCode)
   );
 
   const observed = {
@@ -1893,15 +1899,18 @@ test('V4 pass-through: literal -- suffix follows fixed args for sh and ps1', () 
       }),
     powershellSourceBound,
   };
+  // The warm shape carries NO verb. /open is retired, and /resume is not its
+  // replacement here: resume-verb.mjs:23 fires on source=clear ONLY, and
+  // reopening a terminal is a warm start that --continue already restores.
   assert.deepEqual(observed, {
     shellFirstRun: ['--', '/start', ...opaqueArgs],
-    shellReturning: ['--', '--continue', '/open', ...opaqueArgs],
+    shellReturning: ['--', '--continue', ...opaqueArgs],
     powershellFirstRun: powerShellCommand === null
       ? null
       : ['--', '/start', ...opaqueArgs],
     powershellReturning: powerShellCommand === null
       ? null
-      : ['--', '--continue', '/open', ...opaqueArgs],
+      : ['--', '--continue', ...opaqueArgs],
     powershellSourceBound: true,
   });
 });
@@ -1944,13 +1953,13 @@ test('V4 pass-through: --no-deps after -- is consumed by the launcher, never for
   // that stays managed and forwards it) turns every comparison red.
   assert.deepEqual(observed, {
     shellFirstRun: ['/start', ...forwarded],
-    shellReturning: ['--continue', '/open', ...forwarded],
+    shellReturning: ['--continue', ...forwarded],
     powershellFirstRun: powerShellCommand === null
       ? null
       : ['/start', ...forwarded],
     powershellReturning: powerShellCommand === null
       ? null
-      : ['--continue', '/open', ...forwarded],
+      : ['--continue', ...forwarded],
   });
 });
 
@@ -1988,13 +1997,13 @@ test('V5 no-dash-dash unchanged: decoy args leave both fixed command shapes byte
     },
     {
       shellFirstRun: ['--', '/start'],
-      shellReturning: ['--', '--continue', '/open'],
+      shellReturning: ['--', '--continue'],
       powershellFirstRun: powerShellCommand === null
         ? null
         : ['--', '/start'],
       powershellReturning: powerShellCommand === null
         ? null
-        : ['--', '--continue', '/open'],
+        : ['--', '--continue'],
     },
   );
 });
@@ -2019,9 +2028,11 @@ test('all three existing launchers remain the managed front door with an explici
     shell,
     /launch_claude "\/start" \$\{operator_args\[0\]\+"\$\{operator_args\[@\]\}"\}/,
   );
+  // Warm path carries NO verb — /open is retired and /resume fires on
+  // source=clear only (resume-verb.mjs:23), which a terminal reopen is not.
   assert.match(
     shell,
-    /launch_claude --continue "\/open" \$\{operator_args\[0\]\+"\$\{operator_args\[@\]\}"\}/,
+    /launch_claude --continue \$\{operator_args\[0\]\+"\$\{operator_args\[@\]\}"\}/,
   );
 
   assert.match(powershell, /-ccontains '--no-deps'/);
@@ -2033,7 +2044,7 @@ test('all three existing launchers remain the managed front door with an explici
   );
   assert.match(
     powershell,
-    /Invoke-AigentClaude -ClaudeArgs \(@\('--continue', '\/open'\) \+ \$claudePassthroughArgs\)/,
+    /Invoke-AigentClaude -ClaudeArgs \(@\('--continue'\) \+ \$claudePassthroughArgs\)/,
   );
 
   assert.match(command, /aigent\.ps1" %\*/i);

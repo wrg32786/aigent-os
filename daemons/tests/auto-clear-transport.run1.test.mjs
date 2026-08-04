@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   AutoClearTransport,
+  CHECKPOINT_TAIL_TOLERANCE_BYTES,
   RunnerLockError,
   acquireRunnerLock,
   releaseRunnerLock,
@@ -213,18 +214,35 @@ test('2. stale-capsule: previous-session binding and short transcript offset bot
     writeJson(
       path.join(short.memRoot, 'runtime', 'stop-writer', `${SESSION_ID}.json`),
       {
-        offset: short.transcriptSize - 1,
+        // The lag must EXCEED the announcement budget to be a real staleness
+        // signal. A 1-byte gap used to sit here, asserting the old byte-exact
+        // rule; under the derived budget that is legitimately tolerated (less
+        // than one capped acknowledgement). The base fixture transcript is only
+        // 10 bytes, so the gap is made by GROWING the transcript rather than
+        // subtracting from the offset — subtracting drove it negative and the
+        // transport correctly refused with checkpoint-record-offset-invalid,
+        // which would have passed this test for the wrong reason.
+        offset: 0,
         capsule_path: short.capsulePath,
         last_delta_sha: 'short',
       },
+    );
+    fs.appendFileSync(
+      short.transcriptPath,
+      `\n{"type":"attachment","pad":"${'x'.repeat(CHECKPOINT_TAIL_TOLERANCE_BYTES + 1)}"}\n`,
+    );
+    const shortStaleSize = fs.statSync(short.transcriptPath).size;
+    assert.ok(
+      shortStaleSize > CHECKPOINT_TAIL_TOLERANCE_BYTES,
+      'vector is only meaningful if the lag exceeds the tolerated budget',
     );
     const shortTransport = createTransport(short);
     assert.equal(shortTransport.tick().state.state, 'pressure');
     assert.equal(shortTransport.tick().state.state, 'checkpoint-requested');
     const shortHeld = shortTransport.tick();
     assert.equal(shortHeld.state.state, 'HOLD:checkpoint-transcript-short');
-    assert.equal(shortHeld.state.hold.detail.captured_offset, short.transcriptSize - 1);
-    assert.equal(shortHeld.state.hold.detail.stable_size, short.transcriptSize);
+    assert.equal(shortHeld.state.hold.detail.captured_offset, 0);
+    assert.equal(shortHeld.state.hold.detail.stable_size, shortStaleSize);
     assert.equal(shortHeld.state.clear_intent, null);
   } finally {
     destroyFixture(mismatch);
@@ -705,7 +723,13 @@ test('11. authorization-site checkpoint decay refuses clear and persists no inte
     const transport = createTransport(fixture);
     primeCheckpointConfirmed(transport);
 
-    const activity = '\n{"type":"assistant","message":"activity after checkpoint"}\n';
+    // Must exceed the announcement budget to represent REAL post-checkpoint
+    // activity. A ~60-byte line used to sit here; under the derived budget that
+    // is one capped acknowledgement's worth and is correctly tolerated. Padding
+    // from the constant keeps the vector discriminating if the budget moves.
+    const activity = `\n{"type":"assistant","message":"activity after checkpoint","pad":"${
+      'x'.repeat(CHECKPOINT_TAIL_TOLERANCE_BYTES + 1)
+    }"}\n`;
     atomicFixtureUpdate(
       fixture.transcriptPath,
       (current) => `${current ?? ''}${activity}`,

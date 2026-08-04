@@ -84,7 +84,12 @@ if (-not (Test-Path $marker)) {
   if (-not (Test-Path $marker)) { New-Item -ItemType File -Force $marker | Out-Null }
 } else {
   # Returning operator: never cold-start. Warm-resume the latest session and orient.
-  Invoke-AigentClaude -ClaudeArgs (@('--continue', '/open') + $claudePassthroughArgs)
+  # NO VERB ON THE WARM PATH — see the full note in aigent.sh. /open is retired,
+  # and /resume is not its replacement here: resume-verb.mjs:23 fires on
+  # source=clear ONLY, and reopening a terminal is a warm start. --continue
+  # already restores the conversation. Both faces move together; a launcher that
+  # disagrees with the other is how one platform keeps running a dead command.
+  Invoke-AigentClaude -ClaudeArgs (@('--continue') + $claudePassthroughArgs)
 }
 
 Write-Host ""

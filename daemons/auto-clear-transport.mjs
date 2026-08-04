@@ -31,6 +31,37 @@ const require = createRequire(import.meta.url);
 const { atomicUpdate } = require('./memory-hygiene/atomic-state.cjs');
 
 export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
+
+// ── CAPSULE ANNOUNCEMENT BUDGET ────────────────────────────────────────────────
+// The capsule verb ends with a short acknowledgement (skills/context-capsule,
+// step 6). That acknowledgement is a NEW assistant turn, appended to the
+// transcript AFTER the stop-writer captured its offset — so the checkpoint used
+// to read the capsule as stale and hold on `checkpoint-transcript-short`. The
+// seat could not clear BECAUSE it had said it was ready to. Measured on a live
+// standalone seat 2026-08-04: three separate holds at 1,295 / 1,293 / 1,295
+// bytes. A constant, not a race.
+//
+// The fix is a BOUNDED budget, not an open tolerance: cap the announcement at a
+// known length, and the maximum bytes that can legitimately land after the
+// capture becomes arithmetic instead of a guess.
+//
+//   ANNOUNCEMENT_MAX_CHARS  the cap the skill enforces on its own closing line.
+//   ENTRY_ENVELOPE_MAX      what a transcript entry costs BEFORE its text. This
+//                           is measured, not assumed: 72 short assistant entries
+//                           sampled from a real transcript gave envelope
+//                           overhead min 1,249 / median 1,279 / MAX 1,361. The
+//                           max is used deliberately.
+//   +5%                     the principal's margin, on his instruction.
+//
+// Anything larger than this budget is NOT one capped acknowledgement — it is a
+// second turn, or real work the capsule does not know about, and it must still
+// hold. That is the property this preserves: the check keeps failing for the
+// reason it was written, and stops failing for the reason it was not.
+export const CAPSULE_ANNOUNCEMENT_MAX_CHARS = 120;
+export const TRANSCRIPT_ENTRY_ENVELOPE_MAX = 1361;
+export const CHECKPOINT_TAIL_TOLERANCE_BYTES = Math.ceil(
+  (TRANSCRIPT_ENTRY_ENVELOPE_MAX + CAPSULE_ANNOUNCEMENT_MAX_CHARS) * 1.05,
+);
 export const CYCLE_STATES = Object.freeze([
   'idle',
   'pressure',
@@ -410,10 +441,15 @@ export function evaluateCheckpointFreshness({
   if (!hasOwn(transcript, 'size') || !Number.isSafeInteger(transcript.size) || transcript.size < 0) {
     return checkpointFailure('checkpoint-transcript-size-missing', { path: transcriptPath });
   }
-  if (record.offset < transcript.size) {
+  // A lag up to the announcement budget is EXPECTED — see
+  // CHECKPOINT_TAIL_TOLERANCE_BYTES. Beyond it, the capsule genuinely does not
+  // cover the conversation and the hold is correct.
+  if (transcript.size - record.offset > CHECKPOINT_TAIL_TOLERANCE_BYTES) {
     return checkpointFailure('checkpoint-transcript-short', {
       captured_offset: record.offset,
       stable_size: transcript.size,
+      lag_bytes: transcript.size - record.offset,
+      tolerance_bytes: CHECKPOINT_TAIL_TOLERANCE_BYTES,
       path: transcriptPath,
     });
   }
