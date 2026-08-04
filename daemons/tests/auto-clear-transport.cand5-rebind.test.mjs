@@ -277,3 +277,59 @@ test('cand5-5. no-clear path: the ordinary checkpoint -> clear-submitted -> rele
     destroyFixture(fixture);
   }
 });
+
+// ---------------------------------------------------------------------------
+// cand5-5 — THE DEADLOCK IN THE cand5-1 FIX ITSELF.
+//
+// Found live on Ada's seat 2026-08-04 (titus). cand5-1 un-wedges only on
+// `boot.receipt.source === 'clear'`. But the transport IS the thing that
+// initiates clears, so a transport wedged in HOLD:telemetry-* can never
+// produce the one event its own recovery requires. Any operator who RESTARTS
+// a wedged seat instead of clearing it stays wedged forever — and a restart is
+// what a real user does when a seat looks stuck.
+//
+// The receipt is the authority on which session is live. A different session
+// with a strictly later boot_sequence is real news whether it arrived by
+// 'clear', 'startup', or 'resume'. The three negative controls above
+// (same-session, invalid-receipt, replayed-boot_sequence) are what keep this
+// honest, and they must all stay green.
+
+function writeRestartReceipt(fixture, { sessionId, bootSequence, source = 'startup' }) {
+  fixture.clock.advance(1000);
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+    boot_sequence: bootSequence,
+    session_id: sessionId,
+    source,
+    observed_at: new Date(fixture.clock.ms()).toISOString(),
+  });
+}
+
+test('cand5-6. RESTART wedge: a later, different session must rebind even when the receipt is not a clear', () => {
+  const fixture = makeFixture('restart-wedge');
+  try {
+    const transport = createTransport(fixture, { readPressureFn: readPressure });
+
+    const held = transport.tick();
+    assert.equal(held.state.state, 'HOLD:telemetry-missing', 'wedge precondition: idle telemetry-missing');
+    assert.equal(held.state.boot_sequence_at_start, null, 'wedge precondition: no pressure cycle ever anchored');
+    assert.equal(transport.sessionId, SESSION_ID, 'still bound to the dead session');
+
+    // The operator did NOT clear — they exited and relaunched, which is what a
+    // real user does with a seat that looks stuck.
+    writeRestartReceipt(fixture, { sessionId: NEW_SESSION, bootSequence: 11, source: 'startup' });
+
+    const recovered = transport.tick();
+    assert.equal(transport.sessionId, NEW_SESSION, "mechanism's own observable: a restart into a NEW session must rebind sessionId, or a wedged seat can never recover without the clear it cannot issue");
+    assert.equal(recovered.state.session_id, NEW_SESSION, 'persisted state carries the new session');
+    assert.notEqual(recovered.state.state, 'HOLD:telemetry-missing', 'the restart must un-wedge the transport');
+    assert.equal(recovered.state.state, 'idle', 'un-wedge resolves to idle so ordinary machinery resumes');
+
+    // Prove the NEW session's telemetry is what becomes observable.
+    writeFreshTelemetry(fixture, NEW_SESSION, 90);
+    const afterRebind = transport.tick();
+    assert.equal(afterRebind.state.state, 'pressure', "the NEW session's telemetry must drive the next cycle");
+    assert.equal(afterRebind.state.boot_sequence_at_start, 11, 'the cycle anchors on the receipt that triggered the rebind');
+  } finally {
+    destroyFixture(fixture);
+  }
+});

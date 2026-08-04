@@ -957,9 +957,17 @@ export class AutoClearTransport {
       // receipt proving a later, different session cleared is real news
       // regardless of telemetry state: rebind so the next observable is its
       // own, rather than waiting forever on a session that will never post again.
+      // NOT gated on source === 'clear'. Requiring a clear here is a deadlock:
+      // this transport is the thing that initiates clears, so a transport
+      // already wedged in HOLD:telemetry-* can never emit the one event its own
+      // recovery depends on. An operator who RESTARTS a stuck seat — the
+      // ordinary human response to one — would stay wedged forever. The receipt
+      // is the authority on which session is live, and a DIFFERENT session at a
+      // strictly LATER boot_sequence is real news however it booted. The
+      // same-session / invalid-receipt / replayed-boot_sequence controls below
+      // are what keep this honest (cand5-2, -3, -4).
       const boot = this._readBootReceipt();
       if (boot.ok
-        && boot.receipt.source === 'clear'
         && boot.receipt.session_id !== this.sessionId
         && (this.state.boot_sequence_at_start === null
           || boot.receipt.boot_sequence > this.state.boot_sequence_at_start)) {
