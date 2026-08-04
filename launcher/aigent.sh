@@ -38,13 +38,32 @@ for arg in "$@"; do
   fi
 done
 
+# Windows / Git-Bash (MSYS) rewrites any argument that looks like a POSIX path
+# before the native binary sees it, so the slash-commands below arrive as
+# "C:/Program Files/Git/open" and the operator's /start or /open never runs.
+# Measured on Git Bash 2026-08-04: node -- --continue /open receives
+# ["--continue","C:/Program Files/Git/open"].
+#
+# Scoped to these two prefixes on purpose. MSYS_ARG_CONV_EXCL='*' also fixes the
+# symptom, but it stops converting "$AIGENT_HOME/daemons/pty-runner.mjs" on the
+# same line, which native node needs converted. Both MSYS_ and MSYS2_ spellings
+# are set because Git-for-Windows honours the former and MSYS2 the latter.
+# No-op on macOS/Linux, where these variables are unread.
+AIGENT_ARG_CONV_EXCL='/start;/open'
+
 launch_claude() {
   if [ "$unmanaged" -eq 1 ]; then
+    MSYS_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
+    MSYS2_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
     claude "$@"
   elif ! command -v node >/dev/null 2>&1; then
     printf '%s\n' 'DEGRADED:auto-clear-node-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged' >&2
+    MSYS_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
+    MSYS2_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
     claude "$@"
   else
+    MSYS_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
+    MSYS2_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
     node "$AIGENT_HOME/daemons/pty-runner.mjs" -- "$@"
   fi
 }
