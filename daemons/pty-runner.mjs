@@ -44,6 +44,14 @@ export const DEGRADED_NODE_PTY_LINE = `${DEGRADED_NODE_PTY} checkpoint/recovery 
 export const DEGRADED_PRESSURE_THRESHOLD_INVALID = 'DEGRADED:auto-clear-threshold-invalid';
 export const UNMANAGED_AUTO_CLEAR_OFF = 'UNMANAGED:auto-clear-disabled';
 export const CLEAR_CONTROL_INPUT = '/clear\r';
+// The transport reaches 'checkpoint-requested' and then waits for a capsule to
+// exist. Nothing was ever asking the seat to write one: tick() returns
+// action:'request-checkpoint' (auto-clear-transport.mjs:1019) and this file had
+// no reader for it — the word "action" appeared exactly once here, in an
+// unrelated comment. So a standalone seat armed, tripped its threshold, and sat
+// in checkpoint-requested forever. The Stop-hook autosave does NOT satisfy this;
+// that is a rolling best-effort record, not the capsule verb.
+export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
 export const DEFAULT_RUNNER_TICK_MS = 100;
 export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
 
@@ -654,6 +662,7 @@ export class ManagedPtyRunner {
     this.watchdogArmed = false;
     this.automationEnabled = true;
     this.controlWriteAttempts = 0;
+    this.capsuleRequestWritten = false;
     this.currentControlWriteAttempted = false;
     this.started = false;
     this.closed = false;
@@ -695,6 +704,18 @@ export class ManagedPtyRunner {
     this.currentControlWriteAttempted = true;
     this._event('control-write', CLEAR_CONTROL_INPUT);
     return this.pty.write(CLEAR_CONTROL_INPUT);
+  }
+
+  // Carries action:'request-checkpoint' to the seat. The transport decides WHEN
+  // a capsule is owed; this is the only thing that tells the seat so. Guarded to
+  // one write per cycle: tick() runs every 100ms and the transport emits the
+  // action only on the pressure -> checkpoint-requested transition, but a guard
+  // here means a future re-emit cannot machine-gun the composer.
+  _writeCapsuleRequest() {
+    if (this.capsuleRequestWritten) return false;
+    this.capsuleRequestWritten = true;
+    this._event('capsule-request-write', CAPSULE_CONTROL_INPUT);
+    return this.pty.write(CAPSULE_CONTROL_INPUT);
   }
 
   _writeOutput(data) {
@@ -1750,6 +1771,27 @@ export class ManagedPtyRunner {
         status: 'disabled',
         code: 'runner-transport-result-field-missing',
       };
+    }
+
+    // The seat is owed a capsule. Without this the transport sits in
+    // checkpoint-requested until the session dies — the state it was found in on
+    // a live standalone seat, 2026-08-04.
+    if (coreResult.action === 'request-checkpoint') {
+      try {
+        this._writeCapsuleRequest();
+      } catch (error) {
+        this.lastReason = {
+          code: 'runner-capsule-request-write-failed',
+          detail: errorText(error),
+        };
+        this._event('capsule-request-write-failed', this.lastReason);
+      }
+    }
+    // A cycle that leaves the capsule window re-arms the guard, so the NEXT
+    // pressure cycle can request its own capsule.
+    if (coreResult.state.state !== 'checkpoint-requested'
+      && coreResult.state.state !== 'pressure') {
+      this.capsuleRequestWritten = false;
     }
 
     if (coreResult.state.state === 'released') {
