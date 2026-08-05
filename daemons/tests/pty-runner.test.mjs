@@ -1416,6 +1416,40 @@ test('an undrained operator queue blocks every later automatic submission', () =
   }
 });
 
+test('composer-channel leg 3: a submission refusal persists the tracker snapshot, not just the code', () => {
+  // Measured on a live seat 2026-08-04: a cycle wedged on
+  // runner-input-not-empty while the visible composer was empty. The
+  // refusal log carried the code alone — the stuck flag (activePaste vs
+  // activeControl vs unknown vs plain bytes) was undiagnosable from disk.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    // No trailing Enter: a bare draft leaves knownEmpty false (an Enter
+    // would submit and reset it), the input-not-empty gate this refusal
+    // targets.
+    harness.runner.input.observe('draft-text');
+    harness.attemptAutomaticClear();
+    const observed = harness.snapshot();
+    assert.match(observed.lastDecision.code, /runner-input-not-empty/);
+
+    const logText = readDaemonErrorLog(harness.fixture.memRoot);
+    assert.match(logText, /AUTO-CLEAR REFUSED \(runner-input-not-empty\)/);
+    assert.match(logText, /detail=/);
+    for (const field of ['knownEmpty', 'activePaste', 'activeControl', 'unknown', 'receivedUnits']) {
+      assert.ok(
+        logText.includes(field),
+        `expected the persisted refusal detail to carry ${field}, got: ${logText}`,
+      );
+    }
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('scripted adapter classifies only runner control writes as automatic', () => {
   const harness = new RunnerHarness({
     mode: 'managed',

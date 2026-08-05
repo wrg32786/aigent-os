@@ -136,6 +136,21 @@ function makeMemRootLog(memRoot, fsImpl = fs) {
   return (message) => appendDaemonErrorLog(memRoot, fsImpl, 'pty-runner', message);
 }
 
+// composer-channel leg 3: a live cycle wedged on runner-input-not-empty
+// while the visible composer was empty (measured 2026-08-04). The refusal
+// log carried the CODE only, never the tracker snapshot living in
+// lastReason.detail at every call site, so which flag was actually stuck
+// (activePaste vs activeControl vs unknown vs plain bytes) was undiagnosable
+// from disk. Bounded so one pathological detail object can't blow the line.
+function boundedDetailJson(detail, maximum = 400) {
+  if (detail === null || detail === undefined) return 'null';
+  try {
+    return oneLine(JSON.stringify(detail), maximum);
+  } catch {
+    return oneLine(String(detail), maximum);
+  }
+}
+
 function safeCall(fn, ...args) {
   try {
     return { ok: true, value: fn(...args) };
@@ -1441,7 +1456,7 @@ export class ManagedPtyRunner {
     // repeats every tick is invisible without this. Measured 2026-08-04: intent
     // written, submitted:false for six minutes, zero output — the abort code
     // was unknowable from outside the process.
-    this._noteSubmissionRefusal(code);
+    this._noteSubmissionRefusal(code, detail);
     this._clearCommit();
     this._clearWatchdog();
     this._clearEnter();
@@ -1532,20 +1547,16 @@ export class ManagedPtyRunner {
   // back to HOLD:telemetry-stale. Which of the five gates refused was
   // unknowable from outside the process. This prints the refusal ONCE per
   // reason-code change (never per tick), so a stuck loop names itself.
-  _noteSubmissionRefusal(code) {
+  _noteSubmissionRefusal(code, detail = null) {
     if (this._lastRefusalPrinted === code) return;
     this._lastRefusalPrinted = code;
-    const line = `AUTO-CLEAR REFUSED (${code}) — clear not submitted; retrying each tick`;
+    const line = `AUTO-CLEAR REFUSED (${code}) — clear not submitted; `
+      + `retrying each tick detail=${boundedDetailJson(detail)}`;
     // NO stderr. Ever. It shares the operator's screen, paints over the
     // composer, and when two codes oscillate the once-per-change limiter fires
     // on every flip — it BLOCKED the principal's typing on the live seat
     // (his report, the tenth time he named this class). The file is the record.
-    try {
-      fs.appendFileSync(
-        path.join(this.memRoot, '.daemon-errors.log'),
-        `${new Date().toISOString()} tag="pty-runner" message="${line}"\n`,
-      );
-    } catch { /* the screen line above is then the only copy */ }
+    appendDaemonErrorLog(this.memRoot, fs, 'pty-runner', line);
   }
 
   _prepareSubmission(coreResult, outputObservation) {
@@ -1555,7 +1566,7 @@ export class ManagedPtyRunner {
         code: 'runner-input-not-empty',
         detail: input,
       };
-      this._noteSubmissionRefusal(this.lastReason.code);
+      this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
       return { status: 'refused', ...this.lastReason };
     }
     if (input.activePaste || input.activeControl || input.unknown) {
@@ -1563,7 +1574,7 @@ export class ManagedPtyRunner {
         code: 'runner-input-sequence-active',
         detail: input,
       };
-      this._noteSubmissionRefusal(this.lastReason.code);
+      this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
       return { status: 'refused', ...this.lastReason };
     }
     if (!outputObservation || !hasOwn(outputObservation, 'settled')) {
@@ -1571,7 +1582,7 @@ export class ManagedPtyRunner {
         code: 'runner-output-observable-field-missing',
         detail: { fields: ['settled'] },
       };
-      this._noteSubmissionRefusal(this.lastReason.code);
+      this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
       return { status: 'refused', ...this.lastReason };
     }
     if (outputObservation.settled !== true) {
@@ -1579,19 +1590,19 @@ export class ManagedPtyRunner {
         code: 'runner-child-output-not-settled',
         detail: outputObservation,
       };
-      this._noteSubmissionRefusal(this.lastReason.code);
+      this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
       return { status: 'refused', ...this.lastReason };
     }
     const idleProblem = idleEvidenceProblem(coreResult, this.sessionId);
     if (idleProblem) {
       this.lastReason = idleProblem;
-      this._noteSubmissionRefusal(idleProblem.code);
+      this._noteSubmissionRefusal(idleProblem.code, idleProblem.detail);
       return { status: 'refused', ...idleProblem };
     }
     const bindingProblem = this._bootBindingProblem(coreResult.state);
     if (bindingProblem) {
       this.lastReason = bindingProblem;
-      this._noteSubmissionRefusal(bindingProblem.code);
+      this._noteSubmissionRefusal(bindingProblem.code, bindingProblem.detail);
       return { status: 'refused', ...bindingProblem };
     }
 
