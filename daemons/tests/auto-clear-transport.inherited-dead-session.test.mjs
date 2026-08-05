@@ -321,3 +321,37 @@ test('ids-7. a receipt naming a THIRD session (neither persisted nor live) never
     destroyFixture(fixture);
   }
 });
+
+// DEFECT 5 (measured live on the reference seat, 2026-08-05 05:52Z): the
+// boot rebase, firing while the cycle sits in a HOLD state, rewrites the
+// record through _transition — which nulls the hold — publishing a record
+// the validator rejects (state HOLD:* with hold null). On the live seat the
+// corrupt record then outlived every tick. Specimen preserved at the seat:
+// auto-clear-cycle.corrupt-specimen.json.
+
+test('ids-8. rebase during a HOLD writes a record the validator itself accepts', () => {
+  const fixture = makeFixture('rebase-in-hold');
+  try {
+    plantInheritedCycle(fixture, {
+      session_id: LIVE_SESSION,
+      state: 'HOLD:telemetry-stale',
+      hold: {
+        code: 'telemetry-stale',
+        detail: { pct: 97, fresh: false, state: 'stale', resume_state: 'checkpoint-requested' },
+      },
+    });
+    const transport = createTransport(fixture);
+    transport.tick();
+
+    const onDisk = JSON.parse(
+      fs.readFileSync(path.join(fixture.memRoot, 'runtime', 'auto-clear-cycle.json'), 'utf8'),
+    );
+    assert.equal(onDisk.boot_sequence_at_start, 4, 'the rebase itself must land');
+    if (onDisk.state.startsWith('HOLD:')) {
+      assert.notEqual(onDisk.hold, null, "the validator's own pair-invariant: a HOLD state on disk must carry its hold object — writing hold:null here is the record the validator rejects forever");
+      assert.equal(onDisk.hold.code, onDisk.state.slice('HOLD:'.length), 'hold.code must match the state name');
+    }
+  } finally {
+    destroyFixture(fixture);
+  }
+});
