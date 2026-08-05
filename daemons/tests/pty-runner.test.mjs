@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
   AutoClearTransport,
+  CAPSULE_ACK_LITERAL,
   CHECKPOINT_TAIL_TOLERANCE_BYTES,
   acquireRunnerLock,
   evaluateCheckpointFreshness,
@@ -26,6 +27,7 @@ import {
   transcriptPathFor,
 } from '../auto-clear-transport.mjs';
 import {
+  CAPSULE_CONTROL_INPUT,
   CLEAR_CONTROL_INPUT,
   CLEAR_CONTROL_TEXT,
   CONTROL_ENTER,
@@ -1293,6 +1295,85 @@ test('input ownership parser remains fail-closed across fragmented controls and 
   );
   tracker.observe('\u001b\\\r');
   assert.equal(tracker.snapshot().knownEmpty, true);
+});
+
+// Built via fromCharCode rather than a literal escape so the source carries
+// no raw control byte -- same reasoning as InputOwnershipTracker's own \e
+// substitution in lastTaint.
+const ESC = String.fromCharCode(27);
+
+test('input ownership parser whitelists terminal query RESPONSES, not just focus/mouse reports', () => {
+  // Live seat measured 2026-08-05: snapshot {knownEmpty:false, activePaste:
+  // false, activeControl:false, unknown:true} blocked auto-clear with an
+  // empty composer. The terminal ANSWERS queries on stdin (cursor position,
+  // device attributes, status, mode reports) and none of those responses can
+  // place text in the composer any more than the existing focus/mouse
+  // whitelist can — DEFECT A / FIX A.
+  const reportClasses = [
+    ['CPR (cursor position report)', `${ESC}[24;80R`],
+    ['DECXCPR (extended CPR)', `${ESC}[?24;80;1R`],
+    ['DA1 device attributes response', `${ESC}[?64;1;2;6;9;15;22c`],
+    ['DA2 device attributes response', `${ESC}[>0;276;0c`],
+    ['DSR status report', `${ESC}[0n`],
+    ['DECRPM mode report', `${ESC}[?2026;1$y`],
+  ];
+  for (const [label, bytes] of reportClasses) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe(bytes);
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.unknown, false, `${label} must not taint unknown`);
+    assert.equal(snapshot.knownEmpty, true, `${label} must not mark the composer dirty`);
+  }
+});
+
+test('input ownership parser regression guards: arrows and OSC still taint; a report class cannot launder an existing taint', () => {
+  const arrowTracker = new InputOwnershipTracker();
+  arrowTracker.observe(`${ESC}[A`);
+  assert.equal(arrowTracker.snapshot().unknown, true, 'arrow-up genuinely recalls history and must stay fail-closed');
+
+  const oscTracker = new InputOwnershipTracker();
+  oscTracker.observe(`${ESC}]0;title`);
+  assert.equal(oscTracker.snapshot().unknown, true, 'an OSC title write must still taint');
+
+  // preSequence restore semantics: a report class arriving while the tracker
+  // was ALREADY unknown (from a preceding unrelated ESC) restores to the
+  // PRIOR (tainted) state, not to false — the whitelist branch is a restore,
+  // never an unconditional clear.
+  const alreadyTainted = new InputOwnershipTracker();
+  alreadyTainted.observe(`${ESC}[A`); // taints unknown=true
+  assert.equal(alreadyTainted.snapshot().unknown, true);
+  alreadyTainted.observe(`${ESC}[24;80R`); // a CPR response arrives next
+  assert.equal(
+    alreadyTainted.snapshot().unknown,
+    true,
+    'a terminal report must not clean a taint that predates it',
+  );
+});
+
+test('input ownership tracker records a bounded, printable lastTaint at every taint site', () => {
+  const tracker = new InputOwnershipTracker();
+  assert.equal(tracker.snapshot().lastTaint, null);
+
+  tracker.observe(`${ESC}[A`);
+  const afterArrow = tracker.snapshot().lastTaint;
+  assert.ok(
+    afterArrow && afterArrow.includes('[A'),
+    `lastTaint must name the completed sequence that tainted, got ${afterArrow}`,
+  );
+  assert.ok(
+    afterArrow && !afterArrow.includes(ESC),
+    'lastTaint must never carry a raw ESC byte -- \\e substitution keeps refusal logs printable',
+  );
+
+  tracker.observe('\r');
+  assert.equal(tracker.snapshot().lastTaint, null, 'CR submission clears lastTaint along with the rest of the state');
+
+  const longTracker = new InputOwnershipTracker();
+  longTracker.observe(`${ESC}]0;${'x'.repeat(200)}`);
+  assert.ok(
+    longTracker.snapshot().lastTaint.length <= 80,
+    `lastTaint must be bounded to 80 chars, got length ${longTracker.snapshot().lastTaint.length}`,
+  );
 });
 
 test('post-submit kill and cancellation keep queued input out of the old context', async (t) => {
@@ -2760,6 +2841,149 @@ test('the commit-time checkpoint recheck carries the observed ack', () => {
       true,
       'the runner must hand the observed ack to the checkpoint evaluator — omitting it re-races the tail tolerance the ack exists to settle',
     );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// DEFECT B / FIX B (2026-08-05): _writeCapsuleRequest is one-shot per
+// cycle_id by design (guard added 2026-08-04 to stop an infinite
+// re-injection loop — see its comment in pty-runner.mjs). But the single pty
+// write it fires can land in a TUI that is not ready (measured live
+// 2026-08-05: a relaunch injected the request during --continue restore and
+// the seat never answered). With no ack and nothing re-asking, the cycle is
+// wedged forever. A scripted transport stands in for the real
+// AutoClearTransport core here — unlike wrapCore/makeCore it never resolves
+// checkpoint freshness on its own timeline, so these tests can drive a
+// deterministic "stuck forever" sequence without fighting the real
+// selector/stop-writer machinery that governs when checkpointObservable
+// actually succeeds.
+class WedgedCapsuleTransport {
+  constructor(sessionId, cycleId) {
+    this.sessionId = sessionId;
+    this.cycleId = cycleId;
+    this.calls = 0;
+  }
+
+  get state() {
+    const wedged = this.calls > 1;
+    return {
+      state: wedged ? 'HOLD:checkpoint-transcript-short' : 'checkpoint-requested',
+      cycle_id: this.cycleId,
+      session_id: this.sessionId,
+      hold: wedged
+        ? { code: 'checkpoint-transcript-short', detail: { resume_state: 'checkpoint-requested' } }
+        : null,
+    };
+  }
+
+  tick() {
+    this.calls += 1;
+    const state = this.state;
+    if (this.calls === 1) {
+      return { state, transitioned: true, status: 'checkpoint-requested', action: 'request-checkpoint' };
+    }
+    return { state, transitioned: false, status: 'hold', code: state.hold.code, detail: state.hold.detail };
+  }
+}
+
+function capsuleWriteCount(harness) {
+  return harness.pty.writes.filter((w) => w.equals(Buffer.from(CAPSULE_CONTROL_INPUT))).length;
+}
+
+test('a lost capsule request retries after the transcript sits idle, bounded and idle-gated', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new WedgedCapsuleTransport(SESSION_ID, 'wedge-cycle-1');
+
+    harness.drive(); // the one-shot initial fire
+    assert.equal(capsuleWriteCount(harness), 1, 'the initial fire must still happen exactly once');
+
+    // transcript never changes: no ack, seat fully settled and ack-less
+    for (let i = 0; i < 5; i += 1) harness.drive();
+
+    assert.equal(
+      capsuleWriteCount(harness),
+      2,
+      'a request that never gets an ack must retry once the transcript has sat idle for >=5 ticks -- ' +
+      'MUST be red on unmodified code (measured live 2026-08-05: a seat wedged forever with nothing to re-ask)',
+    );
+    assert.ok(
+      harness.runner.events.some((e) => e.name === 'capsule-request-retry'),
+      'the retry must be LOUD -- capsule-request-retry event, so the wedge is visible on disk',
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a GROWING transcript never triggers a capsule-request retry (protects the 2026-08-04 anti-loop fix)', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new WedgedCapsuleTransport(SESSION_ID, 'wedge-cycle-2');
+    harness.drive(); // initial fire
+
+    // A growing transcript means the seat may be mid-capsule. Interrupting
+    // it is the exact infinite-reinjection loop the 08-04 guard exists to
+    // prevent -- this must hold no matter how many ticks pass.
+    for (let i = 0; i < 20; i += 1) {
+      fs.appendFileSync(harness.fixture.transcriptPath, `growing-${i}\n`);
+      harness.drive();
+    }
+
+    assert.equal(
+      capsuleWriteCount(harness),
+      1,
+      'a growing transcript must never trigger a retry, only the one-shot initial fire',
+    );
+    assert.equal(
+      harness.runner.events.filter((e) => e.name === 'capsule-request-retry').length,
+      0,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a permanently silent request stops at exactly 3 attempts and goes loud once, never again', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new WedgedCapsuleTransport(SESSION_ID, 'wedge-cycle-3');
+    harness.drive(); // attempt 1 (initial)
+
+    // far more ticks than the cap needs (3 attempts * 5 idle ticks each)
+    for (let i = 0; i < 60; i += 1) harness.drive();
+
+    assert.equal(capsuleWriteCount(harness), 3, 'exactly 3 attempts total: the initial fire plus 2 bounded retries');
+    assert.equal(
+      harness.runner.events.filter((e) => e.name === 'capsule-request-exhausted').length,
+      1,
+      'the wedge must go loud on disk exactly once, never silently and never repeatedly',
+    );
+
+    for (let i = 0; i < 20; i += 1) harness.drive();
+    assert.equal(capsuleWriteCount(harness), 3, 'no further writes ever, no matter how many more ticks pass');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the ack literal ends the wedge -- capsule-ack-observed fires and retries stop', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new WedgedCapsuleTransport(SESSION_ID, 'wedge-cycle-4');
+    harness.drive(); // initial fire
+    for (let i = 0; i < 5; i += 1) harness.drive(); // reach the first retry
+
+    assert.equal(capsuleWriteCount(harness), 2, 'setup: the first retry must have fired before the ack arrives');
+
+    fs.appendFileSync(harness.fixture.transcriptPath, CAPSULE_ACK_LITERAL);
+    harness.drive();
+    assert.equal(harness.runner.capsuleAckSeen, true, 'the ack must be observed');
+    assert.ok(harness.runner.events.some((e) => e.name === 'capsule-ack-observed'));
+
+    for (let i = 0; i < 20; i += 1) harness.drive();
+    assert.equal(capsuleWriteCount(harness), 2, 'no further retries once the ack is seen');
   } finally {
     harness.cleanup();
   }
