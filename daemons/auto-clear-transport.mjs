@@ -961,6 +961,25 @@ export class AutoClearTransport {
       }
     }
 
+    // INHERITED-CYCLE BOOT REBASE (the principal's bitcoin, 2026-08-04): a
+    // cycle born at boot N, carried across relaunches to boot N+k of the SAME
+    // session, can never satisfy the boot-binding guard — it refuses forever
+    // against a baseline that no longer exists. Rebase the baseline to the
+    // current receipt IFF: same session, receipt strictly newer, and NO clear
+    // intent (an intent must keep its original binding — ambiguity protection).
+    if (this.state.clear_intent === null
+      && Number.isSafeInteger(this.state.boot_sequence_at_start)) {
+      const bootNow = this._readBootReceipt();
+      if (bootNow.ok
+        && bootNow.receipt.session_id === this.state.session_id
+        && Number.isSafeInteger(bootNow.receipt.boot_sequence)
+        && bootNow.receipt.boot_sequence > this.state.boot_sequence_at_start) {
+        this._transition(this.state.state, {
+          boot_sequence_at_start: bootNow.receipt.boot_sequence,
+        });
+      }
+    }
+
     if (this._inheritedIntent
       && this.state.clear_intent !== null
       && !['clear-submitted', 'clear-verified', 'released', 'HOLD:clear-ambiguous']
