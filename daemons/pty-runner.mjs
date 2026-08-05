@@ -294,6 +294,41 @@ const TERMINAL_REPORT_RESPONSES = [
   new RegExp(`^${ESC}\\[\\?\\d+;\\d+\\$y$`),
 ];
 
+// win32-input-mode (DECSET 9001, CLI-toggled by the client app, e.g. VS
+// Code / node-pty callers): once armed, ConPTY encodes EVERY keystroke as
+// ESC[Vk;Sc;Uc;Kd;Cs;Rc_ instead of the legacy VT keycodes -- including
+// Enter, which no longer arrives as a raw CR. No copy of the spec is
+// vendored in this repo; verified 2026-08-05 against the published spec
+// text (microsoft/terminal doc/specs/#4999 - Improved keyboard handling in
+// Conpty.md) rather than trusting an earlier field-order reading that
+// carried its own explicit unverified caveat. Confirmed field order and defaults:
+//   Vk (virtual key code)      default 0
+//   Sc (scan code)             default 0
+//   Uc (Unicode char, decimal) default 0
+//   Kd (key-down: 1=down/0=up) default 0
+//   Cs (control-key-state)     default 0
+//   Rc (repeat count)          default 1
+// Trailing params may be omitted entirely.
+const WIN32_INPUT_MODE_SHAPE = new RegExp(`^${ESC}\\[([\\d;]*)_$`);
+const VK_RETURN = 13;
+
+// Returns {vk, sc, uc, kd, cs, rc} for a syntactically valid win32-input-
+// mode key event, or null for anything that doesn't match the six-field
+// digit/semicolon shape at all (malformed input stays fail-closed via the
+// caller's normal else branch -- this parser never guesses).
+function parseWin32InputModeEvent(sequence) {
+  const shapeMatch = WIN32_INPUT_MODE_SHAPE.exec(sequence);
+  if (!shapeMatch) return null;
+  const fields = shapeMatch[1].split(';');
+  if (fields.length > 6) return null;
+  const defaults = [0, 0, 0, 0, 0, 1];
+  const [vk, sc, uc, kd, cs, rc] = defaults.map((fallback, index) => {
+    const raw = fields[index];
+    return raw === undefined || raw === '' ? fallback : Number(raw);
+  });
+  return { vk, sc, uc, kd, cs, rc };
+}
+
 /**
  * Fail-closed model of the operator's current input line.
  *
@@ -448,6 +483,54 @@ export class InputOwnershipTracker {
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
+          } else if (character === '_' && parseWin32InputModeEvent(this.sequence) !== null) {
+            // win32-input-mode key event (FIX, 2026-08-05): a DECODED
+            // keystroke, not a terminal report -- so unlike the whitelists
+            // above this is never a blanket pass-through. Only two narrow
+            // cases get special handling; everything else (Kd outside
+            // {0,1}, backspace/delete/arrows/function keys) falls to the
+            // same fail-closed else branch raw CSI codes already use.
+            const event = parseWin32InputModeEvent(this.sequence);
+            if (event.kd === 0) {
+              // KEYUP: places nothing in the composer -- same restore
+              // semantics as the report whitelists above.
+              this.unknown = this.preSequenceUnknown;
+              this.knownEmpty = this.preSequenceKnownEmpty;
+              this.lastTaint = this.preSequenceLastTaint;
+              this.mode = 'normal';
+              this.sequence = '';
+              this.activeControl = false;
+            } else if (event.kd === 1 && event.vk === VK_RETURN) {
+              // KEYDOWN Enter: identical submission semantics to a raw CR
+              // -- unconditional, same as the raw-CR branch above, even if
+              // the line is currently unknown-tainted from something else.
+              this._submitted();
+            } else if (event.kd === 1 && event.uc >= 0x20 && event.uc !== 0x7f) {
+              // KEYDOWN printable (same 0x20..0x7e boundary the raw-byte
+              // path below already uses for its DEL/control check): we
+              // KNOW a character was typed, so no taint. knownEmpty is
+              // forced dirty -- genuine new content, unlike the whitelists
+              // above -- while unknown/lastTaint restore normally: one
+              // known keystroke doesn't retroactively clear an EARLIER
+              // unknown taint still sitting in the line.
+              this.unknown = this.preSequenceUnknown;
+              this.knownEmpty = false;
+              this.lastTaint = this.preSequenceLastTaint;
+              this.mode = 'normal';
+              this.sequence = '';
+              this.activeControl = false;
+            } else {
+              // KEYDOWN non-printable, non-Return (backspace/delete/
+              // arrows/function keys mutate text invisibly -- same
+              // fail-closed reasoning as today's raw-mode arrows), or a
+              // Kd value outside {0,1} that this parser deliberately
+              // never guesses at.
+              this._taint(this.sequence);
+              this.mode = 'normal';
+              this.sequence = '';
+              this.activeControl = false;
+              this.knownEmpty = false;
+            }
           } else {
             this._taint(this.sequence);
             this.mode = 'normal';
