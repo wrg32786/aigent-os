@@ -129,6 +129,10 @@ class ManualScheduler {
     // second argument; dropping it here is what made a fuse sized to the
     // wrong window untestable — the ttl IS the mechanism's observable.
     this.watchdogArms = new Map();
+    // Deferred-Enter timers for the two-phase control write, with their
+    // recorded delays — the delay IS the mechanism's observable.
+    this.enters = new Map();
+    this.enterArms = new Map();
   }
 
   _schedule(collection, callback) {
@@ -168,6 +172,16 @@ class ManualScheduler {
     this._clear(handle);
   }
 
+  scheduleEnter(callback, delay) {
+    const handle = this._schedule(this.enters, callback);
+    this.enterArms.set(handle.id, delay);
+    return handle;
+  }
+
+  clearEnter(handle) {
+    this._clear(handle);
+  }
+
   runOne(collection) {
     const entry = collection.entries().next();
     if (entry.done) return false;
@@ -183,6 +197,10 @@ class ManualScheduler {
 
   fireWatchdog() {
     return this.runOne(this.watchdogs);
+  }
+
+  fireEnter() {
+    return this.runOne(this.enters);
   }
 }
 
@@ -768,6 +786,8 @@ class RunnerHarness {
       clearCommit: (handle) => this.scheduler.clearCommit(handle),
       scheduleWatchdog: (callback, ttl) => this.scheduler.scheduleWatchdog(callback, ttl),
       clearWatchdog: (handle) => this.scheduler.clearWatchdog(handle),
+      scheduleEnter: (callback, delay) => this.scheduler.scheduleEnter(callback, delay),
+      clearEnter: (handle) => this.scheduler.clearEnter(handle),
       exitFn: (code) => {
         this.semanticExitCode = code;
         this.pty.parentExited = true;
@@ -1079,6 +1099,10 @@ class RunnerHarness {
 
   fireWatchdog() {
     return this.scheduler.fireWatchdog();
+  }
+
+  fireEnter() {
+    return this.scheduler.fireEnter();
   }
 
   shutdown() {
@@ -2358,6 +2382,50 @@ test('the post-submit watchdog is sized to the clear round-trip, not the settle 
     } finally {
       second.cleanup();
     }
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the control clear is text plus a separately scheduled Enter, never one chunk', () => {
+  // Screen forensics 2026-08-05 04:23Z (scratch-seat driver, task b361q5dwj):
+  // '/clear\r' written as ONE chunk left '/clear' sitting in the composer
+  // with the CR consumed — no submit, no SessionStart receipt, the round-trip
+  // fuse expired loudly at +300s. The 04:00Z run raced the same write and
+  // happened to land (receipt 2m16s later), which is exactly what a
+  // timing-dependent defect looks like. The driver's own typed turn writes
+  // text, waits 400ms, then writes \r — and has never failed. Same class as
+  // the boarded gate-harness bracketed-paste finding.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    harness.attemptAutomaticClear();
+    harness.flushControl();
+    assert.equal(harness.runner.phase, 'submitted');
+
+    assert.deepEqual(
+      harness.snapshot().automaticWrites,
+      [Buffer.from('/clear')],
+      'the text write must not carry the CR — a single chunk lands in the composer without submitting under bracketed paste',
+    );
+    const enterIds = [...harness.scheduler.enters.keys()];
+    assert.equal(enterIds.length, 1, 'exactly one deferred Enter is scheduled');
+    const delay = harness.scheduler.enterArms.get(enterIds[0]);
+    assert.ok(
+      delay >= 250,
+      `a real delay must separate text from Enter so the terminal treats the CR as a keypress, not paste payload (delay: ${delay}ms)`,
+    );
+
+    harness.fireEnter();
+    assert.deepEqual(
+      harness.snapshot().automaticWrites,
+      [Buffer.from('/clear'), Buffer.from('\r')],
+      'the Enter arrives as its own write through the same automatic-write classification',
+    );
   } finally {
     harness.cleanup();
   }
