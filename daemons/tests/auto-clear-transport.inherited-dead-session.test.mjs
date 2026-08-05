@@ -281,3 +281,43 @@ test('ids-5. same-session inherited cycle: the c29807b boot rebase still owns th
     destroyFixture(fixture);
   }
 });
+
+// R26 F9: the two state-guards on the supersede leg, each with a control
+// that can fail if the guard is deleted.
+
+test('ids-6. released state and third-party receipts stay outside the supersede', () => {
+  // (a) A released cycle from the dead session keeps its own
+  // new-session-idle path — deleting the released guard would reroute it
+  // through the supersede and erase the distinct status.
+  const fixture = makeFixture('outside');
+  try {
+    plantInheritedCycle(fixture, { state: 'released' });
+    writeFreshTelemetry(fixture, LIVE_SESSION, 90);
+    const transport = createTransport(fixture);
+    const result = transport.tick();
+    assert.equal(result.status, 'new-session-idle', "released keeps its own path; 'inherited-cycle-superseded' here means the guard is gone");
+    assert.equal(result.state.state, 'idle');
+    assert.equal(result.state.session_id, LIVE_SESSION);
+  } finally {
+    destroyFixture(fixture);
+  }
+});
+
+test('ids-7. a receipt naming a THIRD session (neither persisted nor live) never supersedes', () => {
+  const fixture = makeFixture('third-party');
+  try {
+    plantInheritedCycle(fixture);
+    writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+      boot_sequence: 9,
+      session_id: 'session-third-party',
+      source: 'startup',
+      observed_at: new Date(fixture.clock.ms()).toISOString(),
+    });
+    const transport = createTransport(fixture);
+    const result = transport.tick();
+    assert.equal(result.state.session_id, DEAD_SESSION, "a third-party receipt is not proof of THIS runner's live session");
+    assert.notEqual(result.state.state, 'idle', 'no supersede without a receipt for the bound live session');
+  } finally {
+    destroyFixture(fixture);
+  }
+});

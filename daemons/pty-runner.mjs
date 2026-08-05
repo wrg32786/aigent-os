@@ -46,14 +46,25 @@ export const DEGRADED_NODE_PTY_LINE = `${DEGRADED_NODE_PTY} checkpoint/recovery 
 export const DEGRADED_PRESSURE_THRESHOLD_INVALID = 'DEGRADED:auto-clear-threshold-invalid';
 export const UNMANAGED_AUTO_CLEAR_OFF = 'UNMANAGED:auto-clear-disabled';
 export const CLEAR_CONTROL_INPUT = '/clear\r';
-// Two-phase control write: text first, Enter as its own delayed write. A
-// single '/clear\r' chunk reads as paste payload under bracketed paste — the
-// CR is consumed and the command sits in the composer unsubmitted (screen
-// forensics 2026-08-05 04:23Z; same class as the gate-harness one-chunk
-// finding). 400ms matches the driver's never-failed typed-turn pattern.
+// Two-phase control write: text first, Enter as its own delayed write.
+// MEASURED (scratch-seat driver, 2026-08-05): the one-chunk '/clear\r' left
+// '/clear' parked in the composer with the queued-messages hint at 04:23Z
+// (no submit, no receipt) yet landed at 04:00Z; the two-phase form landed on
+// both certified runs. Candidate mechanisms, neither singly proven: the CR
+// inside one chunk reads as paste payload under bracketed paste, or the
+// chunk arrives during a turn transition and queues, needing a separate
+// release keypress. The delayed Enter closes both. Counter-evidence the
+// paste story alone can't explain: CAPSULE_CONTROL_INPUT goes out one-chunk
+// on the same terminal and demonstrably executed (run-2 screen forensics) —
+// see _writeCapsuleRequest. 400ms matches the driver's never-failed
+// typed-turn pattern; nothing verifies the text rendered before the Enter
+// fires (named residue, boarded with the capsule-leg row).
 export const CLEAR_CONTROL_TEXT = '/clear';
 export const CONTROL_ENTER = '\r';
 export const DEFAULT_CONTROL_ENTER_DELAY_MS = 400;
+// Kill-line (Ctrl-U): destroys stranded composer text before a queued-input
+// flush may land behind it. A no-op on an empty composer.
+export const COMPOSER_KILL_LINE = '\u0015';
 // The transport reaches 'checkpoint-requested' and then waits for a capsule to
 // exist. Nothing was ever asking the seat to write one: tick() returns
 // action:'request-checkpoint' (auto-clear-transport.mjs:1019) and this file had
@@ -690,6 +701,8 @@ export class ManagedPtyRunner {
     this.clearEnter = clearEnter;
     this.controlEnterDelayMs = controlEnterDelayMs;
     this.enterHandle = null;
+    this.enterToken = 0;
+    this.composerMayHoldControlText = false;
     this.tickMs = tickMs;
     this.inputHoldTtlMs = inputHoldTtlMs;
     this.clearVerifyTtlMs = clearVerifyTtlMs;
@@ -762,27 +775,36 @@ export class ManagedPtyRunner {
     this.currentControlWriteAttempted = true;
     this._event('control-write', CLEAR_CONTROL_TEXT);
     const result = this.pty.write(CLEAR_CONTROL_TEXT);
+    this.composerMayHoldControlText = true;
     // Enter rides its own delayed write so the terminal parses it as a
     // keypress; a text write that throws never schedules it (the abort path
-    // owns that case).
+    // owns that case). The token pins the deferred callback to THIS
+    // scheduling — a cleared-but-still-firing timer from an injected
+    // scheduler is a no-op.
     this._clearEnter();
+    this.enterToken += 1;
+    const token = this.enterToken;
     this.enterHandle = this.scheduleEnter(
-      () => this._writeControlEnter(),
+      () => this._writeControlEnter(token),
       this.controlEnterDelayMs,
     );
     return result;
   }
 
-  _writeControlEnter() {
+  _writeControlEnter(token) {
+    if (token !== this.enterToken) return;
     this.enterHandle = null;
     if (this.closed) return;
     if (this.phase !== 'submitted' && this.phase !== 'submitting') return;
     try {
       this._event('control-enter-write', CONTROL_ENTER);
       this.pty.write(CONTROL_ENTER);
+      this.composerMayHoldControlText = false;
     } catch (error) {
       // The text may sit in the composer unsubmitted; the round-trip fuse
-      // stays armed and expires loudly if no receipt ever lands.
+      // stays armed and expires loudly if no receipt ever lands, and the
+      // stranded-text flag stays up so a later queued-input flush leads
+      // with a kill-line instead of concatenating onto '/clear'.
       this.lastReason = {
         code: 'runner-control-enter-write-failed',
         detail: errorText(error),
@@ -792,6 +814,7 @@ export class ManagedPtyRunner {
   }
 
   _clearEnter() {
+    this.enterToken += 1;
     if (this.enterHandle !== null) {
       try { this.clearEnter(this.enterHandle); } catch { /* already fired */ }
     }
@@ -812,6 +835,13 @@ export class ManagedPtyRunner {
   // seat re-asked for a capsule it already had, forever. Keying on cycle_id
   // makes the request fire exactly once per pressure cycle no matter how many
   // times the state wobbles through holds within it.
+  // DELIBERATELY still one-chunk (R26 F2 disposition, 2026-08-05): this
+  // write demonstrably EXECUTES on the same terminal where the one-chunk
+  // /clear stranded — run-2 screen forensics show the child answering the
+  // capsule request while '/clear' sat in the composer, and both certified
+  // runs reached checkpoint-confirmed through this leg. That is measured
+  // discriminating evidence, not proof of immunity: the two-phase port for
+  // this leg is boarded, with the timing residue named there.
   _writeCapsuleRequest(cycleId) {
     if (this.capsuleRequestCycleId === cycleId) return false;
     this.capsuleRequestCycleId = cycleId;
@@ -1313,6 +1343,7 @@ export class ManagedPtyRunner {
     }
     this.watchdogHandle = null;
     this.watchdogArmed = false;
+    this.watchdogTtlMs = null;
   }
 
   _clearCommit() {
@@ -1323,6 +1354,30 @@ export class ManagedPtyRunner {
   }
 
   _flushQueuedInput() {
+    // R26 F1: while '/clear' may be stranded in the composer (text written,
+    // Enter never landed), flushing queued bytes would concatenate the
+    // operator's input onto it and their trailing CR would submit the blend.
+    // Destroy the stranded text first; if even that write fails, hold the
+    // queue closed rather than corrupt it. Guard lives INSIDE this unit —
+    // every caller (disable, abort, release) is protected, including future
+    // direct calls.
+    if (this.composerMayHoldControlText && this.queuedInput.length > 0) {
+      try {
+        this._event('composer-kill-line', COMPOSER_KILL_LINE);
+        this.pty.write(COMPOSER_KILL_LINE);
+        this.composerMayHoldControlText = false;
+      } catch (error) {
+        this.lastReason = {
+          code: 'runner-composer-kill-line-failed',
+          detail: errorText(error),
+        };
+        this._event('queued-input-release-failed', this.lastReason);
+        this._diagnostic(
+          `queued input held: stranded control text and kill-line failed: ${errorText(error)}`,
+        );
+        return false;
+      }
+    }
     let released = 0;
     while (this.queuedInput.length > 0) {
       const chunk = this.queuedInput[0];

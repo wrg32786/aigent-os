@@ -221,6 +221,7 @@ class ScriptedPty {
     this.operatorWriteDepth = 0;
     this.pendingManualClears = 0;
     this.failWritesRemaining = 0;
+    this.lastWriteWasControlText = false;
   }
 
   onData(callback) {
@@ -246,10 +247,15 @@ class ScriptedPty {
     this.writes.push(rendered);
     // Control chunks come in three exact shapes: the legacy combined
     // '/clear\r' (operator manual clears), the two-phase text '/clear', and
-    // its separately written Enter '\r'.
+    // its separately written Enter '\r'. A bare CR counts as control ONLY
+    // when it immediately follows the control text — a queued operator
+    // Enter flushed later must never consume a control classification
+    // (R26 F6).
     const isControlChunk = rendered.equals(Buffer.from(CLEAR_CONTROL_INPUT))
       || rendered.equals(Buffer.from(CLEAR_CONTROL_TEXT))
-      || rendered.equals(Buffer.from(CONTROL_ENTER));
+      || (rendered.equals(Buffer.from(CONTROL_ENTER))
+        && this.lastWriteWasControlText === true);
+    this.lastWriteWasControlText = rendered.equals(Buffer.from(CLEAR_CONTROL_TEXT));
     if (isControlChunk) {
       const isImmediateManual = this.operatorWriteDepth > 0;
       const isDeferredManual = !isImmediateManual && this.pendingManualClears > 0;

@@ -89,7 +89,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-const DEFAULT_CLEAR = Buffer.from('/clear\r');
 const DEFAULT_CONTROL_SEQUENCE = [Buffer.from('/clear'), Buffer.from('\r')];
 const DEFAULT_MANUAL = Buffer.from('/clear\r');
 const DEFAULT_CHILD_OUTPUT = Buffer.from('\u001b[32mready\u001b[0m\r\n');
@@ -244,7 +243,11 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
   }
 
   const name = String(options.name || adapter.name || 'managed transport');
-  const automaticControl = (options.automaticControl ?? DEFAULT_CONTROL_SEQUENCE)
+  // Legacy adapters passed a single-chunk automaticClear; honor it as a
+  // one-element sequence rather than silently asserting the two-chunk
+  // default against them.
+  const automaticControl = (options.automaticControl
+    ?? (options.automaticClear !== undefined ? [options.automaticClear] : DEFAULT_CONTROL_SEQUENCE))
     .map((chunk) => bytes(chunk));
   const automaticControlHex = automaticControl.map((chunk) => chunk.toString('hex'));
   const fireEnterIfDeferred = async (harness) => {
