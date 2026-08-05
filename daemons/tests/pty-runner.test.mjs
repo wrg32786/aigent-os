@@ -1374,6 +1374,19 @@ test('input ownership tracker records a bounded, printable lastTaint at every ta
     longTracker.snapshot().lastTaint.length <= 80,
     `lastTaint must be bounded to 80 chars, got length ${longTracker.snapshot().lastTaint.length}`,
   );
+
+  // R26 FIX finding 3 (NIT): ESC taints lastTaint unconditionally on
+  // ARRIVAL (fail-closed for unfinished sequences), but a whitelisted report
+  // completing the sequence restores unknown/knownEmpty from the
+  // pre-sequence snapshot -- lastTaint must be restored the same way, or a
+  // clean tracker reads the contradictory {unknown:false, lastTaint:"\e"}.
+  const cprOnlyTracker = new InputOwnershipTracker();
+  cprOnlyTracker.observe(`${ESC}[24;80R`);
+  assert.equal(
+    cprOnlyTracker.snapshot().lastTaint,
+    null,
+    'a whitelisted report on an already-clean tracker must not fabricate a taint record -- MUST be red on unmodified code (ESC-arrival taint is never restored by either whitelist branch)',
+  );
 });
 
 test('post-submit kill and cancellation keep queued input out of the old context', async (t) => {
@@ -2984,6 +2997,122 @@ test('the ack literal ends the wedge -- capsule-ack-observed fires and retries s
 
     for (let i = 0; i < 20; i += 1) harness.drive();
     assert.equal(capsuleWriteCount(harness), 2, 'no further retries once the ack is seen');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// R26 FIX finding 1 (MUST): capsuleRequestAttempts must advance on the catch
+// path, not just the success path. An attempt TRIED is an attempt SPENT --
+// the bound is on injections attempted, not confirmed successful, or a
+// transient EAGAIN-class pty.write failure would re-arm the retry forever
+// (it would re-fire every 5 idle ticks with no cap, and
+// capsule-request-exhausted would never fire).
+test('a capsule-request retry write that throws still spends its attempt (transient EAGAIN class)', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new WedgedCapsuleTransport(SESSION_ID, 'wedge-cycle-5');
+    harness.drive(); // initial fire succeeds
+    assert.equal(capsuleWriteCount(harness), 1);
+
+    // Every write from here on throws (ScriptedPty's built-in counter) --
+    // stands in for a transient EAGAIN-class pty.write failure on retry.
+    harness.pty.failWritesRemaining = 999;
+
+    for (let i = 0; i < 60; i += 1) harness.drive();
+
+    assert.equal(
+      harness.runner.capsuleRequestAttempts,
+      3,
+      'a throwing write must still spend its attempt -- MUST be red on unmodified code ' +
+      '(attempts never advances past 1, so the retry re-fires every 5 idle ticks forever ' +
+      'and capsule-request-exhausted never fires)',
+    );
+    assert.equal(
+      harness.runner.events.filter((e) => e.name === 'capsule-request-exhausted').length,
+      1,
+      'exhaustion must still go loud even though every retry write failed',
+    );
+    assert.equal(
+      capsuleWriteCount(harness),
+      1,
+      'the initial fire is the only write that actually landed -- every retry write threw',
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// R26 FIX finding 2 (SHOULD): a HOLD unrelated to the capsule wedge (e.g.
+// HOLD:telemetry-stale, which the pressure gate can raise WHILE already in
+// checkpoint-requested/HOLD:checkpoint-* territory) can carry
+// hold.detail.resume_state:'checkpoint-requested' too. Gating on resume_state
+// alone lets that unrelated hold spend the 3-attempt budget before the seat
+// ever returns to the real wedge. The gate must check the state STRING
+// itself: bare checkpoint-requested, or a HOLD whose own code is
+// checkpoint-* (HOLD:checkpoint-transcript-short and siblings) -- never any
+// hold merely resuming to checkpoint-requested.
+class TelemetryStaleThenWedgedTransport {
+  constructor(sessionId, cycleId, telemetryStaleTicks) {
+    this.sessionId = sessionId;
+    this.cycleId = cycleId;
+    this.telemetryStaleTicks = telemetryStaleTicks;
+    this.calls = 0;
+  }
+
+  get state() {
+    const base = { cycle_id: this.cycleId, session_id: this.sessionId };
+    if (this.calls === 1) {
+      return { ...base, state: 'checkpoint-requested', hold: null };
+    }
+    if (this.calls <= 1 + this.telemetryStaleTicks) {
+      return {
+        ...base,
+        state: 'HOLD:telemetry-stale',
+        hold: { code: 'telemetry-stale', detail: { resume_state: 'checkpoint-requested' } },
+      };
+    }
+    return {
+      ...base,
+      state: 'HOLD:checkpoint-transcript-short',
+      hold: { code: 'checkpoint-transcript-short', detail: { resume_state: 'checkpoint-requested' } },
+    };
+  }
+
+  tick() {
+    this.calls += 1;
+    const state = this.state;
+    if (this.calls === 1) {
+      return { state, transitioned: true, status: 'checkpoint-requested', action: 'request-checkpoint' };
+    }
+    return { state, transitioned: false, status: 'hold', code: state.hold.code, detail: state.hold.detail };
+  }
+}
+
+test('a HOLD:telemetry-stale detour consumes zero retry budget, even though its resume_state is checkpoint-requested', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.transport = new TelemetryStaleThenWedgedTransport(SESSION_ID, 'wedge-cycle-6', 10);
+    harness.drive(); // initial fire
+
+    for (let i = 0; i < 10; i += 1) harness.drive(); // all 10 ticks are HOLD:telemetry-stale
+
+    assert.equal(
+      capsuleWriteCount(harness),
+      1,
+      'HOLD:telemetry-stale must never spend retry budget, no matter how many idle ticks pass inside it -- ' +
+      'MUST be red on unmodified code (resume_state alone qualifies it, so it fires retries during the detour)',
+    );
+    assert.equal(harness.runner.capsuleRequestAttempts, 1);
+
+    // now genuinely settle into the real wedge -- the budget must be fully
+    // intact, unspent by the telemetry-stale detour
+    for (let i = 0; i < 5; i += 1) harness.drive();
+    assert.equal(
+      capsuleWriteCount(harness),
+      2,
+      'the real wedge still gets its first retry once it arrives, budget untouched by the detour',
+    );
   } finally {
     harness.cleanup();
   }
