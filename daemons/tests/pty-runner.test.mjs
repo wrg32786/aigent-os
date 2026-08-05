@@ -27,6 +27,8 @@ import {
 } from '../auto-clear-transport.mjs';
 import {
   CLEAR_CONTROL_INPUT,
+  CLEAR_CONTROL_TEXT,
+  CONTROL_ENTER,
   DEFAULT_INPUT_HOLD_TTL_MS,
   DEGRADED_NODE_PTY,
   InputOwnershipTracker,
@@ -242,7 +244,13 @@ class ScriptedPty {
     }
     const rendered = asBuffer(value);
     this.writes.push(rendered);
-    if (rendered.equals(Buffer.from(CLEAR_CONTROL_INPUT))) {
+    // Control chunks come in three exact shapes: the legacy combined
+    // '/clear\r' (operator manual clears), the two-phase text '/clear', and
+    // its separately written Enter '\r'.
+    const isControlChunk = rendered.equals(Buffer.from(CLEAR_CONTROL_INPUT))
+      || rendered.equals(Buffer.from(CLEAR_CONTROL_TEXT))
+      || rendered.equals(Buffer.from(CONTROL_ENTER));
+    if (isControlChunk) {
       const isImmediateManual = this.operatorWriteDepth > 0;
       const isDeferredManual = !isImmediateManual && this.pendingManualClears > 0;
       if (isDeferredManual) this.pendingManualClears -= 1;
@@ -1195,7 +1203,10 @@ const adapter = {
 };
 
 defineTransportConformanceSuite(adapter, {
-  automaticClear: Buffer.from(CLEAR_CONTROL_INPUT),
+  automaticControl: [
+    Buffer.from(CLEAR_CONTROL_TEXT),
+    Buffer.from(CONTROL_ENTER),
+  ],
   childExitCode: CHILD_EXIT_CODE,
   degradedPattern: /DEGRADED:auto-clear-node-pty-unavailable/,
 });
@@ -1277,7 +1288,7 @@ test('post-submit kill and cancellation keep queued input out of the old context
         assert.ok(observed.queuedInputBytes > 0);
         assert.deepEqual(
           observed.childWrites,
-          [Buffer.from(CLEAR_CONTROL_INPUT)],
+          [Buffer.from(CLEAR_CONTROL_TEXT)],
           'post-submit disable must not flush bytes before resume verification',
         );
 
@@ -1288,7 +1299,7 @@ test('post-submit kill and cancellation keep queued input out of the old context
         assert.equal(observed.queuedInputBytes, 0);
         assert.deepEqual(
           observed.automaticWrites,
-          [Buffer.from(CLEAR_CONTROL_INPUT)],
+          [Buffer.from(CLEAR_CONTROL_TEXT)],
           'disable/cancel after submit must never retry the control command',
         );
         assert.ok(
@@ -1313,6 +1324,7 @@ test('output that predates the clear receipt cannot prove a fresh context', () =
     harness.primeAuthorized();
     harness.attemptAutomaticClear();
     harness.flushControl();
+    harness.fireEnter();
 
     harness.childOutput('late-old-context-output\r\n');
     harness.drive();
@@ -1337,7 +1349,7 @@ test('output that predates the clear receipt cannot prove a fresh context', () =
     assert.equal(observed.holdActive, false);
     assert.deepEqual(
       observed.automaticWrites,
-      [Buffer.from(CLEAR_CONTROL_INPUT)],
+      [Buffer.from(CLEAR_CONTROL_TEXT), Buffer.from(CONTROL_ENTER)],
     );
   } finally {
     harness.cleanup();
@@ -1432,6 +1444,7 @@ test('a higher same-session clear receipt releases safely and disables re-arming
     harness.primeAuthorized();
     harness.attemptAutomaticClear();
     harness.flushControl();
+    harness.fireEnter();
     harness.operator('queued-after-same-session-clear\r');
     harness.observeClearReceipt('same-session-fresh');
     for (let turn = 0; turn < 3; turn += 1) harness.drive();
@@ -1446,7 +1459,7 @@ test('a higher same-session clear receipt releases safely and disables re-arming
     );
     assert.deepEqual(
       observed.automaticWrites,
-      [Buffer.from(CLEAR_CONTROL_INPUT)],
+      [Buffer.from(CLEAR_CONTROL_TEXT), Buffer.from(CONTROL_ENTER)],
     );
   } finally {
     harness.cleanup();

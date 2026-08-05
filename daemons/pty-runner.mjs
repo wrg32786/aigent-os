@@ -46,6 +46,14 @@ export const DEGRADED_NODE_PTY_LINE = `${DEGRADED_NODE_PTY} checkpoint/recovery 
 export const DEGRADED_PRESSURE_THRESHOLD_INVALID = 'DEGRADED:auto-clear-threshold-invalid';
 export const UNMANAGED_AUTO_CLEAR_OFF = 'UNMANAGED:auto-clear-disabled';
 export const CLEAR_CONTROL_INPUT = '/clear\r';
+// Two-phase control write: text first, Enter as its own delayed write. A
+// single '/clear\r' chunk reads as paste payload under bracketed paste — the
+// CR is consumed and the command sits in the composer unsubmitted (screen
+// forensics 2026-08-05 04:23Z; same class as the gate-harness one-chunk
+// finding). 400ms matches the driver's never-failed typed-turn pattern.
+export const CLEAR_CONTROL_TEXT = '/clear';
+export const CONTROL_ENTER = '\r';
+export const DEFAULT_CONTROL_ENTER_DELAY_MS = 400;
 // The transport reaches 'checkpoint-requested' and then waits for a capsule to
 // exist. Nothing was ever asking the seat to write one: tick() returns
 // action:'request-checkpoint' (auto-clear-transport.mjs:1019) and this file had
@@ -623,6 +631,9 @@ export class ManagedPtyRunner {
     clearCommit = (handle) => clearImmediate(handle),
     scheduleWatchdog = (callback, milliseconds) => setTimeout(callback, milliseconds),
     clearWatchdog = (handle) => clearTimeout(handle),
+    scheduleEnter = (callback, milliseconds) => setTimeout(callback, milliseconds),
+    clearEnter = (handle) => clearTimeout(handle),
+    controlEnterDelayMs = DEFAULT_CONTROL_ENTER_DELAY_MS,
     tickMs = DEFAULT_RUNNER_TICK_MS,
     inputHoldTtlMs = DEFAULT_INPUT_HOLD_TTL_MS,
     clearVerifyTtlMs = DEFAULT_CLEAR_VERIFY_TTL_MS,
@@ -675,6 +686,10 @@ export class ManagedPtyRunner {
     this.clearCommit = clearCommit;
     this.scheduleWatchdog = scheduleWatchdog;
     this.clearWatchdog = clearWatchdog;
+    this.scheduleEnter = scheduleEnter;
+    this.clearEnter = clearEnter;
+    this.controlEnterDelayMs = controlEnterDelayMs;
+    this.enterHandle = null;
     this.tickMs = tickMs;
     this.inputHoldTtlMs = inputHoldTtlMs;
     this.clearVerifyTtlMs = clearVerifyTtlMs;
@@ -745,8 +760,42 @@ export class ManagedPtyRunner {
   _writeControl() {
     this.controlWriteAttempts += 1;
     this.currentControlWriteAttempted = true;
-    this._event('control-write', CLEAR_CONTROL_INPUT);
-    return this.pty.write(CLEAR_CONTROL_INPUT);
+    this._event('control-write', CLEAR_CONTROL_TEXT);
+    const result = this.pty.write(CLEAR_CONTROL_TEXT);
+    // Enter rides its own delayed write so the terminal parses it as a
+    // keypress; a text write that throws never schedules it (the abort path
+    // owns that case).
+    this._clearEnter();
+    this.enterHandle = this.scheduleEnter(
+      () => this._writeControlEnter(),
+      this.controlEnterDelayMs,
+    );
+    return result;
+  }
+
+  _writeControlEnter() {
+    this.enterHandle = null;
+    if (this.closed) return;
+    if (this.phase !== 'submitted' && this.phase !== 'submitting') return;
+    try {
+      this._event('control-enter-write', CONTROL_ENTER);
+      this.pty.write(CONTROL_ENTER);
+    } catch (error) {
+      // The text may sit in the composer unsubmitted; the round-trip fuse
+      // stays armed and expires loudly if no receipt ever lands.
+      this.lastReason = {
+        code: 'runner-control-enter-write-failed',
+        detail: errorText(error),
+      };
+      this._event('control-enter-write-failed', this.lastReason);
+    }
+  }
+
+  _clearEnter() {
+    if (this.enterHandle !== null) {
+      try { this.clearEnter(this.enterHandle); } catch { /* already fired */ }
+    }
+    this.enterHandle = null;
   }
 
   // Carries action:'request-checkpoint' to the seat. The transport decides WHEN
@@ -1316,6 +1365,7 @@ export class ManagedPtyRunner {
     this._noteSubmissionRefusal(code);
     this._clearCommit();
     this._clearWatchdog();
+    this._clearEnter();
     this.token = null;
     this.currentControlWriteAttempted = false;
     this.resumeReceipt = null;
@@ -1335,6 +1385,7 @@ export class ManagedPtyRunner {
       && this.phase === 'disabled';
     this._clearCommit();
     this._clearWatchdog();
+    this._clearEnter();
     this.token = null;
     this.currentControlWriteAttempted = false;
     this.resumeReceipt = null;
@@ -1716,6 +1767,7 @@ export class ManagedPtyRunner {
 
     const receipt = this.resumeReceipt;
     this._clearWatchdog();
+    this._clearEnter();
     this.token = null;
     this.currentControlWriteAttempted = false;
     this.phase = 'idle';
@@ -1994,6 +2046,7 @@ export class ManagedPtyRunner {
     }
     this._clearCommit();
     this._clearWatchdog();
+    this._clearEnter();
 
     dispose(this.dataSubscription);
     this._event('data-handler-disposed');

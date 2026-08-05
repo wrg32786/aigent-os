@@ -80,12 +80,17 @@
 // suffixes are fine): clear-intent-persisted, watchdog-armed,
 // input-hold-started, data-handler-disposed, child-killed, runner-exited.
 // Recording bytes by PTY write call, rather than concatenating them, is what
-// lets this suite prove that /clear is one atomic control input.
+// lets this suite prove the control input is exactly its declared write
+// sequence — by default text then a separately written Enter (a combined
+// '/clear\r' chunk reads as paste payload under bracketed paste and sits in
+// the composer unsubmitted; measured live 2026-08-05) — and is never
+// rewritten or retried.
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 const DEFAULT_CLEAR = Buffer.from('/clear\r');
+const DEFAULT_CONTROL_SEQUENCE = [Buffer.from('/clear'), Buffer.from('\r')];
 const DEFAULT_MANUAL = Buffer.from('/clear\r');
 const DEFAULT_CHILD_OUTPUT = Buffer.from('\u001b[32mready\u001b[0m\r\n');
 const DEFAULT_QUEUED = Buffer.from('after-clear\r');
@@ -239,7 +244,12 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
   }
 
   const name = String(options.name || adapter.name || 'managed transport');
-  const automaticClear = bytes(options.automaticClear ?? DEFAULT_CLEAR);
+  const automaticControl = (options.automaticControl ?? DEFAULT_CONTROL_SEQUENCE)
+    .map((chunk) => bytes(chunk));
+  const automaticControlHex = automaticControl.map((chunk) => chunk.toString('hex'));
+  const fireEnterIfDeferred = async (harness) => {
+    if (typeof harness.fireEnter === 'function') await harness.fireEnter();
+  };
   const manualClear = bytes(options.manualClear ?? DEFAULT_MANUAL);
   const childOutput = bytes(options.childOutput ?? DEFAULT_CHILD_OUTPUT);
   const queuedAfterClear = bytes(options.queuedAfterClear ?? DEFAULT_QUEUED);
@@ -354,12 +364,13 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
       });
       await preparePending(harness);
       await call(harness, 'flushControl');
+      await fireEnterIfDeferred(harness);
 
       let observed = await snapshot(harness);
       assert.deepEqual(
         hexRecords(observed.automaticWrites, 'automaticWrites'),
-        [automaticClear.toString('hex')],
-        '/clear must be exactly one atomic PTY write',
+        automaticControlHex,
+        'the control input must be exactly its declared write sequence — never a combined chunk, never a rewrite',
       );
       assert.equal(observed.holdActive, true, 'accepted submission must hold until observed clear');
 
@@ -371,7 +382,7 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
       observed = await snapshot(harness);
       assert.deepEqual(
         hexRecords(observed.automaticWrites, 'automaticWrites'),
-        [automaticClear.toString('hex')],
+        automaticControlHex,
         'absence of a fresh receipt must never retry /clear',
       );
       assert.equal(observed.holdActive, true, 'no receipt must keep the cycle held');
@@ -391,7 +402,7 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
       assert.equal(observed.holdActive, true, 'a higher non-clear receipt cannot release the hold');
       assert.deepEqual(
         hexRecords(observed.automaticWrites, 'automaticWrites'),
-        [automaticClear.toString('hex')],
+        automaticControlHex,
       );
 
       await call(harness, 'observeClearReceipt', 'stale');
@@ -400,7 +411,7 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
       assert.equal(observed.holdActive, true, 'a stale receipt cannot release the hold');
       assert.deepEqual(
         hexRecords(observed.automaticWrites, 'automaticWrites'),
-        [automaticClear.toString('hex')],
+        automaticControlHex,
       );
 
       await call(harness, 'observeClearReceipt', 'fresh');
@@ -414,7 +425,7 @@ export function defineTransportConformanceSuite(adapter, options = {}) {
       );
       assert.deepEqual(
         hexRecords(observed.automaticWrites, 'automaticWrites'),
-        [automaticClear.toString('hex')],
+        automaticControlHex,
         'successful observation must not create another control write',
       );
     });
