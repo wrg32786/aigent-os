@@ -1300,6 +1300,11 @@ export class ManagedPtyRunner {
 
   _abortPrepared(code, detail = null) {
     if (this.phase !== 'prepared') return false;
+    // Same silent-loop hazard as _prepareSubmission: a commit-time abort that
+    // repeats every tick is invisible without this. Measured 2026-08-04: intent
+    // written, submitted:false for six minutes, zero output — the abort code
+    // was unknowable from outside the process.
+    this._noteSubmissionRefusal(code);
     this._clearCommit();
     this._clearWatchdog();
     this.token = null;
