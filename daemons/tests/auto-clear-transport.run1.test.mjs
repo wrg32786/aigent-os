@@ -541,6 +541,11 @@ test('7. telemetry: missing jq uses Node, stale and missing are named, and the m
     const missing = createTransport(missingFixture, { readPressureFn: readPressure });
     assert.equal(missing.tick().state.state, 'HOLD:telemetry-missing');
 
+    // MONOTONIC-STALE (the principal's ruling, 2026-08-05): a stale reading
+    // with a number passes — context usage only grows within a session, so
+    // an old reading can only understate. The sensor still NAMES staleness
+    // (asserted above via readPressure); the machine just no longer holds
+    // on it. Only 'missing' fails: no number to hold against the threshold.
     const staleFile = writeJson(
       path.join(staleFixture.homeDir, '.claude', 'ctx-refresh', `${SESSION_ID}.json`),
       { used_percentage: 91, ts: '2026-07-30T17:00:00Z' },
@@ -548,7 +553,9 @@ test('7. telemetry: missing jq uses Node, stale and missing are named, and the m
     const old = new Date(staleFixture.clock.ms() - 120_001);
     fs.utimesSync(staleFile, old, old);
     const stale = createTransport(staleFixture, { readPressureFn: readPressure });
-    assert.equal(stale.tick().state.state, 'HOLD:telemetry-stale');
+    const staleResult = stale.tick();
+    assert.ok(!String(staleResult.state.state).startsWith('HOLD:telemetry'),
+      `a stale reading over threshold proceeds (got ${staleResult.state.state})`);
   } finally {
     destroyFixture(fixture);
     destroyFixture(missingFixture);

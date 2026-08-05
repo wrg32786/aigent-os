@@ -1150,6 +1150,10 @@ export class ManagedPtyRunner {
         cwd: this.cwd,
         homeDir: this.homeDir,
         fsImpl: this.fs,
+        // The observed ack settles the transcript-tail race its own
+        // announcement (and any operator nudges) create — the evaluator
+        // already honors it; the recheck must not re-race blind.
+        ackFresh: this.capsuleAckSeen === true,
       });
     } catch (error) {
       return {

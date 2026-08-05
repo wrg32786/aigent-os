@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AutoClearTransport,
   CAPSULE_ACK_LITERAL,
+  transcriptPathFor,
 } from '../auto-clear-transport.mjs';
 import { InputOwnershipTracker } from '../pty-runner.mjs';
 
@@ -37,23 +38,22 @@ function makeTransport({ pressure, nowMs }) {
   };
 }
 
-test('ack substitutes for STALENESS only — stale+ack passes, stale alone holds', () => {
+test('a stale reading with a number passes — context pressure is monotonic, staleness holds are deleted', () => {
+  // The principal's ruling, 2026-08-05: no timers. A stale reading can only
+  // UNDERSTATE live pressure (usage only grows within a session; the sensor
+  // file is per-session), so it is always safe to act on. The old behavior —
+  // stale-holds until the seat happens to speak — only ever DELAYED refreshes
+  // that were already due, and on the reference seat it expired the capsule
+  // ack mid-cycle, twice, eating operator nudges.
   const stale = makeTransport({
     pressure: () => ({ pct: 85, fresh: false, state: 'stale' }),
     nowMs: 1_000_000,
   });
-  const held = stale.transport.tick();
-  assert.match(String(held.state.state), /HOLD:telemetry-stale/,
-    'without an ack, stale telemetry must hold exactly as before');
-
-  const acked = makeTransport({
-    pressure: () => ({ pct: 85, fresh: false, state: 'stale' }),
-    nowMs: 1_000_000,
-  });
-  acked.transport.noteCapsuleAck();
-  const after = acked.transport.tick();
+  const after = stale.transport.tick();
   assert.ok(!String(after.state.state).startsWith('HOLD:telemetry'),
-    `ack-fresh must clear the staleness hold, got ${after.state.state}`);
+    `a stale reading over threshold starts the cycle — no ack required, no clock consulted (got ${after.state.state})`);
+  assert.match(String(after.state.state), /HOLD:boot-receipt-missing/,
+    'the tick proceeds to the next genuine gate; only the timer died');
 });
 
 test('LAW XV — each bound can independently go red', () => {
@@ -68,16 +68,23 @@ test('LAW XV — each bound can independently go red', () => {
   assert.match(String(missingResult.state.state), /HOLD:telemetry-missing/,
     'ack must never substitute for a missing observation');
 
-  // 2) An EXPIRED ack is no ack: past the freshness window the hold returns.
-  const expired = makeTransport({
+  // 2) An AGED ack still stands — the principal's ruling (2026-08-05)
+  //    deleted the expiry timer: the ack is cycle-scoped news. Past the old
+  //    120s window the telemetry gate must still pass, and the tick proceeds
+  //    to the NEXT real gate (boot receipt, absent in this fixture) —
+  //    proving the timer bound is gone while the other bounds keep their
+  //    teeth.
+  const aged = makeTransport({
     pressure: () => ({ pct: 85, fresh: false, state: 'stale' }),
     nowMs: 1_000_000,
   });
-  expired.transport.noteCapsuleAck();
-  expired.clock.ms += 120_000 + 1;
-  const expiredResult = expired.transport.tick();
-  assert.match(String(expiredResult.state.state), /HOLD:telemetry-stale/,
-    'an ack older than the freshness window must not read as fresh');
+  aged.transport.noteCapsuleAck();
+  aged.clock.ms += 120_000 + 1;
+  const agedResult = aged.transport.tick();
+  assert.doesNotMatch(String(agedResult.state.state), /HOLD:telemetry/,
+    'no clock invalidates the ack — the seat said it was ready, and context pressure only grows');
+  assert.match(String(agedResult.state.state), /HOLD:boot-receipt-missing/,
+    'the tick marches to the next genuine gate — the timer is the only thing deleted');
 
   // 3) pct below threshold is NOT rescued by an ack: ack-fresh still resolves
   //    below-pressure toward idle, never toward a clear.
@@ -178,7 +185,27 @@ test('the ack does not expire — the trigger has no timer', () => {
 
 test('post-ack, the submission gate consults no telemetry clock', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-submit-'));
+  const homeDir = path.join(root, 'home');
   fs.mkdirSync(path.join(root, 'runtime'), { recursive: true });
+  // The capsule EXISTS and binds — the principal's step 2, kept with teeth:
+  // running this test without these plants refuses ECLEAR_CHECKPOINT
+  // (no-capsules-dir), ack or no ack.
+  const capsulePath = path.join(root, 'capsules', 'current.md');
+  fs.mkdirSync(path.dirname(capsulePath), { recursive: true });
+  fs.writeFileSync(capsulePath, 'checkpoint fixture\n');
+  const transcriptPath = transcriptPathFor({ cwd: root, sessionId: SESSION_ID, homeDir });
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  const transcript = '0123456789';
+  fs.writeFileSync(transcriptPath, transcript);
+  fs.mkdirSync(path.join(root, 'runtime', 'stop-writer'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'runtime', 'stop-writer', `${SESSION_ID}.json`),
+    `${JSON.stringify({
+      offset: Buffer.byteLength(transcript),
+      capsule_path: capsulePath,
+      last_delta_sha: 'fixture',
+    }, null, 2)}\n`,
+  );
   fs.writeFileSync(
     path.join(root, 'runtime', 'auto-clear-cycle.json'),
     `${JSON.stringify({
@@ -205,14 +232,24 @@ test('post-ack, the submission gate consults no telemetry clock', () => {
     memRoot: root,
     sessionId: SESSION_ID,
     cwd: root,
+    homeDir,
     now: () => new Date(clock.ms),
     readPressureFn: () => ({ pct: 85, fresh: false, state: 'stale' }),
+    selectCapsuleFn: () => ({
+      capsule: {
+        path: capsulePath,
+        id: 'current',
+        created: 1_000_000,
+        createdRaw: new Date(1_000_000).toISOString(),
+      },
+      rejected: [],
+    }),
     acquireLock: false,
   });
   transport.noteCapsuleAck();
   clock.ms += 10 * 60_000;
-  // At HEAD this throws ECLEAR_TELEMETRY: the submission-time pressure
-  // recheck ignores the ack entirely and re-runs the staleness clock.
+  // At HEAD-before-the-fix this throws ECLEAR_TELEMETRY: the submission-time
+  // pressure recheck ignored the ack and re-ran the staleness clock.
   const token = transport.beginClearSubmission();
   assert.ok(token && typeof token.submit === 'function',
     'with the ack standing and the capsule checkpoint confirmed, the clear submits — no telemetry clock applies');

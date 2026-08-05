@@ -837,13 +837,16 @@ export class AutoClearTransport {
     }
     if (observation.state === 'stale'
       && typeof observation.pct === 'number'
-      && Number.isFinite(observation.pct)
-      && this._capsuleAckMs !== null
-      && clockMs(this.now) - this._capsuleAckMs <= this.pressureFreshnessMs) {
-      // ACK-FRESH: the seat printed the capsule ack within the freshness
-      // window. Stale telemetry meant "the seat has not spoken lately" — but
-      // it just did. pct is the last known reading; context pressure only
-      // grows, so acting on it cannot under-fire.
+      && Number.isFinite(observation.pct)) {
+      // MONOTONIC-STALE (the principal's ruling, 2026-08-05: "why is there a
+      // timer anyway, over engineered"): context usage only grows within a
+      // session, and the sensor file is per-session, so a stale reading can
+      // only UNDERSTATE the live pressure — acting on it can never
+      // over-fire. Staleness holds protected nothing session-binding does
+      // not already cover, and on the reference seat they expired the
+      // capsule ack mid-cycle and ate operator nudges, twice measured live.
+      // 'missing' still fails below: no reading means no pct to hold against
+      // the threshold, and the ack never substitutes for that.
       return { ok: true, observation: { ...observation, fresh: true } };
     }
     if (observation.state !== 'ok') {
@@ -871,8 +874,7 @@ export class AutoClearTransport {
       memRoot: this.memRoot,
       sessionId: this.state.session_id,
       cwd: this.cwd,
-      ackFresh: this._capsuleAckMs !== null
-        && clockMs(this.now) - this._capsuleAckMs <= this.pressureFreshnessMs,
+      ackFresh: this._capsuleAckMs !== null,
       homeDir: this.homeDir,
       fsImpl: this.fs,
       selectCapsuleFn: this.selectCapsuleFn,
