@@ -980,6 +980,39 @@ export class AutoClearTransport {
       }
     }
 
+    // INHERITED DEAD-SESSION SUPERSEDE (Ada's relaunch wedge, 2026-08-04): a
+    // cycle persisted by a PREVIOUS runner stays bound to that runner's
+    // session_id. After a relaunch this.sessionId IS the live session, so the
+    // cand5 rebind (receipt vs this.sessionId) can never fire, the rebase
+    // above requires the SAME session, and the checkpoint observable keys the
+    // stop-writer record to state.session_id — a file that will never be
+    // written. The receipt is the authority: when it proves THIS runner's
+    // live session at a strictly newer boot than the inherited baseline, the
+    // inherited cycle is superseded — reset to idle bound to the live session
+    // and let live pressure start a fresh cycle. Never resume an inherited
+    // checkpoint into a submit the live session never confirmed. An inherited
+    // clear_intent keeps its original binding (ambiguity protection below);
+    // 'released' keeps its own new-session-idle path.
+    if (this.state.clear_intent === null
+      && typeof this.state.session_id === 'string'
+      && this.state.session_id !== this.sessionId
+      && this.state.state !== 'released'
+      && this.state.state !== 'HOLD:clear-ambiguous') {
+      const bootNow = this._readBootReceipt();
+      if (bootNow.ok
+        && bootNow.receipt.session_id === this.sessionId
+        && (!Number.isSafeInteger(this.state.boot_sequence_at_start)
+          || bootNow.receipt.boot_sequence > this.state.boot_sequence_at_start)) {
+        const next = this._transition('idle', {
+          cycle_id: null,
+          session_id: this.sessionId,
+          boot_sequence_at_start: null,
+          clear_intent: null,
+        });
+        return resultFor(next, { transitioned: true, status: 'inherited-cycle-superseded' });
+      }
+    }
+
     if (this._inheritedIntent
       && this.state.clear_intent !== null
       && !['clear-submitted', 'clear-verified', 'released', 'HOLD:clear-ambiguous']
