@@ -316,6 +316,12 @@ export class InputOwnershipTracker {
     // anything unfinished or unrecognized keeps the poison.
     this.preSequenceUnknown = false;
     this.preSequenceKnownEmpty = true;
+    // R26 FIX finding 3: restored alongside the two flags above by both
+    // whitelist branches. Without this, a whitelisted report on an
+    // already-clean tracker read the contradictory {unknown:false,
+    // lastTaint:"\e"} -- ESC-arrival taints lastTaint unconditionally, and
+    // neither whitelist branch undid it.
+    this.preSequenceLastTaint = null;
     // Diagnosability (FIX A2, 2026-08-05): the printable cause of the most
     // recent taint, or null if never tainted since the last submission.
     // Flows into the refusal log's detail JSON via snapshot() -- without
@@ -424,6 +430,7 @@ export class InputOwnershipTracker {
           ) {
             this.unknown = this.preSequenceUnknown;
             this.knownEmpty = this.preSequenceKnownEmpty;
+            this.lastTaint = this.preSequenceLastTaint;
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -437,6 +444,7 @@ export class InputOwnershipTracker {
             // fell through to the fail-closed else branch below.
             this.unknown = this.preSequenceUnknown;
             this.knownEmpty = this.preSequenceKnownEmpty;
+            this.lastTaint = this.preSequenceLastTaint;
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -488,6 +496,7 @@ export class InputOwnershipTracker {
       if (character === '\u001b') {
         this.preSequenceUnknown = this.unknown;
         this.preSequenceKnownEmpty = this.knownEmpty;
+        this.preSequenceLastTaint = this.lastTaint;
         this.mode = 'escape';
         this.sequence = character;
         this.activeControl = true;
