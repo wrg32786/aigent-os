@@ -266,6 +266,34 @@ function killSwitchProblem(observation) {
   return null;
 }
 
+// Built via fromCharCode, not a literal escape, so no raw control byte sits
+// in this source file -- InputOwnershipTracker's own lastTaint substitution
+// (below) exists for the same reason: a control byte in a log/diff is a
+// footgun for every tool that reads it after this one.
+const ESC = String.fromCharCode(27);
+
+// TERMINAL REPORT RESPONSES (FIX A, 2026-08-05): the terminal ANSWERS
+// queries on stdin -- these are responses, not operator input, and none of
+// them can place text in the composer. Extends the existing focus/mouse
+// report whitelist inside InputOwnershipTracker#observe. Each pattern is
+// anchored end-to-end against the COMPLETED sequence (this.sequence already
+// includes the final byte at match time).
+const TERMINAL_REPORT_RESPONSES = [
+  // CPR -- cursor position report, the DSR-6 answer: ESC [ Pl ; Pc R
+  new RegExp(`^${ESC}\\[\\d+(?:;\\d+)*R$`),
+  // DECXCPR -- extended CPR (adds a page id): ESC [ ? Pl ; Pc R
+  // Known ambiguity: xterm's modified-F3 can emit ESC[1;<m>R, colliding
+  // with a bare CPR above. Acceptable -- F3 cannot insert composer text
+  // either, whitelisted or not.
+  new RegExp(`^${ESC}\\[\\?\\d+(?:;\\d+)*R$`),
+  // DA1/DA2 -- device attributes responses: ESC [ ? ... c  or  ESC [ > ... c
+  new RegExp(`^${ESC}\\[[?>]\\d*(?:;\\d+)*c$`),
+  // DSR -- device status report: ESC [ 0 n  or  ESC [ 3 n
+  new RegExp(`^${ESC}\\[[03]n$`),
+  // DECRPM -- mode report: ESC [ ? Pd ; Ps $ y
+  new RegExp(`^${ESC}\\[\\?\\d+;\\d+\\$y$`),
+];
+
 /**
  * Fail-closed model of the operator's current input line.
  *
@@ -288,6 +316,21 @@ export class InputOwnershipTracker {
     // anything unfinished or unrecognized keeps the poison.
     this.preSequenceUnknown = false;
     this.preSequenceKnownEmpty = true;
+    // Diagnosability (FIX A2, 2026-08-05): the printable cause of the most
+    // recent taint, or null if never tainted since the last submission.
+    // Flows into the refusal log's detail JSON via snapshot() -- without
+    // this, "unknown:true" on a live seat names no mechanism to check.
+    this.lastTaint = null;
+  }
+
+  // Records that this observation tainted the tracker and WHY, bounded and
+  // printable: ESC substituted for \e (a raw control byte has no place in a
+  // log line), sliced to 80 chars so one runaway sequence can't blow out the
+  // refusal detail. Called at every site that sets unknown=true, with the
+  // cause captured BEFORE the caller clears/truncates this.sequence.
+  _taint(cause) {
+    this.unknown = true;
+    this.lastTaint = cause.split(ESC).join('\\e').slice(0, 80);
   }
 
   _submitted() {
@@ -298,6 +341,7 @@ export class InputOwnershipTracker {
     this.unknown = false;
     this.activePaste = false;
     this.activeControl = false;
+    this.lastTaint = null;
   }
 
   observe(data) {
@@ -336,10 +380,10 @@ export class InputOwnershipTracker {
           this.mode = 'string-control';
           continue;
         }
+        this._taint(this.sequence);
         this.mode = 'normal';
         this.sequence = '';
         this.activeControl = false;
-        this.unknown = true;
         this.knownEmpty = false;
         continue;
       }
@@ -347,10 +391,10 @@ export class InputOwnershipTracker {
       if (this.mode === 'csi') {
         this.sequence += character;
         if (this.sequence.length > 64) {
+          this._taint(this.sequence);
           this.mode = 'unknown-control';
           this.sequence = this.sequence.slice(-2);
           this.activeControl = true;
-          this.unknown = true;
           this.knownEmpty = false;
           continue;
         }
@@ -383,11 +427,24 @@ export class InputOwnershipTracker {
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
-          } else {
+          } else if (TERMINAL_REPORT_RESPONSES.some((pattern) => pattern.test(this.sequence))) {
+            // Terminal query RESPONSES (FIX A, 2026-08-05), not operator
+            // input, same restore semantics as the whitelist immediately
+            // above: CPR/DECXCPR, DA1/DA2, DSR, DECRPM. Measured on a live
+            // seat 2026-08-05: snapshot {knownEmpty:false, activePaste:
+            // false, activeControl:false, unknown:true} blocked auto-clear
+            // with an empty composer, because these completed CSI answers
+            // fell through to the fail-closed else branch below.
+            this.unknown = this.preSequenceUnknown;
+            this.knownEmpty = this.preSequenceKnownEmpty;
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
-            this.unknown = true;
+          } else {
+            this._taint(this.sequence);
+            this.mode = 'normal';
+            this.sequence = '';
+            this.activeControl = false;
             this.knownEmpty = false;
           }
         }
@@ -397,16 +454,16 @@ export class InputOwnershipTracker {
       if (this.mode === 'osc') {
         this.sequence += character;
         if (character === '\u0007' || this.sequence.endsWith('\u001b\\')) {
+          this._taint(this.sequence);
           this.mode = 'normal';
           this.sequence = '';
           this.activeControl = false;
-          this.unknown = true;
           this.knownEmpty = false;
         } else if (this.sequence.length > 1024) {
+          this._taint(this.sequence);
           this.mode = 'unknown-control';
           this.sequence = this.sequence.slice(-2);
           this.activeControl = true;
-          this.unknown = true;
           this.knownEmpty = false;
         }
         continue;
@@ -415,14 +472,14 @@ export class InputOwnershipTracker {
       if (this.mode === 'string-control' || this.mode === 'unknown-control') {
         this.sequence = `${this.sequence}${character}`.slice(-1024);
         if (this.sequence.endsWith('\u001b\\')) {
+          this._taint(this.sequence);
           this.mode = 'normal';
           this.sequence = '';
           this.activeControl = false;
-          this.unknown = true;
           this.knownEmpty = false;
         } else {
+          this._taint(this.sequence);
           this.activeControl = true;
-          this.unknown = true;
           this.knownEmpty = false;
         }
         continue;
@@ -434,14 +491,14 @@ export class InputOwnershipTracker {
         this.mode = 'escape';
         this.sequence = character;
         this.activeControl = true;
-        this.unknown = true;
+        this._taint(character);
         this.knownEmpty = false;
         continue;
       }
 
       const code = character.codePointAt(0);
       if (code < 0x20 || code === 0x7f) {
-        this.unknown = true;
+        this._taint(character);
       }
       this.knownEmpty = false;
     }
@@ -460,6 +517,7 @@ export class InputOwnershipTracker {
       ),
       unknown: this.unknown,
       receivedUnits: this.receivedUnits,
+      lastTaint: this.lastTaint,
     };
   }
 }
