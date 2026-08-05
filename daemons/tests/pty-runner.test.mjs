@@ -1389,6 +1389,113 @@ test('input ownership tracker records a bounded, printable lastTaint at every ta
   );
 });
 
+// win32-input-mode (DECSET 9001, CLI-toggled): once armed, ConPTY encodes
+// EVERY keystroke as ESC[Vk;Sc;Uc;Kd;Cs;Rc_ instead of legacy VT keycodes --
+// including Enter, which stops arriving as a raw CR entirely. Live specimen
+// measured on a live seat 2026-08-05 22:55:05Z: lastTaint "\e[13;28;13;0;0;1_"
+// blocked the composer from ever reading empty again. Field order/defaults
+// verified against the published spec (microsoft/terminal doc/specs/#4999),
+// not an earlier field-order reading (itself explicitly flagged as
+// unverified): Vk;Sc;Uc;Kd;Cs;Rc, Kd=1 keydown/0 keyup. Under that reading
+// the RECORDED specimen (Kd=0) is the KEYUP half of the Enter press, not
+// the keydown -- inert by design, not a red flag on its own. The keydown
+// sibling of that same press is what must submit.
+test('win32-input-mode: VK_RETURN keydown submits exactly like a raw CR', () => {
+  const tracker = new InputOwnershipTracker();
+  tracker.observe('dirty-composer-text');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'setup: composer must be dirty first');
+
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`); // VK_RETURN=13, Kd=1 (keydown)
+  const snapshot = tracker.snapshot();
+  assert.equal(
+    snapshot.knownEmpty,
+    true,
+    'a win32-input-mode VK_RETURN keydown must submit exactly like a raw CR -- MUST be red on unmodified code',
+  );
+  assert.equal(snapshot.unknown, false);
+  assert.equal(snapshot.lastTaint, null);
+});
+
+test('win32-input-mode: the exact live specimen (Enter keyup, the trailing half of the press) is inert, not a taint', () => {
+  // The literal bytes recorded in lastTaint on a live seat. Kd=0 here
+  // is the KEY-UP half of the same Enter press whose keydown sibling
+  // submits (previous test) -- a keyup places nothing in the composer.
+  const tracker = new InputOwnershipTracker();
+  tracker.observe(`${ESC}[13;28;13;0;0;1_`);
+  const snapshot = tracker.snapshot();
+  assert.equal(
+    snapshot.unknown,
+    false,
+    'MUST be red on unmodified code -- the exact field specimen currently taints unknown=true forever',
+  );
+  assert.equal(snapshot.knownEmpty, true);
+  assert.equal(snapshot.lastTaint, null);
+});
+
+test('win32-input-mode: a printable keydown marks the composer dirty without tainting, and a following Enter still clears it', () => {
+  const tracker = new InputOwnershipTracker();
+  assert.equal(tracker.snapshot().knownEmpty, true);
+
+  // 'a' keydown: Vk=65 (VK_A), Sc=30, Uc=97 ('a'), Kd=1, Cs=0, Rc=1
+  tracker.observe(`${ESC}[65;30;97;1;0;1_`);
+  let snapshot = tracker.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'a decoded printable keydown must mark the composer dirty -- MUST be red on unmodified code');
+  assert.equal(snapshot.unknown, false, 'we KNOW what was typed -- must not taint');
+
+  // keyup sibling of the same 'a' press must not erase the dirty state
+  tracker.observe(`${ESC}[65;30;97;0;0;1_`);
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'the keyup restore must not erase the dirty content the keydown just placed');
+
+  // Enter keydown still submits/clears from here
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(tracker.snapshot().knownEmpty, true, 'a win32 Enter must still clear a composer dirtied by win32 printable keys');
+});
+
+test('win32-input-mode: keyup-only traffic on a clean tracker stays clean, lastTaint null', () => {
+  const tracker = new InputOwnershipTracker();
+  tracker.observe(`${ESC}[65;30;97;0;0;1_`); // 'a' keyup, no matching keydown in this trace
+  tracker.observe(`${ESC}[13;28;13;0;0;1_`); // Enter keyup
+  tracker.observe(`${ESC}[16;42;0;0;0;1_`); // Shift keyup (modifier alone, Uc=0)
+  const snapshot = tracker.snapshot();
+  assert.equal(snapshot.knownEmpty, true, 'MUST be red on unmodified code -- every one of these currently taints');
+  assert.equal(snapshot.unknown, false);
+  assert.equal(snapshot.lastTaint, null);
+});
+
+test('win32-input-mode: a malformed underscore-terminated sequence stays fail-closed (regression guard)', () => {
+  // NEVER blanket-whitelist the final byte -- a decoded keystroke IS
+  // composer content, so anything that doesn't parse cleanly must stay
+  // exactly as fail-closed as today. Must stay green through the fix.
+  const tracker = new InputOwnershipTracker();
+  tracker.observe(`${ESC}[garbage_`); // not digits/semicolons at all
+  let snapshot = tracker.snapshot();
+  assert.equal(snapshot.unknown, true, 'malformed CSI-underscore must stay fail-closed, never silently pass through');
+  assert.ok(snapshot.lastTaint, 'the taint must still be recorded');
+
+  const tracker2 = new InputOwnershipTracker();
+  tracker2.observe(`${ESC}[1;2;3;4;5;6;7_`); // shape matches but exceeds the 6-param contract
+  assert.equal(tracker2.snapshot().unknown, true, 'more than 6 params must stay fail-closed, never guessed at');
+});
+
+test('win32-input-mode: mixed raw and win32-encoded traffic interleave correctly', () => {
+  const tracker = new InputOwnershipTracker();
+  tracker.observe('raw-typed-text');
+  assert.equal(tracker.snapshot().knownEmpty, false);
+
+  tracker.observe(`${ESC}[65;30;97;1;0;1_`); // win32 'a' keydown -- dirty stays dirty, no taint
+  assert.equal(tracker.snapshot().knownEmpty, false);
+  assert.equal(tracker.snapshot().unknown, false);
+
+  tracker.observe(`${ESC}[A`); // raw arrow -- still fail-closed
+  assert.equal(tracker.snapshot().unknown, true, 'a raw arrow between win32 events must still taint');
+
+  // win32 Enter keydown must still submit unconditionally, exactly like a
+  // raw CR does even when the line is currently unknown-tainted
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(tracker.snapshot().knownEmpty, true, 'win32 Enter keydown submits unconditionally, same as raw CR');
+});
+
 test('post-submit kill and cancellation keep queued input out of the old context', async (t) => {
   for (const kind of ['kill-switch', 'cancellation']) {
     await t.test(kind, () => {
