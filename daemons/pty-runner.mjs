@@ -824,6 +824,16 @@ export class ManagedPtyRunner {
     // signal (the principal's event-driven design, 2026-08-04).
     this.capsuleAckSearchFrom = null;
     this.capsuleAckSeen = false;
+    // Bounded, idle-gated re-request (FIX B, 2026-08-05). All four reset
+    // together whenever capsuleRequestCycleId advances to a new cycle_id --
+    // see _writeCapsuleRequest. capsuleRequestIdleTicks counts consecutive
+    // ticks the transcript size has NOT changed; a size change resets it to
+    // 0 and skips the tick entirely (see _retryCapsuleRequestIfWedged) --
+    // the 2026-08-04 anti-loop invariant this must never violate.
+    this.capsuleRequestAttempts = 0;
+    this.capsuleRequestLastTranscriptSize = null;
+    this.capsuleRequestIdleTicks = 0;
+    this.capsuleRequestExhausted = false;
     this.currentControlWriteAttempted = false;
     this.started = false;
     this.closed = false;
@@ -932,16 +942,99 @@ export class ManagedPtyRunner {
   // runs reached checkpoint-confirmed through this leg. That is measured
   // discriminating evidence, not proof of immunity: the two-phase port for
   // this leg is boarded, with the timing residue named there.
-  _writeCapsuleRequest(cycleId) {
-    if (this.capsuleRequestCycleId === cycleId) return false;
-    this.capsuleRequestCycleId = cycleId;
-    this.capsuleAckSeen = false;
+  // Writes CAPSULE_CONTROL_INPUT and resets the ack search offset to the
+  // current transcript size. Shared by the one-shot initial fire below and
+  // the bounded retry (FIX B, 2026-08-05) — same write, same offset reset,
+  // different caller-side bookkeeping around it.
+  _fireCapsuleRequest() {
     try {
-      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId });
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
       this.capsuleAckSearchFrom = transcript ? fs.statSync(transcript).size : 0;
     } catch { this.capsuleAckSearchFrom = 0; }
     this._event('capsule-request-write', CAPSULE_CONTROL_INPUT);
     return this.pty.write(CAPSULE_CONTROL_INPUT);
+  }
+
+  _writeCapsuleRequest(cycleId) {
+    if (this.capsuleRequestCycleId === cycleId) return false;
+    this.capsuleRequestCycleId = cycleId;
+    this.capsuleAckSeen = false;
+    this.capsuleRequestAttempts = 1;
+    this.capsuleRequestIdleTicks = 0;
+    this.capsuleRequestExhausted = false;
+    const wrote = this._fireCapsuleRequest();
+    this.capsuleRequestLastTranscriptSize = this.capsuleAckSearchFrom;
+    return wrote;
+  }
+
+  // FIX B (2026-08-05): the single write above can land in a TUI that is
+  // not ready — measured live 2026-08-05, a relaunch injected the request
+  // during --continue restore and the seat never answered: no ack, nothing
+  // ever re-asked, the cycle wedged in HOLD:checkpoint-transcript-short
+  // forever. Re-fires, but only when the transcript has been genuinely
+  // quiet: a GROWING transcript means the seat may be mid-capsule, and
+  // interrupting it is the exact infinite-reinjection loop the 2026-08-04
+  // one-shot guard above exists to prevent — that invariant stays sacred
+  // here (a size change resets the idle counter and returns immediately,
+  // no retry, no matter how many ticks pass while it keeps growing).
+  // Bounded to 3 attempts total; the 3rd exhausted tick goes loud exactly
+  // once so the wedge is visible on disk instead of silent. Holds continue
+  // as today either way — this never disables automation.
+  _retryCapsuleRequestIfWedged(coreResult) {
+    if (this.capsuleAckSeen) return;
+    const stateStr = coreResult?.state?.state;
+    if (typeof stateStr !== 'string') return;
+    const resumeState = stateStr.startsWith('HOLD:')
+      ? coreResult.state.hold?.detail?.resume_state
+      : stateStr;
+    if (resumeState !== 'checkpoint-requested') return;
+    if (this.capsuleRequestCycleId === null
+      || this.capsuleRequestCycleId !== coreResult.state.cycle_id) return;
+
+    let size;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
+      size = transcript ? fs.statSync(transcript).size : null;
+    } catch { size = null; }
+    if (size === null) return;
+
+    if (this.capsuleRequestLastTranscriptSize !== size) {
+      this.capsuleRequestLastTranscriptSize = size;
+      this.capsuleRequestIdleTicks = 0;
+      return;
+    }
+    this.capsuleRequestIdleTicks += 1;
+    if (this.capsuleRequestIdleTicks < 5) return;
+
+    if (this.capsuleRequestAttempts >= 3) {
+      if (!this.capsuleRequestExhausted) {
+        this.capsuleRequestExhausted = true;
+        this._event('capsule-request-exhausted', {
+          cycle_id: this.capsuleRequestCycleId,
+          attempts: this.capsuleRequestAttempts,
+        });
+      }
+      return;
+    }
+
+    const idleTicks = this.capsuleRequestIdleTicks;
+    this.capsuleRequestIdleTicks = 0;
+    try {
+      this._fireCapsuleRequest();
+      this.capsuleRequestLastTranscriptSize = this.capsuleAckSearchFrom;
+      this.capsuleRequestAttempts += 1;
+      this._event('capsule-request-retry', {
+        attempt: this.capsuleRequestAttempts,
+        cycle_id: this.capsuleRequestCycleId,
+        idle_ticks: idleTicks,
+      });
+    } catch (error) {
+      this.lastReason = {
+        code: 'runner-capsule-request-write-failed',
+        detail: errorText(error),
+      };
+      this._event('capsule-request-write-failed', this.lastReason);
+    }
   }
 
   // Scan the transcript (clean text, no ANSI — unlike the screen) for the
@@ -952,7 +1045,7 @@ export class ManagedPtyRunner {
     if (this.capsuleAckSeen || this.capsuleAckSearchFrom === null) return false;
     let transcript = null;
     try {
-      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId });
+      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
       if (!transcript) return false;
       const size = fs.statSync(transcript).size;
       if (size <= this.capsuleAckSearchFrom) return false;
@@ -2130,6 +2223,11 @@ export class ManagedPtyRunner {
     if (!this.capsuleAckSeen && this.capsuleAckSearchFrom !== null) {
       this._checkCapsuleAck();
     }
+    // Runs BEFORE the one-shot fire below so the tick that performs the
+    // initial fire can never also count as an idle tick for the retry (the
+    // cycle_id guard inside only passes once _writeCapsuleRequest has
+    // already bound this cycle — see its own comment for the invariant).
+    this._retryCapsuleRequestIfWedged(coreResult);
     // The seat is owed a capsule. Without this the transport sits in
     // checkpoint-requested until the session dies — the state it was found in on
     // a live standalone seat, 2026-08-04.
