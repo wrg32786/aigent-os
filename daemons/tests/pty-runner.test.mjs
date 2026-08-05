@@ -1969,12 +1969,15 @@ test('V3 threshold-unset-default: absent env passes 80 to the production constru
 });
 
 // composer-channel leg 1: the diagnostic channel shares the operator's
-// console. Every early-return branch below hands stdio off to an unmanaged
-// child (stdio: 'inherit') moments after writing its diagnostic line —
-// painting that text at the top of what becomes the operator's live
-// composer. Fixed measured cost, 2026-08-05: the operator named this class
-// of bleed-through ten times. The file is the record now; stderr gets zero
-// bytes for these three branches, matching the threshold-invalid case above.
+// console. The kill-switch-disabled and node-pty-unavailable branches below
+// hand stdio off to an unmanaged child (stdio: 'inherit') moments after
+// writing their diagnostic line — painting that text at the top of what
+// becomes the operator's live composer, matching the threshold-invalid case
+// above. Their lines land in the file now; stderr gets zero bytes for those
+// two. runner-lock-failed does NOT belong on that list (R26 correction,
+// 2026-08-05): it returns mode:'refused' and never calls runUnmanagedFn —
+// no composer ever exists on that path, so its stderr.write is legitimate
+// and stays, matching the later boot-failure block's reasoning exactly.
 function runSessionCaptureNoLog(name, overrides = {}) {
   const fixture = makeFixture(name);
   const stdin = new ScriptedStream();
@@ -2005,10 +2008,14 @@ function runSessionCaptureNoLog(name, overrides = {}) {
     // exercise the true production default sink, not a test spy.
     ...overrides,
   });
-  const stderrBytes = Buffer.concat(stderr.writes).length;
+  const stderrBuffer = Buffer.concat(stderr.writes);
+  const stderrBytes = stderrBuffer.length;
+  const stderrText = stderrBuffer.toString('utf8');
   const logText = readDaemonErrorLog(fixture.memRoot);
   fs.rmSync(fixture.base, { recursive: true, force: true });
-  return { result, stderrBytes, logText };
+  return {
+    result, stderrBytes, stderrText, logText,
+  };
 }
 
 test('composer-channel leg 1: kill-switch-active diagnostic never reaches stderr', () => {
@@ -2044,13 +2051,20 @@ test('composer-channel leg 1: node-pty-unavailable diagnostic never reaches stde
   );
 });
 
-test('composer-channel leg 1: runner-lock-failed diagnostic never reaches stderr', () => {
-  const { result, stderrBytes, logText } = runSessionCaptureNoLog('leg1-lock-failed', {
+test('composer-channel leg 1 (R26 correction): runner-lock-failed has no composer to protect, so stderr carries the line too', () => {
+  // Unlike kill-switch/node-pty above, this branch never calls
+  // runUnmanagedFn — it returns mode:'refused' and the process exits without
+  // any child ever taking the terminal. No composer, no bleed-through risk,
+  // so stderr staying is correct — the file log is additional, not instead.
+  const {
+    result, stderrBytes, stderrText, logText,
+  } = runSessionCaptureNoLog('leg1-lock-failed', {
     acquireRunnerLockFn: () => { throw new Error('scripted lock failure'); },
   });
   assert.equal(result.mode, 'refused');
   assert.equal(result.code, 'runner-lock-failed');
-  assert.equal(stderrBytes, 0);
+  assert.ok(stderrBytes > 0, 'no unmanaged handoff on this path — stderr should carry the line');
+  assert.match(stderrText, /scripted lock failure/);
   assert.ok(
     logText.includes('tag="pty-runner" message="scripted lock failure"'),
     `expected the lock-failure line in .daemon-errors.log, got: ${logText}`,

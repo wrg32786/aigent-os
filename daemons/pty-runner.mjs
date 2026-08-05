@@ -2605,6 +2605,12 @@ export function runPtySession({
     const code = error instanceof RunnerLockError || error?.code === 'ERUNNERLIVE'
       ? (error.exitCode || 1)
       : 1;
+    // R26 correction: unlike the three branches above, this one never calls
+    // runUnmanagedFn — it returns mode:'refused' and the process just exits.
+    // No composer ever exists on this path, so it sits on the SAME side of
+    // the composer-channel boundary as the boot-failure block below: stderr
+    // is legitimate here. Keep the file log too — both is fine.
+    try { stderr.write(`${oneLine(error?.message || error)}\n`); } catch { /* visible if possible */ }
     appendDaemonErrorLog(memoryRoot, fsImpl, 'pty-runner', error?.message || error);
     return {
       mode: 'refused',
