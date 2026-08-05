@@ -3238,3 +3238,181 @@ test('a HOLD:telemetry-stale detour consumes zero retry budget, even though its 
     harness.cleanup();
   }
 });
+
+// DEFECT 4 / FIX (2026-08-05): a SessionStart hook delivers the resume
+// procedure + capsule as CONTEXT ONLY -- hooks do not create a turn. With no
+// first message, a fresh post-clear seat cannot act on the procedure, posts
+// no telemetry, and the pressure gate holds on telemetry-missing forever
+// (measured live on the cert seat, transcript head in hand: hook fired,
+// capsule loaded -- delivery is NOT the problem, the absent first turn is).
+// The operator saying "hi" un-stuck it every time -- this is that
+// hand-delivered wake, automated. Same idle-gated, 3-attempt-bounded shape
+// as the capsule-request retry.
+//
+// WAKE_MESSAGE/WAKE_TURN_GROWTH_THRESHOLD_BYTES are declared LOCALLY here
+// rather than imported -- they do not exist in pty-runner.mjs yet at this
+// commit, and importing undefined names would crash the WHOLE test file's
+// module load, burying these five tests' clean red assertions under an
+// unrelated import error and failing every other test in this file too.
+// Values here match what the fix commit will export; once that commit
+// lands, these locals are deleted and the import list picks the same names
+// up from '../pty-runner.mjs'.
+const WAKE_MESSAGE = '[aigent] post-clear wake -- run the resume procedure staged at session start.\r';
+const WAKE_TURN_GROWTH_THRESHOLD_BYTES = 65536;
+
+function wakeWriteCount(harness) {
+  return harness.pty.writes.filter((w) => w.equals(Buffer.from(WAKE_MESSAGE))).length;
+}
+
+function clearReceiptFor(harness, sessionId, bootSequence = 11) {
+  return {
+    boot_sequence: bootSequence,
+    session_id: sessionId,
+    source: 'clear',
+    observed_at: new Date(harness.fixture.clock.ms() + 1000).toISOString(),
+  };
+}
+
+test('post-clear wake: fires once after the transcript settles, with no turn present', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n'); // the new session's transcript already carries some hook boot content
+
+    const ok = harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    assert.equal(ok, true, 'setup: rebind must succeed');
+    assert.equal(wakeWriteCount(harness), 0, 'no wake yet -- no ticks have run');
+
+    for (let i = 0; i < 8; i += 1) harness.drive();
+
+    assert.equal(
+      wakeWriteCount(harness),
+      1,
+      'a settled transcript with no turn must fire the wake exactly once -- MUST be red on unmodified code',
+    );
+    assert.ok(harness.runner.events.some((e) => e.name === 'wake-injected'), 'the fire must be LOUD');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('post-clear wake: a GROWING transcript defers the fire until it settles', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n');
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+
+    // the seat may still be restoring -- transcript keeps growing for several ticks
+    for (let i = 0; i < 8; i += 1) {
+      fs.appendFileSync(transcriptPath, `restoring-${i}\n`);
+      harness.drive();
+    }
+    assert.equal(
+      wakeWriteCount(harness),
+      0,
+      'a growing transcript must never fire the wake -- MUST be red on unmodified code if it fires early',
+    );
+
+    // now it genuinely settles
+    for (let i = 0; i < 8; i += 1) harness.drive();
+    assert.equal(wakeWriteCount(harness), 1, 'the wake must still fire once the transcript genuinely settles');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('post-clear wake: a write that throws still spends its attempt, capped at 3, exhausted once (mirrors the capsule-request contract)', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n');
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+
+    harness.pty.failWritesRemaining = 999; // every write throws from here on
+
+    for (let i = 0; i < 40; i += 1) harness.drive();
+
+    assert.equal(
+      harness.runner.wakeAttempts,
+      3,
+      'a throwing write must still spend its attempt, capped at 3 -- MUST be red on unmodified code',
+    );
+    assert.equal(
+      harness.runner.events.filter((e) => e.name === 'wake-exhausted').length,
+      1,
+      'exhaustion must go loud exactly once even though every write threw',
+    );
+    assert.equal(wakeWriteCount(harness), 0, 'every write threw -- none actually landed');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('post-clear wake: a transcript already showing a first turn suppresses the wake entirely', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n');
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+
+    // a real first turn: far beyond boot-noise size (the generous, deliberately
+    // permissive discriminator -- see WAKE_TURN_GROWTH_THRESHOLD_BYTES)
+    fs.appendFileSync(transcriptPath, 'x'.repeat(WAKE_TURN_GROWTH_THRESHOLD_BYTES + 1));
+
+    for (let i = 0; i < 10; i += 1) harness.drive();
+
+    assert.equal(
+      wakeWriteCount(harness),
+      0,
+      'a transcript already showing a first turn must suppress the wake entirely -- MUST be red on unmodified code',
+    );
+    assert.ok(harness.runner.events.some((e) => e.name === 'wake-suppressed-turn-detected'));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('post-clear wake: a dirty composer defers the fire until the tracker clears', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n');
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+
+    harness.runner.input.observe('operator-is-mid-type'); // dirty composer, no CR yet
+
+    for (let i = 0; i < 8; i += 1) harness.drive();
+    assert.equal(
+      wakeWriteCount(harness),
+      0,
+      'a dirty composer must hold the wake -- MUST be red on unmodified code if it glues onto operator typing',
+    );
+
+    harness.runner.input.observe('\r'); // operator submits -- composer reads clean again
+    harness.drive();
+    assert.equal(wakeWriteCount(harness), 1, 'the wake must fire on the first tick the composer reads clean again');
+  } finally {
+    harness.cleanup();
+  }
+});
