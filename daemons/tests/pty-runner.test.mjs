@@ -27,6 +27,7 @@ import {
 } from '../auto-clear-transport.mjs';
 import {
   CLEAR_CONTROL_INPUT,
+  DEFAULT_INPUT_HOLD_TTL_MS,
   DEGRADED_NODE_PTY,
   InputOwnershipTracker,
   ManagedPtyRunner,
@@ -124,6 +125,10 @@ class ManualScheduler {
     this.ticks = new Map();
     this.commits = new Map();
     this.watchdogs = new Map();
+    // Armed-TTL record, keyed by handle id. The runner passes the ttl as the
+    // second argument; dropping it here is what made a fuse sized to the
+    // wrong window untestable — the ttl IS the mechanism's observable.
+    this.watchdogArms = new Map();
   }
 
   _schedule(collection, callback) {
@@ -153,8 +158,10 @@ class ManualScheduler {
     this._clear(handle);
   }
 
-  scheduleWatchdog(callback) {
-    return this._schedule(this.watchdogs, callback);
+  scheduleWatchdog(callback, ttl) {
+    const handle = this._schedule(this.watchdogs, callback);
+    this.watchdogArms.set(handle.id, ttl);
+    return handle;
   }
 
   clearWatchdog(handle) {
@@ -759,7 +766,7 @@ class RunnerHarness {
       clearTick: (handle) => this.scheduler.clearTick(handle),
       scheduleCommit: (callback) => this.scheduler.scheduleCommit(callback),
       clearCommit: (handle) => this.scheduler.clearCommit(handle),
-      scheduleWatchdog: (callback) => this.scheduler.scheduleWatchdog(callback),
+      scheduleWatchdog: (callback, ttl) => this.scheduler.scheduleWatchdog(callback, ttl),
       clearWatchdog: (handle) => this.scheduler.clearWatchdog(handle),
       exitFn: (code) => {
         this.semanticExitCode = code;
@@ -2276,6 +2283,81 @@ test('teardown restores the operator terminal to its pre-start raw state (leg-3 
     assert.equal(harness.stdin.isRaw, true); // raw mode forced at start()
     harness.shutdown();
     assert.equal(harness.stdin.isRaw, false); // pre-start state restored
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the post-submit watchdog is sized to the clear round-trip, not the settle window', () => {
+  // Measured live 2026-08-05T04:03:15Z (scratch-seat driver, task bbx2lktv4):
+  // submit -> clear receipt took 2m16s — the child finishes its in-flight
+  // turn, then the fresh context boots hooks before the SessionStart receipt
+  // lands. One watchdog armed at prepare (DEFAULT_INPUT_HOLD_TTL_MS = 15s)
+  // governed BOTH the settle window and the round-trip, so every real clear
+  // died mid-flight: UNMANAGED:auto-clear-disabled
+  // reason=runner-input-hold-watchdog-expired at submit+15s, with the
+  // completing receipt on disk two minutes later and nobody ticking.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    harness.attemptAutomaticClear();
+    assert.equal(harness.runner.phase, 'prepared');
+    const preIds = [...harness.scheduler.watchdogs.keys()];
+    assert.equal(preIds.length, 1, 'exactly one governing watchdog while prepared');
+    assert.equal(
+      harness.scheduler.watchdogArms.get(preIds[0]),
+      DEFAULT_INPUT_HOLD_TTL_MS,
+      'pre-submit: the settle-window fuse stays short — abort fast, release the composer',
+    );
+
+    harness.flushControl();
+    assert.equal(harness.runner.phase, 'submitted');
+    const postIds = [...harness.scheduler.watchdogs.keys()];
+    assert.equal(postIds.length, 1, 'exactly one governing watchdog after submit');
+    const governingTtl = harness.scheduler.watchdogArms.get(postIds[0]);
+    assert.ok(
+      governingTtl > 136_000,
+      `post-submit: the governing fuse must exceed the measured 136s clear round-trip; a settle-window timer here kills automation while the clear is landing (governing ttl: ${governingTtl}ms)`,
+    );
+
+    // The receipt lands minutes later and must still complete the cycle.
+    writeJson(harness.fixture.bootPath, {
+      boot_sequence: 11,
+      session_id: NEXT_SESSION_ID,
+      source: 'clear',
+      observed_at: new Date(harness.fixture.clock.ms() + 1000).toISOString(),
+    });
+    harness.childOutput('fresh-context-output\r\n');
+    for (let turn = 0; turn < 3; turn += 1) harness.drive();
+    const observed = harness.snapshot();
+    assert.equal(observed.holdActive, false, 'the receipt releases the input hold');
+    assert.equal(harness.runner.automationEnabled, true, 'automation survives a slow clear');
+    assert.equal(harness.runner.sessionId, NEXT_SESSION_ID, 'rebound to the fresh session');
+    assert.equal(harness.runner.watchdogArmed, false, 'the round-trip fuse is disarmed at release');
+
+    // FUSE PRESERVED (control): if the receipt never lands, the governing
+    // watchdog still disables automation and releases the operator's input —
+    // the fuse semantics are unchanged, only its size.
+    const second = new RunnerHarness({
+      mode: 'managed',
+      ptyLoad: 'ok',
+      lockState: 'free',
+    });
+    try {
+      second.primeAuthorized();
+      second.attemptAutomaticClear();
+      second.flushControl();
+      assert.equal(second.runner.phase, 'submitted');
+      second.fireWatchdog();
+      assert.equal(second.runner.automationEnabled, false, 'expiry stays terminal');
+      assert.equal(second.snapshot().holdActive, false, 'expiry still releases the operator input hold');
+    } finally {
+      second.cleanup();
+    }
   } finally {
     harness.cleanup();
   }
