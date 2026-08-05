@@ -59,9 +59,24 @@ export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 // reason it was written, and stops failing for the reason it was not.
 export const CAPSULE_ANNOUNCEMENT_MAX_CHARS = 120;
 export const TRANSCRIPT_ENTRY_ENVELOPE_MAX = 1361;
+// The announcement is not the only thing that lands after the capture. The
+// harness appends ATTACHMENT records (injected context: ctx telemetry etc.)
+// behind a turn — measured at rest on a live seat 2026-08-04: 1,295 bytes
+// (a 670 + 457 pair plus newlines), three separate observations. The first
+// budget covered the announcement alone and the live seat held at lag 2,612 =
+// announcement entry (~1,317) + attachment pair (~1,295). Allowance is the
+// measured pair with headroom.
+export const TRAILING_ATTACHMENT_ALLOWANCE = 1400;
 export const CHECKPOINT_TAIL_TOLERANCE_BYTES = Math.ceil(
-  (TRANSCRIPT_ENTRY_ENVELOPE_MAX + CAPSULE_ANNOUNCEMENT_MAX_CHARS) * 1.05,
+  (TRANSCRIPT_ENTRY_ENVELOPE_MAX
+    + CAPSULE_ANNOUNCEMENT_MAX_CHARS
+    + TRAILING_ATTACHMENT_ALLOWANCE) * 1.05,
 );
+// Discrimination, kept where it cannot rot: tolerance is 3,026. The live
+// legitimate case (2,612) passes; two real turns plus attachments (~3,900)
+// still hold. A second SUBSTANTIVE turn — any turn carrying actual work —
+// blows past the budget on envelope alone the moment attachments trail it.
+// The check keeps failing for the reason it was written.
 export const CYCLE_STATES = Object.freeze([
   'idle',
   'pressure',
