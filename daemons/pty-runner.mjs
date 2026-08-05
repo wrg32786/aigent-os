@@ -984,10 +984,14 @@ export class ManagedPtyRunner {
     if (this.capsuleAckSeen) return;
     const stateStr = coreResult?.state?.state;
     if (typeof stateStr !== 'string') return;
-    const resumeState = stateStr.startsWith('HOLD:')
-      ? coreResult.state.hold?.detail?.resume_state
-      : stateStr;
-    if (resumeState !== 'checkpoint-requested') return;
+    // R26 FIX finding 2: the state STRING itself must be the wedge, not
+    // merely a hold that RESUMES to it. HOLD:telemetry-stale (raised by the
+    // pressure gate while already inside checkpoint-requested/
+    // HOLD:checkpoint-* territory) also carries hold.detail.resume_state:
+    // 'checkpoint-requested' — matching on resume_state alone let that
+    // unrelated hold spend the 3-attempt budget before the seat ever
+    // returned to the real wedge.
+    if (stateStr !== 'checkpoint-requested' && !stateStr.startsWith('HOLD:checkpoint-')) return;
     if (this.capsuleRequestCycleId === null
       || this.capsuleRequestCycleId !== coreResult.state.cycle_id) return;
 
@@ -1019,10 +1023,14 @@ export class ManagedPtyRunner {
 
     const idleTicks = this.capsuleRequestIdleTicks;
     this.capsuleRequestIdleTicks = 0;
+    // R26 FIX finding 1: an attempt TRIED is an attempt SPENT. Counted
+    // before the write, not inside the try after it — a throwing pty.write
+    // (transient EAGAIN class) still spends the budget; a tried/succeeded
+    // split would add state with no consumer (the throw is already loud via
+    // lastReason/capsule-request-write-failed below).
+    this.capsuleRequestAttempts += 1;
     try {
       this._fireCapsuleRequest();
-      this.capsuleRequestLastTranscriptSize = this.capsuleAckSearchFrom;
-      this.capsuleRequestAttempts += 1;
       this._event('capsule-request-retry', {
         attempt: this.capsuleRequestAttempts,
         cycle_id: this.capsuleRequestCycleId,
@@ -1035,6 +1043,11 @@ export class ManagedPtyRunner {
       };
       this._event('capsule-request-write-failed', this.lastReason);
     }
+    // Set regardless of the outcome above — _fireCapsuleRequest's own
+    // internal try/catch always resolves capsuleAckSearchFrom before the
+    // point where pty.write can throw, so this is valid whether or not the
+    // write itself landed.
+    this.capsuleRequestLastTranscriptSize = this.capsuleAckSearchFrom;
   }
 
   // Scan the transcript (clean text, no ANSI — unlike the screen) for the
