@@ -1889,6 +1889,19 @@ export class ManagedPtyRunner {
       };
     }
 
+    if (this.capsuleAckSearchFrom === null
+      && (coreResult.state.state === 'checkpoint-requested'
+        || String(coreResult.state.state).startsWith('HOLD:'))) {
+      // Relaunch into an in-flight cycle: the ack may ALREADY be on disk from a
+      // previous process. Scan from the stop-writer offset BEFORE injecting —
+      // re-injecting was the loop the principal caught: each relaunch wrote
+      // another request, which wrote another ~14-20k, which re-broke the check.
+      try {
+        const recordPath = path.join(this.memRoot, 'runtime', 'stop-writer', `${this.sessionId}.json`);
+        const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+        if (Number.isSafeInteger(record.offset)) this.capsuleAckSearchFrom = record.offset;
+      } catch { /* no record yet — first injection will set the offset */ }
+    }
     if (!this.capsuleAckSeen && this.capsuleAckSearchFrom !== null) {
       this._checkCapsuleAck();
     }
@@ -1901,8 +1914,9 @@ export class ManagedPtyRunner {
     // PERSISTS across relaunches, so a stuck seat presents as the state with no
     // edge. Keyed to cycle_id inside _writeCapsuleRequest — see its comment for
     // the feedback loop the first two versions of this block caused.
-    if (coreResult.action === 'request-checkpoint'
-      || coreResult.state.state === 'checkpoint-requested') {
+    if (!this.capsuleAckSeen
+      && (coreResult.action === 'request-checkpoint'
+        || coreResult.state.state === 'checkpoint-requested')) {
       try {
         this._writeCapsuleRequest(coreResult.state.cycle_id);
       } catch (error) {

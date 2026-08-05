@@ -340,6 +340,7 @@ export function evaluateCheckpointFreshness({
   memRoot,
   sessionId,
   cwd,
+  ackFresh = false,
   homeDir = os.homedir(),
   fsImpl = fs,
   selectCapsuleFn = selectCapsule,
@@ -466,7 +467,14 @@ export function evaluateCheckpointFreshness({
   // A lag up to the announcement budget is EXPECTED — see
   // CHECKPOINT_TAIL_TOLERANCE_BYTES. Beyond it, the capsule genuinely does not
   // cover the conversation and the hold is correct.
-  if (transcript.size - record.offset > CHECKPOINT_TAIL_TOLERANCE_BYTES) {
+  if (ackFresh !== true
+    && transcript.size - record.offset > CHECKPOINT_TAIL_TOLERANCE_BYTES) {
+    // ACK SUPERSEDES the byte arithmetic (principal's design, 2026-08-04,
+    // carried to its end): with a live ack, the bytes past the capture are the
+    // verb's own machinery by construction — every relaunch re-injected the
+    // request (~14-20k) and re-failed the very check the injection existed to
+    // satisfy. Binding + existence checks above still gate; only this
+    // arithmetic yields to the seat's own completion signal.
     return checkpointFailure('checkpoint-transcript-short', {
       captured_offset: record.offset,
       stable_size: transcript.size,
@@ -858,6 +866,8 @@ export class AutoClearTransport {
       memRoot: this.memRoot,
       sessionId: this.state.session_id,
       cwd: this.cwd,
+      ackFresh: this._capsuleAckMs !== null
+        && clockMs(this.now) - this._capsuleAckMs <= this.pressureFreshnessMs,
       homeDir: this.homeDir,
       fsImpl: this.fs,
       selectCapsuleFn: this.selectCapsuleFn,
