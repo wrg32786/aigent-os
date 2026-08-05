@@ -2443,3 +2443,47 @@ test('the control clear is text plus a separately scheduled Enter, never one chu
     harness.cleanup();
   }
 });
+
+test('composer residue: queued input never flushes onto a stranded control text', () => {
+  // R26 finding F1 on the two-phase write: if the deferred Enter write FAILS,
+  // '/clear' is already sitting in the composer. When the round-trip fuse
+  // later expires, _disableAutomation releases the hold and flushes queued
+  // operator input into that composer — and the operator's own trailing CR
+  // submits '/clear<operator text>'. Impossible when the write was atomic;
+  // introduced by the split. The guard lives INSIDE _flushQueuedInput (a fix
+  // in the caller doesn't protect direct calls): while the composer may hold
+  // stranded control text, the flush must lead with a kill-line (Ctrl-U) so
+  // the stranded text is destroyed before any queued byte lands.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    harness.attemptAutomaticClear();
+    harness.flushControl();
+    assert.equal(harness.runner.phase, 'submitted');
+    assert.deepEqual(harness.pty.writes, [Buffer.from('/clear')], 'text phase landed');
+
+    harness.pty.failWritesRemaining = 1; // the deferred Enter write throws
+    harness.fireEnter();
+    assert.deepEqual(harness.pty.writes, [Buffer.from('/clear')], 'the failed Enter recorded no bytes — /clear is stranded in the composer');
+
+    harness.operator('op-cmd\r'); // operator types during the hold: queued
+    assert.ok(harness.snapshot().queuedInputBytes > 0, 'operator input is queued behind the hold');
+
+    harness.fireWatchdog(); // fuse expires -> disable -> release -> flush
+
+    const writes = harness.pty.writes.map((chunk) => chunk.toString('latin1'));
+    const opIndex = writes.indexOf('op-cmd\r');
+    assert.ok(opIndex >= 0, 'queued operator input is delivered after release');
+    assert.equal(
+      writes[opIndex - 1],
+      '\u0015',
+      `the flush must lead with kill-line so queued bytes cannot concatenate onto the stranded '/clear' (writes: ${JSON.stringify(writes)})`,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
