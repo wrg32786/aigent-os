@@ -26,10 +26,12 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
   AutoClearTransport,
+  CAPSULE_ACK_LITERAL,
   DEFAULT_PRESSURE_THRESHOLD_PCT,
   RunnerLockError,
   acquireRunnerLock,
   evaluateCheckpointFreshness,
+  transcriptPathFor,
   readKillSwitch,
   releaseRunnerLock,
 } from './auto-clear-transport.mjs';
@@ -225,6 +227,11 @@ export class InputOwnershipTracker {
     this.activePaste = false;
     this.activeControl = false;
     this.receivedUnits = 0;
+    // Pre-sequence snapshot: ESC poisons the flags on ARRIVAL (fail-closed for
+    // unfinished sequences). A COMPLETED benign terminal report restores them;
+    // anything unfinished or unrecognized keeps the poison.
+    this.preSequenceUnknown = false;
+    this.preSequenceKnownEmpty = true;
   }
 
   _submitted() {
@@ -299,6 +306,27 @@ export class InputOwnershipTracker {
             this.activePaste = true;
             this.activeControl = false;
             this.pasteEndProbe = '';
+          } else if (
+            // TERMINAL REPORTS, not operator input — sequences the terminal
+            // emits about the window that CANNOT place text in the composer:
+            //   ESC[I / ESC[O   focus in / focus out
+            //   ESC[<...M/m     SGR mouse reports (wheel scroll, clicks)
+            // Measured on a live seat 2026-08-04: with these classified as
+            // unknown input, every alt-tab and every wheel scroll marked the
+            // composer dirty, and the auto-clear refused for the whole 120s
+            // telemetry window — OBSERVING the seat prevented the clear.
+            // Arrow keys and everything else stay fail-closed: arrow-up
+            // genuinely recalls history into the composer and MUST refuse.
+            this.sequence === '\u001b[I'
+            || this.sequence === '\u001b[O'
+            || (this.sequence.startsWith('\u001b[<')
+              && (character === 'M' || character === 'm'))
+          ) {
+            this.unknown = this.preSequenceUnknown;
+            this.knownEmpty = this.preSequenceKnownEmpty;
+            this.mode = 'normal';
+            this.sequence = '';
+            this.activeControl = false;
           } else {
             this.mode = 'normal';
             this.sequence = '';
@@ -345,6 +373,8 @@ export class InputOwnershipTracker {
       }
 
       if (character === '\u001b') {
+        this.preSequenceUnknown = this.unknown;
+        this.preSequenceKnownEmpty = this.knownEmpty;
         this.mode = 'escape';
         this.sequence = character;
         this.activeControl = true;
@@ -662,7 +692,12 @@ export class ManagedPtyRunner {
     this.watchdogArmed = false;
     this.automationEnabled = true;
     this.controlWriteAttempts = 0;
-    this.capsuleRequestWritten = false;
+    this.capsuleRequestCycleId = null;
+    // Ack sentinel: transcript offset to scan from, set when the capsule
+    // request is written. The ack literal appearing past it IS the completion
+    // signal (the principal's event-driven design, 2026-08-04).
+    this.capsuleAckSearchFrom = null;
+    this.capsuleAckSeen = false;
     this.currentControlWriteAttempted = false;
     this.started = false;
     this.closed = false;
@@ -707,15 +742,61 @@ export class ManagedPtyRunner {
   }
 
   // Carries action:'request-checkpoint' to the seat. The transport decides WHEN
-  // a capsule is owed; this is the only thing that tells the seat so. Guarded to
-  // one write per cycle: tick() runs every 100ms and the transport emits the
-  // action only on the pressure -> checkpoint-requested transition, but a guard
-  // here means a future re-emit cannot machine-gun the composer.
-  _writeCapsuleRequest() {
-    if (this.capsuleRequestWritten) return false;
-    this.capsuleRequestWritten = true;
+  // a capsule is owed; this is the only thing that tells the seat so.
+  //
+  // ONE WRITE PER CYCLE_ID — not per state visit, and the difference was a live
+  // feedback loop, found by the PRINCIPAL, not by me, 2026-08-04 ~17:55: the
+  // first guard re-armed whenever the state left checkpoint-requested, but the
+  // state OSCILLATES through HOLD:telemetry-stale and back on every operator
+  // turn. Each re-entry fired ANOTHER /context-capsule; each capsule run
+  // appended ~15-22k to the transcript; which re-broke checkpoint-transcript-
+  // short; which held until the operator nudged; whose nudge re-armed the guard.
+  // The injection meant to close the cycle was the thing keeping it open — the
+  // seat re-asked for a capsule it already had, forever. Keying on cycle_id
+  // makes the request fire exactly once per pressure cycle no matter how many
+  // times the state wobbles through holds within it.
+  _writeCapsuleRequest(cycleId) {
+    if (this.capsuleRequestCycleId === cycleId) return false;
+    this.capsuleRequestCycleId = cycleId;
+    this.capsuleAckSeen = false;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId });
+      this.capsuleAckSearchFrom = transcript ? fs.statSync(transcript).size : 0;
+    } catch { this.capsuleAckSearchFrom = 0; }
     this._event('capsule-request-write', CAPSULE_CONTROL_INPUT);
     return this.pty.write(CAPSULE_CONTROL_INPUT);
+  }
+
+  // Scan the transcript (clean text, no ANSI — unlike the screen) for the
+  // capsule ack literal past the request offset. On sight, tell the transport:
+  // the ack substitutes for telemetry FRESHNESS only. Bounded read, once per
+  // tick, stops permanently for the cycle once seen.
+  _checkCapsuleAck() {
+    if (this.capsuleAckSeen || this.capsuleAckSearchFrom === null) return false;
+    let transcript = null;
+    try {
+      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId });
+      if (!transcript) return false;
+      const size = fs.statSync(transcript).size;
+      if (size <= this.capsuleAckSearchFrom) return false;
+      const from = Math.max(0, this.capsuleAckSearchFrom - CAPSULE_ACK_LITERAL.length);
+      const length = Math.min(size - from, 262144);
+      const buffer = Buffer.alloc(length);
+      const fd = fs.openSync(transcript, 'r');
+      try { fs.readSync(fd, buffer, 0, length, from); } finally { fs.closeSync(fd); }
+      const text = buffer.toString('utf8');
+      if (text.includes(CAPSULE_ACK_LITERAL)) {
+        this.capsuleAckSeen = true;
+        this._event('capsule-ack-observed', CAPSULE_ACK_LITERAL);
+        if (typeof this.transport?.noteCapsuleAck === 'function') {
+          this.transport.noteCapsuleAck();
+        }
+        return true;
+      }
+      // advance so each tick reads only the new tail, keeping literal-length overlap
+      this.capsuleAckSearchFrom = Math.max(this.capsuleAckSearchFrom, size - CAPSULE_ACK_LITERAL.length);
+      return false;
+    } catch { return false; }
   }
 
   _writeOutput(data) {
@@ -1803,24 +1884,22 @@ export class ManagedPtyRunner {
       };
     }
 
+    if (!this.capsuleAckSeen && this.capsuleAckSearchFrom !== null) {
+      this._checkCapsuleAck();
+    }
     // The seat is owed a capsule. Without this the transport sits in
     // checkpoint-requested until the session dies — the state it was found in on
     // a live standalone seat, 2026-08-04.
     //
-    // STATE-DRIVEN, NOT EDGE-TRIGGERED, and this distinction is the whole fix.
-    // action:'request-checkpoint' is returned ONLY on the pressure ->
-    // checkpoint-requested transition (auto-clear-transport.mjs:1012-1020). The
-    // state itself PERSISTS in auto-clear-cycle.json across relaunches. So a seat
-    // already sitting in checkpoint-requested — which is exactly how a seat that
-    // has been stuck presents — never re-emits the action, and an edge-triggered
-    // writer never fires for the one population that needs it most. Measured on
-    // the live seat 2026-08-04: the first version of this fix keyed on the action
-    // alone and did nothing, because the transition had happened in an earlier
-    // session. Keying on the state means a stuck seat recovers on its next tick.
+    // STATE-DRIVEN, NOT EDGE-TRIGGERED: action:'request-checkpoint' is emitted
+    // only on the pressure -> checkpoint-requested transition, but the state
+    // PERSISTS across relaunches, so a stuck seat presents as the state with no
+    // edge. Keyed to cycle_id inside _writeCapsuleRequest — see its comment for
+    // the feedback loop the first two versions of this block caused.
     if (coreResult.action === 'request-checkpoint'
       || coreResult.state.state === 'checkpoint-requested') {
       try {
-        this._writeCapsuleRequest();
+        this._writeCapsuleRequest(coreResult.state.cycle_id);
       } catch (error) {
         this.lastReason = {
           code: 'runner-capsule-request-write-failed',
@@ -1828,12 +1907,6 @@ export class ManagedPtyRunner {
         };
         this._event('capsule-request-write-failed', this.lastReason);
       }
-    }
-    // A cycle that leaves the capsule window re-arms the guard, so the NEXT
-    // pressure cycle can request its own capsule.
-    if (coreResult.state.state !== 'checkpoint-requested'
-      && coreResult.state.state !== 'pressure') {
-      this.capsuleRequestWritten = false;
     }
 
     if (coreResult.state.state === 'released') {

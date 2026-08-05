@@ -32,6 +32,13 @@ const { atomicUpdate } = require('./memory-hygiene/atomic-state.cjs');
 
 export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 
+// The capsule verb's mandated closing line (skills/context-capsule step 6).
+// The seat emits EXACTLY this when its capsule is written and confirmed. It is
+// the seat's own completion signal — the event-driven trigger the principal
+// designed 2026-08-04: fire at the moment of maximal truth instead of polling
+// until independently-measured freshness windows happen to align.
+export const CAPSULE_ACK_LITERAL = 'Capsule Complete, Ready For Clear';
+
 // ── CAPSULE ANNOUNCEMENT BUDGET ────────────────────────────────────────────────
 // The capsule verb ends with a short acknowledgement (skills/context-capsule,
 // step 6). That acknowledgement is a NEW assistant turn, appended to the
@@ -656,6 +663,10 @@ export class AutoClearTransport {
     this.now = now;
     this.env = env;
     this.pressureThresholdPct = pressureThresholdPct;
+    // Set by the runner when the seat has emitted CAPSULE_ACK_LITERAL for the
+    // current cycle. Substitutes for telemetry FRESHNESS (the seat just spoke;
+    // it is provably alive) — never for pct, threshold, or checkpoint binding.
+    this._capsuleAckMs = null;
     this.pressureFreshnessMs = pressureFreshnessMs;
     this.selectCapsuleFn = selectCapsuleFn;
     this.readPressureFn = readPressureFn;
@@ -784,6 +795,10 @@ export class AutoClearTransport {
     return { ok: true, receipt };
   }
 
+  noteCapsuleAck() {
+    this._capsuleAckMs = clockMs(this.now);
+  }
+
   _pressureObservable() {
     let observation;
     try {
@@ -806,6 +821,17 @@ export class AutoClearTransport {
     }
     if (!['ok', 'stale', 'missing'].includes(observation.state)) {
       return { ok: false, code: 'telemetry-state-invalid', detail: observation.state };
+    }
+    if (observation.state === 'stale'
+      && typeof observation.pct === 'number'
+      && Number.isFinite(observation.pct)
+      && this._capsuleAckMs !== null
+      && clockMs(this.now) - this._capsuleAckMs <= this.pressureFreshnessMs) {
+      // ACK-FRESH: the seat printed the capsule ack within the freshness
+      // window. Stale telemetry meant "the seat has not spoken lately" — but
+      // it just did. pct is the last known reading; context pressure only
+      // grows, so acting on it cannot under-fire.
+      return { ok: true, observation: { ...observation, fresh: true } };
     }
     if (observation.state !== 'ok') {
       return {
@@ -845,6 +871,7 @@ export class AutoClearTransport {
   }
 
   _startPressure(observation) {
+    this._capsuleAckMs = null; // a new cycle needs its own ack
     const boot = this._readBootReceipt();
     if (!boot.ok) return this._holdResult(boot.code, boot.detail, 'idle');
     if (boot.receipt.session_id !== this.sessionId) {
