@@ -767,7 +767,12 @@ export class AutoClearTransport {
       ...changes,
       state: nextState,
       entered_at: clockIso(this.now),
-      hold: null,
+      // A transition normally clears the hold — but a caller rewriting
+      // bookkeeping WITHIN a hold (the boot rebase) must pass the hold
+      // through explicitly, or it publishes state HOLD:* with hold:null:
+      // exactly the record invalidStateReason rejects (defect 5, measured
+      // live 2026-08-05).
+      hold: hasOwn(changes, 'hold') ? changes.hold : null,
     };
     return this._atomicWrite(next);
   }
@@ -976,6 +981,10 @@ export class AutoClearTransport {
         && bootNow.receipt.boot_sequence > this.state.boot_sequence_at_start) {
         this._transition(this.state.state, {
           boot_sequence_at_start: bootNow.receipt.boot_sequence,
+          // Preserve the hold: this rewrite keeps the CURRENT state name,
+          // which may be a HOLD — nulling the hold here corrupts the record
+          // (defect 5).
+          hold: this.state.hold,
         });
       }
     }
