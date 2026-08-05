@@ -1310,7 +1310,18 @@ export class ManagedPtyRunner {
   _noteSubmissionRefusal(code) {
     if (this._lastRefusalPrinted === code) return;
     this._lastRefusalPrinted = code;
-    this._writeError(`AUTO-CLEAR REFUSED (${code}) — clear not submitted; retrying each tick`);
+    const line = `AUTO-CLEAR REFUSED (${code}) — clear not submitted; retrying each tick`;
+    this._writeError(line);
+    // stderr shares the operator's screen and paints over the composer (known
+    // display defect) — the FIRST live firing of this diagnostic was destroyed
+    // by exactly that, mid-keystroke. The file is the sink that survives; the
+    // stderr line is best-effort convenience.
+    try {
+      fs.appendFileSync(
+        path.join(this.memRoot, '.daemon-errors.log'),
+        `${new Date().toISOString()} tag="pty-runner" message="${line}"\n`,
+      );
+    } catch { /* the screen line above is then the only copy */ }
   }
 
   _prepareSubmission(coreResult, outputObservation) {
