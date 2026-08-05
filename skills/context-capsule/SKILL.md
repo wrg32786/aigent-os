@@ -79,3 +79,16 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 - Mid-thought (finish the thought).
 - Trivial sessions a fresh session could reconstruct from memory alone.
 - Inside a dispatched sub-agent (the dispatch brief IS the capsule).
+
+**Declining still ends at Step 6.** If this invocation is an **injected**
+`/context-capsule` from the auto-clear cycle (not the operator's own),
+"trivial" only excuses the WRITE — steps 2–5 — never the ack. Before going
+quiet: (a) confirm a valid prior capsule already exists on disk for this
+session — `daemons/stop-capsule-writer.mjs` wrote one on the last `Stop`
+event, and the checkpoint's capsule-exists gate feeds on it being there,
+so verify rather than assume; (b) still emit the exact literal from Step 6,
+`Capsule Complete, Ready For Clear`, as the final act, then go silent. The
+cycle is waiting on that literal alone — "nothing to capsule" is not an
+exemption from producing it. The principal's ruling, verbatim (2026-08-05):
+*"just capsule and then run the skill like u should and ack when done, if
+nothing to capsule ack like u finished exactly as u should."*
