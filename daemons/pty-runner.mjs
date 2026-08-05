@@ -1300,6 +1300,19 @@ export class ManagedPtyRunner {
     return true;
   }
 
+  // Every refusal below sets lastReason IN MEMORY and returns — nothing ever
+  // surfaced it. Measured cost on a live seat 2026-08-04: checkpoint-confirmed
+  // with hold:null for the FULL 120s telemetry window, ~1,200 ticks, zero
+  // submissions, zero output — then the window closed and the state decayed
+  // back to HOLD:telemetry-stale. Which of the five gates refused was
+  // unknowable from outside the process. This prints the refusal ONCE per
+  // reason-code change (never per tick), so a stuck loop names itself.
+  _noteSubmissionRefusal(code) {
+    if (this._lastRefusalPrinted === code) return;
+    this._lastRefusalPrinted = code;
+    this._writeError(`AUTO-CLEAR REFUSED (${code}) — clear not submitted; retrying each tick`);
+  }
+
   _prepareSubmission(coreResult, outputObservation) {
     const input = this.input.snapshot();
     if (!input.knownEmpty) {
@@ -1307,6 +1320,7 @@ export class ManagedPtyRunner {
         code: 'runner-input-not-empty',
         detail: input,
       };
+      this._noteSubmissionRefusal(this.lastReason.code);
       return { status: 'refused', ...this.lastReason };
     }
     if (input.activePaste || input.activeControl || input.unknown) {
@@ -1314,6 +1328,7 @@ export class ManagedPtyRunner {
         code: 'runner-input-sequence-active',
         detail: input,
       };
+      this._noteSubmissionRefusal(this.lastReason.code);
       return { status: 'refused', ...this.lastReason };
     }
     if (!outputObservation || !hasOwn(outputObservation, 'settled')) {
@@ -1321,6 +1336,7 @@ export class ManagedPtyRunner {
         code: 'runner-output-observable-field-missing',
         detail: { fields: ['settled'] },
       };
+      this._noteSubmissionRefusal(this.lastReason.code);
       return { status: 'refused', ...this.lastReason };
     }
     if (outputObservation.settled !== true) {
@@ -1328,16 +1344,19 @@ export class ManagedPtyRunner {
         code: 'runner-child-output-not-settled',
         detail: outputObservation,
       };
+      this._noteSubmissionRefusal(this.lastReason.code);
       return { status: 'refused', ...this.lastReason };
     }
     const idleProblem = idleEvidenceProblem(coreResult, this.sessionId);
     if (idleProblem) {
       this.lastReason = idleProblem;
+      this._noteSubmissionRefusal(idleProblem.code);
       return { status: 'refused', ...idleProblem };
     }
     const bindingProblem = this._bootBindingProblem(coreResult.state);
     if (bindingProblem) {
       this.lastReason = bindingProblem;
+      this._noteSubmissionRefusal(bindingProblem.code);
       return { status: 'refused', ...bindingProblem };
     }
 
