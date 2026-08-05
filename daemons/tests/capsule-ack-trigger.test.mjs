@@ -151,3 +151,69 @@ test('the ack literal is what the skill mandates — drift means the trigger nev
   assert.ok(skill.includes(CAPSULE_ACK_LITERAL),
     'skills/context-capsule/SKILL.md must mandate the exact literal the sentinel watches');
 });
+
+// THE PRINCIPAL'S RULING, third telling (2026-08-05 12:47 AM PT, verbatim):
+// "2 minutes first off is absurd, u take 5+ minutes to write a capsule
+// sometimes longer. why is there a timer anyway, over engineered. ... trigger
+// with capsule complete, ready for clear exact wording, ensure capsule exists
+// then clear." Measured on the reference seat the same night: the capsule
+// turn ran 2m7s — the ENTIRE freshness window — so the ack expired before
+// the submit gates finished, twice, eating two operator nudges. Context
+// usage is monotonic within a session: a stale reading only understates
+// pressure. The ack is cycle-scoped news; no clock invalidates it.
+
+test('the ack does not expire — the trigger has no timer', () => {
+  const acked = makeTransport({
+    pressure: () => ({ pct: 85, fresh: false, state: 'stale' }),
+    nowMs: 1_000_000,
+  });
+  acked.transport.noteCapsuleAck();
+  acked.clock.ms += 10 * 60_000; // a long capsule, a slow night — ten minutes
+  const after = acked.transport.tick();
+  assert.ok(
+    !String(after.state.state).startsWith('HOLD:telemetry'),
+    `the ack is cycle-scoped, not a 120s timer; ten minutes later it must still stand (got ${after.state.state})`,
+  );
+});
+
+test('post-ack, the submission gate consults no telemetry clock', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-submit-'));
+  fs.mkdirSync(path.join(root, 'runtime'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'runtime', 'auto-clear-cycle.json'),
+    `${JSON.stringify({
+      state: 'checkpoint-confirmed',
+      cycle_id: 'ack-cycle',
+      session_id: SESSION_ID,
+      boot_sequence_at_start: 7,
+      clear_intent: null,
+      entered_at: new Date(1_000_000).toISOString(),
+      hold: null,
+    }, null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(root, 'runtime', 'boot-receipt.json'),
+    `${JSON.stringify({
+      boot_sequence: 7,
+      session_id: SESSION_ID,
+      source: 'startup',
+      observed_at: new Date(1_000_000).toISOString(),
+    }, null, 2)}\n`,
+  );
+  const clock = { ms: 1_000_000 };
+  const transport = new AutoClearTransport({
+    memRoot: root,
+    sessionId: SESSION_ID,
+    cwd: root,
+    now: () => new Date(clock.ms),
+    readPressureFn: () => ({ pct: 85, fresh: false, state: 'stale' }),
+    acquireLock: false,
+  });
+  transport.noteCapsuleAck();
+  clock.ms += 10 * 60_000;
+  // At HEAD this throws ECLEAR_TELEMETRY: the submission-time pressure
+  // recheck ignores the ack entirely and re-runs the staleness clock.
+  const token = transport.beginClearSubmission();
+  assert.ok(token && typeof token.submit === 'function',
+    'with the ack standing and the capsule checkpoint confirmed, the clear submits — no telemetry clock applies');
+});

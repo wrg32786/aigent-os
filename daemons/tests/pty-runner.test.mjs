@@ -775,6 +775,7 @@ class RunnerHarness {
     this.managedSpawnCount = 0;
     this.unmanagedSpawnCount = 0;
     this.semanticWrites = [];
+    this.checkpointCalls = [];
     this.semanticParentWrites = [];
     this.semanticResizes = [];
     this.semanticSignals = [];
@@ -838,14 +839,20 @@ class RunnerHarness {
         receipt: readJson(this.fixture.bootPath),
       }),
       readKillSwitchFn: () => this._readKillSwitch(),
-      readCheckpointObservableFn: () => evaluateCheckpointFreshness({
-        memRoot: this.fixture.memRoot,
-        sessionId: this.runner?.sessionId || SESSION_ID,
-        cwd: this.fixture.cwd,
-        homeDir: this.fixture.homeDir,
-        fsImpl: fs,
-        selectCapsuleFn: () => this.fixture.selection,
-      }),
+      readCheckpointObservableFn: (args) => {
+        // Record the runner's actual argument object — the ackFresh flag it
+        // does (or does not) hand over IS the mechanism under test.
+        this.checkpointCalls.push(args);
+        return evaluateCheckpointFreshness({
+          memRoot: this.fixture.memRoot,
+          sessionId: this.runner?.sessionId || SESSION_ID,
+          cwd: this.fixture.cwd,
+          homeDir: this.fixture.homeDir,
+          fsImpl: fs,
+          selectCapsuleFn: () => this.fixture.selection,
+          ackFresh: args?.ackFresh === true,
+        });
+      },
       log: (message) => this.fixture.logs.push(message),
       ...this._runnerOptions(),
     });
@@ -2488,6 +2495,36 @@ test('composer residue: queued input never flushes onto a stranded control text'
       writes[opIndex - 1],
       '\u0015',
       `the flush must lead with kill-line so queued bytes cannot concatenate onto the stranded '/clear' (writes: ${JSON.stringify(writes)})`,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the commit-time checkpoint recheck carries the observed ack', () => {
+  // The principal's design (2026-08-05): ack literal + capsule exists ->
+  // clear. evaluateCheckpointFreshness already honors ackFresh (it settles
+  // the transcript-tail race the capsule's own announcement creates) — but
+  // the runner's commit-time recheck never passed the flag, so the tail
+  // tolerance re-raced blind at the exact moment it mattered. Measured on
+  // the reference seat: checkpoint confirmed, then the operator's nudge
+  // turns re-tripped the recheck until the freshness window ate the cycle.
+  const harness = new RunnerHarness({
+    mode: 'managed',
+    ptyLoad: 'ok',
+    lockState: 'free',
+  });
+  try {
+    harness.primeAuthorized();
+    harness.runner.capsuleAckSeen = true; // the seat printed the literal this cycle
+    harness.attemptAutomaticClear();
+    harness.flushControl();
+    assert.equal(harness.runner.phase, 'submitted');
+    const commitCall = harness.checkpointCalls.at(-1);
+    assert.equal(
+      commitCall?.ackFresh,
+      true,
+      'the runner must hand the observed ack to the checkpoint evaluator — omitting it re-races the tail tolerance the ack exists to settle',
     );
   } finally {
     harness.cleanup();
