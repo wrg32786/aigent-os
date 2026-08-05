@@ -115,8 +115,25 @@ function oneLine(value, maximum = 1200) {
     .slice(0, maximum);
 }
 
-function defaultDiagnostic(message) {
-  try { process.stderr.write(`${oneLine(message)}\n`); } catch { /* no diagnostic sink */ }
+// composer-channel leg 1: the diagnostic channel shares the operator's
+// console. process.stderr and the live PTY's proxied output render to the
+// SAME terminal — a diagnostic line painted there lands visually inside the
+// operator's composer (measured on a live seat 2026-08-05; the operator
+// named this bleed-through class roughly ten times). Every default `log`
+// implementation below appends to the memRoot error log instead, matching
+// the pattern already established by _noteSubmissionRefusal and by
+// auto-clear-transport.mjs's own defaultLog. NO stderr. Ever.
+function appendDaemonErrorLog(memRoot, fsImpl, tag, message) {
+  try {
+    fsImpl.appendFileSync(
+      path.join(memRoot, '.daemon-errors.log'),
+      `${new Date().toISOString()} tag="${tag}" message="${oneLine(message)}"\n`,
+    );
+  } catch { /* file sink unavailable; the message is dropped, never painted on-screen */ }
+}
+
+function makeMemRootLog(memRoot, fsImpl = fs) {
+  return (message) => appendDaemonErrorLog(memRoot, fsImpl, 'pty-runner', message);
 }
 
 function safeCall(fn, ...args) {
@@ -635,7 +652,7 @@ export class ManagedPtyRunner {
     readBootReceiptFn = readBootReceiptObservable,
     readKillSwitchFn = readKillSwitch,
     readCheckpointObservableFn = evaluateCheckpointFreshness,
-    log = defaultDiagnostic,
+    log = makeMemRootLog(memRoot, fsImpl),
     scheduleTick = (callback, milliseconds) => setInterval(callback, milliseconds),
     clearTick = (handle) => clearInterval(handle),
     scheduleCommit = (callback) => setImmediate(callback),
@@ -690,7 +707,7 @@ export class ManagedPtyRunner {
     this.readBootReceiptFn = readBootReceiptFn;
     this.readKillSwitchFn = readKillSwitchFn;
     this.readCheckpointObservableFn = readCheckpointObservableFn;
-    this.log = typeof log === 'function' ? log : defaultDiagnostic;
+    this.log = typeof log === 'function' ? log : makeMemRootLog(memRoot, fsImpl);
     this.scheduleTick = scheduleTick;
     this.clearTick = clearTick;
     this.scheduleCommit = scheduleCommit;
@@ -892,10 +909,13 @@ export class ManagedPtyRunner {
     }
   }
 
+  // composer-channel leg 1: this used to write straight to this.stderr,
+  // which shares the terminal the child PTY is actively rendering to —
+  // the worst case of the bleed-through class, since it lands mid-composer
+  // rather than merely pre-handoff. Routes through the same file sink as
+  // every other in-session diagnostic now.
   _writeError(line) {
-    try { this.stderr?.write?.(`${oneLine(line)}\n`); } catch {
-      this._diagnostic(line);
-    }
+    this._diagnostic(line);
   }
 
   start() {
@@ -2448,7 +2468,7 @@ export function runPtySession({
   readKillSwitchFn = readKillSwitch,
   readBootReceiptFn = readBootReceiptObservable,
   createTransportFn = (options) => new AutoClearTransport(options),
-  log = defaultDiagnostic,
+  log = makeMemRootLog(resolveMemoryRoot(root), fsImpl),
   exitFn = (code) => process.exit(code),
   runnerOptions = {},
 } = {}) {
@@ -2467,11 +2487,12 @@ export function runPtySession({
   // V2 threshold-invalid-refuses: a bad operator value must stay loud and
   // unmanaged; falling through would arm the wrong gate population.
   if (!thresholdValid) {
-    try {
-      stderr.write(
-        `${DEGRADED_PRESSURE_THRESHOLD_INVALID} ${oneLine(thresholdRaw)}\n`,
-      );
-    } catch { /* visible if possible */ }
+    appendDaemonErrorLog(
+      memoryRoot,
+      fsImpl,
+      'pty-runner',
+      `${DEGRADED_PRESSURE_THRESHOLD_INVALID} ${oneLine(thresholdRaw)}`,
+    );
     return {
       mode: 'degraded',
       code: DEGRADED_PRESSURE_THRESHOLD_INVALID,
@@ -2521,7 +2542,7 @@ export function runPtySession({
   const initialKillProblem = killSwitchProblem(initialKill);
   if (initialKillProblem || initialKill.active) {
     const reason = initialKillProblem?.code || initialKill.code;
-    try { stderr.write(`${UNMANAGED_AUTO_CLEAR_OFF} reason=${reason}\n`); } catch { /* visible if possible */ }
+    appendDaemonErrorLog(memoryRoot, fsImpl, 'pty-runner', `${UNMANAGED_AUTO_CLEAR_OFF} reason=${reason}`);
     return {
       mode: 'unmanaged',
       code: reason,
@@ -2547,7 +2568,7 @@ export function runPtySession({
     };
   }
   if (!loaded?.ok || typeof loaded?.module?.spawn !== 'function') {
-    try { stderr.write(`${DEGRADED_NODE_PTY_LINE}\n`); } catch { /* visible if possible */ }
+    appendDaemonErrorLog(memoryRoot, fsImpl, 'pty-runner', DEGRADED_NODE_PTY_LINE);
     return {
       mode: 'degraded',
       code: DEGRADED_NODE_PTY,
@@ -2573,7 +2594,7 @@ export function runPtySession({
     const code = error instanceof RunnerLockError || error?.code === 'ERUNNERLIVE'
       ? (error.exitCode || 1)
       : 1;
-    try { stderr.write(`${oneLine(error?.message || error)}\n`); } catch { /* visible if possible */ }
+    appendDaemonErrorLog(memoryRoot, fsImpl, 'pty-runner', error?.message || error);
     return {
       mode: 'refused',
       code: error?.code || 'runner-lock-failed',

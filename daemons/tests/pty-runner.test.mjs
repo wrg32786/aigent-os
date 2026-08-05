@@ -72,6 +72,14 @@ function readJson(target) {
   return JSON.parse(fs.readFileSync(target, 'utf8'));
 }
 
+// composer-channel leg 1: every diagnostic this suite reroutes off stderr
+// lands here instead — read it back the same way the production sink writes
+// it (memRoot/.daemon-errors.log), never via the stderr stream.
+function readDaemonErrorLog(memRoot) {
+  const file = path.join(memRoot, '.daemon-errors.log');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+}
+
 function asBuffer(value) {
   if (Buffer.isBuffer(value)) return Buffer.from(value);
   if (value instanceof Uint8Array) {
@@ -476,7 +484,10 @@ function makeThresholdWiringProbe(name, env) {
     },
     observed() {
       return {
-        line: Buffer.concat(stderr.writes).toString('utf8'),
+        // composer-channel leg 1: the threshold-invalid diagnostic must never
+        // paint the operator's stderr; it is a byte count here (not text) so
+        // this assertion can't be satisfied by moving the words elsewhere.
+        stderrBytes: Buffer.concat(stderr.writes).length,
         mode: result.mode,
         runnerPresent: Boolean(result.runner),
         managedSpawnCount,
@@ -486,6 +497,9 @@ function makeThresholdWiringProbe(name, env) {
         runnerLockAcquireCount,
         runnerLockReleaseCount,
       };
+    },
+    loggedLine() {
+      return readDaemonErrorLog(fixture.memRoot);
     },
     orderingSpyCounts() {
       return { nodePtyLoadCount, runnerLockAcquireCount };
@@ -1172,9 +1186,15 @@ class RunnerHarness {
         ?? this.runner?.transport?.state?.clear_intent
         ?? null,
     );
+    // composer-channel leg 1: the four pre-handoff diagnostics in
+    // runPtySession now write the memRoot file directly (the same
+    // "file is the record" pattern as _noteSubmissionRefusal), bypassing
+    // both the injected `log` spy and stderr on purpose. Read that file back
+    // too, or this harness's front-door scenarios go blind to them.
     const logs = [
       ...this.fixture.logs.map((entry) => asBuffer(entry)),
       ...this.stderr.writes.map(asBuffer),
+      asBuffer(readDaemonErrorLog(this.fixture.memRoot)),
     ];
     return {
       automaticWrites,
@@ -1849,7 +1869,7 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
   const probe = makeThresholdWiringProbe('run3-v2-threshold-invalid', env);
   try {
     assert.deepEqual(probe.observed(), {
-      line: 'DEGRADED:auto-clear-threshold-invalid abc\n',
+      stderrBytes: 0,
       mode: 'degraded',
       runnerPresent: false,
       managedSpawnCount: 0,
@@ -1859,6 +1879,10 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
       runnerLockAcquireCount: 0,
       runnerLockReleaseCount: 0,
     });
+    assert.ok(
+      probe.loggedLine().includes('tag="pty-runner" message="DEGRADED:auto-clear-threshold-invalid abc"'),
+      `expected the threshold-invalid line in .daemon-errors.log, got: ${probe.loggedLine()}`,
+    );
   } finally {
     probe.close();
   }
@@ -1873,7 +1897,7 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
     );
     try {
       assert.deepEqual(invalidProbe.observed(), {
-        line: `DEGRADED:auto-clear-threshold-invalid ${String(raw)}\n`,
+        stderrBytes: 0,
         mode: 'degraded',
         runnerPresent: false,
         managedSpawnCount: 0,
@@ -1883,6 +1907,14 @@ test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarme
         runnerLockAcquireCount: 0,
         runnerLockReleaseCount: 0,
       });
+      // The log sink's own oneLine() trims the composed message, so an empty
+      // raw value (index 0, '') collapses the trailing space away — trim the
+      // expectation the same way rather than assume raw concatenation.
+      const expectedMessage = `DEGRADED:auto-clear-threshold-invalid ${String(raw)}`.trim();
+      assert.ok(
+        invalidProbe.loggedLine().includes(`tag="pty-runner" message="${expectedMessage}"`),
+        `expected the threshold-invalid line in .daemon-errors.log, got: ${invalidProbe.loggedLine()}`,
+      );
     } finally {
       invalidProbe.close();
     }
@@ -1899,6 +1931,160 @@ test('V3 threshold-unset-default: absent env passes 80 to the production constru
     assert.equal(probe.constructed[0].pressureThresholdPct, 80);
   } finally {
     probe.close();
+  }
+});
+
+// composer-channel leg 1: the diagnostic channel shares the operator's
+// console. Every early-return branch below hands stdio off to an unmanaged
+// child (stdio: 'inherit') moments after writing its diagnostic line —
+// painting that text at the top of what becomes the operator's live
+// composer. Fixed measured cost, 2026-08-05: the operator named this class
+// of bleed-through ten times. The file is the record now; stderr gets zero
+// bytes for these three branches, matching the threshold-invalid case above.
+function runSessionCaptureNoLog(name, overrides = {}) {
+  const fixture = makeFixture(name);
+  const stdin = new ScriptedStream();
+  const stdout = new ScriptedStream();
+  const stderr = new ScriptedStream();
+  const processLike = new ScriptedStream();
+  const result = runPtySession({
+    childArgs: ['--continue', '/open'],
+    command: 'claude',
+    root: fixture.root,
+    cwd: fixture.cwd,
+    env: fixture.env,
+    fsImpl: fs,
+    stdin,
+    stdout,
+    stderr,
+    processLike,
+    platform: 'linux',
+    homeDir: fixture.homeDir,
+    readKillSwitchFn: () => ({ active: false, code: null, detail: null }),
+    readBootReceiptFn: () => ({ ok: true, receipt: readJson(fixture.bootPath) }),
+    loadNodePtyFn: () => ({ ok: true, module: { spawn: () => new ScriptedPty() } }),
+    acquireRunnerLockFn: () => ({ path: 'scripted-lock' }),
+    releaseRunnerLockFn: () => {},
+    runUnmanagedFn: () => CHILD_EXIT_CODE,
+    exitFn: () => {},
+    // No `log` override anywhere in this helper — every scenario below must
+    // exercise the true production default sink, not a test spy.
+    ...overrides,
+  });
+  const stderrBytes = Buffer.concat(stderr.writes).length;
+  const logText = readDaemonErrorLog(fixture.memRoot);
+  fs.rmSync(fixture.base, { recursive: true, force: true });
+  return { result, stderrBytes, logText };
+}
+
+test('composer-channel leg 1: kill-switch-active diagnostic never reaches stderr', () => {
+  const { result, stderrBytes, logText } = runSessionCaptureNoLog('leg1-kill-switch', {
+    readKillSwitchFn: () => ({ active: true, code: 'kill-switch-test', detail: 'fixture' }),
+  });
+  assert.equal(result.mode, 'unmanaged');
+  assert.equal(result.code, 'kill-switch-test');
+  assert.equal(stderrBytes, 0);
+  assert.ok(
+    logText.includes('tag="pty-runner" message="UNMANAGED:auto-clear-disabled reason=kill-switch-test"'),
+    `expected the kill-switch line in .daemon-errors.log, got: ${logText}`,
+  );
+});
+
+test('composer-channel leg 1: node-pty-unavailable diagnostic never reaches stderr', () => {
+  const { result, stderrBytes, logText } = runSessionCaptureNoLog('leg1-node-pty', {
+    loadNodePtyFn: () => ({
+      ok: false,
+      code: 'node-pty-load-failed',
+      detail: 'scripted missing module',
+    }),
+  });
+  assert.equal(result.mode, 'degraded');
+  assert.equal(result.code, DEGRADED_NODE_PTY);
+  assert.equal(stderrBytes, 0);
+  assert.ok(
+    logText.includes(
+      'tag="pty-runner" message="DEGRADED:auto-clear-node-pty-unavailable '
+      + 'checkpoint/recovery available; auto-clear unavailable; launching unmanaged"',
+    ),
+    `expected the node-pty-unavailable line in .daemon-errors.log, got: ${logText}`,
+  );
+});
+
+test('composer-channel leg 1: runner-lock-failed diagnostic never reaches stderr', () => {
+  const { result, stderrBytes, logText } = runSessionCaptureNoLog('leg1-lock-failed', {
+    acquireRunnerLockFn: () => { throw new Error('scripted lock failure'); },
+  });
+  assert.equal(result.mode, 'refused');
+  assert.equal(result.code, 'runner-lock-failed');
+  assert.equal(stderrBytes, 0);
+  assert.ok(
+    logText.includes('tag="pty-runner" message="scripted lock failure"'),
+    `expected the lock-failure line in .daemon-errors.log, got: ${logText}`,
+  );
+});
+
+test('composer-channel leg 1: the default diagnostic sink and the disable-automation announcement never touch stderr mid-session', () => {
+  // Inventoried beyond the four early-return branches above: _diagnostic
+  // (the line-119 default `log` sink, reached from many in-session failure
+  // paths) and _writeError (the UNMANAGED announcement _disableAutomation
+  // fires) both run on an ALREADY-STARTED runner — after the child PTY's
+  // output is already being proxied to the operator's terminal. This is the
+  // most direct instance of the composer-paint defect: not a pre-handoff
+  // line, but text interleaved with an actively rendering composer.
+  const fixture = makeFixture('leg1-live-session-diagnostics');
+  const pty = new ScriptedPty();
+  const stdin = new ScriptedStream();
+  const stdout = new ScriptedStream();
+  const stderr = new ScriptedStream();
+  const processLike = new ScriptedStream();
+  try {
+    const runner = new ManagedPtyRunner({
+      ptyProcess: pty,
+      memRoot: fixture.memRoot,
+      sessionId: SESSION_ID,
+      transport: { tick: () => {} },
+      baselineBootSequence: 10,
+      fsImpl: fs,
+      env: fixture.env,
+      stdin,
+      stdout,
+      stderr,
+      terminal: stdout,
+      processLike,
+      cwd: fixture.cwd,
+      homeDir: fixture.homeDir,
+      now: fixture.clock,
+      readBootReceiptFn: () => ({ ok: true, receipt: readJson(fixture.bootPath) }),
+      readKillSwitchFn: () => ({ active: false, code: null, detail: null }),
+      // No `log` override — this must exercise the true production default.
+      scheduleTick: () => null,
+      clearTick: () => {},
+      scheduleCommit: () => null,
+      clearCommit: () => {},
+      scheduleWatchdog: () => null,
+      clearWatchdog: () => {},
+      scheduleEnter: () => null,
+      clearEnter: () => {},
+      exitFn: () => {},
+    });
+    runner.start();
+
+    runner._diagnostic('composer-channel probe: scheduled tick failure');
+    runner._disableAutomation('composer-channel-probe-cancel', { source: 'test' });
+
+    const stderrBytes = Buffer.concat(stderr.writes).length;
+    const logText = readDaemonErrorLog(fixture.memRoot);
+    assert.equal(stderrBytes, 0);
+    assert.ok(
+      logText.includes('composer-channel probe: scheduled tick failure'),
+      `expected the _diagnostic line in .daemon-errors.log, got: ${logText}`,
+    );
+    assert.ok(
+      logText.includes('UNMANAGED:auto-clear-disabled reason=composer-channel-probe-cancel'),
+      `expected the _writeError line in .daemon-errors.log, got: ${logText}`,
+    );
+  } finally {
+    fs.rmSync(fixture.base, { recursive: true, force: true });
   }
 });
 
