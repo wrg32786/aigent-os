@@ -56,6 +56,11 @@ export const CLEAR_CONTROL_INPUT = '/clear\r';
 export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
 export const DEFAULT_RUNNER_TICK_MS = 100;
 export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
+// Post-submit fuse: the clear round-trip spans the child finishing its
+// in-flight turn plus the fresh context booting hooks before the SessionStart
+// receipt lands. Measured live 2026-08-05: 2m16s on a loaded box. The
+// settle-window TTL above must never govern that window.
+export const DEFAULT_CLEAR_VERIFY_TTL_MS = 300_000;
 
 function hasOwn(value, field) {
   return value !== null
@@ -620,6 +625,7 @@ export class ManagedPtyRunner {
     clearWatchdog = (handle) => clearTimeout(handle),
     tickMs = DEFAULT_RUNNER_TICK_MS,
     inputHoldTtlMs = DEFAULT_INPUT_HOLD_TTL_MS,
+    clearVerifyTtlMs = DEFAULT_CLEAR_VERIFY_TTL_MS,
     exitFn = (code) => process.exit(code),
     outerLockHandle = null,
     releaseOuterLockFn = releaseRunnerLock,
@@ -671,6 +677,8 @@ export class ManagedPtyRunner {
     this.clearWatchdog = clearWatchdog;
     this.tickMs = tickMs;
     this.inputHoldTtlMs = inputHoldTtlMs;
+    this.clearVerifyTtlMs = clearVerifyTtlMs;
+    this.watchdogTtlMs = null;
     this.exitFn = exitFn;
     this.outerLockHandle = outerLockHandle;
     this.releaseOuterLockFn = releaseOuterLockFn;
@@ -1222,12 +1230,12 @@ export class ManagedPtyRunner {
       && receipt.boot_sequence > startSequence;
   }
 
-  _armWatchdog() {
+  _armWatchdog(ttlMs = this.inputHoldTtlMs) {
     let handle;
     try {
       handle = this.scheduleWatchdog(
         () => this._watchdogExpired(),
-        this.inputHoldTtlMs,
+        ttlMs,
       );
     } catch (error) {
       return {
@@ -1245,7 +1253,8 @@ export class ManagedPtyRunner {
     }
     this.watchdogHandle = handle;
     this.watchdogArmed = true;
-    this._event('watchdog-armed', { ttl_ms: this.inputHoldTtlMs });
+    this.watchdogTtlMs = ttlMs;
+    this._event('watchdog-armed', { ttl_ms: ttlMs });
     return { ok: true };
   }
 
@@ -1363,7 +1372,7 @@ export class ManagedPtyRunner {
     this.watchdogHandle = null;
     this.watchdogArmed = false;
     this._disableAutomation('runner-input-hold-watchdog-expired', {
-      ttl_ms: this.inputHoldTtlMs,
+      ttl_ms: this.watchdogTtlMs ?? this.inputHoldTtlMs,
       phase: this.phase,
     });
   }
@@ -1567,6 +1576,17 @@ export class ManagedPtyRunner {
       this.token.submit(() => this._writeControl());
       this.phase = 'submitted';
       this._event('submission-committed');
+      // The settle-window fuse must not govern the clear round-trip: the
+      // child finishes its in-flight turn, then the fresh context boots
+      // hooks before the receipt lands (measured 2m16s live, 2026-08-05).
+      // Re-arm sized to that window. Expiry semantics are unchanged — the
+      // fuse still releases the hold and disables loudly.
+      this._clearWatchdog();
+      const rearm = this._armWatchdog(this.clearVerifyTtlMs);
+      if (!rearm.ok) {
+        this._disableAutomation(rearm.code, rearm.detail);
+        return false;
+      }
       return true;
     } catch (error) {
       const submitted = this.transport?.state?.clear_intent?.submitted === true
@@ -1574,12 +1594,18 @@ export class ManagedPtyRunner {
       if (submitted) {
         // Persistence or a PTY write may have happened.  Ambiguity is terminal
         // for writes: keep the hold until receipt or watchdog, never retry.
+        // The write may be in flight, so the round-trip fuse applies here too.
         this.phase = 'submitted';
         this.lastReason = {
           code: 'runner-control-write-ambiguous',
           detail: errorText(error),
         };
         this._event('submission-ambiguous', this.lastReason);
+        this._clearWatchdog();
+        const rearmAmbiguous = this._armWatchdog(this.clearVerifyTtlMs);
+        if (!rearmAmbiguous.ok) {
+          this._disableAutomation(rearmAmbiguous.code, rearmAmbiguous.detail);
+        }
         return false;
       }
       this.phase = 'prepared';
