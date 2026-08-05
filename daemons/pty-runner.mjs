@@ -1397,11 +1397,10 @@ export class ManagedPtyRunner {
     if (this._lastRefusalPrinted === code) return;
     this._lastRefusalPrinted = code;
     const line = `AUTO-CLEAR REFUSED (${code}) — clear not submitted; retrying each tick`;
-    this._writeError(line);
-    // stderr shares the operator's screen and paints over the composer (known
-    // display defect) — the FIRST live firing of this diagnostic was destroyed
-    // by exactly that, mid-keystroke. The file is the sink that survives; the
-    // stderr line is best-effort convenience.
+    // NO stderr. Ever. It shares the operator's screen, paints over the
+    // composer, and when two codes oscillate the once-per-change limiter fires
+    // on every flip — it BLOCKED the principal's typing on the live seat
+    // (his report, the tenth time he named this class). The file is the record.
     try {
       fs.appendFileSync(
         path.join(this.memRoot, '.daemon-errors.log'),
