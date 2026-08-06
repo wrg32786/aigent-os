@@ -1131,6 +1131,13 @@ export class ManagedPtyRunner {
     if (this.capsuleRequestCycleId === null
       || this.capsuleRequestCycleId !== coreResult.state.cycle_id) return;
 
+    // A THINKING seat writes nothing to its transcript, so transcript
+    // stillness alone reads "busy" as "wedged" and fires a second request
+    // into a live composer (measured live 2026-08-05: a second
+    // /context-capsule queued while the first was still composing). The child
+    // is still producing output the whole time -- ask.
+    if (this.output.observe().settled !== true) return;
+
     let size;
     try {
       const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
@@ -2326,6 +2333,9 @@ export class ManagedPtyRunner {
   _retryWakeIfNeeded() {
     if (this.wakeSessionId === null || this.wakeSessionId !== this.sessionId) return;
     if (this.wakeSuppressed || this.wakeExhausted) return;
+    // Same reason as the capsule retry: a thinking seat writes no transcript,
+    // so stillness there does not mean idle.
+    if (this.output.observe().settled !== true) return;
 
     let size;
     try {
