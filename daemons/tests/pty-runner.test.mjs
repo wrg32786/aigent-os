@@ -1051,6 +1051,10 @@ class RunnerHarness {
   }
 
   forceDuplicateAttempt() {
+    // The first clear SPENT the ack, which now refuses ahead of the core.
+    // This helper exists to reach the core's duplicate-intent guard, so give
+    // it a fresh ack -- the ack gate has its own test.
+    this.runner.capsuleAckSeen = true;
     const output = this.runner.output.observe();
     const result = this.runner._prepareSubmission(
       this.runner.lastCoreResult,

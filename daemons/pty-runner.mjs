@@ -1009,6 +1009,12 @@ export class ManagedPtyRunner {
   _writeControl() {
     this.controlWriteAttempts += 1;
     this.currentControlWriteAttempted = true;
+    // An ack buys ONE clear. Spend it here, at the moment it is used, so it
+    // cannot authorize the next one: a surviving ack cleared the seat again
+    // the instant it rebound -- clear, resume, clear, with no capsule in
+    // between (measured live 2026-08-05).
+    this.capsuleAckSeen = false;
+    this._event('capsule-ack-spent', CLEAR_CONTROL_TEXT);
     this._event('control-write', CLEAR_CONTROL_TEXT);
     const result = this.pty.write(CLEAR_CONTROL_TEXT);
     this.composerMayHoldControlText = true;
