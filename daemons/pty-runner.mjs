@@ -1007,6 +1007,11 @@ export class ManagedPtyRunner {
 
   _event(name, detail = null) {
     this.events.push({ name, detail });
+    // Also durable: these were memory-only, so "did the capsule request go
+    // out? did the wake fire? which gate stopped it?" was unanswerable from a
+    // seat's own files -- twice in one night. All 49 sites are state changes,
+    // not per-tick, so the log stays readable.
+    this._diagnostic(`EVENT ${name} ${boundedDetailJson(detail)}`);
   }
 
   _diagnostic(message) {
