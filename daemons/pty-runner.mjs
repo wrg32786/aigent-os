@@ -1082,11 +1082,20 @@ export class ManagedPtyRunner {
   // current transcript size. Shared by the one-shot initial fire below and
   // the bounded retry (FIX B, 2026-08-05) — same write, same offset reset,
   // different caller-side bookkeeping around it.
-  _fireCapsuleRequest() {
+  // The ack belongs to the CAPSULE VERB, not to whoever asked for it: the
+  // operator can run /context-capsule by hand, and that capsule is just as
+  // real. Armed at every session bind so any capsule counts (measured live
+  // 2026-08-05: a hand-run capsule completed and acked, and the clear never
+  // came because the watcher only armed when the runner wrote the request).
+  _armCapsuleAckWatch() {
     try {
       const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
       this.capsuleAckSearchFrom = transcript ? fs.statSync(transcript).size : 0;
     } catch { this.capsuleAckSearchFrom = 0; }
+  }
+
+  _fireCapsuleRequest() {
+    this._armCapsuleAckWatch();
     this._event('capsule-request-write', CAPSULE_CONTROL_INPUT);
     return this.pty.write(CAPSULE_CONTROL_INPUT);
   }
@@ -1607,6 +1616,7 @@ export class ManagedPtyRunner {
     this.transport = created;
     this.sessionId = boot.receipt.session_id;
     this.baselineBootSequence = boot.receipt.boot_sequence;
+    this._armCapsuleAckWatch();
     this._event('session-bound', {
       session_id: this.sessionId,
       boot_sequence: this.baselineBootSequence,
@@ -2253,6 +2263,7 @@ export class ManagedPtyRunner {
     this.sessionId = receipt.session_id;
     this.baselineBootSequence = receipt.boot_sequence;
     this.lastCoreResult = null;
+    this._armCapsuleAckWatch();
     this._event('session-rebound', {
       session_id: receipt.session_id,
       boot_sequence: receipt.boot_sequence,
