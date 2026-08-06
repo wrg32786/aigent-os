@@ -967,6 +967,10 @@ class RunnerHarness {
     assert.equal(this.core.tick().state.state, 'pressure');
     assert.equal(this.core.tick().state.state, 'checkpoint-requested');
     assert.equal(this.core.tick().state.state, 'checkpoint-confirmed');
+    // The clear now requires the capsule ack for the cycle (capsule -> ack ->
+    // clear). Tests that exercise OTHER guards prime it here so each keeps
+    // testing its own thing; the ack gate itself has its own test.
+    this.runner.capsuleAckSeen = true;
     this.runner.output.observe();
     this.runner.output.observe();
   }
@@ -1023,6 +1027,11 @@ class RunnerHarness {
             this.fixture.transcriptPath,
             `\nactivity after checkpoint ${'x'.repeat(CHECKPOINT_TAIL_TOLERANCE_BYTES + 1)}\n`,
           );
+          // A live ack SUPERSEDES the byte arithmetic, so leaving it set here
+          // would make this guard stop guarding again -- the exact failure its
+          // comment above records. Real conversation past the capture means the
+          // capsule no longer covers the conversation: that cycle's ack is void.
+          this.runner.capsuleAckSeen = false;
         }
         break;
       case 'killSwitch':
@@ -3480,6 +3489,35 @@ test('post-clear wake: the Enter rides its own write so the terminal parses it a
       afterText.some((w) => w.equals(Buffer.from(CONTROL_ENTER))),
       'a SEPARATE CONTROL_ENTER write must follow the wake text -- MUST be red on unmodified code, where the CR is glued into WAKE_MESSAGE and the terminal swallows it as pasted content',
     );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// THE CLEAR MUST WAIT FOR THE CAPSULE ACK.
+// The checkpoint gate only ever proved a stop-writer RECORD existed on disk --
+// and the Stop hook writes one on every turn end, autosaving a rolling capsule.
+// So an idle turn satisfied the gate and the clear fired without the capsule
+// verb ever running: capsule -> ack -> clear collapsed to just clear.
+// ackFresh existed but only RELAXED a byte check; nothing ever required it.
+// Measured live 2026-08-05: resume -> work -> idle -> clear, no capsule, no ack.
+test('automatic clear does NOT submit until the capsule ack for this cycle is seen', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.primeAuthorized();
+    harness.runner.capsuleAckSeen = false; // the capsule verb never completed
+    harness.attemptAutomaticClear();
+    harness.flushControl();
+    harness.fireEnter();
+
+    assert.deepEqual(
+      harness.snapshot().automaticWrites,
+      [],
+      'no ack for this cycle means no clear -- MUST be red on unmodified code',
+    );
+    // The ACKED path needs no leg here: primeAuthorized() sets the ack, so
+    // every other clear test in this file is the positive control -- they go
+    // red if this guard ever over-blocks.
   } finally {
     harness.cleanup();
   }

@@ -1917,6 +1917,21 @@ export class ManagedPtyRunner {
       this._noteSubmissionRefusal(bindingProblem.code, bindingProblem.detail);
       return { status: 'refused', ...bindingProblem };
     }
+    // capsule -> ack -> clear. The checkpoint gate only proves a stop-writer
+    // RECORD exists, and the Stop hook writes one on EVERY turn end with a
+    // rolling autosave capsule -- so an idle turn satisfied it and the clear
+    // fired with the capsule verb never having run (measured live 2026-08-05:
+    // resume -> work -> idle -> clear, no capsule, no ack). ackFresh existed
+    // but only RELAXED a byte check; nothing ever required the ack itself.
+    // Refused here, before a token is minted, so no hold has to be released.
+    if (this.capsuleAckSeen !== true) {
+      this.lastReason = {
+        code: 'runner-capsule-not-acked',
+        detail: { cycle_id: this.capsuleRequestCycleId },
+      };
+      this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
+      return { status: 'refused', ...this.lastReason };
+    }
 
     let token;
     try {
