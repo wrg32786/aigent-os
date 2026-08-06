@@ -101,22 +101,6 @@ export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
 // CR lands in the composer instead of submitting. The Enter rides its own
 // delayed write (see _fireWake / _writeWakeEnter, mirroring _writeControl).
 export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from vault/memory/capsules and proceed.';
-// First-turn discriminator (see _rebindAfterClear / _retryWakeIfNeeded):
-// distinguishes SessionStart hook boot noise (capsule + resume procedure
-// injected as context) from a genuine first turn already having happened,
-// by transcript growth since the boot baseline. NOT a measured value --
-// CHECKPOINT_TAIL_TOLERANCE_BYTES (auto-clear-transport.mjs) covers a
-// narrower, already-measured case (a capped post-checkpoint announcement +
-// attachment pair, ~3KB) that is very plausibly SMALLER than a real
-// capsule's boot injection, so reusing it here would suppress the wake on
-// ordinary boot noise -- the opposite of the intended bias. Deliberately
-// generous instead: a duplicate wake after a real small turn is a
-// documented no-op (WAKE_MESSAGE is inert once the operator is already
-// driving); a wake suppressed by boot noise that was mistaken for a turn is
-// a dead unattended chain. Named residue: this number is not measured
-// against a live boot-noise specimen and should be tightened once one
-// exists.
-export const WAKE_TURN_GROWTH_THRESHOLD_BYTES = 65536;
 export const DEFAULT_RUNNER_TICK_MS = 100;
 export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
 // Post-submit fuse: the clear round-trip spans the child finishing its
@@ -976,7 +960,6 @@ export class ManagedPtyRunner {
     // idle-gated, 3-attempt-bounded shape as the capsule retry -- see
     // _retryWakeIfNeeded.
     this.wakeSessionId = null;
-    this.wakeBootBaselineSize = null;
     this.wakeAttempts = 0;
     this.wakeLastTranscriptSize = null;
     this.wakeIdleTicks = 0;
@@ -1221,7 +1204,15 @@ export class ManagedPtyRunner {
       const fd = fs.openSync(transcript, 'r');
       try { fs.readSync(fd, buffer, 0, length, from); } finally { fs.closeSync(fd); }
       const text = buffer.toString('utf8');
-      if (text.includes(CAPSULE_ACK_LITERAL)) {
+      // The literal also appears in the capsule SKILL's own instructions, which
+      // land in the transcript the moment the verb is invoked -- so a raw
+      // substring scan read "you must say this" as "she said this" and acked
+      // while the capsule was still being written (measured live 2026-08-05:
+      // ack at +0ms, clear at +100ms, capsule unfinished). A mention is not a
+      // use: only the seat's OWN turn counts.
+      const said = text.split('\n').some((line) => line.includes(CAPSULE_ACK_LITERAL)
+        && line.includes('"type":"assistant"'));
+      if (said) {
         this.capsuleAckSeen = true;
         this._event('capsule-ack-observed', CAPSULE_ACK_LITERAL);
         if (typeof this.transport?.noteCapsuleAck === 'function') {
@@ -2263,12 +2254,8 @@ export class ManagedPtyRunner {
     return true;
   }
 
-  // DEFECT 4 / FIX: arms the post-clear wake for the just-rebound session.
-  // Every field resets together, exactly like _writeCapsuleRequest resets
-  // the capsule-request fields on a new cycle_id. wakeBootBaselineSize
-  // anchors the first-turn discriminator in _retryWakeIfNeeded — captured
-  // NOW, before the fresh session's SessionStart hook has necessarily even
-  // run, so early hook-injection growth is measured from a true zero point.
+  // Arms the post-clear wake for the just-rebound session. Fields reset
+  // together, like _writeCapsuleRequest does on a new cycle_id.
   _armWake(sessionId) {
     this.wakeSessionId = sessionId;
     this.wakeAttempts = 0;
@@ -2276,14 +2263,7 @@ export class ManagedPtyRunner {
     this.wakeIdleTicks = 0;
     this.wakeExhausted = false;
     this.wakeSuppressed = false;
-    try {
-      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId, homeDir: this.homeDir });
-      this.wakeBootBaselineSize = transcript ? fs.statSync(transcript).size : 0;
-    } catch { this.wakeBootBaselineSize = 0; }
-    this._event('wake-armed', {
-      session_id: sessionId,
-      boot_baseline_size: this.wakeBootBaselineSize,
-    });
+    this._event('wake-armed', { session_id: sessionId });
   }
 
   // Two writes, never one: the text, then the Enter on its own delayed write
@@ -2353,15 +2333,6 @@ export class ManagedPtyRunner {
       size = transcript ? fs.statSync(transcript).size : null;
     } catch { size = null; }
     if (size === null) return; // transcript not on disk yet -- wait for it
-
-    if (size - this.wakeBootBaselineSize > WAKE_TURN_GROWTH_THRESHOLD_BYTES) {
-      this.wakeSuppressed = true;
-      this._event('wake-suppressed-turn-detected', {
-        session_id: this.wakeSessionId,
-        grown_bytes: size - this.wakeBootBaselineSize,
-      });
-      return;
-    }
 
     if (this.wakeLastTranscriptSize !== size) {
       this.wakeLastTranscriptSize = size;

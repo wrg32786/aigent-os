@@ -36,7 +36,6 @@ import {
   InputOwnershipTracker,
   ManagedPtyRunner,
   WAKE_MESSAGE,
-  WAKE_TURN_GROWTH_THRESHOLD_BYTES,
   loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
@@ -3122,7 +3121,13 @@ test('the ack literal ends the wedge -- capsule-ack-observed fires and retries s
 
     assert.equal(capsuleWriteCount(harness), 2, 'setup: the first retry must have fired before the ack arrives');
 
-    fs.appendFileSync(harness.fixture.transcriptPath, CAPSULE_ACK_LITERAL);
+    // A transcript ENTRY, not a bare literal: the ack counts only in the
+    // seat's own turn, because the capsule skill's instructions carry the
+    // same words and land in the transcript the moment the verb is invoked.
+    fs.appendFileSync(
+      harness.fixture.transcriptPath,
+      `\n{"type":"assistant","message":{"content":[{"type":"text","text":"${CAPSULE_ACK_LITERAL}"}]}}\n`,
+    );
     harness.drive();
     assert.equal(harness.runner.capsuleAckSeen, true, 'the ack must be observed');
     assert.ok(harness.runner.events.some((e) => e.name === 'capsule-ack-observed'));
@@ -3357,34 +3362,6 @@ test('post-clear wake: a write that throws still spends its attempt, capped at 3
       'exhaustion must go loud exactly once even though every write threw',
     );
     assert.equal(wakeWriteCount(harness), 0, 'every write threw -- none actually landed');
-  } finally {
-    harness.cleanup();
-  }
-});
-
-test('post-clear wake: a transcript already showing a first turn suppresses the wake entirely', () => {
-  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
-  try {
-    const transcriptPath = transcriptPathFor({
-      cwd: harness.fixture.cwd,
-      sessionId: NEXT_SESSION_ID,
-      homeDir: harness.fixture.homeDir,
-    });
-    writeText(transcriptPath, 'boot\n');
-    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
-
-    // a real first turn: far beyond boot-noise size (the generous, deliberately
-    // permissive discriminator -- see WAKE_TURN_GROWTH_THRESHOLD_BYTES)
-    fs.appendFileSync(transcriptPath, 'x'.repeat(WAKE_TURN_GROWTH_THRESHOLD_BYTES + 1));
-
-    for (let i = 0; i < 10; i += 1) harness.drive();
-
-    assert.equal(
-      wakeWriteCount(harness),
-      0,
-      'a transcript already showing a first turn must suppress the wake entirely -- MUST be red on unmodified code',
-    );
-    assert.ok(harness.runner.events.some((e) => e.name === 'wake-suppressed-turn-detected'));
   } finally {
     harness.cleanup();
   }
