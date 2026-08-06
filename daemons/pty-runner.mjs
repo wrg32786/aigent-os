@@ -96,7 +96,11 @@ export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
 // state, re-ground, act" (no fourth step), and selectCapsule()'s own
 // convention is "newest valid capsule" -- both reused verbatim below so the
 // command names a real, defined action rather than an undefined one.
-export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from vault/memory/capsules and proceed.\r';
+// No trailing CR, for the same reason CLEAR_CONTROL_TEXT carries none: a
+// single chunk of text+CR is read by the terminal as PASTED CONTENT, so the
+// CR lands in the composer instead of submitting. The Enter rides its own
+// delayed write (see _fireWake / _writeWakeEnter, mirroring _writeControl).
+export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from vault/memory/capsules and proceed.';
 // First-turn discriminator (see _rebindAfterClear / _retryWakeIfNeeded):
 // distinguishes SessionStart hook boot noise (capsule + resume procedure
 // injected as context) from a genuine first turn already having happened,
@@ -2262,9 +2266,40 @@ export class ManagedPtyRunner {
     });
   }
 
+  // Two writes, never one: the text, then the Enter on its own delayed write
+  // so the terminal parses it as a keypress rather than swallowing it as
+  // pasted content. Same shape as _writeControl, same token discipline -- a
+  // cleared-but-still-firing timer is a no-op.
   _fireWake() {
     this._event('wake-write', WAKE_MESSAGE);
-    return this.pty.write(WAKE_MESSAGE);
+    const result = this.pty.write(WAKE_MESSAGE);
+    this._clearEnter();
+    this.enterToken += 1;
+    const token = this.enterToken;
+    this.enterHandle = this.scheduleEnter(
+      () => this._writeWakeEnter(token),
+      this.controlEnterDelayMs,
+    );
+    return result;
+  }
+
+  _writeWakeEnter(token) {
+    if (token !== this.enterToken) return;
+    this.enterHandle = null;
+    if (this.closed) return;
+    try {
+      this._event('wake-enter-write', CONTROL_ENTER);
+      this.pty.write(CONTROL_ENTER);
+    } catch (error) {
+      // The wake text may sit in the composer unsubmitted. Loud, and the
+      // wake is already marked delivered -- a stranded line is recoverable
+      // by the operator's own Enter; a silent retry loop is not.
+      this.lastReason = {
+        code: 'runner-wake-enter-write-failed',
+        detail: errorText(error),
+      };
+      this._event('wake-enter-write-failed', this.lastReason);
+    }
   }
 
   // DEFECT 4 / FIX (2026-08-05): a SessionStart hook delivers context only --

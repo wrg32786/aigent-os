@@ -3419,8 +3419,13 @@ test('post-clear wake: a dirty composer defers the fire until the tracker clears
 // procedure or capsule content itself (the hook already staged those; the
 // wake COMMANDS the run, it doesn't duplicate the payload).
 test('post-clear wake message commands the resume verb, not a bare nudge (SPEC AMENDMENT)', () => {
-  assert.ok(WAKE_MESSAGE.endsWith('\r'), 'must remain a one-chunk write ending in the submit CR');
-  assert.ok(!WAKE_MESSAGE.slice(0, -1).includes('\n'), 'must stay a single line');
+  // The submit CR is NOT part of this constant: it rides its own delayed
+  // write so the terminal parses it as a keypress. Gluing text+CR into one
+  // chunk makes the terminal read the whole thing as pasted content and the
+  // message never submits -- measured on the live cert seat 2026-08-05, and
+  // the reason CLEAR_CONTROL_TEXT carries no CR either.
+  assert.ok(!WAKE_MESSAGE.includes('\r'), 'must NOT carry the submit CR -- a text+CR chunk is read as a paste');
+  assert.ok(!WAKE_MESSAGE.includes('\n'), 'must stay a single line');
   assert.ok(/^\[\w+\]/.test(WAKE_MESSAGE), 'must open with a bracketed machine-origin prefix');
 
   const sentenceCount = (WAKE_MESSAGE.match(/\./g) || []).length;
@@ -3438,4 +3443,44 @@ test('post-clear wake message commands the resume verb, not a bare nudge (SPEC A
     /if\b[^.]*staged/i,
     'must carry a self-contained fallback for when no procedure is staged -- MUST be red on unmodified code',
   );
+});
+
+// The wake text and its Enter must be TWO writes. A single chunk carrying
+// text+CR is read by the terminal as pasted content, so the CR lands in the
+// composer instead of submitting -- the message sits there until a human
+// presses Enter. This is the same defect the clear control write was already
+// fixed for (see _writeControl's own comment: "Enter rides its own delayed
+// write so the terminal parses it as a keypress"), and CLEAR_CONTROL_TEXT
+// carries no CR for exactly this reason. Measured on the live cert seat
+// 2026-08-05: the wake never submitted, and the operator's own Enter flushed
+// it -- the pre-fix symptom exactly.
+test('post-clear wake: the Enter rides its own write so the terminal parses it as a keypress', () => {
+  assert.ok(
+    !WAKE_MESSAGE.includes('\r'),
+    'WAKE_MESSAGE must not carry a trailing CR -- a text+CR single chunk is read as a PASTE and never submits',
+  );
+
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transcriptPath = transcriptPathFor({
+      cwd: harness.fixture.cwd,
+      sessionId: NEXT_SESSION_ID,
+      homeDir: harness.fixture.homeDir,
+    });
+    writeText(transcriptPath, 'boot\n');
+
+    assert.equal(harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID)), true, 'setup: rebind');
+    for (let i = 0; i < 10; i += 1) harness.drive();
+
+    assert.equal(wakeWriteCount(harness), 1, 'setup: the wake text must have been written once');
+    harness.scheduler.fireEnter(); // the Enter is a DEFERRED write -- flush it
+    const textIndex = harness.pty.writes.findIndex((w) => w.equals(Buffer.from(WAKE_MESSAGE)));
+    const afterText = harness.pty.writes.slice(textIndex + 1);
+    assert.ok(
+      afterText.some((w) => w.equals(Buffer.from(CONTROL_ENTER))),
+      'a SEPARATE CONTROL_ENTER write must follow the wake text -- MUST be red on unmodified code, where the CR is glued into WAKE_MESSAGE and the terminal swallows it as pasted content',
+    );
+  } finally {
+    harness.cleanup();
+  }
 });
