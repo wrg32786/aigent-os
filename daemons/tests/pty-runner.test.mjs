@@ -1432,6 +1432,20 @@ test('win32-input-mode: the exact live specimen (Enter keyup, the trailing half 
   assert.equal(snapshot.lastTaint, null);
 });
 
+test('win32-input-mode: Kd outside {0,1} falls through to fail-closed taint', () => {
+  // The decode branches are gated on Kd being exactly 0 or 1; any other
+  // value is a shape we have no reading for and must taint, never be
+  // swallowed as an inert keyup. Guards against the branch broadening to
+  // `kd !== 1`, which passes every other test in this file.
+  for (const kd of [2, 3]) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe(`${ESC}[65;30;97;${kd};0;1_`); // syntactically valid, Kd unrecognized
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.unknown, true, `Kd=${kd} must fall through to the fail-closed taint branch`);
+    assert.notEqual(snapshot.lastTaint, null, `Kd=${kd} must record the tainting bytes in lastTaint`);
+  }
+});
+
 test('win32-input-mode: a printable keydown marks the composer dirty without tainting, and a following Enter still clears it', () => {
   const tracker = new InputOwnershipTracker();
   assert.equal(tracker.snapshot().knownEmpty, true);
