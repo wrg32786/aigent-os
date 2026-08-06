@@ -3408,3 +3408,34 @@ test('post-clear wake: a dirty composer defers the fire until the tracker clears
     harness.cleanup();
   }
 });
+
+// SPEC AMENDMENT (2026-08-05): principal's direct design word -- the wake is
+// not a bare nudge, it IS the resume instruction, fleet-style, so the boot
+// turn runs the verb visibly (thinking + narration the operator can watch),
+// the same way a seat runs resume today. Locks the wording contract in code
+// so a future edit can't silently drift back to a bare nudge: commands the
+// run, references the staged procedure, carries a self-contained fallback
+// if staging is absent, and stays within two sentences -- never inlines the
+// procedure or capsule content itself (the hook already staged those; the
+// wake COMMANDS the run, it doesn't duplicate the payload).
+test('post-clear wake message commands the resume verb, not a bare nudge (SPEC AMENDMENT)', () => {
+  assert.ok(WAKE_MESSAGE.endsWith('\r'), 'must remain a one-chunk write ending in the submit CR');
+  assert.ok(!WAKE_MESSAGE.slice(0, -1).includes('\n'), 'must stay a single line');
+  assert.ok(/^\[\w+\]/.test(WAKE_MESSAGE), 'must open with a bracketed machine-origin prefix');
+
+  const sentenceCount = (WAKE_MESSAGE.match(/\./g) || []).length;
+  assert.ok(
+    sentenceCount <= 2,
+    `must command the run in max two sentences -- MUST be red on unmodified code if it exceeds that, counted ${sentenceCount}`,
+  );
+  assert.match(
+    WAKE_MESSAGE,
+    /capsule/i,
+    'must command loading the capsule, not just "resume" -- MUST be red on unmodified code (the bare-nudge wording never mentions it)',
+  );
+  assert.match(
+    WAKE_MESSAGE,
+    /if\b[^.]*staged/i,
+    'must carry a self-contained fallback for when no procedure is staged -- MUST be red on unmodified code',
+  );
+});
