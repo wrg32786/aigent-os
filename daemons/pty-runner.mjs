@@ -78,10 +78,25 @@ export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
 // first message, a fresh post-clear seat cannot act on the procedure, posts
 // no telemetry, and the pressure gate holds on telemetry-missing forever.
 // Measured live on the cert seat (transcript head in hand): the operator
-// typing "hi" un-stuck it every time -- this is that hand-delivered wake,
-// automated. One line, neutral, machine-origin (bracketed prefix) so it
-// reads unambiguously as an injected nudge, not an operator message.
-export const WAKE_MESSAGE = '[aigent] post-clear wake -- run the resume procedure staged at session start.\r';
+// typing "hi" un-stuck it every time -- this is that hand-delivered nudge,
+// automated.
+//
+// SPEC AMENDMENT (2026-08-05, principal's direct design word): not a bare
+// nudge -- the wake IS the resume instruction, so the boot turn runs the
+// verb visibly (thinking + narration the operator can watch), exactly like
+// a seat running resume today. Commands the run in two sentences, never
+// inlines the procedure or capsule content itself (the hook already staged
+// those); carries a self-contained fallback so the command still resolves
+// to a real action even if staging is somehow absent. One line, neutral,
+// machine-origin (bracketed prefix) so it reads unambiguously as an
+// injected command, not an operator message.
+//
+// Wording mirrors this repo's OWN documented resume contract, not fleet
+// shorthand: docs/two-verb-lifecycle.md defines /resume as exactly "load
+// state, re-ground, act" (no fourth step), and selectCapsule()'s own
+// convention is "newest valid capsule" -- both reused verbatim below so the
+// command names a real, defined action rather than an undefined one.
+export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from vault/memory/capsules and proceed.\r';
 // First-turn discriminator (see _rebindAfterClear / _retryWakeIfNeeded):
 // distinguishes SessionStart hook boot noise (capsule + resume procedure
 // injected as context) from a genuine first turn already having happened,
