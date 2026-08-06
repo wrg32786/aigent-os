@@ -73,6 +73,31 @@ export const COMPOSER_KILL_LINE = '\u0015';
 // in checkpoint-requested forever. The Stop-hook autosave does NOT satisfy this;
 // that is a rolling best-effort record, not the capsule verb.
 export const CAPSULE_CONTROL_INPUT = '/context-capsule\r';
+// DEFECT 4 / FIX (2026-08-05): a SessionStart hook delivers the resume
+// procedure + capsule as CONTEXT ONLY -- hooks do not create a turn. With no
+// first message, a fresh post-clear seat cannot act on the procedure, posts
+// no telemetry, and the pressure gate holds on telemetry-missing forever.
+// Measured live on the cert seat (transcript head in hand): the operator
+// typing "hi" un-stuck it every time -- this is that hand-delivered wake,
+// automated. One line, neutral, machine-origin (bracketed prefix) so it
+// reads unambiguously as an injected nudge, not an operator message.
+export const WAKE_MESSAGE = '[aigent] post-clear wake -- run the resume procedure staged at session start.\r';
+// First-turn discriminator (see _rebindAfterClear / _retryWakeIfNeeded):
+// distinguishes SessionStart hook boot noise (capsule + resume procedure
+// injected as context) from a genuine first turn already having happened,
+// by transcript growth since the boot baseline. NOT a measured value --
+// CHECKPOINT_TAIL_TOLERANCE_BYTES (auto-clear-transport.mjs) covers a
+// narrower, already-measured case (a capped post-checkpoint announcement +
+// attachment pair, ~3KB) that is very plausibly SMALLER than a real
+// capsule's boot injection, so reusing it here would suppress the wake on
+// ordinary boot noise -- the opposite of the intended bias. Deliberately
+// generous instead: a duplicate wake after a real small turn is a
+// documented no-op (WAKE_MESSAGE is inert once the operator is already
+// driving); a wake suppressed by boot noise that was mistaken for a turn is
+// a dead unattended chain. Named residue: this number is not measured
+// against a live boot-noise specimen and should be tightened once one
+// exists.
+export const WAKE_TURN_GROWTH_THRESHOLD_BYTES = 65536;
 export const DEFAULT_RUNNER_TICK_MS = 100;
 export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
 // Post-submit fuse: the clear round-trip spans the child finishing its
@@ -926,6 +951,18 @@ export class ManagedPtyRunner {
     this.capsuleRequestLastTranscriptSize = null;
     this.capsuleRequestIdleTicks = 0;
     this.capsuleRequestExhausted = false;
+    // Post-clear wake (DEFECT 4 / FIX, 2026-08-05). Armed once per rebound
+    // session in _rebindAfterClear; all fields reset together there exactly
+    // like the capsule-request fields reset in _writeCapsuleRequest. Same
+    // idle-gated, 3-attempt-bounded shape as the capsule retry -- see
+    // _retryWakeIfNeeded.
+    this.wakeSessionId = null;
+    this.wakeBootBaselineSize = null;
+    this.wakeAttempts = 0;
+    this.wakeLastTranscriptSize = null;
+    this.wakeIdleTicks = 0;
+    this.wakeExhausted = false;
+    this.wakeSuppressed = false;
     this.currentControlWriteAttempted = false;
     this.started = false;
     this.closed = false;
@@ -2183,7 +2220,130 @@ export class ManagedPtyRunner {
       session_id: receipt.session_id,
       boot_sequence: receipt.boot_sequence,
     });
+    this._armWake(receipt.session_id);
     return true;
+  }
+
+  // DEFECT 4 / FIX: arms the post-clear wake for the just-rebound session.
+  // Every field resets together, exactly like _writeCapsuleRequest resets
+  // the capsule-request fields on a new cycle_id. wakeBootBaselineSize
+  // anchors the first-turn discriminator in _retryWakeIfNeeded — captured
+  // NOW, before the fresh session's SessionStart hook has necessarily even
+  // run, so early hook-injection growth is measured from a true zero point.
+  _armWake(sessionId) {
+    this.wakeSessionId = sessionId;
+    this.wakeAttempts = 0;
+    this.wakeLastTranscriptSize = null;
+    this.wakeIdleTicks = 0;
+    this.wakeExhausted = false;
+    this.wakeSuppressed = false;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId, homeDir: this.homeDir });
+      this.wakeBootBaselineSize = transcript ? fs.statSync(transcript).size : 0;
+    } catch { this.wakeBootBaselineSize = 0; }
+    this._event('wake-armed', {
+      session_id: sessionId,
+      boot_baseline_size: this.wakeBootBaselineSize,
+    });
+  }
+
+  _fireWake() {
+    this._event('wake-write', WAKE_MESSAGE);
+    return this.pty.write(WAKE_MESSAGE);
+  }
+
+  // DEFECT 4 / FIX (2026-08-05): a SessionStart hook delivers context only --
+  // no first turn ever arrives, so an unattended post-clear seat cannot act
+  // on the resume procedure, posts no telemetry, and the pressure gate holds
+  // forever. Mirrors _retryCapsuleRequestIfWedged's shape throughout: idle
+  // ticks counted only while the transcript size is genuinely unchanged (the
+  // new session may still be restoring), 3-attempt bound, an attempt TRIED
+  // is an attempt SPENT (counted before the write, R26 finding 1's lesson).
+  // Two gates the capsule retry does not need, because a wake is a decoded
+  // keystroke landing in a live composer, not a control command into a
+  // settled seat:
+  //   1. First-turn suppression: if the transcript has already grown past
+  //      WAKE_TURN_GROWTH_THRESHOLD_BYTES since the boot baseline, something
+  //      that looks like a real turn already happened (operator got there
+  //      first, or a future path auto-runs the hook) -- give up entirely,
+  //      once, regardless of how many idle ticks remain. See the constant's
+  //      own comment for why this threshold is deliberately generous and
+  //      named as unmeasured residue.
+  //   2. Composer-channel discipline: never fire while the input tracker
+  //      reads dirty (operator mid-type) -- hold at the ready state and
+  //      re-check next tick, without spending an attempt or losing idle
+  //      progress, until the composer clears.
+  _retryWakeIfNeeded() {
+    if (this.wakeSessionId === null || this.wakeSessionId !== this.sessionId) return;
+    if (this.wakeSuppressed || this.wakeExhausted) return;
+
+    let size;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
+      size = transcript ? fs.statSync(transcript).size : null;
+    } catch { size = null; }
+    if (size === null) return; // transcript not on disk yet -- wait for it
+
+    if (size - this.wakeBootBaselineSize > WAKE_TURN_GROWTH_THRESHOLD_BYTES) {
+      this.wakeSuppressed = true;
+      this._event('wake-suppressed-turn-detected', {
+        session_id: this.wakeSessionId,
+        grown_bytes: size - this.wakeBootBaselineSize,
+      });
+      return;
+    }
+
+    if (this.wakeLastTranscriptSize !== size) {
+      this.wakeLastTranscriptSize = size;
+      this.wakeIdleTicks = 0;
+      return;
+    }
+    this.wakeIdleTicks += 1;
+    if (this.wakeIdleTicks < 5) return;
+
+    if (this.wakeAttempts >= 3) {
+      if (!this.wakeExhausted) {
+        this.wakeExhausted = true;
+        this._event('wake-exhausted', {
+          session_id: this.wakeSessionId,
+          attempts: this.wakeAttempts,
+        });
+      }
+      return;
+    }
+
+    // Composer-channel discipline: a dirty tracker holds the wake at the
+    // ready state -- idle ticks and attempts are untouched, so it fires on
+    // the first tick the composer reads clean again.
+    if (!this.input.snapshot().knownEmpty) return;
+
+    const idleTicks = this.wakeIdleTicks;
+    this.wakeIdleTicks = 0;
+    const attemptNumber = this.wakeAttempts + 1;
+    if (attemptNumber > 1) {
+      this._event('wake-retry', {
+        attempt: attemptNumber,
+        session_id: this.wakeSessionId,
+        idle_ticks: idleTicks,
+      });
+    }
+    this.wakeAttempts = attemptNumber;
+    try {
+      this._fireWake();
+      this._event('wake-injected', {
+        attempt: attemptNumber,
+        session_id: this.wakeSessionId,
+        idle_ticks: idleTicks,
+      });
+      this.wakeSuppressed = true; // delivered -- one-and-done, no ack to wait for
+    } catch (error) {
+      this.lastReason = {
+        code: 'runner-wake-write-failed',
+        detail: errorText(error),
+      };
+      this._event('wake-write-failed', this.lastReason);
+    }
+    this.wakeLastTranscriptSize = size;
   }
 
   tick() {
@@ -2333,6 +2493,11 @@ export class ManagedPtyRunner {
     // cycle_id guard inside only passes once _writeCapsuleRequest has
     // already bound this cycle — see its own comment for the invariant).
     this._retryCapsuleRequestIfWedged(coreResult);
+    // DEFECT 4 / FIX: no coreResult dependency (the wake only cares about
+    // session identity, transcript growth, and composer dirtiness) — placed
+    // alongside the capsule retry for locality with the other idle-gated
+    // injection this file owns.
+    this._retryWakeIfNeeded();
     // The seat is owed a capsule. Without this the transport sits in
     // checkpoint-requested until the session dies — the state it was found in on
     // a live standalone seat, 2026-08-04.

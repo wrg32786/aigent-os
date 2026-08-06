@@ -35,6 +35,8 @@ import {
   DEGRADED_NODE_PTY,
   InputOwnershipTracker,
   ManagedPtyRunner,
+  WAKE_MESSAGE,
+  WAKE_TURN_GROWTH_THRESHOLD_BYTES,
   loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
@@ -3247,18 +3249,8 @@ test('a HOLD:telemetry-stale detour consumes zero retry budget, even though its 
 // capsule loaded -- delivery is NOT the problem, the absent first turn is).
 // The operator saying "hi" un-stuck it every time -- this is that
 // hand-delivered wake, automated. Same idle-gated, 3-attempt-bounded shape
-// as the capsule-request retry.
-//
-// WAKE_MESSAGE/WAKE_TURN_GROWTH_THRESHOLD_BYTES are declared LOCALLY here
-// rather than imported -- they do not exist in pty-runner.mjs yet at this
-// commit, and importing undefined names would crash the WHOLE test file's
-// module load, burying these five tests' clean red assertions under an
-// unrelated import error and failing every other test in this file too.
-// Values here match what the fix commit will export; once that commit
-// lands, these locals are deleted and the import list picks the same names
-// up from '../pty-runner.mjs'.
-const WAKE_MESSAGE = '[aigent] post-clear wake -- run the resume procedure staged at session start.\r';
-const WAKE_TURN_GROWTH_THRESHOLD_BYTES = 65536;
+// as the capsule-request retry. WAKE_MESSAGE/WAKE_TURN_GROWTH_THRESHOLD_BYTES
+// are imported above from '../pty-runner.mjs'.
 
 function wakeWriteCount(harness) {
   return harness.pty.writes.filter((w) => w.equals(Buffer.from(WAKE_MESSAGE))).length;
