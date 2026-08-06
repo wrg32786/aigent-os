@@ -1058,6 +1058,27 @@ export class AutoClearTransport {
     }
 
     if (this.state.state === 'HOLD:clear-ambiguous') {
+      // The hold exists because a submitted clear MIGHT have landed. For a
+      // SAME-SESSION cycle that is answerable, not ambiguous: a clear always
+      // mints a new session, so the same session id at a LATER boot proves the
+      // clear never took. Evidence, not a guess -- so release instead of
+      // holding forever. Measured live 2026-08-05: a seat killed mid-clear
+      // re-entered this hold on every relaunch and could never lap again.
+      // Cross-session inheritance is untouched (ids-2): there the sessions
+      // differ, no receipt can speak for the dead one, and the hold still owns it.
+      const boot = this._readBootReceipt();
+      if (boot.ok
+        && boot.receipt.session_id === this.state.session_id
+        && boot.receipt.source !== 'clear'
+        && Number.isSafeInteger(this.state.boot_sequence_at_start)
+        && boot.receipt.boot_sequence > this.state.boot_sequence_at_start) {
+        this.log(`clear-ambiguous released: same session at boot ${boot.receipt.boot_sequence} proves the clear never landed`);
+        const next = this._atomicWrite({
+          ...initialState(this.sessionId, clockIso(this.now)),
+          boot_sequence_at_start: boot.receipt.boot_sequence,
+        });
+        return resultFor(next, { transitioned: true, status: 'new-session-idle' });
+      }
       return resultFor(this.state, {
         status: 'hold',
         code: 'clear-ambiguous',
