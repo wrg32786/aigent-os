@@ -165,6 +165,8 @@ jobs:
               elif path.endswith(('.html', '.svg')):
                   text = re.sub(r'<!--.*?-->', preserve_lines, text, flags=re.S)
                   text = re.sub(r'/\*.*?\*/', preserve_lines, text, flags=re.S)
+                  if path.endswith('.html'):
+                      text = re.sub(r'(?<!http:)(?<!https:)//[^\n]*', '', text)
 
               for line_number, line in enumerate(text.splitlines(), 1):
                   if '—' in line:
