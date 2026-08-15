@@ -32,15 +32,15 @@ If aigent-OS saves you time, [star the repo](https://github.com/wrg32786/aigent-
 <img src="assets/demo-session-resume.svg" alt="A session at 60% context has already autosaved its capsule; the operator runs /clear, the resume verb re-grounds the fresh window, and it comes back at 10% context knowing exactly where it left off" width="100%"/>
 </div>
 
-Only one thing above was typed: `/clear`. Everything around it is automatic: the session reaches 60% context with its capsule already autosaved, the operator clears the window, and the fresh context comes back at 10% already knowing the objective, what it's waiting on, and the exact next step, with room to keep working. That's [Auto-Refresh](#-auto-refresh): the mechanism below, with the exact files that do it.
+The animation shows the manual `/clear` path. Managed Auto-Refresh now performs that boundary too: at the configured context threshold it requests a capsule, waits for the exact completion acknowledgement, queues one `/clear`, binds the fresh session, and submits one resume wake. The same lifecycle remains available manually when you want it.
 
 **aigent-OS is a 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system**, one operator, one Claude, running on your own machine. No database, no server, no build step: drop the files in, run `bash install.sh`, and the next session already knows who it is and what it's working on. The framework also ships tools for maintaining itself: a nightly self-maintenance routine you can run against your own vault, and a hook that spots a new skill file and prompts you to enroll it. The publish half, deciding what a local install has learned that's worth graduating to this repo, sanitizing it, and opening the pull request, is designed and not built. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
-> **Dependency model:** the core kernel is markdown + shell: no build step, no database, no server. Optional features (semantic search, hooks automation) need Node.js 18+ and install automatically if Node is present. Obsidian is optional, for browsing the vault visually.
+> **Dependency model:** the core kernel is markdown + shell: no database or server. Node.js 18+ enables semantic search, hook automation, and the managed Auto-Refresh transport; the installer wires them automatically when Node is present. A `--no-deps` install keeps checkpointing and post-clear recovery, but launches Claude unmanaged with automatic clear disabled. Obsidian is optional, for browsing the vault visually.
 
 Unlike memory add-ons that keep state in an opaque database, every checkpoint here is a real git commit, readable with plain `git log`, not a query against someone else's schema. The table below scores the rest against real rivals, not strawmen.
 
-> **Recent:** the Auto-Refresh two-verb lifecycle, model-tier dispatch enforcement, and the Codex adapter all shipped this cycle: see [`CHANGELOG.md`](CHANGELOG.md) for dates and detail.
+> **Recent:** managed Auto-Refresh now ships in the public core, alongside the two-verb lifecycle, model-tier dispatch enforcement, and the Codex adapter. See [`CHANGELOG.md`](CHANGELOG.md) for dates and detail.
 
 ---
 
@@ -68,7 +68,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 
 | Capability | Mechanism | Ships today? |
 |---|---|---|
-| **Auto-Refresh** (autonomous memory + context) | With `claude --continue` as the warm-resume transport, the session manages its own memory *and* context: every turn autosaves a capsule, the window re-grounds itself after a compaction or `/clear`, and nothing is typed: no `/open`/`/close` | ✅ shipped ([details](#-auto-refresh)) |
+| **Auto-Refresh** (autonomous memory + context) | Managed local runner: pressure threshold → one capsule request → exact acknowledgement → one `/clear` → fresh SessionStart identity → one resume wake. Busy output uses Claude Code's native prompt queue instead of blocking the cycle. | ✅ shipped ([details](#-auto-refresh)) |
 | Git-native vault memory | Every closed capsule cycle is a real commit, pushed to your configured remote, auditable with plain `git log`, not an opaque DB | ✅ shipped |
 | Somatic layer | Five lazy-computed pressure gauges (context, memory backlog, decision pressure, token usage, drift) read before acting, no daemon polling | ✅ shipped |
 | Self-learning engine | Skill recall → skill hunt → solution hunt escalation chain; every failure becomes a durable artifact | ✅ shipped |
@@ -100,9 +100,9 @@ The first-run onboarding: three plain questions, then a first plan. (The resume/
 ```text
 Clone or download this repo (https://github.com/wrg32786/aigent-os) into the current
 directory, then run `bash install.sh` from inside it. If Node.js 18+ is available, let
-the installer wire semantic search too; otherwise pass --no-deps. When it finishes,
-start a new session in this same directory, read whatever it prints on boot, and tell
-me what you'd like to work on first.
+the installer wire semantic search and the managed Auto-Refresh runner; otherwise pass
+--no-deps. When it finishes, start a new session in this same directory, read whatever
+it prints on boot, and tell me what you'd like to work on first.
 ```
 
 Your agent reads its own install script, runs it, and reports back what it found: no shell flags to remember yourself. Pasting this into an agent? Use the block above. Typing in your own terminal? Use the block below.
@@ -115,9 +115,9 @@ bash install.sh
 
 That's it. aigent-OS installs into whatever directory you're in: your existing project, your home folder, wherever you work. The installer copies the kernel files, creates `.claude/settings.json` with your actual paths substituted, and installs semantic search if Node.js is available.
 
-> **Optional `--no-deps`:** skips the Node.js semantic-search install. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change. See [Advanced Setup](docs/advanced-setup.md).
+> **Optional `--no-deps`:** skips Node dependencies, including semantic search and the managed PTY transport. Checkpointing and post-clear recovery still work, but automatic clear is disabled and the launcher says so. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change. See [Advanced Setup](docs/advanced-setup.md).
 
-**Start a new Claude Code conversation** in the same directory. aigent-OS is live: it resumes itself on start, manages its own memory and context while you work (routing, delegation, per-turn capsule autosave), and checkpoints itself when the session ends, compacts, or clears. Nothing typed: no `/open` or `/close`. Warm-resume the exact conversation any time with `claude --continue`; `/context-capsule` and `/resume` remain available on demand.
+**Start a new Claude Code conversation** in the same directory. The launcher uses the managed runner when its PTY dependency is available: it resumes on start, tracks context pressure, checkpoints, clears, and wakes the fresh session without an operator command. `/context-capsule`, `/clear`, and `/resume` remain available on demand, and `claude --continue` still warm-resumes an existing conversation.
 
 **Prefer an app to a terminal?** Run `launcher/install.sh` (or `install.ps1` on Windows) once, then double-click the AIgent icon, warm-resumed via `claude --continue`, no `cd` and no cold start. See [`launcher/README.md`](launcher/README.md).
 
@@ -141,7 +141,7 @@ vault/                             Persistent memory and knowledge graph (markdo
 vault/agents/                      Instrument roster: 9 named sub-agents
 skills/                            Claude Code slash-command skills (60+ source templates)
 hooks/                             Automation hook scripts (session summary, token tracking, compact nudge)
-daemons/                           Background helpers (Caddy, semantic search, memory-heat, runtime state)
+daemons/                           Background helpers (Auto-Refresh transport, Caddy, semantic search, runtime state)
 docs/                              Setup guides, doctrine references, architecture roadmaps
 memory/                            Ledger templates (SKILL_LEDGER, SKILL_GAPS, SKILL_CHAINS, facts/)
 memory/runtime/                    Cognitive layer (ACTIVE_STATE, SELF_MODEL, GOAL_STACK, BELIEF_STATE)
@@ -155,25 +155,47 @@ install.sh                         One-line installer
 
 ## 🔄 Auto-Refresh: autonomous memory and context management
 
-*(Some earlier docs called this the self-refresh reflex; Auto-Refresh is the name going forward.)*
+Auto-Refresh now ships in this repository as a managed local transport. Its user-visible rule is deliberately small:
 
-Auto-Refresh is what manages your AI's memory **and** its context for you: both, automatically; the only thing you ever type is `/clear` itself. Paired with `claude --continue` as the warm-resume transport, a session carries its own context and its own memory across every boundary Claude Code has: a closed terminal, a compaction, a `/clear`. You stop being the thing that remembers where you were.
+```text
+context pressure rises
+→ request one /context-capsule
+→ observe exactly one "Capsule Complete, Ready For Clear"
+→ submit exactly one /clear
+→ observe a fresh source=clear SessionStart identity
+→ submit exactly one resume wake
+→ load prior work, re-ground, and continue
+```
 
-> **Where the boundary sits today:** in our own multi-agent deployment (Pantheon), a private supervisor also *initiates* the clear: the full capsule → `/clear` → resume cycle runs unattended end-to-end. That clear-initiating transport is not part of this standalone repository: here, automatic checkpointing and post-clear recovery ship, and the `/clear` itself is yours (or Claude Code's own compaction). Bringing that transport into the public core (or shipping it as an official extension with an end-to-end install proof) is on the roadmap.
+**No acknowledgement means no clear. One acknowledgement buys one clear.** Busy or idle is not a readiness decision: command text and a protected, separately written Enter ride Claude Code's native queued-prompt path and execute when the current turn releases the composer.
 
-Two halves, both automatic:
+### What owns each leg
 
-- **Context: the live window.** `claude --continue` reopens the exact conversation with its full history, so nothing is lost between sittings. When the window compacts or you `/clear` it, the resume verb re-grounds the fresh context from the newest capsule; you never re-explain what you were in the middle of. The session's working context is kept current without you managing it.
-- **Memory: the durable vault.** Every turn, the session delta is folded to disk; on a deliberate close it becomes a real git commit, pushed to your remote. The vault is the long-term brain that outlives any single session, and it's plain files you can read, not an opaque store.
+- `daemons/ctx-telemetry.mjs` records the current context percentage.
+- `daemons/auto-clear-transport.mjs` owns the persisted one-cycle authorization and at-most-once clear intent.
+- `daemons/pty-runner.mjs` is the sole PTY writer. It queues operator input while automatic command text owns the composer.
+- `skills/context-capsule/SKILL.md` writes and verifies the resume-ready capsule, then emits the exact acknowledgement literal.
+- `daemons/boot-receipt.mjs` and `daemons/sessionstart-reinject.mjs` provide the fresh SessionStart receipt.
+- `daemons/resume-verb.mjs` loads the newest valid capsule as historical work state. The live SessionStart hook ID is the current identity; capsule text and the disk receipt never substitute for it.
 
-Under the hood, four things happen without a command:
+The transport writes slash-command text and Enter separately. It also clears stale composer text before `/clear`, protects the wake text/Enter pair, refuses duplicate clear intent, and stops loudly on physical write or identity failures. It does not add an automatic retry after an ambiguous submission.
 
-1. **The capsule verb**: every turn, `daemons/stop-capsule-writer.mjs` folds the transcript delta into your one active capsule (`vault/memory/capsules/<date>-<slug>.md`), so disk state is never more than one turn stale. A capsule only counts once it carries a non-empty `id`, `objective`, `waiting_on`, and `next_valid_action`; `daemons/capsule-verb.mjs`'s `validateCapsuleText()` is the content-gate check for that.
-2. **Warm resume (`--continue`) or `/clear`**: reopening with `claude --continue` restores the live conversation directly, full history intact. When you (or Claude Code) instead `/clear` the window, nothing has to be saved first; the rolling autosave from step 1 already has you covered.
-3. **The resume verb**: on the next session start where Claude Code reports `source: clear`, `daemons/resume-verb.mjs` loads the newest valid capsule **by `created_at`** (no pointer, no cycle token to resolve) and hands back a load → re-ground → act procedure. Every other session start (a fresh terminal, a compaction) gets a lighter warm reinject via `daemons/sessionstart-reinject.mjs` instead of the full procedure.
-4. **Git commit + push**: when a capsule cycle closes deliberately, `daemons/vault-sync.mjs` stages only the changed durable-memory paths, commits them as `vault sync: <reason> (<timestamp>)`, and pushes to whatever remote your repo has configured, a silent no-op if none is set.
+### Installation and fallback
 
-**What this doesn't do:** `resume-verb.mjs` loads the newest capsule; it does not independently verify that a `/clear` actually happened: it trusts the hook payload's `source` field. If you're scripting sessions and need that guarantee, don't treat this as an attested or verified resume token: it isn't one today.
+`bash install.sh` installs the transport's single runtime dependency, `node-pty`, when Node.js 18+ is present. The launchers use the managed runner by default. If the dependency cannot load, Claude still starts, checkpointing and recovery remain available, and the launcher reports that automatic clear is unavailable rather than pretending the managed path is active.
+
+A `--no-deps` install intentionally selects that unmanaged fallback.
+
+### Release evidence
+
+The release candidate completed **11 of 11 observed refresh transport transactions** on one Windows reference seat in one live run: three setup transactions and eight transactions after the test objective began. Every observed transaction produced one capsule request, one acknowledgement, one clear, and one fresh SessionStart identity, with zero stranded acknowledgements and zero duplicate clears.
+
+The accelerated observation harness then failed outside the transport: the model appended several remaining test-witness lines inside one unchanged session and declared the synthetic test complete. That invalidated the harness's proposed 20-cycle bookkeeping claim; it did not produce a failed refresh transaction. The harness used an intentionally low pressure threshold to exercise the mechanism rapidly. Normal users do not run the witness-file protocol.
+
+This is bounded single-seat release evidence, not a fleet-reliability or "20/20" claim. The executable transport files in this public release are the same files used for the successful observed transactions.
+
+See [`docs/two-verb-lifecycle.md`](docs/two-verb-lifecycle.md) for the lifecycle and identity contract.
+
 
 ---
 

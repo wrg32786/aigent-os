@@ -131,7 +131,7 @@ TARGET="$(abspath "$TARGET")"
 MODE="copy"
 [[ "$SRC" == "$TARGET" ]] && MODE="in-place"
 
-COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals)
+COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals launcher)
 
 # ── Symlink-escape guard ──────────────────────────────────────────────────────
 # A pre-seeded symlink inside TARGET -- e.g. a file named "CLAUDE.md" that is
@@ -374,6 +374,9 @@ seed_nightly_templates() {
 
 if [[ "$MODE" == "copy" ]]; then
   printf '\n  Copying framework files without overwriting user files...\n'
+  launcher_shell="$TARGET/launcher/aigent.sh"
+  launcher_shell_missing=0
+  [[ -e "$launcher_shell" || -L "$launcher_shell" ]] || launcher_shell_missing=1
   # Seed sanitized canonical inputs before the general vault tree. The normal
   # no-clobber copy then preserves these product templates instead of importing
   # development-vault staging content.
@@ -398,6 +401,12 @@ if [[ "$MODE" == "copy" ]]; then
     esac
     printf '  [ok] %s/\n' "$dir"
   done
+  # Git records this front door as 100644; launcher/install.sh makes it
+  # executable too. Restore that contract only for a newly copied file.
+  if [[ "$launcher_shell_missing" -eq 1 && -f "$launcher_shell" ]] \
+    && path_is_symlink_safe "$launcher_shell"; then
+    chmod +x "$launcher_shell"
+  fi
 
 else
   printf '\n  Activating this checkout in place; source files already exist.\n'
@@ -875,31 +884,53 @@ printf '  [ok] Generated local state excluded from git\n'
 
 if [[ "$NO_DEPS" -eq 1 ]]; then
   printf '  [skip] Optional dependencies (--no-deps)\n'
-elif [[ ! -f "$TARGET/daemons/semantic-search/package.json" ]]; then
-  printf '  [skip] No semantic-search package found\n'
 elif ! command -v node >/dev/null 2>&1; then
-  printf '  [warn] Node.js not found; semantic search was not installed\n'
+  printf '  [warn] Node.js not found; optional dependencies were not installed\n'
 else
   NODE_MAJOR="$(node --version | sed 's/^v//' | cut -d. -f1)"
   if ! [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || ((NODE_MAJOR < 18)); then
-    printf '  [warn] Node.js 18+ is required for semantic search; found %s\n' "$(node --version)"
+    printf '  [warn] Node.js 18+ is required for optional dependencies; found %s\n' "$(node --version)"
   else
-    printf '  Installing optional semantic-search dependencies (network access may occur)...\n'
-    pushd "$TARGET/daemons/semantic-search" >/dev/null
-    # --ignore-scripts disables lifecycle scripts for
-    # this package AND every transitive dependency. Without it, installing
-    # into a target that already had its own daemons/semantic-search/
-    # package.json (or a compromised transitive dependency) could execute
-    # an attacker-controlled preinstall/install/postinstall script. The
-    # bundled semantic-search package (see package.json) has no lifecycle
-    # scripts of its own, so this is a no-op for the legitimate install path.
-    if [[ -f package-lock.json ]]; then
-      npm ci --silent --ignore-scripts
-    else
-      npm install --silent --ignore-scripts
-    fi
-    popd >/dev/null
-    printf '  [ok] Semantic search dependencies installed\n'
+    # Two independent optional dependency roots, installed identically:
+    #   semantic-search — embeddings feature (@xenova/transformers tree)
+    #   transport-deps  — auto-clear transport's node-pty, its sole dependency
+    # Separate roots keep the transport's availability decoupled from the
+    # install health of semantic-search's script-bearing dependency tree.
+    for DEP_DIR in semantic-search transport-deps; do
+      if [[ ! -f "$TARGET/daemons/$DEP_DIR/package.json" ]]; then
+        printf '  [skip] No %s package found\n' "$DEP_DIR"
+        continue
+      fi
+      printf '  Installing optional %s dependencies (network access may occur)...\n' "$DEP_DIR"
+      pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
+      # --ignore-scripts disables lifecycle scripts for
+      # this package AND every transitive dependency. Without it, installing
+      # into a target that already had its own package.json under
+      # daemons/ (or a compromised transitive dependency) could execute
+      # an attacker-controlled preinstall/install/postinstall script. Neither
+      # bundled package (see each package.json) has lifecycle scripts of its
+      # own, so this is a no-op for the legitimate install path.
+      if [[ -f package-lock.json ]]; then
+        npm ci --silent --ignore-scripts
+      else
+        npm install --silent --ignore-scripts
+      fi
+      # ONE NAMED EXCEPTION, and only for this package. node-pty ships prebuilt
+      # binaries for macOS and Windows but not for Linux, where the native
+      # binding exists only if its own build script runs. With scripts off, a
+      # Linux install leaves the transport unable to load it and the runner
+      # falls back to unmanaged. Rebuilding BY NAME runs that one package's
+      # build and does not reopen the transitive lifecycle surface the flag
+      # above exists to close: node-pty is this root's sole declared
+      # dependency. Best effort, because an optional dependency must not fail
+      # the install; a machine without a compiler keeps the loud degrade.
+      if [[ "$DEP_DIR" == "transport-deps" ]]; then
+        npm rebuild --silent node-pty \
+          || printf '  [warn] node-pty native build failed; auto-clear will run unmanaged\n'
+      fi
+      popd >/dev/null
+      printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+    done
   fi
 fi
 

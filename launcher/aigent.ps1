@@ -36,18 +36,62 @@ Write-Host "  ${dim}your operator is waking up...${reset}"
 Write-Host ""
 
 $marker = Join-Path $AigentHome '.aigent\first-run-done'
+$runner = Join-Path $AigentHome 'daemons\pty-runner.mjs'
+$script:LaunchUnmanaged = $args -ccontains '--no-deps'
+$script:ClaudeExitCode = 0
+
+# V5 no-dash-dash unchanged: this array stays empty until a literal separator,
+# preserving the fixed first-run and returning command shapes.
+$claudePassthroughArgs = @()
+$afterSeparator = $false
+foreach ($arg in $args) {
+  # V4 pass-through: --no-deps remains launcher-owned on either side of --.
+  if ($arg -ceq '--no-deps') {
+    continue
+  # V4 pass-through: preserve each post-separator argument in its original
+  # order; splatting later retains argument boundaries.
+  } elseif ($afterSeparator) {
+    $claudePassthroughArgs += [string]$arg
+  # V4 pass-through: only the first literal -- opens the forwarded suffix.
+  } elseif ($arg -ceq '--') {
+    $afterSeparator = $true
+  }
+}
+
+function Invoke-AigentClaude {
+  param([string[]]$ClaudeArgs)
+
+  if ($script:LaunchUnmanaged) {
+    & claude @ClaudeArgs
+  } else {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $node) {
+      [Console]::Error.WriteLine('DEGRADED:auto-clear-node-unavailable checkpoint/recovery available; auto-clear unavailable; launching unmanaged')
+      & claude @ClaudeArgs
+    } else {
+      & $node.Source $runner '--' @ClaudeArgs
+    }
+  }
+  $script:ClaudeExitCode = $LASTEXITCODE
+}
 
 if (-not (Test-Path $marker)) {
   # First boot: the guided Day-1 flow. /start owns install-check -> /operator-setup
   # interview -> first win, and writes the marker itself when setup completes.
   # A run that dies early leaves no marker, so the next launch retries /start.
   New-Item -ItemType Directory -Force (Split-Path $marker) | Out-Null
-  claude "/start"
+  Invoke-AigentClaude -ClaudeArgs (@('/start') + $claudePassthroughArgs)
 } else {
   # Returning operator: never cold-start. Warm-resume the latest session and orient.
-  claude --continue "/open"
+  # NO VERB ON THE WARM PATH — see the full note in aigent.sh. /open is retired,
+  # and /resume is not its replacement here: resume-verb.mjs:23 fires on
+  # source=clear ONLY, and reopening a terminal is a warm start. --continue
+  # already restores the conversation. Both faces move together; a launcher that
+  # disagrees with the other is how one platform keeps running a dead command.
+  Invoke-AigentClaude -ClaudeArgs (@('--continue') + $claudePassthroughArgs)
 }
 
 Write-Host ""
-Write-Host "  ${dim}Tip: next time, say ""close up"" before you quit — your AIgent banks the session so it remembers everything.${reset}"
+Write-Host ('  {0}Tip: next time, say "close up" before you quit — your AIgent banks the session so it remembers everything.{1}' -f $dim, $reset)
 Write-Host ""
+if ($script:ClaudeExitCode -ne 0) { exit $script:ClaudeExitCode }

@@ -11,8 +11,8 @@
 #   "statusLine": { "type": "command", "command": "bash \"__AIGENT_ROOT__/daemons/statusline-ctx.sh\"" }
 #
 # Passive telemetry only — writes a number to a JSON file; injects nothing,
-# changes no session behavior. Degrades to a no-op without jq, and the sensor
-# is silently inert without the file, so nothing here can error the lifecycle.
+# changes no session behavior. When jq is absent, ctx-telemetry.mjs writes the
+# same observable with Node instead of silently disabling pressure reporting.
 #
 # Display delegation: if ~/.claude/statusline-command.sh exists (the
 # conventional home of an operator's own statusline script), the visible line
@@ -23,8 +23,10 @@
 INPUT=$(cat)
 
 SENSOR_DIR="$HOME/.claude/ctx-refresh"
+HAS_JQ=0
 
-if command -v jq >/dev/null 2>&1; then
+if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
+  HAS_JQ=1
   SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
   PCT=$(printf '%s' "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
 
@@ -44,13 +46,20 @@ if command -v jq >/dev/null 2>&1; then
     # files are its business, not ours.
     find "$SENSOR_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null
   fi
+elif command -v node >/dev/null 2>&1; then
+  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+  if [ -n "$SCRIPT_DIR" ]; then
+    printf '%s' "$INPUT" \
+      | node "$SCRIPT_DIR/ctx-telemetry.mjs" --write-only >/dev/null 2>&1 \
+      || true
+  fi
 fi
 
 # Display: delegate to an existing statusline script unchanged, if one is wired.
 DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-$HOME/.claude/statusline-command.sh}"
 if [ -f "$DELEGATE" ]; then
   printf '%s' "$INPUT" | bash "$DELEGATE"
-elif command -v jq >/dev/null 2>&1; then
+elif [ "$HAS_JQ" -eq 1 ]; then
   # Minimal built-in fallback: model name + context usage. `|| true` so an
   # unparseable payload shows an empty line rather than a failing statusline.
   printf '%s' "$INPUT" | jq -r '
