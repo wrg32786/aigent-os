@@ -1,0 +1,58 @@
+name: Import managed Auto-Refresh release
+
+on:
+  push:
+    branches:
+      - release/managed-auto-refresh-2026-08-15
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: ${{ !contains(github.event.head_commit.message, 'Import managed Auto-Refresh release') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download and verify the sanitized exact archive
+        env:
+          EXPORT_URL: "https://sdmntprwestus3.oaiusercontent.com/files/00000000-be14-81fd-ae1a-6dbbbac73b74/raw?se=2026-08-15T19%3A13%3A03Z&sp=r&sv=2026-02-06&sr=b&scid=91960303-9d1b-5c6e-a865-40f22874ca49&skoid=5e713cdb-766b-475e-a3ca-8adb6cf99aa0&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-15T13%3A19%3A41Z&ske=2026-08-16T13%3A19%3A41Z&sks=b&skv=2026-02-06&sig=tG%2B6odPtfH2X9ds0YgqHAH%2BHfZnv%2BOksW9vP8Bmpvw4%3D"
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$EXPORT_URL" --output /tmp/export.zip
+          unzip -p /tmp/export.zip public-auto-refresh-export.tar.gz > /tmp/export.tar.gz
+          printf '%s  %s\n' \
+            '2907cbce3604560abd788792902da876ff88b60740505c21411974da362145ca' \
+            '/tmp/export.tar.gz' | sha256sum --check -
+          tar -xzf /tmp/export.tar.gz -C "$GITHUB_WORKSPACE"
+
+      - name: Verify imported transport
+        run: |
+          set -euo pipefail
+          cd daemons/transport-deps
+          npm ci --ignore-scripts
+          npm rebuild node-pty
+          cd ../..
+          node --test daemons/tests/pty-runner.test.mjs
+          node --test daemons/tests/capsule-ack-trigger.test.mjs
+          node --test daemons/tests/resume-session-authority.test.mjs
+          node --test daemons/tests/auto-clear-transport.run1.test.mjs
+          bash -n install.sh
+          bash -n launcher/aigent.sh
+          git diff --check
+
+      - name: Commit the product-only public release
+        run: |
+          set -euo pipefail
+          rm .github/workflows/import-managed-auto-refresh.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo 'No release delta produced'; exit 1; }
+          git commit -m "Import managed Auto-Refresh release"
+          git push origin HEAD
