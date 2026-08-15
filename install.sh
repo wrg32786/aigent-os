@@ -14,7 +14,8 @@ With no TARGET, the installer activates the current aigent-OS checkout in place.
 
 Options:
   --target DIR          Install into DIR instead of the current directory
-  --no-deps             Skip optional Node.js dependency installation
+  --no-deps             Skip Node.js dependencies and managed Auto-Refresh
+  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring
   --dry-run             Print the planned changes without modifying files
   --trust-existing      Keep pre-existing files under hooks/, daemons/,
                         .claude/skills/, .claude/agents/, .claude/rules/, and
@@ -38,6 +39,7 @@ fail() {
 
 TARGET=""
 NO_DEPS=0
+NO_LAUNCHER=0
 DRY_RUN=0
 TRUST_EXISTING=0
 
@@ -51,6 +53,10 @@ while (($#)); do
       ;;
     --no-deps)
       NO_DEPS=1
+      shift
+      ;;
+    --no-launcher)
+      NO_LAUNCHER=1
       shift
       ;;
     --dry-run)
@@ -191,7 +197,8 @@ printf '  +------------------------------------+\n\n'
 printf '  Source: %s\n' "$SRC"
 printf '  Target: %s\n' "$TARGET"
 printf '  Mode:   %s\n' "$MODE"
-printf '  Deps:   %s\n' "$([[ "$NO_DEPS" -eq 1 ]] && printf 'skip' || printf 'install when Node.js 18+ is available')"
+printf '  Deps:   %s\n' "$([[ "$NO_DEPS" -eq 1 ]] && printf 'skip (unmanaged fallback)' || printf 'managed Auto-Refresh (Node.js 18+ required)')"
+printf '  Launch: %s\n' "$([[ "$NO_LAUNCHER" -eq 1 ]] && printf 'files only' || printf 'wire the aigent front door')"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '\n  Planned changes:\n'
@@ -207,7 +214,10 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '    - create or merge .claude/settings.json\n'
   printf '    - initialize local first-run state under .aigent/\n'
   printf '    - add generated-state entries to .gitignore\n'
-  [[ "$NO_DEPS" -eq 0 ]] && printf '    - install optional semantic-search dependencies\n'
+  if [[ "$NO_DEPS" -eq 0 ]]; then
+    printf '    - install and verify semantic search + managed Auto-Refresh dependencies\n'
+  fi
+  [[ "$NO_LAUNCHER" -eq 0 ]] && printf '    - wire the aigent command and platform launcher\n'
   printf '\n  Dry run complete. No files changed.\n\n'
   exit 0
 fi
@@ -883,64 +893,96 @@ fi
 printf '  [ok] Generated local state excluded from git\n'
 
 if [[ "$NO_DEPS" -eq 1 ]]; then
-  printf '  [skip] Optional dependencies (--no-deps)\n'
-elif ! command -v node >/dev/null 2>&1; then
-  printf '  [warn] Node.js not found; optional dependencies were not installed\n'
+  printf '  [skip] Node.js dependencies (--no-deps); managed Auto-Refresh may be unavailable\n'
 else
+  command -v node >/dev/null 2>&1 \
+    || fail "Node.js 18+ is required for the default managed Auto-Refresh install. Install Node.js and rerun, or pass --no-deps for the unmanaged fallback."
+  command -v npm >/dev/null 2>&1 \
+    || fail "npm is required for the default managed Auto-Refresh install. Install Node.js with npm and rerun, or pass --no-deps."
+
   NODE_MAJOR="$(node --version | sed 's/^v//' | cut -d. -f1)"
   if ! [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || ((NODE_MAJOR < 18)); then
-    printf '  [warn] Node.js 18+ is required for optional dependencies; found %s\n' "$(node --version)"
-  else
-    # Two independent optional dependency roots, installed identically:
-    #   semantic-search — embeddings feature (@xenova/transformers tree)
-    #   transport-deps  — auto-clear transport's node-pty, its sole dependency
-    # Separate roots keep the transport's availability decoupled from the
-    # install health of semantic-search's script-bearing dependency tree.
-    for DEP_DIR in semantic-search transport-deps; do
-      if [[ ! -f "$TARGET/daemons/$DEP_DIR/package.json" ]]; then
-        printf '  [skip] No %s package found\n' "$DEP_DIR"
-        continue
-      fi
-      printf '  Installing optional %s dependencies (network access may occur)...\n' "$DEP_DIR"
-      pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
-      # --ignore-scripts disables lifecycle scripts for
-      # this package AND every transitive dependency. Without it, installing
-      # into a target that already had its own package.json under
-      # daemons/ (or a compromised transitive dependency) could execute
-      # an attacker-controlled preinstall/install/postinstall script. Neither
-      # bundled package (see each package.json) has lifecycle scripts of its
-      # own, so this is a no-op for the legitimate install path.
-      if [[ -f package-lock.json ]]; then
-        npm ci --silent --ignore-scripts
-      else
-        npm install --silent --ignore-scripts
-      fi
-      # ONE NAMED EXCEPTION, and only for this package. node-pty ships prebuilt
-      # binaries for macOS and Windows but not for Linux, where the native
-      # binding exists only if its own build script runs. With scripts off, a
-      # Linux install leaves the transport unable to load it and the runner
-      # falls back to unmanaged. Rebuilding BY NAME runs that one package's
-      # build and does not reopen the transitive lifecycle surface the flag
-      # above exists to close: node-pty is this root's sole declared
-      # dependency. Best effort, because an optional dependency must not fail
-      # the install; a machine without a compiler keeps the loud degrade.
-      if [[ "$DEP_DIR" == "transport-deps" ]]; then
-        npm rebuild --silent node-pty \
-          || printf '  [warn] node-pty native build failed; auto-clear will run unmanaged\n'
-      fi
-      popd >/dev/null
-      printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
-    done
+    fail "Node.js 18+ is required for managed Auto-Refresh; found $(node --version). Upgrade Node.js or pass --no-deps for the unmanaged fallback."
   fi
+
+  # Two independent dependency roots: semantic search and the managed PTY transport.
+  for DEP_DIR in semantic-search transport-deps; do
+    if [[ ! -f "$TARGET/daemons/$DEP_DIR/package.json" ]]; then
+      printf '  [skip] No %s package found\n' "$DEP_DIR"
+      continue
+    fi
+    printf '  Installing %s dependencies (network access may occur)...\n' "$DEP_DIR"
+    pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
+    if [[ -f package-lock.json ]]; then
+      npm ci --silent --ignore-scripts
+    else
+      npm install --silent --ignore-scripts
+    fi
+    if [[ "$DEP_DIR" == "transport-deps" ]]; then
+      npm rebuild --silent node-pty \
+        || fail "node-pty failed to build. Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
+    fi
+    popd >/dev/null
+    printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+  done
+
+  if ! node -e '
+const { createRequire } = require("node:module");
+createRequire(process.argv[1])("node-pty");
+' "$TARGET/daemons/transport-deps/package.json"; then
+    fail "node-pty installed but could not load. Fix the reported native dependency error and rerun, or pass --no-deps for the unmanaged fallback."
+  fi
+  printf '  [ok] Managed Auto-Refresh runner verified\n'
+fi
+
+wire_aigent_front_door() {
+  # Minimal installer fixtures intentionally omit launcher/. The real product tree ships it.
+  [[ -d "$SRC/launcher" ]] || return 0
+
+  [[ -f "$TARGET/launcher/aigent.sh" && -f "$TARGET/launcher/aigent.ps1" ]] \
+    || fail "managed launcher files are missing from $TARGET/launcher"
+
+  if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${WINDIR:-}" ]]; then
+    local powershell=""
+    if command -v pwsh >/dev/null 2>&1; then
+      powershell="pwsh"
+    elif command -v powershell.exe >/dev/null 2>&1; then
+      powershell="powershell.exe"
+    else
+      fail "PowerShell is required to wire the Windows aigent command and shortcuts"
+    fi
+    [[ -f "$TARGET/launcher/install.ps1" ]] \
+      || fail "missing Windows launcher installer: $TARGET/launcher/install.ps1"
+    "$powershell" -NoLogo -NoProfile -ExecutionPolicy Bypass \
+      -File "$TARGET/launcher/install.ps1" -AigentHome "$TARGET"
+  else
+    [[ -f "$TARGET/launcher/install.sh" ]] \
+      || fail "missing launcher installer: $TARGET/launcher/install.sh"
+    bash "$TARGET/launcher/install.sh" "$TARGET"
+  fi
+  printf '  [ok] aigent command and platform launcher wired\n'
+}
+
+if [[ "$NO_LAUNCHER" -eq 1 ]]; then
+  printf '  [skip] Launcher wiring (--no-launcher)\n'
+else
+  wire_aigent_front_door
 fi
 
 printf '\n  ========================================\n'
-printf '  [ok] aigent-OS is ready\n'
+if [[ "$NO_DEPS" -eq 1 ]]; then
+  printf '  [ok] aigent-OS is ready (Node dependencies skipped)\n'
+else
+  printf '  [ok] aigent-OS is ready with managed Auto-Refresh\n'
+fi
 printf '  ========================================\n\n'
 printf '  Next:\n'
-printf '    1. Open Claude Code in: %s\n' "$TARGET"
-printf '    2. Run /start for first-time setup\n'
-printf '    3. Use /open at the start and /close at the end of later sessions\n\n'
+if [[ "$NO_LAUNCHER" -eq 1 ]]; then
+  printf '    Launcher wiring was skipped. Start through launcher/aigent.sh or launcher/aigent.ps1.\n\n'
+else
+  printf '    Open a new terminal and run: aigent\n'
+  printf '    On Windows or macOS, you can also open the AIgent app/shortcut.\n\n'
+fi
 
 # Reached only on a successful install: the script runs under `set -Eeuo pipefail`,
 # so any earlier failure aborts before this point.

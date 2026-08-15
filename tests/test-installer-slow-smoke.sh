@@ -19,7 +19,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 printf 'Installing the real repository tree into a fresh target (many mkdir/cp calls against the full checkout -- this is the slow one)...\n'
 REAL_TARGET="$WORK/real-target"
-bash "$ROOT/install.sh" --target "$REAL_TARGET" --no-deps >/dev/null
+bash "$ROOT/install.sh" --target "$REAL_TARGET" --no-deps --no-launcher >/dev/null
 printf '[1/2] real-tree install: ok\n'
 
 bash "$REAL_TARGET/scripts/doctor.sh" "$REAL_TARGET" >/dev/null

@@ -1,13 +1,8 @@
 # The AIgent: Launcher (the branded front door)
 
-Not every operator wants to remember `cd` into a folder and type `claude` every session.
-This launcher is an optional convenience layer: it wraps the harness in a branded front
-door so starting a session feels like opening an app, not learning a terminal workflow.
+The root `bash install.sh` command wires this front door automatically. Type `aigent` in a new terminal, or open the installed AIgent app/shortcut, and the operator wakes up warm-resumed with managed Auto-Refresh active. No `cd`, flags, or second installer command are required.
 
-Double-click an "AIgent" icon (or type `aigent` in any shell) and your AIgent wakes up,
-warm-resumed, in a branded window. No `cd`, no flags, no commands to memorize — though
-nothing stops you from just running `claude` directly if you'd rather skip the launcher
-entirely.
+The launcher is the supported default because it starts Claude inside `daemons/pty-runner.mjs`. Running `claude` directly remains possible, but it bypasses the managed Auto-Refresh transport.
 
 ## Files
 | File | Role |
