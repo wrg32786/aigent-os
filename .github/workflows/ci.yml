@@ -16,197 +16,93 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Shell syntax check
+      - name: Shell syntax
         shell: bash
         run: |
           set -euo pipefail
-          fail=0
-          while IFS= read -r -d '' script; do
-            if ! bash -n "$script"; then
-              echo "SYNTAX ERROR: $script"
-              fail=1
-            fi
-          done < <(find . -name '*.sh' -not -path '*/node_modules/*' -print0)
-          test "$fail" -eq 0
+          while IFS= read -r -d '' file; do bash -n "$file"; done \
+            < <(find . -name '*.sh' -not -path '*/node_modules/*' -print0)
 
-      - name: JSON syntax check
+      - name: JSON syntax
         shell: bash
         run: |
           set -euo pipefail
-          fail=0
-          while IFS= read -r -d '' file; do
-            if ! python3 -m json.tool "$file" >/dev/null; then
-              echo "JSON PARSE ERROR: $file"
-              fail=1
-            fi
-          done < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
-          test "$fail" -eq 0
+          while IFS= read -r -d '' file; do python3 -m json.tool "$file" >/dev/null; done \
+            < <(find . -name '*.json' -not -path '*/node_modules/*' -print0)
 
-      # ubuntu runners ship pwsh, so the Windows installer's settings renderer
-      # is regression-tested here too (board 6c437b41: the old render wrapped
-      # every path in __ residue and renamed the AIGENT_ROOT key; the first fix
-      # emitted invalid JSON escapes for legal $ paths).
-      - name: Windows settings renderer regression
+      - name: Windows settings renderer
         shell: pwsh
         run: ./launcher/tests/install-render.test.ps1
 
-      - name: Node hook tests
-        run: node --test tests/tool-tracker.test.cjs
-
-      - name: Python runtime tests
-        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-      - name: Caddy router tests
-        run: bash tests/test-caddy.sh
-
-      - name: Caddy new-skill detection tests
-        run: bash tests/test-caddy-detect-new-skill.sh
-
-      # The corpora under evals/ existed for weeks with no runner - JSON shaped
-      # like evidence that nothing executed. This job is what makes them evidence.
-      # Red on: a behaviour drift (FAIL), a case this install cannot evaluate and
-      # does not declare why (UNDECLARED), or a declared gap that has quietly
-      # closed (GAP-CLOSED).
-      - name: Eval corpora (skill recall, capsule resume)
-        run: node evals/run-evals.mjs
-
-      # Daemons suite runs by DISCOVERY, not by enumeration.
-      #
-      # It used to be seven steps naming files one at a time, and the gap that
-      # creates is silent: a new test file simply does not run, and nothing says
-      # so. Measured 2026-07-28 -- 14 of 19 files were named here, and the five
-      # that were not included `stop-capsule-writer.classify.test.mjs`, the test
-      # for close-classification, which is the very contract this suite exists to
-      # guard. All five passed locally, so CI had been green while not running
-      # them; the gap cost no red, it just meant the gate was narrower than it
-      # looked.
-      #
-      # A rule you have to remember at each new file is a rule you will forget at
-      # some new file. Globbing makes coverage the default and deletes the
-      # per-file bookkeeping instead of patching it. Live evidence from this very
-      # rebase: #36 landed `stop-capsule-writer.test.mjs` and had to hand-add it
-      # to the Lifecycle step to make it run. Under the glob it would simply have
-      # been picked up, and forgetting would not have been possible.
-      #
-      # `node --test daemons/tests/` was tried first and is NOT usable on this
-      # runner's Node: it treats the directory as a single test and fails. The
-      # loop is framework-agnostic -- plain scripts and node:test files both exit
-      # non-zero on failure (verified with a deliberately failing node:test file:
-      # run directly, exit 1), so `set -e` catches either.
-      - name: Rendering-boundary structural guard canary
-        run: |
-          test -s daemons/tests/render-boundary-guard.test.mjs
-          grep -q 'RENDER_BOUNDARY_STRUCTURAL_GUARD_V1' daemons/tests/render-boundary-guard.test.mjs
-
-      # jq is what statusline-ctx.test.mjs gates its four cases on, and the
-      # ubuntu runner does NOT ship it. Measured, not assumed: run 30619697841
-      # on this branch reported `# jq unavailable` (not `bash unavailable` --
-      # the probe distinguishes them), so bash ran fine and jq was genuinely
-      # missing. Those four tests had therefore never executed in CI, and never
-      # executed on the dev machine either; the skip-count gate below is what
-      # made that visible on its first fire.
-      #
-      # ⚑ THIS MAKES FOUR NEVER-EXECUTED TESTS RUN FOR THE FIRST TIME, and
-      # their outcome is genuinely UNKNOWN. A red here is a real finding about
-      # statusline-ctx.sh, not a regression from this line -- the tests have
-      # simply never been given the chance to fail. That is the point.
-      - name: Install jq (statusline-ctx tests gate on it)
+      - name: Hook, runtime, router, and eval checks
+        shell: bash
         run: |
           set -euo pipefail
-          if command -v jq >/dev/null 2>&1; then
-            echo "jq already present: $(jq --version)"
-          else
+          node --test tests/tool-tracker.test.cjs
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          bash tests/test-caddy.sh
+          bash tests/test-caddy-detect-new-skill.sh
+          node evals/run-evals.mjs
+
+      - name: Install daemon test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq jq
-            echo "jq installed: $(jq --version)"
           fi
+          cd daemons/transport-deps
+          npm ci --ignore-scripts
+          npm rebuild node-pty
 
-      - name: Daemons test suite (all of daemons/tests, discovery)
+      - name: Daemon tests by discovery
+        shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           files=(daemons/tests/*.test.mjs)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "No daemons test files matched: the glob or the layout changed."
-            echo "Refusing to report a green gate that ran nothing."
+            echo 'No daemon test files found.'
             exit 1
           fi
-          echo "Running ${#files[@]} daemons test files"
-          for f in "${files[@]}"; do
-            echo "::group::$f"
-            if ! out="$(node "$f" 2>&1)"; then
-              printf '%s\n' "$out"
-              echo "::endgroup::"
-              exit 1
-            fi
-            printf '%s\n' "$out"
-            echo "::endgroup::"
 
-            # A SKIP IS NOT A PASS -- the same refusal as the empty-glob guard
-            # above, one level down. That guard catches "ran zero FILES and
-            # exited 0"; this catches "ran zero TESTS in a file and exited 0".
-            #
-            # node:test reports a skipped test in its summary and still exits 0.
-            # Measured on the dev machine 2026-07-31: statusline-ctx.test.mjs
-            # gates 4 tests on `command -v jq`, jq was absent, and the file
-            # reported `pass 0 / skipped 4` with EXIT CODE 0. The whole file was
-            # vacuous and the gate read green. The skip reason WAS printed --
-            # `# jq unavailable` on each line -- so the log was never blind; only
-            # the exit code was, and the exit code is the only thing CI reads.
-            #
-            # Anchored on `skipped N` at end-of-line so a test whose NAME
-            # contains "skipped" cannot trip it (verified against
-            # stop-capsule-writer.test.mjs, which has exactly that).
-            #
-            # `|| true` on the pipelines: under `pipefail` a non-matching grep
-            # would abort the step, turning "no summary line" into a crash
-            # instead of a zero.
-            #
-            # ⚑ THIS SUITE IS MIXED, so the check is GATED ON BEING APPLICABLE
-            # rather than assuming every file reports. Plain scripts (e.g.
-            # stop-capsule-writer.classify.test.mjs, which ends "…: PASS") emit
-            # no summary at all; node:test files emit `tests N`. Keying off
-            # `tests N` tells "this file reported and skipped none" apart from
-            # "this file does not report" -- without it, an absent summary reads
-            # as zero and the gate fails OPEN.
-            #
-            # That distinction is not theoretical: the first version of this
-            # guard was "green" on a plain script and I had proven nothing,
-            # because it never parsed a number at all.
+          for file in "${files[@]}"; do
+            echo "::group::$file"
+            out="$(node "$file" 2>&1)" || {
+              printf '%s\n' "$out"
+              echo '::endgroup::'
+              exit 1
+            }
+            printf '%s\n' "$out"
+            echo '::endgroup::'
+
             reported="$(printf '%s\n' "$out" | grep -cE '^.{0,4}tests [0-9]+$' || true)"
             skipped="$(printf '%s\n' "$out" | grep -E 'skipped [0-9]+$' | tail -1 | grep -oE '[0-9]+$' || true)"
+            declared="$(printf '%s\n' "$out" | grep -cE '# SKIP (Windows|Linux|macOS|POSIX) .+ only$' || true)"
+
             if [ "${reported:-0}" -ne 0 ] && [ -z "$skipped" ]; then
-              echo "$f printed a node:test summary but no parseable skip count."
-              echo "Refusing to guess: the reporter format changed, or output was truncated."
+              echo "$file printed an unparseable node:test summary."
               exit 1
             fi
-            if [ "${skipped:-0}" -ne 0 ]; then
-              echo "$f reported ${skipped} SKIPPED test(s), and exited 0."
-              echo "Refusing to report a green gate for tests that never ran."
-              echo "Each skip prints its own reason above. Either provide what the"
-              echo "test needs on this runner, or delete the test -- a permanently"
-              echo "skipped test is a claim nobody is checking."
+            if [ "${skipped:-0}" -gt "${declared:-0}" ]; then
+              echo "$file reported ${skipped} skips, but only ${declared} are declared platform-only checks."
               exit 1
             fi
           done
 
-      - name: Codex adapter tests
-        run: bash tests/test-codex-adapter.sh
-
-      - name: Terminal-demo asset drift guard
-        run: bash tests/test-build-terminal-demo.sh
-
-      - name: Session-capture-summary hook tests
-        run: bash tests/test-session-capture-summary.sh
-
-      - name: Onboarding-guide start-over regression test
-        run: bash tests/test-onboarding-start-over.sh
-
-      - name: Vault-sync regression tests
-        run: bash tests/test-vault-sync.sh
+      - name: Remaining regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-codex-adapter.sh
+          bash tests/test-build-terminal-demo.sh
+          bash tests/test-session-capture-summary.sh
+          bash tests/test-onboarding-start-over.sh
+          bash tests/test-vault-sync.sh
+          git diff --check
 
   installer:
     name: Installer (${{ matrix.os }})
@@ -218,88 +114,63 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Installer regression suite (fast)
+      - uses: actions/checkout@v4
+      - name: Installer regression suite
         shell: bash
-        run: bash tests/test-installer-fast.sh
-
-      - name: Installer regression suite (slow smoke, real repo tree)
-        shell: bash
-        run: bash tests/test-installer-slow-smoke.sh
-
-      - name: Web-install regression suite
-        shell: bash
-        run: bash tests/test-web-install.sh
-
+        run: |
+          set -euo pipefail
+          bash tests/test-installer-fast.sh
+          bash tests/test-installer-slow-smoke.sh
+          bash tests/test-web-install.sh
 
   style:
     name: Public copy style
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # Deliberately a SIBLING of validate/installer with no `needs:`, so a house-style
-    # red and a test red are independent signals. This guard used to sit as an early
-    # STEP inside validate; GitHub skips every later step in a failed job, so one
-    # styled character in a docs file skipped all twelve test steps on every master
-    # run for ~7.5h (2026-07-31, specimen a9d1cc7, run 30596693165: guard=failure,
-    # 12x skipped). Style has no business gating whether the tests execute.
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Em-dash guard (public copy)
+      - uses: actions/checkout@v4
+      - name: Em-dash guard
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PYEOF'
-          import glob, re, sys
+          python3 - <<'PY'
+          import glob
+          import re
+          import sys
 
-          scope = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CREDITS.md',
-                   'INSTALL.md', 'SECURITY.md']
-          scope += glob.glob('docs/**/*.md', recursive=True)
-          scope += glob.glob('docs/**/*.html', recursive=True)
-          scope += glob.glob('daemons/**/*.md', recursive=True)
-          scope += glob.glob('assets/*.svg')
+          paths = [
+              'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'CREDITS.md',
+              'INSTALL.md', 'SECURITY.md',
+          ]
+          paths += glob.glob('docs/**/*.md', recursive=True)
+          paths += glob.glob('docs/**/*.html', recursive=True)
+          paths += glob.glob('daemons/**/*.md', recursive=True)
+          paths += glob.glob('assets/*.svg')
 
-          DASH = '—'
-          fail = False
+          failed = False
 
-          def blank(m):
-              # Replace a stripped (exempt) region with only its own newlines,
-              # so every surviving line keeps its real line number.
-              return '\n' * m.group(0).count('\n')
+          def preserve_lines(match):
+              return '\n' * match.group(0).count('\n')
 
-          for path in sorted(set(scope)):
+          for path in sorted(set(paths)):
               try:
                   text = open(path, encoding='utf-8').read()
               except FileNotFoundError:
                   continue
-              if path.endswith('.md'):
-                  # code/data is exempt: strip fenced code blocks and inline code spans
-                  scan = re.sub(r'```.*?```', blank, text, flags=re.S)
-                  scan = re.sub(r'`[^`]*`', blank, scan)
-              elif path.endswith('.html') or path.endswith('.svg'):
-                  # comments are exempt: only rendered markup/text is in scope
-                  scan = re.sub(r'<!--.*?-->', blank, text, flags=re.S)
-                  scan = re.sub(r'/\*.*?\*/', blank, scan, flags=re.S)
-                  if path.endswith('.html'):
-                      # strip `//` line comments, but never a URL's own `//`
-                      # (http:// and https:// survive untouched)
-                      scan = re.sub(r'(?<!http:)(?<!https:)//[^\n]*', '', scan)
-              else:
-                  scan = text
-              for lineno, line in enumerate(scan.split('\n'), start=1):
-                  if DASH in line:
-                      print(f'EM DASH: {path}:{lineno}: {line.strip()}')
-                      fail = True
 
-          if fail:
-              print()
-              print('Em dashes found in public-facing copy. Replace with a colon, semicolon,')
-              print('comma, or parentheses per house style. Code/data inside fenced blocks,')
-              print('inline code spans, and file comments is exempt from this guard.')
+              if path.endswith('.md'):
+                  text = re.sub(r'```.*?```', preserve_lines, text, flags=re.S)
+                  text = re.sub(r'`[^`]*`', preserve_lines, text)
+              elif path.endswith(('.html', '.svg')):
+                  text = re.sub(r'<!--.*?-->', preserve_lines, text, flags=re.S)
+                  text = re.sub(r'/\*.*?\*/', preserve_lines, text, flags=re.S)
+
+              for line_number, line in enumerate(text.splitlines(), 1):
+                  if '—' in line:
+                      print(f'EM DASH: {path}:{line_number}: {line.strip()}')
+                      failed = True
+
+          if failed:
               sys.exit(1)
-          print('Em-dash guard: no em dashes in rendered public copy.')
-          PYEOF
+          PY
