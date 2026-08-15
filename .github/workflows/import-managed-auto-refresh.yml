@@ -21,13 +21,13 @@ jobs:
 
       - name: Download and verify the sanitized exact archive
         env:
-          EXPORT_URL: "https://sdmntprwestus3.oaiusercontent.com/files/00000000-be14-81fd-ae1a-6dbbbac73b74/raw?se=2026-08-15T19%3A13%3A03Z&sp=r&sv=2026-02-06&sr=b&scid=91960303-9d1b-5c6e-a865-40f22874ca49&skoid=5e713cdb-766b-475e-a3ca-8adb6cf99aa0&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-15T13%3A19%3A41Z&ske=2026-08-16T13%3A19%3A41Z&sks=b&skv=2026-02-06&sig=tG%2B6odPtfH2X9ds0YgqHAH%2BHfZnv%2BOksW9vP8Bmpvw4%3D"
+          EXPORT_URL: "https://sdmntprwestus3.oaiusercontent.com/files/00000000-ca00-81fd-b331-8a308aa3eaf7/raw?se=2026-08-15T19%3A15%3A09Z&sp=r&sv=2026-02-06&sr=b&scid=3f3ef021-8377-577e-a3b8-12218f0a8d8a&skoid=5e713cdb-766b-475e-a3ca-8adb6cf99aa0&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-15T15%3A05%3A15Z&ske=2026-08-16T15%3A05%3A15Z&sks=b&skv=2026-02-06&sig=GIlncHAEXCT%2B9JU9acA4OD3R28LPR0eyUVS13BS/rUI%3D"
         run: |
           set -euo pipefail
           curl --fail --location --silent --show-error "$EXPORT_URL" --output /tmp/export.zip
           unzip -p /tmp/export.zip public-auto-refresh-export.tar.gz > /tmp/export.tar.gz
           printf '%s  %s\n' \
-            '2907cbce3604560abd788792902da876ff88b60740505c21411974da362145ca' \
+            '6bb4ed3cb897c9e06de14bd8361c2c4802a332441deb20eb43817a0434fae1a2' \
             '/tmp/export.tar.gz' | sha256sum --check -
           tar -xzf /tmp/export.tar.gz -C "$GITHUB_WORKSPACE"
 
