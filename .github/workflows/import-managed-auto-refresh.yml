@@ -46,10 +46,13 @@ jobs:
           bash -n launcher/aigent.sh
           git diff --check
 
-      - name: Commit the product-only public release
+      - name: Commit product files only
         run: |
           set -euo pipefail
-          rm .github/workflows/import-managed-auto-refresh.yml
+          # GitHub Actions' repository token may update product files but may not
+          # create or alter workflows. Those two reviewed workflow changes are
+          # applied separately through the authenticated repository connector.
+          git checkout HEAD -- .github/workflows/ci.yml .github/workflows/import-managed-auto-refresh.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
