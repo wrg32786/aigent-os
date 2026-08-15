@@ -14,7 +14,7 @@
 
 **Stop re-briefing your AI every morning.**
 
-*aigent-OS gives Claude Code durable memory and automatic context recovery; it remembers across sessions, checkpoints itself every turn, and re-grounds the fresh window after every compaction or `/clear` so you never re-brief it. A free, open-source operator layer, not a chat wrapper.*
+*aigent-OS gives Claude Code durable memory and autonomous context refresh: it watches context pressure, saves a verified capsule, clears and rebinds the session, then continues the work without interrupting the operator. A free, open-source operator layer, not a chat wrapper.*
 
 From the team behind [The AIgent](https://theaigent.xyz), a free media project for people building with AI.
 
@@ -29,14 +29,14 @@ If aigent-OS saves you time, [star the repo](https://github.com/wrg32786/aigent-
 ## See it resume itself
 
 <div align="center">
-<img src="assets/demo-session-resume.svg" alt="A session at 60% context has already autosaved its capsule; the operator runs /clear, the resume verb re-grounds the fresh window, and it comes back at 10% context knowing exactly where it left off" width="100%"/>
+<img src="assets/demo-session-resume.svg" alt="Managed Auto-Refresh saves a capsule, clears the full context, rebinds the fresh session, and continues the work" width="100%"/>
 </div>
 
-The animation shows the manual `/clear` path. Managed Auto-Refresh now performs that boundary too: at the configured context threshold it requests a capsule, waits for the exact completion acknowledgement, queues one `/clear`, binds the fresh session, and submits one resume wake. The same lifecycle remains available manually when you want it.
+The animation illustrates the lifecycle. In the shipped default, Managed Auto-Refresh performs the whole boundary automatically: at the configured context threshold it requests a capsule, waits for the exact completion acknowledgement, submits one `/clear`, binds the fresh session, and submits one resume wake.
 
 **aigent-OS is a 16-document kernel (plus extended specs) that turns Claude Code into a persistent operating system**, one operator, one Claude, running on your own machine. No database, no server, no build step: drop the files in, run `bash install.sh`, and the next session already knows who it is and what it's working on. The framework also ships tools for maintaining itself: a nightly self-maintenance routine you can run against your own vault, and a hook that spots a new skill file and prompts you to enroll it. The publish half, deciding what a local install has learned that's worth graduating to this repo, sanitizing it, and opening the pull request, is designed and not built. ([How this repo maintains itself](#-how-this-repo-maintains-itself) · [Manifesto](docs/manifesto.md))
 
-> **Dependency model:** the core kernel is markdown + shell: no database or server. Node.js 18+ enables semantic search, hook automation, and the managed Auto-Refresh transport; the installer wires them automatically when Node is present. A `--no-deps` install keeps checkpointing and post-clear recovery, but launches Claude unmanaged with automatic clear disabled. Obsidian is optional, for browsing the vault visually.
+> **Dependency model:** the core kernel is markdown + shell: no database or server. The default installer requires Node.js 18+, installs and verifies the managed Auto-Refresh transport, and wires the `aigent` front door automatically. `--no-deps` is the explicit fallback when you deliberately want to skip Node dependencies. Obsidian is optional, for browsing the vault visually.
 
 Unlike memory add-ons that keep state in an opaque database, every checkpoint here is a real git commit, readable with plain `git log`, not a query against someone else's schema. The table below scores the rest against real rivals, not strawmen.
 
@@ -99,10 +99,9 @@ The first-run onboarding: three plain questions, then a first plan. (The resume/
 
 ```text
 Clone or download this repo (https://github.com/wrg32786/aigent-os) into the current
-directory, then run `bash install.sh` from inside it. If Node.js 18+ is available, let
-the installer wire semantic search and the managed Auto-Refresh runner; otherwise pass
---no-deps. When it finishes, start a new session in this same directory, read whatever
-it prints on boot, and tell me what you'd like to work on first.
+directory, then run `bash install.sh` from inside it. The default installer requires
+Node.js 18+, installs and verifies the managed Auto-Refresh runner, and wires the
+`aigent` front door. When it finishes, open a new terminal and run `aigent`.
 ```
 
 Your agent reads its own install script, runs it, and reports back what it found: no shell flags to remember yourself. Pasting this into an agent? Use the block above. Typing in your own terminal? Use the block below.
@@ -113,13 +112,13 @@ Your agent reads its own install script, runs it, and reports back what it found
 bash install.sh
 ```
 
-That's it. aigent-OS installs into whatever directory you're in: your existing project, your home folder, wherever you work. The installer copies the kernel files, creates `.claude/settings.json` with your actual paths substituted, and installs semantic search if Node.js is available.
+That's it. aigent-OS installs into whatever directory you're in: your existing project, your home folder, wherever you work. The installer copies the kernel files, creates `.claude/settings.json`, installs and verifies managed Auto-Refresh, and wires the `aigent` command plus the platform launcher where supported.
 
-> **Optional `--no-deps`:** skips Node dependencies, including semantic search and the managed PTY transport. Checkpointing and post-clear recovery still work, but automatic clear is disabled and the launcher says so. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change. See [Advanced Setup](docs/advanced-setup.md).
+> **Explicit fallback `--no-deps`:** skips Node dependencies, including semantic search and the managed PTY transport; the launcher then uses its loud unmanaged fallback when the transport is unavailable. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change, and `--no-launcher` skips PATH/shortcut wiring. See [Advanced Setup](docs/advanced-setup.md).
 
-**Start a new Claude Code conversation** in the same directory. The launcher uses the managed runner when its PTY dependency is available: it resumes on start, tracks context pressure, checkpoints, clears, and wakes the fresh session without an operator command. `/context-capsule`, `/clear`, and `/resume` remain available on demand, and `claude --continue` still warm-resumes an existing conversation.
+**Open a new terminal and run `aigent`.** The installer has already wired the managed runner. The first launch runs guided setup; later launches warm-resume, track context pressure, checkpoint, clear, rebind, and continue without an operator command.
 
-**Prefer an app to a terminal?** Run `launcher/install.sh` (or `install.ps1` on Windows) once, then double-click the AIgent icon, warm-resumed via `claude --continue`, no `cd` and no cold start. See [`launcher/README.md`](launcher/README.md).
+**Prefer an app to a terminal?** The same install creates the AIgent app/shortcut where supported. Open it instead of typing `aigent`. See [`launcher/README.md`](launcher/README.md).
 
 **Optional:** open the `vault/` folder in [Obsidian](https://obsidian.md) to see your AI's knowledge graph visually.
 
@@ -127,7 +126,7 @@ Full setup walkthrough: [Getting Started](docs/getting-started.md) · Advanced c
 
 ### If something doesn't boot
 
-- **No Node.js installed:** the kernel still works; you just lose semantic search and the Node-based hooks. Run `bash install.sh --no-deps`, or install Node 18+ later and run `npm install` inside `daemons/semantic-search/` to wire it retroactively.
+- **No Node.js installed:** the default install stops because managed Auto-Refresh is the default. Install Node.js 18+ and rerun `bash install.sh`; use `--no-deps` only when you deliberately want the unmanaged fallback.
 - **Windows, and `bash: command not found`:** `install.sh` needs a real bash. Install [Git for Windows](https://git-scm.com) (bundles Git Bash), then reopen your terminal and retry; PowerShell alone can't run it.
 - **Anything else:** `bash scripts/doctor.sh` diagnoses hooks, settings, semantic search, and runtime state in one pass. See [Getting Started § Troubleshooting](docs/getting-started.md).
 

@@ -77,7 +77,7 @@ $shell = New-Object -ComObject WScript.Shell
 foreach ($dir in @([Environment]::GetFolderPath('Desktop'),
                    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'))) {
   $lnk = $shell.CreateShortcut((Join-Path $dir 'AIgent.lnk'))
-  $lnk.TargetPath       = 'pwsh.exe'
+  $lnk.TargetPath       = (Get-Process -Id $PID).Path
   $lnk.Arguments        = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$($PSScriptRoot)\aigent.ps1`""
   $lnk.WorkingDirectory = $AigentHome
   $lnk.Description       = 'The AIgent: wake your operator'

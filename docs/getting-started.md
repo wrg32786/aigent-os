@@ -2,16 +2,18 @@
 
 ## Prerequisites
 
-Required:
+Required for the default managed install:
 
 1. **Claude Code** in the CLI, desktop app, or an IDE integration.
 2. **Bash** for installation and hook scripts.
+3. **Node.js 18 or newer** for the managed Auto-Refresh runner and semantic search.
 
 Optional:
 
-- **Node.js 18 or newer** for semantic search and Node-based hooks.
 - **Python 3** for runtime-state computation and selected daemons.
 - **Obsidian** for visual navigation of the vault.
+
+Use `--no-deps` only for an explicit unmanaged fallback without the managed PTY transport.
 
 The Markdown kernel and normal vault workflow do not require a database or server.
 
@@ -27,9 +29,9 @@ Open a terminal in the downloaded `aigent-os` directory and run:
 bash install.sh
 ```
 
-This leaves the source tree in place and configures `.claude/`, local state, runtime skills, agents, and optional dependencies.
+This leaves the source tree in place, installs and verifies the managed Auto-Refresh dependencies, configures `.claude/`, and wires the `aigent` command plus the platform launcher.
 
-To skip optional dependencies:
+To deliberately skip Node dependencies and use the unmanaged fallback:
 
 ```bash
 bash install.sh --no-deps
@@ -73,21 +75,22 @@ For an external target, the installer:
 - Preserves invalid existing settings and writes the proposed aigent configuration to `.claude/settings.aigent.json` for manual repair.
 - Creates `.aigent/state.json` for machine-readable first-run state.
 - Adds a marked generated-state block to `.gitignore`.
-- Runs `npm ci` or `npm install` inside `daemons/semantic-search/` when Node.js 18 or newer is available, unless `--no-deps` was supplied.
+- Runs `npm ci` or `npm install` for semantic search and the managed PTY transport, rebuilds and load-verifies `node-pty`, unless `--no-deps` was supplied.
+- Wires `aigent` into the user's PATH and creates the platform app/shortcut where supported, unless `--no-launcher` was supplied.
 
-The optional npm step can use the network. The rest of the installer reads from the local checkout and writes only inside the target directory.
+The npm step can use the network. Launcher wiring writes the user-level PATH/profile or platform shortcut; the remaining installer work stays inside the target directory.
 
 Rerunning the installer is safe and idempotent for managed configuration. It refreshes the marked `CLAUDE.md` and `.gitignore` blocks, merges settings, and preserves existing framework and user files. It is deliberately conservative rather than pretending every customized installation can be upgraded by blindly overwriting files.
 
 ## First session
 
-Open Claude Code in the installed directory and run:
+Open a new terminal and run:
 
 ```text
-/start
+aigent
 ```
 
-`/start` owns first-run detection and onboarding. It records setup progress in `.aigent/state.json`, learns the operator's context, produces a first usable artifact, and marks setup ready only after durable writes succeed.
+The installed front door starts Claude inside the managed runner. On the first launch it invokes `/start`, which owns first-run detection and onboarding, records setup progress in `.aigent/state.json`, learns the operator's context, produces a first usable artifact, and marks setup ready only after durable writes succeed.
 
 Use `/setup` later for deeper configuration or to revise identity, priorities, authority boundaries, decision logic, projects, people, or agent definitions.
 
@@ -99,7 +102,7 @@ The lifecycle is two verbs, and both fire automatically at their hook points; yo
 2. **Work normally.** Skills and hooks route tasks, capture privacy-safe action metadata, and update durable notes when appropriate. A rolling, best-effort capsule autosave runs on every `Stop` (`daemons/stop-capsule-writer.mjs`).
 3. **`/context-capsule`** reconciles and writes a resume-ready capsule, then stops; invoke it for a deliberate mid-session checkpoint or a clean end-of-thread finalize. The autosave already covers the case where you just walk away.
 
-`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage so you can watch the window fill; when you `/clear`, the rolling capsule autosave means nothing needs saving first, and the resume verb re-grounds the fresh window automatically.
+`/open` and `/close` are **retired** (the skill files remain but are deprecated). The installed `aigent` front door is the default: it watches context pressure, requests and verifies one capsule, submits one clear, binds the fresh SessionStart identity, and sends one resume wake. `/context-capsule`, `/clear`, and `/resume` remain available for deliberate manual use, but they are not the normal operating path.
 
 ## State layout
 
