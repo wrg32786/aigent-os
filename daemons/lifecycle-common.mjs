@@ -89,6 +89,15 @@ export function memRoot(root) {
 // ordinary history from a capsule that was authored and then thrown away.
 export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
 
+// Same comparison auto-clear-transport.mjs's normalizedPath() uses for its own
+// checkpoint-identity check. Duplicated rather than imported: that module
+// imports FROM this one, and a path string is the entire shared surface, not
+// worth a circular dependency.
+function normalizedSelectorPath(candidate) {
+  const resolved = path.resolve(String(candidate));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 // Resume has one selector: the valid active capsule with the newest frontmatter
 // created_at. Any unreadable or malformed candidate is ignored; hook callers
 // degrade without throwing when no valid capsule exists.
@@ -104,7 +113,28 @@ export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'su
 // The return shape is EXTENDED, never narrowed: .path/.id/.created/.createdRaw
 // are unchanged and null still means "nothing to resume from", so the existing
 // callers keep working untouched.
-export function selectCapsule(memoryRoot) {
+//
+// sessionCapsulePath (OPTIONAL, added 2026-08-03): identity binding for the ONE
+// caller that needs it — auto-clear-transport.mjs's checkpoint-freshness check,
+// which asks "does my own just-written checkpoint capsule still exist and
+// still hold?", never "is it also the objectively best capsule on the seat."
+// The 2026-08-01 placeholder-demotion fix below answers a DIFFERENT question
+// (resume quality) and, left unqualified, outranks a session's own honest
+// "nothing was captured" checkpoint with an unrelated curated capsule every
+// time both exist — the exact deadlock that stopped every F001 cycle from
+// counting (measured cycle 5: HOLD:checkpoint-session-mismatch on every tick,
+// permanently, because a reference install always has a curated capsule on
+// disk). When the caller names its own capsule by path and that file is
+// present and passes every structural check above (readable, frontmatter,
+// active, id, created_at, non-empty objective/next_valid_action), it is the
+// pick — placeholder or not, newer curated capsule or not. Omit the option and
+// this function is BYTE-IDENTICAL to before this parameter existed; every
+// caller that never heard of session binding never triggers this branch.
+export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
+  const sessionTarget = typeof sessionCapsulePath === 'string' && sessionCapsulePath.trim().length
+    ? normalizedSelectorPath(sessionCapsulePath)
+    : null;
+  let sessionMatch = null;
   const rejected = [];
   const note = (name, reason, detail) => rejected.push({ name, reason, ...(detail ? { detail } : {}) });
   const none = (reason) => ({ capsule: null, rejected, unavailable: reason });
@@ -155,6 +185,16 @@ export function selectCapsule(memoryRoot) {
       );
       continue;
     }
+
+    // IDENTITY BINDING wins here, before the placeholder check ever runs, for
+    // exactly the capsule the caller named — see the option's doc comment
+    // above selectCapsule. Structural validity is proven by every check this
+    // candidate already passed to reach this line; placeholder-ness is not
+    // re-checked because it must not matter for this one candidate.
+    if (sessionTarget && normalizedSelectorPath(full) === sessionTarget) {
+      sessionMatch = { path: full, id, created, createdRaw };
+    }
+
     // Presence is not resumability. The stop-writer honestly reports when a Stop
     // delta captured no objective and no next action; that report is correct
     // output and its contract is deliberate (never invent an objective the human
@@ -184,6 +224,14 @@ export function selectCapsule(memoryRoot) {
     }
   }
 
+  // The named session capsule wins THIS selection outright — see the option's
+  // doc comment above selectCapsule. Checked after the loop completes (not by
+  // returning early inside it) so `rejected` still carries every OTHER
+  // candidate's real disposition; only the winning pick changes.
+  if (sessionMatch) {
+    return { capsule: sessionMatch, rejected, sessionBound: true };
+  }
+
   // A curated capsule always wins. Record the demotion so the ledger shows the
   // placeholder was seen and passed over — a silent demotion reads exactly like
   // the placeholder never existing.
@@ -200,8 +248,15 @@ export function selectCapsule(memoryRoot) {
 // Backward-compatible wrapper for callers that only need the selection. The
 // orientation leg (sessionstart-reinject) labels whatever comes back "newest
 // active capsule", so null here still means exactly what it always did.
-export function newestValidCapsule(memoryRoot) {
-  const { capsule, rejected } = selectCapsule(memoryRoot);
+//
+// `options` threads straight to selectCapsule (sessionCapsulePath and any
+// future addition); the return shape is intentionally kept as narrow as
+// before (.path/.id/.created/.createdRaw + .rejected only) so a caller that
+// never passes options gets a BYTE-IDENTICAL object to pre-2026-08-03 — no
+// existing caller reads .sessionBound or .fellBackToPlaceholder off this
+// wrapper today, and none starts implicitly by this change.
+export function newestValidCapsule(memoryRoot, options) {
+  const { capsule, rejected } = selectCapsule(memoryRoot, options);
   if (!capsule) return null;
   return { ...capsule, rejected };
 }

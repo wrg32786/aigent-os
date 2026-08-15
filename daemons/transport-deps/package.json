@@ -1,0 +1,10 @@
+{
+  "name": "transport-deps",
+  "version": "1.0.0",
+  "description": "Minimal dependency root for the auto-clear transport PTY runner. node-pty is the ONLY dependency by design (closure package §6): an independent failure domain, decoupled from semantic-search's script-bearing install tree.",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "node-pty": "1.1.0"
+  }
+}

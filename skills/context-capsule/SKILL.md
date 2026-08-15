@@ -39,7 +39,36 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
    - **Stage directives** — anything decision-shaped or instruction-shaped that isn't already banked goes to `vault/memory/MEMORY_CANDIDATES.md`. A directive that exists only inside a capsule dies with that capsule: the capsule is spent on the next resume, and the directive is not meant to be.
    - **One `vault/memory/SESSION_LOG.md` line**, newest first: `- <YYYY-MM-DD> <capsule-id>: <one-line summary>`.
 5. **SYNC fail-soft.** After the capsule and any memory edits land, run `node daemons/vault-sync.mjs`. It resolves the installed root from `.aigent/state.json`, stages only capsule/memory changes, and handles no-remote or push-failure outcomes without prompting or gating the lifecycle. Fail-soft is deliberate: a fresh install has no remote, and the lifecycle must never wedge because one is absent. But if it reports a failure and a remote IS configured, that is a real finding — say so plainly rather than moving on, because unsynced memory is memory you will lose.
-6. **STOP.** One line acknowledging the capsule path, then silence.
+6. **STOP. Emit this EXACT line, nothing else, and then be silent:**
+
+   ```
+   Capsule Complete, Ready For Clear
+   ```
+
+   Not a summary. Not the capsule path. Not what shipped, not what is ready, not
+   what comes next. **This literal string and nothing more.** If you have
+   something to say, it belonged in the capsule.
+
+   **Why it is a fixed literal and not "keep it short":** every word after the
+   capsule is a NEW assistant turn appended to the transcript, and the auto-clear
+   checkpoint compares the captured offset against the transcript size. A turn
+   landing after the capture makes the capsule read as stale, and the cycle holds
+   on `checkpoint-transcript-short` — **the seat cannot clear, because it
+   announced that it was ready to.**
+
+   A fixed string makes the trailing bytes ARITHMETIC instead of a guess, which
+   is what lets `CHECKPOINT_TAIL_TOLERANCE_BYTES` (auto-clear-transport.mjs) be
+   derived rather than invented: entry-envelope max 1,361 bytes (measured over 72
+   real short assistant entries) + a 120-char ceiling + 5% margin. Anything
+   bigger than that budget is a second turn or real work, and must still hold.
+   **Free-form prose here re-breaks the cycle silently** — it will look like it
+   worked and the seat will simply never clear.
+
+   Measured on a live standalone seat 2026-08-04: the capsule wrote correctly,
+   the seat then said "Capsule saved: … Research session complete. 40
+   production-quality documents delivered … Ready for next phase.", and the cycle
+   stalled behind exactly those bytes. The instruction that used to sit on this
+   line — "one line acknowledging the capsule path" — is what produced it.
 
 ## Lifecycle
 
@@ -50,3 +79,14 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 - Mid-thought (finish the thought).
 - Trivial sessions a fresh session could reconstruct from memory alone.
 - Inside a dispatched sub-agent (the dispatch brief IS the capsule).
+
+**Declining still ends at Step 6.** If this invocation is an **injected**
+`/context-capsule` from the auto-clear cycle (not the operator's own),
+"trivial" only excuses the WRITE — steps 2–5 — never the ack. Before going
+quiet: (a) confirm a valid prior capsule already exists on disk for this
+session — `daemons/stop-capsule-writer.mjs` wrote one on the last `Stop`
+event, and the checkpoint's capsule-exists gate feeds on it being there,
+so verify rather than assume; (b) still emit the exact literal from Step 6,
+`Capsule Complete, Ready For Clear`, as the final act, then go silent. The
+cycle is waiting on that literal alone — "nothing to capsule" is not an
+exemption from producing it. The completion acknowledgement is still required when an existing valid capsule is reused. The injected cycle waits on that exact literal; "nothing to capsule" is not a completion signal.

@@ -42,6 +42,7 @@ import {
 import { formatNightlyBootAlerts } from './nightly-alerts.mjs';
 import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 import { runResumeVerb } from './resume-verb.mjs';
+import { writeBootReceipt } from './boot-receipt.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 
 const TOP_LINKS = 5;
@@ -76,20 +77,7 @@ function coordinationActive() {
   }
 }
 
-try {
-  let payload = {};
-  try { payload = JSON.parse(readStdin() || '{}'); } catch { /* non-JSON */ }
-  const root = process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || payload.cwd || '';
-  if (!root) process.exit(0);
-  const source = String(payload.source || 'startup');
-  const renderedSource = inert(source, 80);
-
-  // CLOCK — ground the waking session in real day/time BEFORE any orientation. A
-  // bare wake fires no UserPromptSubmit, so a prompt-time clock injection can't
-  // cover it — this is the SessionStart half of "the session always knows the
-  // date." Unconditional, first, before the coordination-guard branch.
-  process.stdout.write(`[CLOCK] ${new Date().toString()}\n`);
-
+async function runNightlyBoot(root) {
   // SessionStart is the durable fallback when no scheduler is installed: it
   // re-derives watchdog status, persists a named alert, delivers it on stderr,
   // and then surfaces active alerts in the hook payload. Alert deduplication
@@ -114,26 +102,57 @@ try {
       + 'see vault/memory/.daemon-errors.log.\n',
     );
   }
+}
+
+try {
+  let payload = {};
+  try { payload = JSON.parse(readStdin() || '{}'); } catch { /* non-JSON */ }
+  const root = process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || payload.cwd || '';
+  if (!root) process.exit(0);
+  const source = String(payload.source || 'startup');
+  const renderedSource = inert(source, 80);
+  const MEM = memRoot(root);
+
+  // The receipt is the first boot write on every source. In particular, a clear
+  // cannot consume its capsule before the new boot sequence is durably visible
+  // to the transport that submitted it.
+  writeBootReceipt({
+    payload: { ...payload, source },
+    memRoot: MEM,
+    logError: (message) => logErr(root, message),
+  });
 
   // A live coordination cycle (if a fork wires one) owns the lifecycle — including
   // across a clear, so this check runs before the source==='clear' branch below.
+  // The boot receipt above has already written: it is a passive observable the
+  // transport depends on, not an orientation action, so the guard never skips it.
   if (coordinationActive()) {
+    process.stdout.write(`[CLOCK] ${new Date().toString()}\n`);
     process.stdout.write(`[SESSIONSTART:reinject] session (${renderedSource}) — a coordinated multi-agent cycle is LIVE. `
       + `Follow its conductor; control legs run FULLY. Warm-start orientation deferred until the cycle closes.\n`);
     process.exit(0);
   }
 
-  // Post-clear boot: the resume verb is the entire payload. runResumeVerb() loads
-  // the newest valid capsule and emits the full load → re-ground → ACT → ACK
-  // procedure; nothing else in this file runs for this source.
+  // Post-clear boot: receipt first, then the resume verb, then nightly work.
+  // runResumeVerb() loads and spends the newest valid capsule before anything
+  // nightly-related can mutate or report boot state.
   if (source === 'clear') {
     const result = runResumeVerb({ projectRoot: root, source, sessionId: payload.session_id });
+    process.stdout.write(`[CLOCK] ${new Date().toString()}\n`);
     process.stdout.write(result.prompt + '\n');
+    await runNightlyBoot(root);
     process.exit(0);
   }
 
+  // CLOCK — ground the waking session in real day/time BEFORE any orientation. A
+  // bare wake fires no UserPromptSubmit, so a prompt-time clock injection can't
+  // cover it — this is the SessionStart half of "the session always knows the
+  // date." Unconditional and first among the rendered orientation lines.
+  process.stdout.write(`[CLOCK] ${new Date().toString()}\n`);
+
+  await runNightlyBoot(root);
+
   const out = [];
-  const MEM = memRoot(root);
 
   // Identity line — an optional <vault root>/identity-core.md, else a fallback.
   const corePath = [path.join(path.dirname(MEM), 'identity-core.md'), path.join(root, 'identity-core.md')]

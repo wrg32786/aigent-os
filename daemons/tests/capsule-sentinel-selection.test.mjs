@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { strict as assert } from 'node:assert';
-import { selectCapsule } from '../lifecycle-common.mjs';
+import { selectCapsule, newestValidCapsule } from '../lifecycle-common.mjs';
 
 let failures = 0;
 const test = (name, fn) => {
@@ -170,6 +170,104 @@ test('NEG: newest-wins still holds between two valid curated capsules', () => {
     newer: { ...CURATED, id: 'newer', created_at: '2026-08-01T11:00:00.000Z' },
   });
   assert.equal(selectCapsule(root).capsule?.id, 'newer', 'recency ordering regressed');
+  rmSync(root, { recursive: true, force: true });
+});
+
+// ── sessionCapsulePath — identity binding for the transport's checkpoint
+// check (2026-08-03 fix). WHY THIS EXISTS: the 08-01 demotion above is a
+// RESUME-QUALITY heuristic — right for choosing what a fresh session should
+// resume INTO, wrong for a DIFFERENT question auto-clear-transport.mjs asks:
+// "does the checkpoint capsule THIS session just wrote still exist and still
+// hold?" On a reference install a curated capsule always sits on disk, so a
+// session whose own Stop delta captured nothing had its placeholder demoted
+// in favor of that curated capsule on every tick — the selector's pick then
+// never matched what the session's own stop-writer recorded, and the
+// transport held checkpoint-session-mismatch forever (measured cycle 5,
+// zero F001 cycles ever counted). The fix: name the session's own capsule by
+// path and it wins THIS selection outright, placeholder or not. ───────────
+
+test('sessionCapsulePath: the session\'s OWN sentinel wins over a curated capsule', () => {
+  const root = seat({
+    curated: CURATED,
+    'auto-seat-abcd1234': {
+      id: 'auto-seat-abcd1234', status: 'active',
+      created_at: '2026-08-01T22:20:34.089Z',
+      objective: SENTINEL_OBJECTIVE, next_valid_action: SENTINEL_ACTION,
+    },
+  });
+  const sessionPath = path.join(root, 'capsules', 'auto-seat-abcd1234.md');
+  const { capsule, sessionBound } = selectCapsule(root, { sessionCapsulePath: sessionPath });
+  assert.equal(capsule?.id, 'auto-seat-abcd1234',
+    `session's own placeholder lost to the curated capsule (picked ${capsule?.id})`);
+  assert.equal(sessionBound, true, 'the win was not recorded as session binding');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('sessionCapsulePath: identity binding beats RECENCY too, not just the placeholder heuristic', () => {
+  // Same shape, but curated is now the NEWER capsule. If session binding only
+  // worked when the session capsule happened to be newest, it would not have
+  // fixed the reported defect (a curated capsule can postdate the checkpoint).
+  const root = seat({
+    'auto-seat-abcd1234': {
+      id: 'auto-seat-abcd1234', status: 'active',
+      created_at: '2026-08-01T09:00:00.000Z',
+      objective: SENTINEL_OBJECTIVE, next_valid_action: SENTINEL_ACTION,
+    },
+    curated: { ...CURATED, created_at: '2026-08-01T23:00:00.000Z' },
+  });
+  const sessionPath = path.join(root, 'capsules', 'auto-seat-abcd1234.md');
+  const { capsule } = selectCapsule(root, { sessionCapsulePath: sessionPath });
+  assert.equal(capsule?.id, 'auto-seat-abcd1234',
+    'a curated capsule newer than the session checkpoint still stole the pick');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('NEG: sessionCapsulePath ABSENT on the identical seat — the 08-01 demotion is unchanged', () => {
+  const root = seat({
+    curated: CURATED,
+    'auto-seat-abcd1234': {
+      id: 'auto-seat-abcd1234', status: 'active',
+      created_at: '2026-08-01T22:20:34.089Z',
+      objective: SENTINEL_OBJECTIVE, next_valid_action: SENTINEL_ACTION,
+    },
+  });
+  const { capsule, sessionBound } = selectCapsule(root);
+  assert.equal(capsule?.id, 'curated-real', 'default (option-absent) selection regressed');
+  assert.ok(!sessionBound, 'sessionBound must not appear when the option was never supplied');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('NEG: sessionCapsulePath naming a file NOT on disk is inert — standard selection still applies', () => {
+  const root = seat({ curated: CURATED });
+  const { capsule, sessionBound } = selectCapsule(root, {
+    sessionCapsulePath: path.join(root, 'capsules', 'never-written.md'),
+  });
+  assert.equal(capsule?.id, 'curated-real', 'a dangling session path must not disturb ordinary selection');
+  assert.ok(!sessionBound);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('newestValidCapsule threads sessionCapsulePath through, and stays narrow when absent', () => {
+  const root = seat({
+    curated: CURATED,
+    'auto-seat-abcd1234': {
+      id: 'auto-seat-abcd1234', status: 'active',
+      created_at: '2026-08-01T22:20:34.089Z',
+      objective: SENTINEL_OBJECTIVE, next_valid_action: SENTINEL_ACTION,
+    },
+  });
+  const sessionPath = path.join(root, 'capsules', 'auto-seat-abcd1234.md');
+
+  const bound = newestValidCapsule(root, { sessionCapsulePath: sessionPath });
+  assert.equal(bound?.id, 'auto-seat-abcd1234', 'wrapper did not thread the option through');
+
+  const plain = newestValidCapsule(root);
+  assert.equal(plain?.id, 'curated-real', 'wrapper default behavior regressed');
+  assert.deepEqual(
+    Object.keys(plain).sort(),
+    ['createdRaw', 'created', 'id', 'path', 'rejected'].sort(),
+    'option-absent return shape must stay BYTE-IDENTICAL to before this fix — no leaked sessionBound key',
+  );
   rmSync(root, { recursive: true, force: true });
 });
 

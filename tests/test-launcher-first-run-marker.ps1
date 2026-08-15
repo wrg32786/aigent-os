@@ -76,8 +76,15 @@ $env:PATH = "$FakeBin;$env:PATH"
 
 # The launcher's product contract is pwsh (aigent.cmd and the installer
 # shortcut both target it), so the suite drives it under pwsh too.
+# --no-deps is the launcher's own flag for running claude directly instead of
+# through the managed runner. Without it the launcher execs
+# $AIGENT_HOME/daemons/pty-runner.mjs, and these fixtures are bare temp
+# directories with no daemons tree, so the run dies before the stub is reached.
+# Marker ownership lives in the top-level first-run branch, outside
+# Invoke-AigentClaude, so it behaves identically on both paths; the managed path
+# has its own coverage in daemons/tests/pty-runner.test.mjs.
 function Invoke-Launcher([string]$LogPath) {
-    & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $Launcher > $LogPath 2>&1
+    & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $Launcher --no-deps > $LogPath 2>&1
     return $LASTEXITCODE
 }
 
@@ -102,7 +109,7 @@ $env:CLAUDE_STUB_MODE = 'sleep'
 $env:CLAUDE_PID_FILE = $PidFile
 
 $script:LauncherProc = Start-Process -FilePath 'pwsh' `
-    -ArgumentList '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Launcher `
+    -ArgumentList '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Launcher, '--no-deps' `
     -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $Work 'kill.log') `
     -RedirectStandardError (Join-Path $Work 'kill.err')
@@ -132,7 +139,11 @@ if (Test-Path (Join-Path $KillHome '.aigent\first-run-done')) {
 Write-Host "[2/$Total] PID-targeted interruption: no first-run marker"
 Remove-Item Env:\CLAUDE_PID_FILE
 
-# ── 3. Skill-owned completion: marker routes the next launch to /open ──────
+# ── 3. Skill-owned completion: marker routes the next launch to the warm path ─
+#
+# The warm path sends --continue and no slash-command. /open is retired
+# (docs/capsule-v2-doctrine.md), and the launcher stopped sending it when the
+# managed runner landed; this expectation follows the launcher.
 $CompleteHome = Join-Path $Work 'complete-home'
 $CallLog = Join-Path $Work 'claude-calls.tsv'
 New-Item -ItemType Directory -Force $CompleteHome | Out-Null
@@ -150,7 +161,7 @@ if ($StateJson -notmatch '"status"\s*:\s*"ready"') {
 }
 
 Invoke-Launcher (Join-Path $Work 'complete-second.log') | Out-Null
-$ExpectedCalls = @("1`t/start", "2`t--continue`t/open")
+$ExpectedCalls = @("1`t/start", "1`t--continue")
 $ActualCalls = @(Get-Content $CallLog)
 if (($ActualCalls.Count -ne $ExpectedCalls.Count) -or
     (@(Compare-Object $ExpectedCalls $ActualCalls -SyncWindow 0).Count -ne 0)) {
@@ -158,9 +169,9 @@ if (($ActualCalls.Count -ne $ExpectedCalls.Count) -or
     $ExpectedCalls | ForEach-Object { [Console]::Error.WriteLine("  $_") }
     [Console]::Error.WriteLine('actual claude calls:')
     $ActualCalls | ForEach-Object { [Console]::Error.WriteLine("  $_") }
-    Fail 'completed first run did not route the second launch to --continue /open'
+    Fail 'completed first run did not route the second launch to --continue'
 }
-Write-Host "[3/$Total] skill-owned completion: second launch receives --continue /open"
+Write-Host "[3/$Total] skill-owned completion: second launch receives --continue"
 
 Write-Host "launcher first-run marker suite passed ($Total/$Total)"
 Cleanup
