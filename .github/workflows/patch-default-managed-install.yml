@@ -1,0 +1,399 @@
+name: Apply default managed install patch
+
+on:
+  push:
+    branches:
+      - fix/default-managed-install
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ github.event.head_commit.message != 'Make managed runner the default install' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply the narrow installer and documentation patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path, text):
+              Path(path).write_text(text, encoding="utf-8")
+
+          def replace_once(path, old, new):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              write(path, text.replace(old, new, 1))
+
+          # install.sh: default means verified managed runner plus the installed front door.
+          replace_once(
+              "install.sh",
+              "  --no-deps             Skip optional Node.js dependency installation\n  --dry-run             Print the planned changes without modifying files\n",
+              "  --no-deps             Skip Node.js dependencies and managed Auto-Refresh\n  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring\n  --dry-run             Print the planned changes without modifying files\n",
+          )
+          replace_once(
+              "install.sh",
+              "NO_DEPS=0\nDRY_RUN=0\n",
+              "NO_DEPS=0\nNO_LAUNCHER=0\nDRY_RUN=0\n",
+          )
+          replace_once(
+              "install.sh",
+              "    --no-deps)\n      NO_DEPS=1\n      shift\n      ;;\n    --dry-run)\n",
+              "    --no-deps)\n      NO_DEPS=1\n      shift\n      ;;\n    --no-launcher)\n      NO_LAUNCHER=1\n      shift\n      ;;\n    --dry-run)\n",
+          )
+          replace_once(
+              "install.sh",
+              "printf '  Deps:   %s\\n' \"$([[ \"$NO_DEPS\" -eq 1 ]] && printf 'skip' || printf 'install when Node.js 18+ is available')\"\n",
+              "printf '  Deps:   %s\\n' \"$([[ \"$NO_DEPS\" -eq 1 ]] && printf 'skip (unmanaged fallback)' || printf 'managed Auto-Refresh (Node.js 18+ required)')\"\nprintf '  Launch: %s\\n' \"$([[ \"$NO_LAUNCHER\" -eq 1 ]] && printf 'files only' || printf 'wire the aigent front door')\"\n",
+          )
+          replace_once(
+              "install.sh",
+              "  [[ \"$NO_DEPS\" -eq 0 ]] && printf '    - install optional semantic-search dependencies\\n'\n  printf '\\n  Dry run complete. No files changed.\\n\\n'\n",
+              "  if [[ \"$NO_DEPS\" -eq 0 ]]; then\n    printf '    - install and verify semantic search + managed Auto-Refresh dependencies\\n'\n  fi\n  [[ \"$NO_LAUNCHER\" -eq 0 ]] && printf '    - wire the aigent command and platform launcher\\n'\n  printf '\\n  Dry run complete. No files changed.\\n\\n'\n",
+          )
+
+          install = read("install.sh")
+          dep_start = install.index(
+              'if [[ "$NO_DEPS" -eq 1 ]]; then\n',
+              install.index("printf '  [ok] Generated local state excluded from git\\n'"),
+          )
+          final_start = install.index("printf '\\n  ========================================\\n'", dep_start)
+          replacement = r'''if [[ "$NO_DEPS" -eq 1 ]]; then
+            printf '  [skip] Node.js dependencies (--no-deps); managed Auto-Refresh may be unavailable\n'
+          else
+            command -v node >/dev/null 2>&1 \
+              || fail "Node.js 18+ is required for the default managed Auto-Refresh install. Install Node.js and rerun, or pass --no-deps for the unmanaged fallback."
+            command -v npm >/dev/null 2>&1 \
+              || fail "npm is required for the default managed Auto-Refresh install. Install Node.js with npm and rerun, or pass --no-deps."
+
+            NODE_MAJOR="$(node --version | sed 's/^v//' | cut -d. -f1)"
+            if ! [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || ((NODE_MAJOR < 18)); then
+              fail "Node.js 18+ is required for managed Auto-Refresh; found $(node --version). Upgrade Node.js or pass --no-deps for the unmanaged fallback."
+            fi
+
+            # Two independent dependency roots: semantic search and the managed PTY transport.
+            for DEP_DIR in semantic-search transport-deps; do
+              if [[ ! -f "$TARGET/daemons/$DEP_DIR/package.json" ]]; then
+                printf '  [skip] No %s package found\n' "$DEP_DIR"
+                continue
+              fi
+              printf '  Installing %s dependencies (network access may occur)...\n' "$DEP_DIR"
+              pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
+              if [[ -f package-lock.json ]]; then
+                npm ci --silent --ignore-scripts
+              else
+                npm install --silent --ignore-scripts
+              fi
+              if [[ "$DEP_DIR" == "transport-deps" ]]; then
+                npm rebuild --silent node-pty \
+                  || fail "node-pty failed to build. Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
+              fi
+              popd >/dev/null
+              printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+            done
+
+            if ! node -e '
+          const { createRequire } = require("node:module");
+          createRequire(process.argv[1])("node-pty");
+          ' "$TARGET/daemons/transport-deps/package.json"; then
+              fail "node-pty installed but could not load. Fix the reported native dependency error and rerun, or pass --no-deps for the unmanaged fallback."
+            fi
+            printf '  [ok] Managed Auto-Refresh runner verified\n'
+          fi
+
+          wire_aigent_front_door() {
+            # Minimal installer fixtures intentionally omit launcher/. The real product tree ships it.
+            [[ -d "$SRC/launcher" ]] || return 0
+
+            [[ -f "$TARGET/launcher/aigent.sh" && -f "$TARGET/launcher/aigent.ps1" ]] \
+              || fail "managed launcher files are missing from $TARGET/launcher"
+
+            if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${WINDIR:-}" ]]; then
+              local powershell=""
+              if command -v pwsh >/dev/null 2>&1; then
+                powershell="pwsh"
+              elif command -v powershell.exe >/dev/null 2>&1; then
+                powershell="powershell.exe"
+              else
+                fail "PowerShell is required to wire the Windows aigent command and shortcuts"
+              fi
+              [[ -f "$TARGET/launcher/install.ps1" ]] \
+                || fail "missing Windows launcher installer: $TARGET/launcher/install.ps1"
+              "$powershell" -NoLogo -NoProfile -ExecutionPolicy Bypass \
+                -File "$TARGET/launcher/install.ps1" -AigentHome "$TARGET"
+            else
+              [[ -f "$TARGET/launcher/install.sh" ]] \
+                || fail "missing launcher installer: $TARGET/launcher/install.sh"
+              bash "$TARGET/launcher/install.sh" "$TARGET"
+            fi
+            printf '  [ok] aigent command and platform launcher wired\n'
+          }
+
+          if [[ "$NO_LAUNCHER" -eq 1 ]]; then
+            printf '  [skip] Launcher wiring (--no-launcher)\n'
+          else
+            wire_aigent_front_door
+          fi
+
+          '''
+          install = install[:dep_start] + replacement + install[final_start:]
+
+          final_start = install.index("printf '\\n  ========================================\\n'", dep_start)
+          install = install[:final_start] + r'''printf '\n  ========================================\n'
+          if [[ "$NO_DEPS" -eq 1 ]]; then
+            printf '  [ok] aigent-OS is ready (Node dependencies skipped)\n'
+          else
+            printf '  [ok] aigent-OS is ready with managed Auto-Refresh\n'
+          fi
+          printf '  ========================================\n\n'
+          printf '  Next:\n'
+          if [[ "$NO_LAUNCHER" -eq 1 ]]; then
+            printf '    Launcher wiring was skipped. Start through launcher/aigent.sh or launcher/aigent.ps1.\n\n'
+          else
+            printf '    Open a new terminal and run: aigent\n'
+            printf '    On Windows or macOS, you can also open the AIgent app/shortcut.\n\n'
+          fi
+
+          # Reached only on a successful install: the script runs under `set -Eeuo pipefail`,
+          # so any earlier failure aborts before this point.
+          printf '  If aigent-OS saves you time, a star helps other people find it:\n'
+          printf '    https://github.com/wrg32786/aigent-os\n\n'
+          '''
+          write("install.sh", install)
+
+          # Windows shortcuts should use whichever PowerShell executable actually ran the installer.
+          replace_once(
+              "launcher/install.ps1",
+              "  $lnk.TargetPath       = 'pwsh.exe'\n",
+              "  $lnk.TargetPath       = (Get-Process -Id $PID).Path\n",
+          )
+
+          # README: autonomous default, one command, no second launcher install.
+          replace_once(
+              "README.md",
+              "*aigent-OS gives Claude Code durable memory and automatic context recovery; it remembers across sessions, checkpoints itself every turn, and re-grounds the fresh window after every compaction or `/clear` so you never re-brief it. A free, open-source operator layer, not a chat wrapper.*",
+              "*aigent-OS gives Claude Code durable memory and autonomous context refresh: it watches context pressure, saves a verified capsule, clears and rebinds the session, then continues the work without interrupting the operator. A free, open-source operator layer, not a chat wrapper.*",
+          )
+          replace_once(
+              "README.md",
+              '<img src="assets/demo-session-resume.svg" alt="A session at 60% context has already autosaved its capsule; the operator runs /clear, the resume verb re-grounds the fresh window, and it comes back at 10% context knowing exactly where it left off" width="100%"/>',
+              '<img src="assets/demo-session-resume.svg" alt="Managed Auto-Refresh saves a capsule, clears the full context, rebinds the fresh session, and continues the work" width="100%"/>',
+          )
+          replace_once(
+              "README.md",
+              "The animation shows the manual `/clear` path. Managed Auto-Refresh now performs that boundary too: at the configured context threshold it requests a capsule, waits for the exact completion acknowledgement, queues one `/clear`, binds the fresh session, and submits one resume wake. The same lifecycle remains available manually when you want it.",
+              "The animation illustrates the lifecycle. In the shipped default, Managed Auto-Refresh performs the whole boundary automatically: at the configured context threshold it requests a capsule, waits for the exact completion acknowledgement, submits one `/clear`, binds the fresh session, and submits one resume wake.",
+          )
+          replace_once(
+              "README.md",
+              "> **Dependency model:** the core kernel is markdown + shell: no database or server. Node.js 18+ enables semantic search, hook automation, and the managed Auto-Refresh transport; the installer wires them automatically when Node is present. A `--no-deps` install keeps checkpointing and post-clear recovery, but launches Claude unmanaged with automatic clear disabled. Obsidian is optional, for browsing the vault visually.",
+              "> **Dependency model:** the core kernel is markdown + shell: no database or server. The default installer requires Node.js 18+, installs and verifies the managed Auto-Refresh transport, and wires the `aigent` front door automatically. `--no-deps` is the explicit fallback when you deliberately want to skip Node dependencies. Obsidian is optional, for browsing the vault visually.",
+          )
+          replace_once(
+              "README.md",
+              "Clone or download this repo (https://github.com/wrg32786/aigent-os) into the current\ndirectory, then run `bash install.sh` from inside it. If Node.js 18+ is available, let\nthe installer wire semantic search and the managed Auto-Refresh runner; otherwise pass\n--no-deps. When it finishes, start a new session in this same directory, read whatever\nit prints on boot, and tell me what you'd like to work on first.",
+              "Clone or download this repo (https://github.com/wrg32786/aigent-os) into the current\ndirectory, then run `bash install.sh` from inside it. The default installer requires\nNode.js 18+, installs and verifies the managed Auto-Refresh runner, and wires the\n`aigent` front door. When it finishes, open a new terminal and run `aigent`.",
+          )
+          replace_once(
+              "README.md",
+              "That's it. aigent-OS installs into whatever directory you're in: your existing project, your home folder, wherever you work. The installer copies the kernel files, creates `.claude/settings.json` with your actual paths substituted, and installs semantic search if Node.js is available.",
+              "That's it. aigent-OS installs into whatever directory you're in: your existing project, your home folder, wherever you work. The installer copies the kernel files, creates `.claude/settings.json`, installs and verifies managed Auto-Refresh, and wires the `aigent` command plus the platform launcher where supported.",
+          )
+          replace_once(
+              "README.md",
+              "> **Optional `--no-deps`:** skips Node dependencies, including semantic search and the managed PTY transport. Checkpointing and post-clear recovery still work, but automatic clear is disabled and the launcher says so. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change. See [Advanced Setup](docs/advanced-setup.md).",
+              "> **Explicit fallback `--no-deps`:** skips Node dependencies, including semantic search and the managed PTY transport; the launcher then uses its loud unmanaged fallback when the transport is unavailable. **Other flags:** `--target <dir>` installs elsewhere, `--dry-run` previews every change, and `--no-launcher` skips PATH/shortcut wiring. See [Advanced Setup](docs/advanced-setup.md).",
+          )
+          replace_once(
+              "README.md",
+              "**Start a new Claude Code conversation** in the same directory. The launcher uses the managed runner when its PTY dependency is available: it resumes on start, tracks context pressure, checkpoints, clears, and wakes the fresh session without an operator command. `/context-capsule`, `/clear`, and `/resume` remain available on demand, and `claude --continue` still warm-resumes an existing conversation.\n\n**Prefer an app to a terminal?** Run `launcher/install.sh` (or `install.ps1` on Windows) once, then double-click the AIgent icon, warm-resumed via `claude --continue`, no `cd` and no cold start. See [`launcher/README.md`](launcher/README.md).",
+              "**Open a new terminal and run `aigent`.** The installer has already wired the managed runner. The first launch runs guided setup; later launches warm-resume, track context pressure, checkpoint, clear, rebind, and continue without an operator command.\n\n**Prefer an app to a terminal?** The same install creates the AIgent app/shortcut where supported. Open it instead of typing `aigent`. See [`launcher/README.md`](launcher/README.md).",
+          )
+          replace_once(
+              "README.md",
+              "- **No Node.js installed:** the kernel still works; you just lose semantic search and the Node-based hooks. Run `bash install.sh --no-deps`, or install Node 18+ later and run `npm install` inside `daemons/semantic-search/` to wire it retroactively.",
+              "- **No Node.js installed:** the default install stops because managed Auto-Refresh is the default. Install Node.js 18+ and rerun `bash install.sh`; use `--no-deps` only when you deliberately want the unmanaged fallback.",
+          )
+
+          # Launcher docs: this is the default front door now, not a second optional setup step.
+          launcher = read("launcher/README.md")
+          start = launcher.index("Not every operator wants")
+          end = launcher.index("## Files")
+          launcher_intro = '''The root `bash install.sh` command wires this front door automatically. Type `aigent` in a new terminal, or open the installed AIgent app/shortcut, and the operator wakes up warm-resumed with managed Auto-Refresh active. No `cd`, flags, or second installer command are required.
+
+The launcher is the supported default because it starts Claude inside `daemons/pty-runner.mjs`. Running `claude` directly remains possible, but it bypasses the managed Auto-Refresh transport.
+
+'''
+          write("launcher/README.md", launcher[:start] + launcher_intro + launcher[end:])
+
+          # Getting-started guide follows the same one-command contract.
+          replace_once(
+              "docs/getting-started.md",
+              "Required:\n\n1. **Claude Code** in the CLI, desktop app, or an IDE integration.\n2. **Bash** for installation and hook scripts.\n\nOptional:\n\n- **Node.js 18 or newer** for semantic search and Node-based hooks.\n- **Python 3** for runtime-state computation and selected daemons.\n- **Obsidian** for visual navigation of the vault.",
+              "Required for the default managed install:\n\n1. **Claude Code** in the CLI, desktop app, or an IDE integration.\n2. **Bash** for installation and hook scripts.\n3. **Node.js 18 or newer** for the managed Auto-Refresh runner and semantic search.\n\nOptional:\n\n- **Python 3** for runtime-state computation and selected daemons.\n- **Obsidian** for visual navigation of the vault.\n\nUse `--no-deps` only for an explicit unmanaged fallback without the managed PTY transport.",
+          )
+          replace_once(
+              "docs/getting-started.md",
+              "This leaves the source tree in place and configures `.claude/`, local state, runtime skills, agents, and optional dependencies.",
+              "This leaves the source tree in place, installs and verifies the managed Auto-Refresh dependencies, configures `.claude/`, and wires the `aigent` command plus the platform launcher.",
+          )
+          replace_once(
+              "docs/getting-started.md",
+              "To skip optional dependencies:\n",
+              "To deliberately skip Node dependencies and use the unmanaged fallback:\n",
+          )
+          replace_once(
+              "docs/getting-started.md",
+              "- Runs `npm ci` or `npm install` inside `daemons/semantic-search/` when Node.js 18 or newer is available, unless `--no-deps` was supplied.\n\nThe optional npm step can use the network. The rest of the installer reads from the local checkout and writes only inside the target directory.",
+              "- Runs `npm ci` or `npm install` for semantic search and the managed PTY transport, rebuilds and load-verifies `node-pty`, unless `--no-deps` was supplied.\n- Wires `aigent` into the user's PATH and creates the platform app/shortcut where supported, unless `--no-launcher` was supplied.\n\nThe npm step can use the network. Launcher wiring writes the user-level PATH/profile or platform shortcut; the remaining installer work stays inside the target directory.",
+          )
+          replace_once(
+              "docs/getting-started.md",
+              "## First session\n\nOpen Claude Code in the installed directory and run:\n\n```text\n/start\n```\n\n`/start` owns first-run detection and onboarding. It records setup progress in `.aigent/state.json`, learns the operator's context, produces a first usable artifact, and marks setup ready only after durable writes succeed.",
+              "## First session\n\nOpen a new terminal and run:\n\n```text\naigent\n```\n\nThe installed front door starts Claude inside the managed runner. On the first launch it invokes `/start`, which owns first-run detection and onboarding, records setup progress in `.aigent/state.json`, learns the operator's context, produces a first usable artifact, and marks setup ready only after durable writes succeed.",
+          )
+          replace_once(
+              "docs/getting-started.md",
+              "`/open` and `/close` are **retired** (the skill files remain but are deprecated). Run `/statusline` once in Claude Code and enable context usage so you can watch the window fill; when you `/clear`, the rolling capsule autosave means nothing needs saving first, and the resume verb re-grounds the fresh window automatically.",
+              "`/open` and `/close` are **retired** (the skill files remain but are deprecated). The installed `aigent` front door is the default: it watches context pressure, requests and verifies one capsule, submits one clear, binds the fresh SessionStart identity, and sends one resume wake. `/context-capsule`, `/clear`, and `/resume` remain available for deliberate manual use, but they are not the normal operating path.",
+          )
+
+          # Public changelog records the UX change.
+          replace_once(
+              "CHANGELOG.md",
+              "## [Unreleased]\n\n### Added\n",
+              "## [Unreleased]\n\n### Changed\n- **One-command managed install**: `bash install.sh` now treats the managed runner as the default product path. It requires Node.js 18+, installs and load-verifies `node-pty`, wires the `aigent` command and platform launcher automatically, and finishes with one instruction: open a new terminal and run `aigent`. `--no-deps` and `--no-launcher` remain explicit opt-outs.\n\n### Added\n",
+          )
+
+          # Direct regression: default path verifies dependencies and invokes launcher wiring.
+          write("tests/test-installer-launcher-copy.sh", r'''#!/usr/bin/env bash
+          # Default-install regression: the ordinary one-command path verifies the managed
+          # runner and invokes the copied platform front-door installer.
+
+          set -Eeuo pipefail
+
+          ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT INT TERM
+
+          fail() {
+            printf 'FAIL: %s\n' "$*" >&2
+            exit 1
+          }
+
+          FIXTURE="$WORK/source"
+          mkdir -p "$FIXTURE"/{system,vault/agents,skills/demo,hooks,daemons/semantic-search,daemons/transport-deps,scripts,docs,memory,evals,launcher,.claude/rules}
+          cp "$ROOT/install.sh" "$FIXTURE/install.sh"
+          printf '# Identity\n' > "$FIXTURE/system/00_identity.md"
+          printf '# Claude source\n' > "$FIXTURE/CLAUDE.md"
+          printf '%s\n' '---' 'name: demo' '---' > "$FIXTURE/skills/demo/SKILL.md"
+          printf '%s\n' '---' 'name: scout' 'tools: [Read]' '---' > "$FIXTURE/vault/agents/scout.md"
+          printf '# critical\n' > "$FIXTURE/.claude/rules/post-compact-critical.md"
+          cat > "$FIXTURE/.claude/settings.json.template" <<'JSON'
+          {"env":{"AIGENT_ROOT":"__AIGENT_ROOT__","AIGENT_VAULT":"__AIGENT_ROOT__"},"statusLine":{"type":"command","command":"bash \"__AIGENT_ROOT__/daemons/statusline-ctx.sh\""},"hooks":{"SessionEnd":[]}}
+          JSON
+          printf '[]\n' > "$FIXTURE/.claude/skill-index.json"
+          printf '{"name":"semantic-search","version":"1.0.0"}\n' > "$FIXTURE/daemons/semantic-search/package.json"
+          printf '{"name":"transport-deps","version":"1.0.0"}\n' > "$FIXTURE/daemons/transport-deps/package.json"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXTURE/daemons/statusline-ctx.sh"
+          printf '#!/bin/sh\necho "trusted"\n' > "$FIXTURE/hooks/example-hook.sh"
+          cp "$ROOT/launcher/aigent.sh" "$FIXTURE/launcher/aigent.sh"
+          cp "$ROOT/launcher/aigent.ps1" "$FIXTURE/launcher/aigent.ps1"
+
+          cat > "$FIXTURE/launcher/install.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          mkdir -p "$1/.aigent"
+          printf '%s\n' "$1" > "$1/.aigent/launcher-wired"
+          SH
+          cat > "$FIXTURE/launcher/install.ps1" <<'PS1'
+          param([string]$AigentHome)
+          New-Item -ItemType Directory -Force (Join-Path $AigentHome '.aigent') | Out-Null
+          Set-Content -Encoding ascii (Join-Path $AigentHome '.aigent\launcher-wired') $AigentHome
+          PS1
+
+          FAKE_BIN="$WORK/bin"
+          mkdir -p "$FAKE_BIN"
+          cat > "$FAKE_BIN/node" <<'SH'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "--version" ]]; then
+            printf 'v20.0.0\n'
+          fi
+          exit 0
+          SH
+          cat > "$FAKE_BIN/npm" <<'SH'
+          #!/usr/bin/env bash
+          exit 0
+          SH
+          chmod +x "$FAKE_BIN/node" "$FAKE_BIN/npm"
+
+          TARGET="$WORK/copy-target"
+          (
+            cd "$FIXTURE"
+            PATH="$FAKE_BIN:$PATH" bash install.sh --target "$TARGET" > "$WORK/install.out"
+          )
+
+          test -f "$TARGET/launcher/aigent.sh" \
+            || fail "copy install omitted launcher/aigent.sh"
+          test -f "$TARGET/launcher/aigent.ps1" \
+            || fail "copy install omitted launcher/aigent.ps1"
+          test -x "$TARGET/launcher/aigent.sh" \
+            || fail "copy-installed launcher/aigent.sh is not executable"
+          test -f "$TARGET/.aigent/launcher-wired" \
+            || fail "default installer did not invoke platform launcher wiring"
+          grep -F 'Managed Auto-Refresh runner verified' "$WORK/install.out" >/dev/null \
+            || fail "default installer did not verify the managed runner"
+          grep -F 'Open a new terminal and run: aigent' "$WORK/install.out" >/dev/null \
+            || fail "installer did not finish with the one-command front door"
+
+          printf '[1/1] default install verifies managed runner and wires the aigent front door\n'
+          printf 'launcher copy installer suite passed (1/1)\n'
+          ''')
+
+          # The slow full-tree smoke is about target integrity; avoid changing the developer's PATH/profile.
+          replace_once(
+              "tests/test-installer-slow-smoke.sh",
+              'bash "$ROOT/install.sh" --target "$REAL_TARGET" --no-deps >/dev/null\n',
+              'bash "$ROOT/install.sh" --target "$REAL_TARGET" --no-deps --no-launcher >/dev/null\n',
+          )
+          PY
+
+      - name: Run the direct checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install.sh
+          bash tests/test-installer-launcher-copy.sh
+          bash tests/test-installer-fast.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('README.md').read_text(encoding='utf-8')
+          assert 'after every compaction or `/clear`' not in text
+          assert 'run `launcher/install.sh`' not in text
+          assert 'open a new terminal and run `aigent`' in text.lower()
+          PY
+          git diff --check
+
+      - name: Commit the patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add install.sh README.md CHANGELOG.md docs/getting-started.md launcher/README.md launcher/install.ps1 tests/test-installer-launcher-copy.sh tests/test-installer-slow-smoke.sh
+          git commit -m "Make managed runner the default install"
+          git push origin HEAD
