@@ -179,7 +179,7 @@ test('an exact install attests COMPLIANT against the shipped manifest', () => {
 });
 
 test('a settings fixture rendered with a lowercase Windows root attests COMPLIANT', {
-  skip: process.platform !== 'win32',
+  skip: process.platform !== 'win32' && 'Windows drive-letter canonicalization only',
 }, () => {
   withInstall((root) => {
     const lowerRoot = lowercaseMsysRoot(root);
