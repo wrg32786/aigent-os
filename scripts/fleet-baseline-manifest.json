@@ -1,0 +1,109 @@
+{
+  "schema": "FleetBaselineManifest/v1",
+  "baseline_id": "aigent-os-2026-08-19-41051d9e",
+  "public_product_commit": "41051d9e544063309d3b69462aecb7aa4edbe149",
+  "notes": [
+    "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
+    "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
+    "scripts/doctor.sh is excluded: it is the measuring instrument, and this baseline was cut before the --attest change landed, so its post-merge bytes are not the pinned ones.",
+    "CLAUDE.md, .claude/settings.json and .gitignore are excluded: the installer rewrites them (marker block, placeholder render, managed ignore block), so their installed bytes are never the repo bytes.",
+    ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT."
+  ],
+  "required_files": {
+    "daemons/statusline-ctx.sh": "49c1aa9d2336ce3515314e4c7a0bbdaf0c2576082413e53d3b09901d648bdb2e",
+    "daemons/sessionstart-reinject.mjs": "f088db2faba158af4008dc56321d80cb52a7544d37a952d51472d69fa9e39496",
+    "daemons/resume-verb.mjs": "abc505d1581e28c5640eb018e41cfbd1f637da85d36312320abe9c7444052dc5",
+    "daemons/caddy.sh": "3985a94194fb5914b77c0f6089188045a08dd863f8143e02ffad85728f5c3b0e",
+    "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
+    "daemons/precompact-flush.mjs": "eb93bc6bed70e24400229d4930c7ec9b3f806476562f20ea83f6da4cc3b8b07a",
+    "daemons/ctx-refresh-sensor.mjs": "0978848f6fac08f66fa7c6842e666c19eed6d05b82836a316b9c3c2be49e6cfb",
+    "daemons/model-tier-guard.mjs": "11a68c2afcfbd8531d37ada2e9cd0b5fc08d30030862ff1bce078cf0c182b659",
+    "daemons/gateguard.mjs": "5135ec0d86c96867c86cf318cdbee84ea0e0ef97e91a1ea4d1b2d46d0fba8e4d",
+    "daemons/memory-budget-guard.mjs": "78098d5281c28e61380bf09956f609a6721eff47f5e63a9fe80589250f0b10a2",
+    "hooks/suggest-compact.sh": "a7aaf8d9eee7f2c7d5269167566a51677f22319f8343cb904ea82ba2390197f4",
+    "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
+    "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
+    "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
+    "daemons/stop-capsule-writer.mjs": "a9c37843f0b8d9e2bec10c1cd798afae80add202f795bcd0d0326410fca30f55",
+    "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
+    "hooks/session-capture-summary.sh": "42c6ce5a62258f65526137aa820f370452f26cd3e2fea129edb6f7aa51fccb4d",
+    "hooks/log-token-usage.sh": "5a009edd29267d54c34827a483b7309370d58f7a9483defe000061ec3804965c",
+    "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
+    ".claude/settings.json.template": "2a56f0b438f8c3280653854d75f6efee3c6f90492f788b821ccaf2f0c46782d0",
+    ".claude/rules/post-compact-critical.md": "5859c7d30e6f59188942930586f23e6669306d9d877e9219bbc57898dc9d883a",
+    "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
+    "daemons/pty-runner.mjs": "384f7a6b6be1e6be7882cd58e3d5b454390c39de31d64fc20e88c0749da79389",
+    "daemons/auto-clear-transport.mjs": "c552f4270158e5b1efe248ffa2580a4b5baa3fe7b00ecf715c3e0b6a69dabe3f",
+    "daemons/lifecycle-common.mjs": "e4f36b6c41d3e6c4725c9ccf678fe192ba1bed513e158f824176fd24684e9d8b",
+    "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
+    "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
+    "launcher/aigent.sh": "5aebacaf419b421f87260ff5aa31c0b7b68a795435031475b92e9c65d8419335",
+    "launcher/aigent.ps1": "44e21c52268c77fb64e190b698beeeffc27ab188e315c5f5d3b173af950508b0",
+    "launcher/install.sh": "cdb11fd4a4f0d0f5a39ba044ac2e3a509482ee35d1964b677a32f52f78dd2285",
+    "launcher/install.ps1": "472cb70b6bfba4c1d3ff38cf72855eadde2953ac5063bcdfc89c3fa05ae93574"
+  },
+  "required_settings": {
+    "path": ".claude/settings.json",
+    "template": ".claude/settings.json.template",
+    "unresolved_placeholder": "__AIGENT_ROOT__",
+    "hook_commands": [
+      "daemons/statusline-ctx.sh",
+      "daemons/sessionstart-reinject.mjs",
+      "daemons/resume-verb.mjs",
+      "daemons/caddy.sh",
+      "daemons/userpromptsubmit-journal.mjs",
+      "daemons/precompact-flush.mjs",
+      "daemons/ctx-refresh-sensor.mjs",
+      "daemons/model-tier-guard.mjs",
+      "daemons/gateguard.mjs",
+      "daemons/memory-budget-guard.mjs",
+      "hooks/suggest-compact.sh",
+      "hooks/auto-capture.sh",
+      "hooks/security-scan.sh",
+      "daemons/caddy-detect-new-skill.sh",
+      "daemons/stop-capsule-writer.mjs",
+      "daemons/discipline-check.mjs",
+      "hooks/session-capture-summary.sh",
+      "hooks/log-token-usage.sh",
+      "daemons/sessionend-flush.mjs"
+    ]
+  },
+  "managed_runner": {
+    "dependency_root": "daemons/transport-deps",
+    "module": "node-pty",
+    "version": "1.1.0",
+    "entry_point": "daemons/pty-runner.mjs"
+  },
+  "managed_launcher": {
+    "expected": "present",
+    "paths": [
+      "launcher/aigent.sh",
+      "launcher/aigent.ps1",
+      "launcher/install.sh",
+      "launcher/install.ps1"
+    ],
+    "scope_note": "v1 attests the launcher files in the tree only. The PATH shim and desktop/Start-menu shortcuts that launcher/install.* create land outside the install root and are out of scope for a read-only in-tree attestation."
+  },
+  "auto_refresh": {
+    "expected": "enabled",
+    "kill_switch_env": "AUTO_CLEAR_OFF",
+    "kill_switch_file": "runtime/auto-clear-off",
+    "kill_switch_roots": [
+      "vault/memory",
+      "memory"
+    ],
+    "note": "kill_switch_file is resolved under the first existing kill_switch_roots entry, mirroring memRoot() in daemons/lifecycle-common.mjs. When expected is enabled, an active kill switch or an unloadable node-pty is NONCOMPLIANT."
+  },
+  "optional_components": {
+    "semantic_search": {
+      "path": "daemons/semantic-search/node_modules",
+      "absent_verdict": "DEGRADED"
+    }
+  },
+  "terminals": [
+    "COMPLIANT",
+    "DEGRADED",
+    "NONCOMPLIANT",
+    "UNKNOWN"
+  ]
+}

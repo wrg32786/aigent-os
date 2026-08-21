@@ -2,9 +2,18 @@
 # aigent-OS Doctor
 # Diagnoses install health. Exit 0 = no FAILs. Exit 1 = at least one FAIL.
 # Usage: bash scripts/doctor.sh [aigent-root-path] [--fix]
+#        bash scripts/doctor.sh [aigent-root-path] --attest
 #
 # By default this script is READ-ONLY -- it reports missing dirs/files as WARN but does not create them.
 # Pass --fix to enable mutation (mkdir for missing vault dirs, etc.).
+#
+# --attest compares this tree against scripts/fleet-baseline-manifest.json and
+# prints exactly one terminal class: COMPLIANT, DEGRADED, NONCOMPLIANT, or
+# UNKNOWN. It is strictly read-only -- no writes anywhere (not even a temp
+# file), no repairs, no network -- and returns before the diagnostic pass
+# below, so --fix can never run alongside it. Exit 0 = COMPLIANT or DEGRADED,
+# 1 = NONCOMPLIANT, 2 = UNKNOWN (the tree could not be measured, which is not
+# the same as measuring it and finding it broken).
 #
 # Checks:
 #   - aigent-OS root detected
@@ -24,9 +33,11 @@ set -euo pipefail
 # -- Parse args ----------------------------------------------------------------
 ROOT=""
 FIX=0
+ATTEST=0
 for arg in "$@"; do
   case "$arg" in
     --fix) FIX=1 ;;
+    --attest) ATTEST=1 ;;
     -*) ;;  # ignore unknown flags
     *) [ -z "$ROOT" ] && ROOT="$arg" ;;
   esac
@@ -40,6 +51,453 @@ if [ -z "$ROOT" ]; then
   elif [ -f "$(pwd)/../system/00_identity.md" ]; then
     ROOT="$(cd "$(pwd)/.." && pwd)"
   fi
+fi
+
+# -- Baseline attestation (--attest) -------------------------------------------
+# Returns before the diagnostic pass below. Everything here reads; nothing
+# writes, so this mode is safe to point at a live seat.
+#
+# The manifest is read with python3 (the same runtime checks 7b and 11 below
+# already depend on) via a stdin heredoc rather than a mktemp scratch file --
+# the read-only claim has to hold for /tmp too. python3 being absent is
+# "cannot measure", which is UNKNOWN, not a failure of the tree.
+if [ "$ATTEST" -eq 1 ]; then
+  attest_verdict() {
+    echo ""
+    echo "  ----------------------------------------"
+    echo "  ATTEST: $1"
+    echo ""
+    case "$1" in
+      COMPLIANT|DEGRADED) exit 0 ;;
+      NONCOMPLIANT)       exit 1 ;;
+      *)                  exit 2 ;;
+    esac
+  }
+
+  echo ""
+  echo "  aigent-OS Baseline Attestation"
+  echo "  ----------------------------------------"
+
+  if [ -z "$ROOT" ]; then
+    echo "  [detail] aigent-OS root not found -- pass the path as an argument or set AIGENT_ROOT"
+    attest_verdict UNKNOWN
+  fi
+  echo "  root:     $ROOT"
+
+  MANIFEST="$ROOT/scripts/fleet-baseline-manifest.json"
+  if [ ! -f "$MANIFEST" ]; then
+    echo "  [detail] baseline manifest not found: $MANIFEST"
+    attest_verdict UNKNOWN
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "  [detail] python3 not available -- the baseline manifest cannot be read"
+    attest_verdict UNKNOWN
+  fi
+
+  ATTEST_RC=0
+  ATTEST_OUT="$(python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
+import hashlib
+import json
+import os
+import sys
+
+manifest_path, root = sys.argv[1:3]
+
+with open(manifest_path, encoding="utf-8") as fh:
+    manifest = json.load(fh)
+
+
+def under_root(relative):
+    return os.path.join(root, *relative.split("/"))
+
+
+findings = []
+
+print("info:baseline %s" % manifest["baseline_id"])
+print("info:commit %s" % manifest["public_product_commit"])
+
+# Required files, byte for byte. A missing file and a changed file are the
+# same terminal but not the same fact, so they stay separate lines.
+for relative, expected in manifest["required_files"].items():
+    try:
+        with open(under_root(relative), "rb") as fh:
+            actual = hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        findings.append("required file missing: %s" % relative)
+        continue
+    if actual != expected:
+        findings.append("required file changed: %s" % relative)
+
+# Settings staleness. The installer MERGES into an existing settings.json
+# rather than replacing it, so a settings file rendered from an older template
+# stays valid JSON with every path resolved and is simply missing the newer
+# hook wiring. Checking the placeholder alone would read that as healthy.
+settings = manifest["required_settings"]
+MISSING = object()
+settings_document = MISSING
+
+
+def reject_json_constant(value):
+    raise ValueError("invalid JSON constant: %s" % value)
+
+
+try:
+    with open(under_root(settings["path"]), encoding="utf-8") as fh:
+        settings_text = fh.read()
+except OSError:
+    findings.append("settings missing: %s" % settings["path"])
+    settings_text = None
+except UnicodeError:
+    findings.append("settings JSON malformed: %s" % settings["path"])
+    settings_text = None
+
+if settings_text is not None:
+    if settings["unresolved_placeholder"] in settings_text:
+        findings.append(
+            "settings placeholder not substituted: %s"
+            % settings["unresolved_placeholder"]
+        )
+    try:
+        settings_document = json.loads(
+            settings_text, parse_constant=reject_json_constant
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        findings.append("settings JSON malformed: %s" % settings["path"])
+    if settings_document is MISSING:
+        for command in settings["hook_commands"]:
+            # When parsing fails, retain the legacy text witness and message:
+            # the relative tail is a literal substring of a rendered command.
+            if command not in settings_text:
+                findings.append("settings hook not wired: %s" % command)
+
+# The pinned template is the structural contract. Only its managed statusLine
+# and selected hook entries are required; unrelated operator settings remain
+# deliberately outside attestation.
+template_document = MISSING
+try:
+    with open(under_root(settings["template"]), encoding="utf-8") as fh:
+        template_document = json.load(fh, parse_constant=reject_json_constant)
+except OSError:
+    findings.append("settings template missing: %s" % settings["template"])
+except (ValueError, UnicodeError, RecursionError):
+    findings.append("settings template JSON malformed: %s" % settings["template"])
+
+
+root_to_resolve = root
+if (
+    os.name == "nt"
+    and len(root) >= 2
+    and root[0] == "/"
+    and root[1].isalpha()
+    and (len(root) == 2 or root[2] == "/")
+):
+    root_to_resolve = root[1] + ":" + root[2:]
+absolute_root = os.path.abspath(root_to_resolve)
+canonical_root = os.path.realpath(absolute_root)
+root_spellings = []
+
+
+def add_root_spelling(value):
+    if value not in root_spellings:
+        root_spellings.append(value)
+
+
+def add_root_variants(value):
+    add_root_spelling(value)
+    forward = value.replace("\\", "/")
+    add_root_spelling(forward)
+    drive, tail = os.path.splitdrive(forward)
+    if len(drive) == 2 and drive[1] == ":":
+        add_root_spelling("/%s%s" % (drive[0].lower(), tail))
+        add_root_spelling("/%s%s" % (drive[0].upper(), tail))
+
+
+for root_spelling in (canonical_root, absolute_root, root):
+    add_root_variants(root_spelling)
+
+
+def render_commands(command):
+    token = settings["unresolved_placeholder"]
+    if not isinstance(command, str) or token not in command:
+        return (command,)
+    if command == token:
+        return tuple(root_spellings)
+    rendered = []
+    for root_spelling in root_spellings:
+        escaped_root = (
+            root_spelling.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("$", "\\$")
+            .replace("`", "\\`")
+        )
+        rendered.append(command.replace(token, escaped_root))
+    return tuple(dict.fromkeys(rendered))
+
+
+def normalized_matcher(value):
+    return "" if value is MISSING or value in ("", "*") else value
+
+
+def hook_records(document):
+    records = []
+    hooks = document.get("hooks") if isinstance(document, dict) else None
+    if not isinstance(hooks, dict):
+        return records
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            for entry in group["hooks"]:
+                if isinstance(entry, dict):
+                    records.append(
+                        (
+                            event,
+                            normalized_matcher(group.get("matcher", MISSING)),
+                            entry.get("type", MISSING),
+                            entry.get("command", MISSING),
+                            entry.get("timeout", MISSING),
+                        )
+                    )
+    return records
+
+
+def same(left, right):
+    return type(left) is type(right) and left == right
+
+
+def shown(value):
+    return "missing" if value is MISSING else repr(value)
+
+
+def normalized_command(command):
+    if os.name == "nt" and isinstance(command, str):
+        return os.path.normcase(command)
+    return command
+
+
+def command_matches(actual, expected_commands):
+    actual = normalized_command(actual)
+    return any(
+        same(actual, normalized_command(expected)) for expected in expected_commands
+    )
+
+
+def timeout_is_insufficient(actual, required):
+    if required is MISSING:
+        return False
+    if actual is MISSING:
+        return True
+    if isinstance(required, bool) or not isinstance(required, (int, float)):
+        return not same(actual, required)
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        return True
+    return actual < required
+
+
+def shown_commands(commands):
+    return " or ".join(shown(command) for command in commands)
+
+
+if template_document is not MISSING:
+    required_commands = settings["hook_commands"]
+    represented = set()
+    expected_status = MISSING
+    status_line = (
+        template_document.get("statusLine")
+        if isinstance(template_document, dict)
+        else None
+    )
+    if isinstance(status_line, dict) and "command" in status_line:
+        template_status = status_line["command"]
+        expected_status = render_commands(template_status)
+        if isinstance(template_status, str):
+            represented.update(
+                command for command in required_commands if command in template_status
+            )
+    else:
+        findings.append(
+            "settings template contract missing statusLine command: %s"
+            % settings["template"]
+        )
+
+    expected_hooks = []
+    for event, matcher, hook_type, command, timeout in hook_records(template_document):
+        if not isinstance(command, str):
+            continue
+        for relative in required_commands:
+            if relative in command:
+                expected_hooks.append(
+                    (
+                        relative,
+                        event,
+                        matcher,
+                        hook_type,
+                        render_commands(command),
+                        timeout,
+                    )
+                )
+                represented.add(relative)
+    for command in required_commands:
+        if command not in represented:
+            findings.append(
+                "settings template contract missing required command: %s" % command
+            )
+
+    if settings_document is not MISSING:
+        installed_status = MISSING
+        if isinstance(settings_document, dict):
+            status_line = settings_document.get("statusLine")
+            if isinstance(status_line, dict):
+                installed_status = status_line.get("command", MISSING)
+        if (
+            expected_status is not MISSING
+            and not command_matches(installed_status, expected_status)
+        ):
+            findings.append(
+                "settings statusLine command differs: expected %s, got %s"
+                % (shown_commands(expected_status), shown(installed_status))
+            )
+
+        installed_hooks = hook_records(settings_document)
+        for relative, event, matcher, hook_type, commands, timeout in expected_hooks:
+            candidates = [
+                actual
+                for actual in installed_hooks
+                if isinstance(actual[3], str)
+                and normalized_command(relative) in normalized_command(actual[3])
+            ]
+            if not candidates:
+                findings.append(
+                    "settings hook %s not wired under event %s matcher %s"
+                    % (relative, shown(event), shown(matcher))
+                )
+                continue
+
+            compared = []
+            for candidate in candidates:
+                differences = []
+                for name, actual, required in (
+                    ("event", candidate[0], event),
+                    ("matcher", candidate[1], matcher),
+                    ("type", candidate[2], hook_type),
+                ):
+                    if not same(actual, required):
+                        differences.append(
+                            "%s expected %s, got %s"
+                            % (name, shown(required), shown(actual))
+                        )
+                if timeout_is_insufficient(candidate[4], timeout):
+                    differences.append(
+                        "timeout expected %s, got %s"
+                        % (shown(timeout), shown(candidate[4]))
+                    )
+                if not command_matches(candidate[3], commands):
+                    differences.append(
+                        "command expected %s, got %s"
+                        % (shown_commands(commands), shown(candidate[3]))
+                    )
+                if not differences:
+                    break
+                compared.append(differences)
+            if not differences:
+                continue
+
+            differences = min(compared, key=len)
+            findings.append(
+                "settings hook %s differs: %s"
+                % (relative, "; ".join(differences))
+            )
+
+# The managed launcher expectation is enforced through required_files. This
+# check guards the manifest itself: a declared launcher path that nothing
+# hashes is an expectation with no instrument behind it.
+for relative in manifest["managed_launcher"]["paths"]:
+    if relative not in manifest["required_files"]:
+        findings.append("manifest declares an unhashed launcher path: %s" % relative)
+
+auto_refresh = manifest["auto_refresh"]
+if auto_refresh["expected"] == "enabled":
+    if os.environ.get(auto_refresh["kill_switch_env"]) == "1":
+        findings.append(
+            "Auto-Refresh expected enabled but %s=1"
+            % auto_refresh["kill_switch_env"]
+        )
+    # Mirrors memRoot() in daemons/lifecycle-common.mjs: the FIRST existing
+    # root wins. Checking both would fail an install that merely still has a
+    # stale marker under the root the runtime never reads.
+    for candidate in auto_refresh["kill_switch_roots"]:
+        if os.path.isdir(under_root(candidate)):
+            marker = "%s/%s" % (candidate, auto_refresh["kill_switch_file"])
+            if os.path.exists(under_root(marker)):
+                findings.append(
+                    "Auto-Refresh expected enabled but the kill switch is set: %s"
+                    % marker
+                )
+            break
+    print("runner-required:%s" % under_root(manifest["managed_runner"]["dependency_root"]))
+
+for name, spec in manifest["optional_components"].items():
+    if not os.path.exists(under_root(spec["path"])):
+        findings.append("optional %s absent: %s" % (name, spec["path"]))
+
+for finding in findings:
+    print("finding:%s" % finding)
+ATTESTPY
+  )" || ATTEST_RC=$?
+
+  if [ "$ATTEST_RC" -ne 0 ]; then
+    echo "  [detail] baseline manifest could not be read or is malformed: $MANIFEST"
+    attest_verdict UNKNOWN
+  fi
+
+  ATTEST_FINDINGS=()
+  RUNNER_ROOT=""
+  while IFS= read -r line; do
+    # python3 on Windows writes CRLF, and `read -r` keeps the CR. Without this
+    # strip the runner root parsed below ends in a bare CR, the node-pty probe
+    # is handed a path that cannot exist, and a healthy managed runner reports
+    # as unavailable on every Windows install.
+    line="${line%$'\r'}"
+    case "$line" in
+      info:*)            echo "  ${line#info:}" ;;
+      runner-required:*) RUNNER_ROOT="${line#runner-required:}" ;;
+      finding:*)         ATTEST_FINDINGS+=("${line#finding:}") ;;
+    esac
+  done <<< "$ATTEST_OUT"
+
+  # Managed runner. Same load probe install.sh runs after npm rebuild, so
+  # "installed but unloadable" is caught here exactly as it is at install time.
+  if [ -n "$RUNNER_ROOT" ]; then
+    if ! command -v node >/dev/null 2>&1; then
+      ATTEST_FINDINGS+=("managed runner unavailable: node not found, so node-pty cannot load")
+    elif ! node -e '
+const { createRequire } = require("node:module");
+createRequire(process.argv[1])("node-pty");
+' "$RUNNER_ROOT/package.json" >/dev/null 2>&1; then
+      ATTEST_FINDINGS+=("managed runner unavailable: node-pty could not be loaded from $RUNNER_ROOT")
+    fi
+  fi
+
+  # An optional-component finding must never pull the verdict back UP from
+  # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT.
+  TERMINAL="COMPLIANT"
+  if [ "${#ATTEST_FINDINGS[@]}" -gt 0 ]; then
+    for finding in "${ATTEST_FINDINGS[@]}"; do
+      echo "  [detail] $finding"
+      case "$finding" in
+        optional*)
+          if [ "$TERMINAL" = "COMPLIANT" ]; then TERMINAL="DEGRADED"; fi
+          ;;
+        *)
+          TERMINAL="NONCOMPLIANT"
+          ;;
+      esac
+    done
+  fi
+
+  attest_verdict "$TERMINAL"
 fi
 
 # -- Counters ------------------------------------------------------------------
