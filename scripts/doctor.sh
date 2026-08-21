@@ -133,11 +133,22 @@ for relative, expected in manifest["required_files"].items():
 # stays valid JSON with every path resolved and is simply missing the newer
 # hook wiring. Checking the placeholder alone would read that as healthy.
 settings = manifest["required_settings"]
+MISSING = object()
+settings_document = MISSING
+
+
+def reject_json_constant(value):
+    raise ValueError("invalid JSON constant: %s" % value)
+
+
 try:
     with open(under_root(settings["path"]), encoding="utf-8") as fh:
         settings_text = fh.read()
 except OSError:
     findings.append("settings missing: %s" % settings["path"])
+    settings_text = None
+except UnicodeError:
+    findings.append("settings JSON malformed: %s" % settings["path"])
     settings_text = None
 
 if settings_text is not None:
@@ -152,6 +163,215 @@ if settings_text is not None:
         # substring of a correctly rendered settings.json.
         if command not in settings_text:
             findings.append("settings hook not wired: %s" % command)
+    try:
+        settings_document = json.loads(
+            settings_text, parse_constant=reject_json_constant
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        findings.append("settings JSON malformed: %s" % settings["path"])
+
+# The pinned template is the structural contract. Only its managed statusLine
+# and selected hook entries are required; unrelated operator settings remain
+# deliberately outside attestation.
+template_document = MISSING
+try:
+    with open(under_root(settings["template"]), encoding="utf-8") as fh:
+        template_document = json.load(fh, parse_constant=reject_json_constant)
+except OSError:
+    findings.append("settings template missing: %s" % settings["template"])
+except (ValueError, UnicodeError, RecursionError):
+    findings.append("settings template JSON malformed: %s" % settings["template"])
+
+
+root_to_resolve = root
+if (
+    os.name == "nt"
+    and len(root) >= 2
+    and root[0] == "/"
+    and root[1].isalpha()
+    and (len(root) == 2 or root[2] == "/")
+):
+    root_to_resolve = root[1] + ":" + root[2:]
+canonical_root = os.path.realpath(os.path.abspath(root_to_resolve))
+root_spellings = []
+
+
+def add_root_spelling(value):
+    if value not in root_spellings:
+        root_spellings.append(value)
+
+
+add_root_spelling(canonical_root)
+forward_root = canonical_root.replace("\\", "/")
+add_root_spelling(forward_root)
+drive, tail = os.path.splitdrive(forward_root)
+if len(drive) == 2 and drive[1] == ":":
+    add_root_spelling("/%s%s" % (drive[0].lower(), tail))
+
+
+def render_commands(command):
+    token = settings["unresolved_placeholder"]
+    if not isinstance(command, str) or token not in command:
+        return (command,)
+    if command == token:
+        return tuple(root_spellings)
+    rendered = []
+    for root_spelling in root_spellings:
+        escaped_root = (
+            root_spelling.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("$", "\\$")
+            .replace("`", "\\`")
+        )
+        rendered.append(command.replace(token, escaped_root))
+    return tuple(dict.fromkeys(rendered))
+
+
+def hook_records(document):
+    records = []
+    hooks = document.get("hooks") if isinstance(document, dict) else None
+    if not isinstance(hooks, dict):
+        return records
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            for entry in group["hooks"]:
+                if isinstance(entry, dict):
+                    records.append(
+                        (
+                            event,
+                            group.get("matcher", MISSING),
+                            entry.get("type", MISSING),
+                            entry.get("command", MISSING),
+                            entry.get("timeout", MISSING),
+                        )
+                    )
+    return records
+
+
+def same(left, right):
+    return type(left) is type(right) and left == right
+
+
+def shown(value):
+    return "missing" if value is MISSING else repr(value)
+
+
+def command_matches(actual, expected_commands):
+    return any(same(actual, expected) for expected in expected_commands)
+
+
+def shown_commands(commands):
+    return " or ".join(shown(command) for command in commands)
+
+
+if template_document is not MISSING:
+    required_commands = settings["hook_commands"]
+    represented = set()
+    expected_status = MISSING
+    status_line = (
+        template_document.get("statusLine")
+        if isinstance(template_document, dict)
+        else None
+    )
+    if isinstance(status_line, dict) and "command" in status_line:
+        template_status = status_line["command"]
+        expected_status = render_commands(template_status)
+        if isinstance(template_status, str):
+            represented.update(
+                command for command in required_commands if command in template_status
+            )
+    else:
+        findings.append(
+            "settings template contract missing statusLine command: %s"
+            % settings["template"]
+        )
+
+    expected_hooks = []
+    for event, matcher, hook_type, command, timeout in hook_records(template_document):
+        if not isinstance(command, str):
+            continue
+        for relative in required_commands:
+            if relative in command:
+                expected_hooks.append(
+                    (
+                        relative,
+                        event,
+                        matcher,
+                        hook_type,
+                        render_commands(command),
+                        timeout,
+                    )
+                )
+                represented.add(relative)
+    for command in required_commands:
+        if command not in represented:
+            findings.append(
+                "settings template contract missing required command: %s" % command
+            )
+
+    if settings_document is not MISSING:
+        installed_status = MISSING
+        if isinstance(settings_document, dict):
+            status_line = settings_document.get("statusLine")
+            if isinstance(status_line, dict):
+                installed_status = status_line.get("command", MISSING)
+        if (
+            expected_status is not MISSING
+            and not command_matches(installed_status, expected_status)
+        ):
+            findings.append(
+                "settings statusLine command differs: expected %s, got %s"
+                % (shown_commands(expected_status), shown(installed_status))
+            )
+
+        installed_hooks = hook_records(settings_document)
+        for relative, event, matcher, hook_type, commands, timeout in expected_hooks:
+            candidates = [
+                actual
+                for actual in installed_hooks
+                if isinstance(actual[3], str) and relative in actual[3]
+            ]
+            if not candidates:
+                findings.append(
+                    "settings hook %s not wired under event %s matcher %s"
+                    % (relative, shown(event), shown(matcher))
+                )
+                continue
+
+            compared = []
+            for candidate in candidates:
+                differences = []
+                for name, actual, required in (
+                    ("event", candidate[0], event),
+                    ("matcher", candidate[1], matcher),
+                    ("type", candidate[2], hook_type),
+                    ("timeout", candidate[4], timeout),
+                ):
+                    if not same(actual, required):
+                        differences.append(
+                            "%s expected %s, got %s"
+                            % (name, shown(required), shown(actual))
+                        )
+                if not command_matches(candidate[3], commands):
+                    differences.append(
+                        "command expected %s, got %s"
+                        % (shown_commands(commands), shown(candidate[3]))
+                    )
+                if not differences:
+                    break
+                compared.append(differences)
+            if not differences:
+                continue
+
+            differences = min(compared, key=len)
+            findings.append(
+                "settings hook %s differs: %s"
+                % (relative, "; ".join(differences))
+            )
 
 # The managed launcher expectation is enforced through required_files. This
 # check guards the manifest itself: a declared launcher path that nothing

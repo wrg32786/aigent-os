@@ -215,6 +215,72 @@ test('settings stale against the manifest attest NONCOMPLIANT', () => {
   });
 });
 
+test('malformed settings JSON attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const valid = readFileSync(settings, 'utf8').trimEnd();
+    // Keep every required command path present while making the document
+    // invalid, so a raw substring scan cannot distinguish it from a contract.
+    writeFileSync(settings, `${valid},\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual(
+      { verdict, status },
+      { verdict: 'NONCOMPLIANT', status: 1 },
+      output,
+    );
+    assert.match(output, /settings JSON malformed: \.claude\/settings\.json/);
+  });
+});
+
+test('a required hook under the wrong matcher attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    const preToolUse = parsed.hooks.PreToolUse;
+    const expectedTuple = preToolUse.find(({ matcher }) => matcher === 'Edit|Write|Bash');
+    const hookIndex = expectedTuple.hooks.findIndex(({ command }) => (
+      command.includes('gateguard.mjs')
+    ));
+    assert.notEqual(hookIndex, -1, 'fixture includes the required gateguard hook');
+    const [movedHook] = expectedTuple.hooks.splice(hookIndex, 1);
+    preToolUse.find(({ matcher }) => matcher === 'Agent').hooks.push(movedHook);
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual(
+      { verdict, status },
+      { verdict: 'NONCOMPLIANT', status: 1 },
+      output,
+    );
+    assert.match(output, /settings hook .*daemons\/gateguard\.mjs.*matcher/);
+  });
+});
+
+test('unrelated operator settings do not affect a COMPLIANT verdict', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    parsed.env.OPERATOR_THEME = 'midnight';
+    parsed.permissions = { allow: ['Read'], deny: ['Bash(rm:*)'] };
+    parsed.operator = { notifications: true };
+    parsed.hooks.OperatorEvent = [
+      {
+        matcher: 'operator-only',
+        hooks: [{ type: 'command', command: 'echo operator hook', timeout: 500 }],
+      },
+    ];
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+  });
+});
+
 test('an unsubstituted settings placeholder attests NONCOMPLIANT', () => {
   withInstall((root) => {
     const manifest = readManifest();
