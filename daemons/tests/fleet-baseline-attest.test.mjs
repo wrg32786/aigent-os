@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -50,8 +51,8 @@ function readManifest() {
 // Simulates an exact install: every path the manifest requires, the manifest
 // itself (the installer's COPY_DIRS already carries scripts/), a rendered
 // settings.json, and the directories a real install creates.
-function buildInstall() {
-  const root = mkdtempSync(path.join(tmpdir(), 'fleet-baseline-attest-'));
+function buildInstall({ settingsRootFor = (root) => root } = {}) {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'fleet-baseline-attest-')));
   const manifest = readManifest();
 
   for (const relative of Object.keys(manifest.required_files)) {
@@ -70,6 +71,7 @@ function buildInstall() {
   // moment the install root contains a backslash, which every Windows install
   // root does -- so the fixture has to render the way the installer renders.
   const token = manifest.required_settings.unresolved_placeholder;
+  const settingsRoot = settingsRootFor(root);
   const shellDoubleQuoted = (value) => value
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
@@ -78,7 +80,9 @@ function buildInstall() {
   const render = (value) => {
     if (typeof value === 'string') {
       if (!value.includes(token)) return value;
-      return value === token ? root : value.split(token).join(shellDoubleQuoted(root));
+      return value === token
+        ? settingsRoot
+        : value.split(token).join(shellDoubleQuoted(settingsRoot));
     }
     if (Array.isArray(value)) return value.map(render);
     if (value && typeof value === 'object') {
@@ -150,13 +154,20 @@ function digest(root) {
   return accumulator.digest('hex');
 }
 
-function withInstall(run) {
-  const root = buildInstall();
+function withInstall(run, options) {
+  const root = buildInstall(options);
   try {
     run(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function lowercaseMsysRoot(root) {
+  const forward = root.replace(/\\/g, '/');
+  const match = forward.match(/^([A-Za-z]):(\/.*)$/);
+  assert.ok(match, `expected a Windows drive path, got: ${root}`);
+  return `/${match[1].toLowerCase()}${match[2].toLowerCase()}`;
 }
 
 test('an exact install attests COMPLIANT against the shipped manifest', () => {
@@ -165,6 +176,17 @@ test('an exact install attests COMPLIANT against the shipped manifest', () => {
     assert.equal(verdict, 'COMPLIANT', output);
     assert.equal(status, 0, 'COMPLIANT exits 0');
   });
+});
+
+test('a settings fixture rendered with a lowercase Windows root attests COMPLIANT', {
+  skip: process.platform !== 'win32',
+}, () => {
+  withInstall((root) => {
+    const lowerRoot = lowercaseMsysRoot(root);
+    const { verdict, status, output } = attest(lowerRoot);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+  }, { settingsRootFor: lowercaseMsysRoot });
 });
 
 // THE MUTATION WITNESS. One expected hash in the manifest is flipped; the file
@@ -211,6 +233,32 @@ test('settings stale against the manifest attest NONCOMPLIANT', () => {
 
     const { verdict, output } = attest(root);
     assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.match(output, /settings hook daemons\/gateguard\.mjs not wired under event/);
+    assert.equal(
+      output.match(/gateguard\.mjs/g)?.length,
+      1,
+      `a parsed missing hook should produce one structural finding:\n${output}`,
+    );
+  });
+});
+
+test('an unparsed settings document keeps the raw missing-hook finding', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    parsed.hooks.PreToolUse = parsed.hooks.PreToolUse.filter(
+      (entry) => !JSON.stringify(entry).includes('gateguard.mjs'),
+    );
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)},\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual(
+      { verdict, status },
+      { verdict: 'NONCOMPLIANT', status: 1 },
+      output,
+    );
+    assert.match(output, /settings JSON malformed: \.claude\/settings\.json/);
     assert.match(output, /settings hook not wired: daemons\/gateguard\.mjs/);
   });
 });
@@ -256,6 +304,73 @@ test('a required hook under the wrong matcher attests NONCOMPLIANT', () => {
       output,
     );
     assert.match(output, /settings hook .*daemons\/gateguard\.mjs.*matcher/);
+  });
+});
+
+test('omitting an empty match-all matcher remains COMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    const matchAll = parsed.hooks.SessionStart.find(({ matcher, hooks }) => (
+      matcher === ''
+      && hooks.some(({ command }) => command.includes('sessionstart-reinject.mjs'))
+    ));
+    assert.ok(matchAll, 'fixture includes a SessionStart match-all hook');
+    delete matchAll.matcher;
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+  });
+});
+
+test('raising a required hook timeout remains COMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    const matchAll = parsed.hooks.SessionStart.find(({ matcher, hooks }) => (
+      matcher === ''
+      && hooks.some(({ command }) => command.includes('sessionstart-reinject.mjs'))
+    ));
+    const hook = matchAll?.hooks.find(({ command }) => (
+      command.includes('sessionstart-reinject.mjs')
+    ));
+    assert.ok(hook, 'fixture includes the required SessionStart hook');
+    hook.timeout += 1000;
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+  });
+});
+
+test('lowering a required hook timeout attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    const matchAll = parsed.hooks.SessionStart.find(({ matcher, hooks }) => (
+      matcher === ''
+      && hooks.some(({ command }) => command.includes('sessionstart-reinject.mjs'))
+    ));
+    const hook = matchAll?.hooks.find(({ command }) => (
+      command.includes('sessionstart-reinject.mjs')
+    ));
+    assert.ok(hook, 'fixture includes the required SessionStart hook');
+    hook.timeout -= 1000;
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual(
+      { verdict, status },
+      { verdict: 'NONCOMPLIANT', status: 1 },
+      output,
+    );
+    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout/);
   });
 });
 

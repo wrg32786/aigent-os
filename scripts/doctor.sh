@@ -157,18 +157,18 @@ if settings_text is not None:
             "settings placeholder not substituted: %s"
             % settings["unresolved_placeholder"]
         )
-    for command in settings["hook_commands"]:
-        # The template embeds every hook as "<root>/<relative>" with forward
-        # slashes on every platform, so the relative tail is a literal
-        # substring of a correctly rendered settings.json.
-        if command not in settings_text:
-            findings.append("settings hook not wired: %s" % command)
     try:
         settings_document = json.loads(
             settings_text, parse_constant=reject_json_constant
         )
     except (ValueError, UnicodeError, RecursionError):
         findings.append("settings JSON malformed: %s" % settings["path"])
+    if settings_document is MISSING:
+        for command in settings["hook_commands"]:
+            # When parsing fails, retain the legacy text witness and message:
+            # the relative tail is a literal substring of a rendered command.
+            if command not in settings_text:
+                findings.append("settings hook not wired: %s" % command)
 
 # The pinned template is the structural contract. Only its managed statusLine
 # and selected hook entries are required; unrelated operator settings remain
@@ -192,7 +192,8 @@ if (
     and (len(root) == 2 or root[2] == "/")
 ):
     root_to_resolve = root[1] + ":" + root[2:]
-canonical_root = os.path.realpath(os.path.abspath(root_to_resolve))
+absolute_root = os.path.abspath(root_to_resolve)
+canonical_root = os.path.realpath(absolute_root)
 root_spellings = []
 
 
@@ -201,12 +202,18 @@ def add_root_spelling(value):
         root_spellings.append(value)
 
 
-add_root_spelling(canonical_root)
-forward_root = canonical_root.replace("\\", "/")
-add_root_spelling(forward_root)
-drive, tail = os.path.splitdrive(forward_root)
-if len(drive) == 2 and drive[1] == ":":
-    add_root_spelling("/%s%s" % (drive[0].lower(), tail))
+def add_root_variants(value):
+    add_root_spelling(value)
+    forward = value.replace("\\", "/")
+    add_root_spelling(forward)
+    drive, tail = os.path.splitdrive(forward)
+    if len(drive) == 2 and drive[1] == ":":
+        add_root_spelling("/%s%s" % (drive[0].lower(), tail))
+        add_root_spelling("/%s%s" % (drive[0].upper(), tail))
+
+
+for root_spelling in (canonical_root, absolute_root, root):
+    add_root_variants(root_spelling)
 
 
 def render_commands(command):
@@ -227,6 +234,10 @@ def render_commands(command):
     return tuple(dict.fromkeys(rendered))
 
 
+def normalized_matcher(value):
+    return "" if value is MISSING or value in ("", "*") else value
+
+
 def hook_records(document):
     records = []
     hooks = document.get("hooks") if isinstance(document, dict) else None
@@ -243,7 +254,7 @@ def hook_records(document):
                     records.append(
                         (
                             event,
-                            group.get("matcher", MISSING),
+                            normalized_matcher(group.get("matcher", MISSING)),
                             entry.get("type", MISSING),
                             entry.get("command", MISSING),
                             entry.get("timeout", MISSING),
@@ -260,8 +271,29 @@ def shown(value):
     return "missing" if value is MISSING else repr(value)
 
 
+def normalized_command(command):
+    if os.name == "nt" and isinstance(command, str):
+        return os.path.normcase(command)
+    return command
+
+
 def command_matches(actual, expected_commands):
-    return any(same(actual, expected) for expected in expected_commands)
+    actual = normalized_command(actual)
+    return any(
+        same(actual, normalized_command(expected)) for expected in expected_commands
+    )
+
+
+def timeout_is_insufficient(actual, required):
+    if required is MISSING:
+        return False
+    if actual is MISSING:
+        return True
+    if isinstance(required, bool) or not isinstance(required, (int, float)):
+        return not same(actual, required)
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        return True
+    return actual < required
 
 
 def shown_commands(commands):
@@ -333,7 +365,8 @@ if template_document is not MISSING:
             candidates = [
                 actual
                 for actual in installed_hooks
-                if isinstance(actual[3], str) and relative in actual[3]
+                if isinstance(actual[3], str)
+                and normalized_command(relative) in normalized_command(actual[3])
             ]
             if not candidates:
                 findings.append(
@@ -349,13 +382,17 @@ if template_document is not MISSING:
                     ("event", candidate[0], event),
                     ("matcher", candidate[1], matcher),
                     ("type", candidate[2], hook_type),
-                    ("timeout", candidate[4], timeout),
                 ):
                     if not same(actual, required):
                         differences.append(
                             "%s expected %s, got %s"
                             % (name, shown(required), shown(actual))
                         )
+                if timeout_is_insufficient(candidate[4], timeout):
+                    differences.append(
+                        "timeout expected %s, got %s"
+                        % (shown(timeout), shown(candidate[4]))
+                    )
                 if not command_matches(candidate[3], commands):
                     differences.append(
                         "command expected %s, got %s"
