@@ -500,7 +500,10 @@ safe_mkdir_p "$TARGET/.claude/agents" || fail "cannot create $TARGET/.claude/age
 # same class as CLAUDE.md's operator text: an existing install carries the
 # operator's own rules and the installer must not replace them. Seed the
 # framework starter only when the file is absent; an existing file is kept
-# as-is (symlink-guarded, like every other single-file write).
+# as-is (symlink-guarded, like every other single-file write). Keeping it
+# gives up quarantine protection against a file planted here before the
+# first install — the same accepted tradeoff as CLAUDE.md's free-text
+# region, and narrower than hooks/skills/agents, which stay quarantined.
 RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
 RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then
