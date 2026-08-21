@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=18
+TOTAL=19
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -589,5 +589,21 @@ if [ "$UNICODE_SEPARATOR_PROBES" -eq 1 ]; then
 else
   printf '[18/%d] launcher settings/profile: hostile values quoted; newline refused; unicode probes SKIPPED\n' "$TOTAL"
 fi
+
+# ── 19. Operator rules file kept ─────────────────────────────────────────────
+# .claude/rules/post-compact-critical.md is operator-owned doctrine (the
+# CLAUDE.md class): an existing, diverged file must be KEPT — not
+# quarantine-replaced — and the framework starter seeds only a fresh install.
+RULES_KEEP_TARGET="$WORK/rules-keep-target"
+mkdir -p "$RULES_KEEP_TARGET/.claude/rules"
+printf '# Operator Critical Rules\nOPERATOR-DOCTRINE-SENTINEL\n' > "$RULES_KEEP_TARGET/.claude/rules/post-compact-critical.md"
+RULES_KEEP_OUT="$(cd "$FIXTURE" && bash install.sh --target "$RULES_KEEP_TARGET" --no-deps 2>&1)"
+printf '%s\n' "$RULES_KEEP_OUT" | grep -q "\[keep\] operator rules file kept"
+grep -q "OPERATOR-DOCTRINE-SENTINEL" "$RULES_KEEP_TARGET/.claude/rules/post-compact-critical.md"
+RULES_SEED_TARGET="$WORK/rules-seed-target"
+mkdir -p "$RULES_SEED_TARGET"
+(cd "$FIXTURE" && bash install.sh --target "$RULES_SEED_TARGET" --no-deps >/dev/null 2>&1)
+grep -q "critical" "$RULES_SEED_TARGET/.claude/rules/post-compact-critical.md"
+printf '[19/%d] operator rules file: existing doctrine kept, starter seeds fresh installs only\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

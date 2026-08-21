@@ -496,10 +496,11 @@ fi
 safe_mkdir_p "$TARGET/.claude/rules" || fail "cannot create $TARGET/.claude/rules (see symlink warning above)"
 safe_mkdir_p "$TARGET/.claude/skills" || fail "cannot create $TARGET/.claude/skills (see symlink warning above)"
 safe_mkdir_p "$TARGET/.claude/agents" || fail "cannot create $TARGET/.claude/agents (see symlink warning above)"
-# .claude/rules is read as agent instructions on every session -- a planted
-# file here that differs from the framework's is as much a trust-surface
-# concern as a hook script, so it goes through
-# copy_missing_file(sensitive=1) too.
+# .claude/rules/post-compact-critical.md is operator-owned doctrine, the
+# same class as CLAUDE.md's operator text: an existing install carries the
+# operator's own rules and the installer must not replace them. Seed the
+# framework starter only when the file is absent; an existing file is kept
+# as-is (symlink-guarded, like every other single-file write).
 RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
 RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then
@@ -507,11 +508,16 @@ if [[ -f "$RULES_SRC" ]]; then
   # in-place mode SRC and TARGET canonicalize to the same directory, so a
   # blind cp here would target itself and fail hard on BSD/Windows cp.
   if [[ "$(abspath "$RULES_SRC")" != "$(abspath "$RULES_DST")" ]]; then
-    unsafeRawPromoteProcedureFile \
-      "$RULES_SRC" \
-      "$RULES_DST" \
-      "the post-compact rule is reviewed multiline procedure text promoted into Claude's runtime" \
-      || true
+    require_symlink_safe "$RULES_DST"
+    if [[ -f "$RULES_DST" ]]; then
+      printf '  [keep] operator rules file kept (%s)\n' "$RULES_DST"
+    else
+      unsafeRawPromoteProcedureFile \
+        "$RULES_SRC" \
+        "$RULES_DST" \
+        "the post-compact rule starter is reviewed multiline procedure text seeded only into a fresh install" \
+        || true
+    fi
   fi
 fi
 
