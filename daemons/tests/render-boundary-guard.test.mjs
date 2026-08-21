@@ -1672,7 +1672,7 @@ const SHELL_RAW_ALLOWLIST = [
   {
     file: 'install.sh',
     accessor: 'unsafeRawPromoteProcedureFile',
-    reason: "the post-compact rule is reviewed multiline procedure text promoted into Claude's runtime",
+    reason: 'the post-compact rule starter is reviewed multiline procedure text seeded only into a fresh install',
   },
   {
     file: 'install.sh',
