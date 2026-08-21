@@ -7,7 +7,8 @@
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
     "scripts/doctor.sh is excluded: it is the measuring instrument, and this baseline was cut before the --attest change landed, so its post-merge bytes are not the pinned ones.",
     "CLAUDE.md, .claude/settings.json and .gitignore are excluded: the installer rewrites them (marker block, placeholder render, managed ignore block), so their installed bytes are never the repo bytes.",
-    ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT."
+    ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT.",
+    ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "49c1aa9d2336ce3515314e4c7a0bbdaf0c2576082413e53d3b09901d648bdb2e",
@@ -30,7 +31,6 @@
     "hooks/log-token-usage.sh": "5a009edd29267d54c34827a483b7309370d58f7a9483defe000061ec3804965c",
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "2a56f0b438f8c3280653854d75f6efee3c6f90492f788b821ccaf2f0c46782d0",
-    ".claude/rules/post-compact-critical.md": "5859c7d30e6f59188942930586f23e6669306d9d877e9219bbc57898dc9d883a",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "384f7a6b6be1e6be7882cd58e3d5b454390c39de31d64fc20e88c0749da79389",
     "daemons/auto-clear-transport.mjs": "c552f4270158e5b1efe248ffa2580a4b5baa3fe7b00ecf715c3e0b6a69dabe3f",
