@@ -26,7 +26,7 @@
 // Both scripts top-level `import '@xenova/transformers'`, whose model download
 // has no place in CI, and both resolve their deny file relative to their own
 // __dirname with no environment override (deliberately: an override would be a
-// bypass). So the behavioral tests copy the three real source files into a
+// bypass). So the behavioral tests copy the real source files into a
 // sandbox that has its own index-deny.json and a tiny stub package in
 // node_modules. The copies are read from the repo at run time, so any edit to
 // the real files is under test; nothing here reads a checked-in duplicate.
@@ -91,7 +91,13 @@ function makeSandbox(name, denyFileText) {
 
   const sem = path.join(root, 'daemons', 'semantic-search');
   mkdirSync(sem, { recursive: true });
-  for (const file of ['deny-list.mjs', 'embed-vault.js', 'search-vault.js']) {
+  for (const file of [
+    'deny-list.mjs',
+    'namespace-registry.mjs',
+    'namespace-registry.json',
+    'embed-vault.js',
+    'search-vault.js',
+  ]) {
     copyFileSync(path.join(SEM, file), path.join(sem, file));
   }
   copyFileSync(

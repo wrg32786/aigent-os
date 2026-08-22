@@ -1,0 +1,16 @@
+{
+  "schema": "MemoryNamespaceRegistry/v1",
+  "namespaces": [
+    { "path": "daily",     "disposition": "INDEX" },
+    { "path": "memory",    "disposition": "INDEX" },
+    { "path": "concepts",  "disposition": "INDEX" },
+    { "path": "projects",  "disposition": "INDEX" },
+    { "path": "people",    "disposition": "INDEX" },
+    { "path": "agents",    "disposition": "INDEX" },
+    { "path": "research",  "disposition": "INDEX" },
+    { "path": "feedback",  "disposition": "INDEX" },
+    { "path": "reference", "disposition": "INDEX" },
+    { "path": "templates", "disposition": "SKIP", "reason": "boilerplate scaffolding, not authored memory" },
+    { "path": "examples",  "disposition": "SKIP", "reason": "illustrative starter content, not operator signal" }
+  ]
+}
