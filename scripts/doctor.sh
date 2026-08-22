@@ -309,9 +309,11 @@ if template_document is not MISSING:
         if isinstance(template_document, dict)
         else None
     )
+    expected_status_type = MISSING
     if isinstance(status_line, dict) and "command" in status_line:
         template_status = status_line["command"]
         expected_status = render_commands(template_status)
+        expected_status_type = status_line.get("type", MISSING)
         if isinstance(template_status, str):
             represented.update(
                 command for command in required_commands if command in template_status
@@ -347,10 +349,12 @@ if template_document is not MISSING:
 
     if settings_document is not MISSING:
         installed_status = MISSING
+        installed_status_type = MISSING
         if isinstance(settings_document, dict):
             status_line = settings_document.get("statusLine")
             if isinstance(status_line, dict):
                 installed_status = status_line.get("command", MISSING)
+                installed_status_type = status_line.get("type", MISSING)
         if (
             expected_status is not MISSING
             and not command_matches(installed_status, expected_status)
@@ -358,6 +362,13 @@ if template_document is not MISSING:
             findings.append(
                 "settings statusLine command differs: expected %s, got %s"
                 % (shown_commands(expected_status), shown(installed_status))
+            )
+        if expected_status_type is not MISSING and not same(
+            installed_status_type, expected_status_type
+        ):
+            findings.append(
+                "settings statusLine type differs: expected %s, got %s"
+                % (shown(expected_status_type), shown(installed_status_type))
             )
 
         installed_hooks = hook_records(settings_document)

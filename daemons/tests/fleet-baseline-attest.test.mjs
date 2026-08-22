@@ -282,6 +282,25 @@ test('malformed settings JSON attests NONCOMPLIANT', () => {
   });
 });
 
+test('a wrong statusLine type attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settings = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+    assert.equal(parsed.statusLine.type, 'command', 'fixture pins the template statusLine type');
+    parsed.statusLine.type = 'script';
+    writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual(
+      { verdict, status },
+      { verdict: 'NONCOMPLIANT', status: 1 },
+      output,
+    );
+    assert.match(output, /settings statusLine type differs/);
+  });
+});
+
 test('a required hook under the wrong matcher attests NONCOMPLIANT', () => {
   withInstall((root) => {
     const manifest = readManifest();
