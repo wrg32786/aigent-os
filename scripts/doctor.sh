@@ -25,6 +25,7 @@
 #   - .claude/settings.json present and AIGENT_ROOT placeholder resolved
 #   - Node.js available (optional)
 #   - semantic search node_modules present (if Node available)
+#   - semantic search namespace registry valid and physically complete
 #   - all shell scripts pass bash -n syntax check
 #   - all JSON files parse cleanly
 
@@ -719,6 +720,163 @@ if [ "$NODE_OK" -eq 1 ]; then
   fi
 else
   warn "semantic search install check skipped (Node not available)"
+fi
+
+# -- 9b. Semantic search namespace registry -----------------------------------
+# Validate the whole document before emitting any records. The extractor lives
+# in a temp file, matching check 7b's set -euo pipefail-safe pattern; capturing
+# its status directly (rather than through process substitution) ensures a
+# parser failure cannot be mistaken for an empty, healthy registry.
+NAMESPACE_REGISTRY="$ROOT/daemons/semantic-search/namespace-registry.json"
+if command -v python3 >/dev/null 2>&1; then
+  _NAMESPACE_PY=$(mktemp /tmp/doctor_namespace_registry.XXXXXX.py)
+  cat > "$_NAMESPACE_PY" << 'NAMESPACEPY'
+import json
+import ntpath
+import os
+import posixpath
+import sys
+
+SCHEMA = "MemoryNamespaceRegistry/v1"
+DISPOSITIONS = {"INDEX", "SKIP", "DENY"}
+INFRASTRUCTURE = {
+    "node_modules",
+    ".git",
+    "daemons",
+    ".claude",
+    "command-center-v2",
+    "graphify-out",
+    "recon",
+    "prompts",
+    "tools",
+}
+
+
+def stop(message):
+    print(message)
+    raise SystemExit(1)
+
+
+def reject_json_constant(value):
+    raise ValueError("invalid JSON constant: %s" % value)
+
+
+registry_path, vault_root = sys.argv[1:3]
+try:
+    with open(registry_path, encoding="utf-8") as registry_file:
+        registry_text = registry_file.read()
+except (OSError, UnicodeError) as error:
+    stop("namespace registry missing or unreadable: %s (%s)" % (registry_path, error))
+
+try:
+    document = json.loads(registry_text, parse_constant=reject_json_constant)
+except (ValueError, UnicodeError, RecursionError) as error:
+    stop("namespace registry malformed JSON: %s" % error)
+
+if type(document) is not dict:
+    stop("namespace registry root must be an object")
+if document.get("schema") != SCHEMA:
+    stop("namespace registry schema must equal exactly %s" % SCHEMA)
+
+namespaces = document.get("namespaces")
+if type(namespaces) is not list:
+    stop("namespace registry namespaces must be an array")
+
+rows = []
+seen = set()
+for index, row in enumerate(namespaces):
+    if type(row) is not dict:
+        stop("namespaces[%d] must be an object" % index)
+
+    namespace_path = row.get("path")
+    if type(namespace_path) is not str:
+        stop("namespaces[%d].path must be a string" % index)
+    if (
+        not namespace_path
+        or namespace_path.strip() != namespace_path
+        or namespace_path in (".", "..")
+        or "/" in namespace_path
+        or "\\" in namespace_path
+        or posixpath.isabs(namespace_path)
+        or ntpath.isabs(namespace_path)
+    ):
+        stop("namespaces[%d].path must be one normalized top-level segment" % index)
+
+    key = namespace_path.replace("\\", "/").lower()
+    if key in seen:
+        stop("duplicate namespace path: %s" % namespace_path)
+    seen.add(key)
+
+    disposition = row.get("disposition")
+    if type(disposition) is not str or disposition not in DISPOSITIONS:
+        stop("namespaces[%d] has invalid disposition: %s" % (index, disposition))
+    if disposition in ("SKIP", "DENY"):
+        reason = row.get("reason")
+        if type(reason) is not str or not reason.strip():
+            stop("namespaces[%d] %s row requires a non-empty reason" % (index, disposition))
+
+    rows.append((namespace_path, disposition, key))
+
+physical = []
+if os.path.exists(vault_root):
+    if not os.path.isdir(vault_root):
+        stop("vault root is not a directory: %s" % vault_root)
+    try:
+        with os.scandir(vault_root) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        physical.append(entry.name)
+                except OSError as error:
+                    stop("cannot inspect vault namespace %s: %s" % (entry.name, error))
+    except OSError as error:
+        stop("cannot enumerate vault root %s: %s" % (vault_root, error))
+
+memory_directories = [name for name in physical if name not in INFRASTRUCTURE]
+physical_names = set(physical)
+declared_names = {namespace_path for namespace_path, _, _ in rows}
+
+records = []
+for namespace_path, disposition, key in rows:
+    presence = "PRESENT" if namespace_path in physical_names else "ABSENT"
+    records.append(("NAMESPACE_%s_%s" % (disposition, presence), namespace_path))
+
+for name in sorted(
+    (name for name in memory_directories if name not in declared_names),
+    key=lambda value: (value.lower(), value),
+):
+    records.append(("NAMESPACE_UNDECLARED", name))
+
+for label, namespace_path in records:
+    print("%s\t%s" % (label, namespace_path))
+NAMESPACEPY
+
+  NAMESPACE_OUTPUT=""
+  NAMESPACE_RC=0
+  NAMESPACE_OUTPUT="$(python3 "$_NAMESPACE_PY" "$NAMESPACE_REGISTRY" "$ROOT/vault" 2>&1)" || NAMESPACE_RC=$?
+  rm -f "$_NAMESPACE_PY"
+
+  if [ "$NAMESPACE_RC" -ne 0 ]; then
+    fail "namespace registry check failed: ${NAMESPACE_OUTPUT:-unknown validation error}"
+  else
+    while IFS=$'\t' read -r namespace_label namespace_path; do
+      [ -z "$namespace_label" ] && continue
+      namespace_path="${namespace_path%$'\r'}"
+      case "$namespace_label" in
+        NAMESPACE_INDEX_PRESENT|NAMESPACE_INDEX_ABSENT|NAMESPACE_SKIP_PRESENT|NAMESPACE_SKIP_ABSENT|NAMESPACE_DENY_PRESENT|NAMESPACE_DENY_ABSENT)
+          pass "$namespace_label $namespace_path"
+          ;;
+        NAMESPACE_UNDECLARED)
+          fail "$namespace_label $namespace_path"
+          ;;
+        *)
+          fail "namespace registry check failed: unexpected extractor record: $namespace_label $namespace_path"
+          ;;
+      esac
+    done <<< "$NAMESPACE_OUTPUT"
+  fi
+else
+  fail "namespace registry check failed: python3 not available"
 fi
 
 # -- 10. Shell script syntax check ---------------------------------------------

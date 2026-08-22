@@ -13,6 +13,11 @@ import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSy
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
+import {
+  namespaceDispositionForPath,
+  requireDeclaredNamespaceDirectories,
+  requireNamespaceRegistry,
+} from './namespace-registry.mjs';
 import frontmatterReader from '../frontmatter-reader.cjs';
 
 const {
@@ -33,18 +38,6 @@ const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const MAX_CHUNK_CHARS = 1800; // ~512 tokens at ~3.5 chars/token
 const CHUNK_OVERLAP_CHARS = 200;
 
-// Directories to scan (relative to VAULT_ROOT)
-const SCAN_DIRS = [
-  'daily',
-  'memory',
-  'concepts',
-  'projects',
-  'people',
-  'agents',
-  'research',
-  'templates',
-];
-
 // Directories/files to skip
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -57,6 +50,11 @@ const SKIP_DIRS = new Set([
   'prompts',
   'tools',
 ]);
+
+// The registry is mandatory. Load it at module startup so missing or invalid
+// policy fails before the vault is walked, a model is loaded, or an index is
+// written.
+const NAMESPACE_REGISTRY = requireNamespaceRegistry(__dirname, 'embed-vault');
 
 // Confidential-class deny list. Anyone running semantic search over their own
 // vault can point it at client work, deal notes, or anything else under NDA, and
@@ -143,8 +141,9 @@ function scanDirectory(dir, fileList = []) {
 
 function collectFiles() {
   const files = [];
-  for (const dir of SCAN_DIRS) {
-    const fullDir = join(VAULT_ROOT, dir);
+  for (const row of NAMESPACE_REGISTRY.rows) {
+    if (row.disposition !== 'INDEX') continue;
+    const fullDir = join(VAULT_ROOT, row.path);
     if (existsSync(fullDir)) {
       scanDirectory(fullDir, files);
     }
@@ -187,6 +186,11 @@ async function embedText(text) {
 async function main() {
   const changedOnly = process.argv.includes('--changed-only');
 
+  // A physical memory namespace must be explicitly classified before any
+  // embedding work begins. Existing SKIP_DIRS infrastructure names are the only
+  // implicit exemptions (enforced by the shared registry module).
+  requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT, 'embed-vault');
+
   // Load existing embeddings if present
   let existing = { model: MODEL_NAME, updated: null, notes: [] };
   if (existsSync(EMBEDDINGS_PATH)) {
@@ -198,14 +202,26 @@ async function main() {
     }
   }
 
-  // Purge denied chunks from the carried-forward index (a --changed-only run must
-  // also strip previously-indexed confidential-class entries, not just skip new ones
-  // -- a prefix added to index-deny.json after the fact has to retroactively purge).
+  // Purge chunks that no longer belong to an INDEX namespace. This covers SKIP,
+  // DENY, and undeclared paths in stale or hand-edited indexes.
+  const beforeNamespacePurge = (existing.notes || []).length;
+  existing.notes = (existing.notes || []).filter(
+    (note) => namespaceDispositionForPath(NAMESPACE_REGISTRY, note.path) === 'INDEX',
+  );
+  if (beforeNamespacePurge !== existing.notes.length) {
+    console.log(`[namespace] purged ${beforeNamespacePurge - existing.notes.length} previously-indexed non-INDEX chunk(s)`);
+  }
+
+  // Purge denied chunks from the carried-forward index (a --changed-only run
+  // must also strip previously-indexed confidential-class entries, not just
+  // skip new ones -- a prefix added to index-deny.json after the fact has to
+  // retroactively purge).
   const beforePurge = (existing.notes || []).length;
   existing.notes = (existing.notes || []).filter((n) => !deniedPath(DENY_PREFIXES, n.path));
   if (beforePurge !== existing.notes.length) {
     console.log(`[deny] purged ${beforePurge - existing.notes.length} previously-indexed chunk(s) matching index-deny.json`);
   }
+  const carriedForwardPurged = beforeNamespacePurge !== beforePurge || beforePurge !== existing.notes.length;
 
   // Build a map of path → existing entries (for --changed-only)
   const existingByPath = new Map();
@@ -228,7 +244,7 @@ async function main() {
     console.log(`--changed-only: ${toEmbed.length} files modified since last index.`);
   }
 
-  if (toEmbed.length === 0) {
+  if (toEmbed.length === 0 && !carriedForwardPurged) {
     console.log('Nothing to embed. Index is up to date.');
     return;
   }

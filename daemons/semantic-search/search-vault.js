@@ -14,6 +14,11 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
+import {
+  namespaceDispositionForPath,
+  requireDeclaredNamespaceDirectories,
+  requireNamespaceRegistry,
+} from './namespace-registry.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -24,6 +29,10 @@ const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
 const EMBEDDINGS_PATH = join(VAULT_ROOT, 'memory', 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_TOP_K = 5;
+
+// Missing or invalid namespace policy must stop the process before an index is
+// read or any result can be emitted.
+const NAMESPACE_REGISTRY = requireNamespaceRegistry(__dirname, 'search-vault');
 
 // Confidential-class deny list, re-checked at query time so this is safe even
 // against a stale or hand-edited embeddings.json built before a prefix was added
@@ -75,6 +84,11 @@ async function embedText(text) {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
+  // Search refuses the same undeclared physical state as index construction.
+  // This is independent of the stale-entry filter below: a live namespace must
+  // be classified before either caller will operate.
+  requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT, 'search-vault');
+
   // Load index
   if (!existsSync(EMBEDDINGS_PATH)) {
     console.error(`Embeddings index not found at ${EMBEDDINGS_PATH}`);
@@ -88,8 +102,11 @@ async function main() {
   const beforeDeny = index.notes.length;
   index.notes = index.notes.filter((n) => !deniedPath(DENY_PREFIXES, n.path));
   const deniedCount = beforeDeny - index.notes.length;
+  const beforeNamespace = index.notes.length;
+  index.notes = index.notes.filter((note) => namespaceDispositionForPath(NAMESPACE_REGISTRY, note.path) === 'INDEX');
+  const namespaceCount = beforeNamespace - index.notes.length;
   if (!jsonOnly) {
-    console.log(`${index.notes.length} entries loaded.${deniedCount ? ` (${deniedCount} confidential-class chunk(s) filtered by index-deny.json)` : ''}`);
+    console.log(`${index.notes.length} entries loaded.${deniedCount ? ` (${deniedCount} confidential-class chunk(s) filtered by index-deny.json)` : ''}${namespaceCount ? ` (${namespaceCount} non-INDEX namespace chunk(s) filtered by namespace-registry.json)` : ''}`);
   }
 
   // Embed query
