@@ -524,3 +524,120 @@ test('--attest writes nothing into the tree it attests', () => {
     assert.equal(digest(root), before, '--attest must not modify the attested tree');
   });
 });
+
+// -- FleetBaselineManifest/v2 -------------------------------------------------
+
+const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
+
+test('v2 manifest identity pins the recut population', () => {
+  const manifest = readManifest();
+  assert.equal(manifest.schema, 'FleetBaselineManifest/v2');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-08-22-30598546');
+  assert.equal(
+    manifest.public_product_commit,
+    '30598546a36a19cc1e2863ecf792d3743276fa06',
+  );
+  assert.ok(
+    manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
+    'baseline_id embeds the commit prefix it was cut from',
+  );
+  assert.match(
+    manifest.required_files[REGISTRY] ?? '',
+    /^[0-9a-f]{64}$/,
+    'the product namespace policy artifact is pinned',
+  );
+});
+
+test('every declared required path exists in the tree with no duplicate declarations', () => {
+  const manifest = readManifest();
+  const declared = Object.keys(manifest.required_files);
+  for (const relative of declared) {
+    assert.ok(
+      statSync(path.join(REPO, ...relative.split('/'))).isFile(),
+      `declared required path missing from the tree: ${relative}`,
+    );
+  }
+  assert.equal(
+    new Set(declared.map((key) => path.posix.normalize(key))).size,
+    declared.length,
+    'two declarations normalize to the same path',
+  );
+  // JSON.parse collapses duplicate keys silently, so the parsed object can
+  // never show one. Count declarations in the raw manifest text instead.
+  const raw = readFileSync(MANIFEST, 'utf8');
+  const block = raw.slice(raw.indexOf('"required_files"'), raw.indexOf('"required_settings"'));
+  const rawDeclarations = block.match(/"[^"\n]+": "[0-9a-f]{64}"/g) ?? [];
+  assert.equal(
+    rawDeclarations.length,
+    declared.length,
+    'raw manifest text declares a required path the parsed object lost (duplicate key)',
+  );
+});
+
+test('every declared required path resolves at the pinned source commit', (t) => {
+  const manifest = readManifest();
+  const commit = manifest.public_product_commit;
+  const probe = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${commit}^{commit}`]);
+  if (probe.status !== 0) {
+    // A shallow CI clone does not carry the pinned commit object. Skip LOUDLY
+    // rather than assert against an unreachable object; the tree-existence
+    // case above still runs everywhere.
+    t.skip(`pinned commit ${commit.slice(0, 8)} not present in this clone (shallow checkout)`);
+    return;
+  }
+  for (const relative of Object.keys(manifest.required_files)) {
+    const result = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${commit}:${relative}`]);
+    assert.equal(result.status, 0, `not present at ${commit.slice(0, 8)}: ${relative}`);
+  }
+});
+
+test('a byte changed in the namespace policy artifact attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const file = path.join(root, ...REGISTRY.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.equal(status, 1, 'NONCOMPLIANT exits 1');
+    assert.match(output, /required file changed: daemons\/semantic-search\/namespace-registry\.json/);
+  });
+});
+
+// THE v2 MUTATION WITNESS. The expected namespace-registry hash is flipped in
+// the installed manifest while the artifact on disk stays untouched: the
+// exact-install case must turn red, and a byte-identical restore must turn it
+// green again -- proving the green depends on exactly these bytes.
+test('flipping the expected namespace-registry hash turns the exact install red; restoring turns it green', () => {
+  withInstall((root) => {
+    const installed = path.join(root, 'scripts', 'fleet-baseline-manifest.json');
+    const original = readFileSync(installed);
+
+    assert.equal(attest(root).verdict, 'COMPLIANT', 'exact install is green before the mutation');
+
+    const manifest = JSON.parse(original.toString('utf8'));
+    assert.ok(manifest.required_files[REGISTRY], 'fixture manifest pins the registry');
+    manifest.required_files[REGISTRY] = 'f'.repeat(64);
+    writeFileSync(installed, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const red = attest(root);
+    assert.equal(red.verdict, 'NONCOMPLIANT', red.output);
+    assert.match(red.output, /required file changed: daemons\/semantic-search\/namespace-registry\.json/);
+
+    writeFileSync(installed, original);
+    const green = attest(root);
+    assert.equal(green.verdict, 'COMPLIANT', green.output);
+    assert.equal(green.status, 0, 'byte-identical restore returns the exact install to green');
+  });
+});
+
+test('attest prints the measured population count from the manifest', () => {
+  withInstall((root) => {
+    const { output } = attest(root);
+    const count = Object.keys(readManifest().required_files).length;
+    assert.match(
+      output,
+      new RegExp(`population ${count} required files`),
+      'the population line must state the declared required-file count',
+    );
+  });
+});

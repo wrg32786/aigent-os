@@ -1,11 +1,13 @@
 {
-  "schema": "FleetBaselineManifest/v1",
-  "baseline_id": "aigent-os-2026-08-19-41051d9e",
-  "public_product_commit": "41051d9e544063309d3b69462aecb7aa4edbe149",
+  "schema": "FleetBaselineManifest/v2",
+  "baseline_id": "aigent-os-2026-08-22-30598546",
+  "public_product_commit": "30598546a36a19cc1e2863ecf792d3743276fa06",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
-    "scripts/doctor.sh is excluded: it is the measuring instrument, and this baseline was cut before the --attest change landed, so its post-merge bytes are not the pinned ones.",
+    "scripts/doctor.sh is excluded: it is the measuring instrument, not a member of the measured population.",
+    "daemons/semantic-search/namespace-registry.json pins the product-owned namespace policy artifact. v2 does not attest every semantic-search implementation byte; it pins this policy artifact plus the existing load-bearing population.",
+    "FleetBaselineManifest/v1 (aigent-os-2026-08-19-41051d9e) is superseded by this baseline as the current public baseline and remains historical evidence in git history.",
     "CLAUDE.md, .claude/settings.json and .gitignore are excluded: the installer rewrites them (marker block, placeholder render, managed ignore block), so their installed bytes are never the repo bytes.",
     ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT.",
     ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes."
@@ -40,7 +42,8 @@
     "launcher/aigent.sh": "5aebacaf419b421f87260ff5aa31c0b7b68a795435031475b92e9c65d8419335",
     "launcher/aigent.ps1": "44e21c52268c77fb64e190b698beeeffc27ab188e315c5f5d3b173af950508b0",
     "launcher/install.sh": "cdb11fd4a4f0d0f5a39ba044ac2e3a509482ee35d1964b677a32f52f78dd2285",
-    "launcher/install.ps1": "472cb70b6bfba4c1d3ff38cf72855eadde2953ac5063bcdfc89c3fa05ae93574"
+    "launcher/install.ps1": "472cb70b6bfba4c1d3ff38cf72855eadde2953ac5063bcdfc89c3fa05ae93574",
+    "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060"
   },
   "required_settings": {
     "path": ".claude/settings.json",
