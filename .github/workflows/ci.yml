@@ -17,6 +17,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so fleet-baseline-attest's pinned-commit case runs
+          # here instead of skipping (the skip guard below rightly refuses
+          # non-platform skips).
+          fetch-depth: 0
 
       - name: Shell syntax
         shell: bash
