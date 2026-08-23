@@ -22,6 +22,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -552,8 +553,9 @@ test('every declared required path exists in the tree with no duplicate declarat
   const manifest = readManifest();
   const declared = Object.keys(manifest.required_files);
   for (const relative of declared) {
+    const full = path.join(REPO, ...relative.split('/'));
     assert.ok(
-      statSync(path.join(REPO, ...relative.split('/'))).isFile(),
+      existsSync(full) && statSync(full).isFile(),
       `declared required path missing from the tree: ${relative}`,
     );
   }
@@ -579,15 +581,26 @@ test('every declared required path resolves at the pinned source commit', (t) =>
   const commit = manifest.public_product_commit;
   const probe = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${commit}^{commit}`]);
   if (probe.status !== 0) {
-    // A shallow CI clone does not carry the pinned commit object. Skip LOUDLY
-    // rather than assert against an unreachable object; the tree-existence
-    // case above still runs everywhere.
-    t.skip(`pinned commit ${commit.slice(0, 8)} not present in this clone (shallow checkout)`);
+    // Only a shallow clone excuses the missing object. In a full clone an
+    // unreachable public_product_commit means the manifest pins a wrong or
+    // rewritten commit -- that must FAIL, not skip.
+    const shallow = spawnSync('git', ['-C', REPO, 'rev-parse', '--is-shallow-repository'], { encoding: 'utf8' });
+    assert.equal(
+      shallow.stdout?.trim(),
+      'true',
+      `pinned commit ${commit} is unreachable in a full clone -- wrong or rewritten public_product_commit`,
+    );
+    t.skip(`pinned commit ${commit.slice(0, 8)} not present (shallow clone)`);
     return;
   }
+  const tree = spawnSync('git', ['-C', REPO, 'ls-tree', '-r', '--name-only', commit], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(tree.status, 0, `git ls-tree failed for ${commit.slice(0, 8)}`);
+  const present = new Set(tree.stdout.split('\n'));
   for (const relative of Object.keys(manifest.required_files)) {
-    const result = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${commit}:${relative}`]);
-    assert.equal(result.status, 0, `not present at ${commit.slice(0, 8)}: ${relative}`);
+    assert.ok(present.has(relative), `not present at ${commit.slice(0, 8)}: ${relative}`);
   }
 });
 
@@ -630,7 +643,10 @@ test('flipping the expected namespace-registry hash turns the exact install red;
   });
 });
 
-test('attest prints the measured population count from the manifest', () => {
+// Locks the population line's presence and format. Both sides parse the same
+// manifest bytes, so this does NOT independently detect truncation -- the
+// duplicate-declaration raw-text case above carries that coverage.
+test('attest output states the declared population count', () => {
   withInstall((root) => {
     const { output } = attest(root);
     const count = Object.keys(readManifest().required_files).length;

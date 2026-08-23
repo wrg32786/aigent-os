@@ -116,8 +116,8 @@ findings = []
 
 print("info:baseline %s" % manifest["baseline_id"])
 print("info:commit %s" % manifest["public_product_commit"])
-# A silently truncated population would attest green over fewer files than the
-# baseline declares; printing the count makes the measured population loud.
+# A bare verdict is not self-describing about coverage: COMPLIANT over 31
+# files and COMPLIANT over 1 file print identically without this line.
 print("info:population %d required files" % len(manifest["required_files"]))
 
 # Required files, byte for byte. A missing file and a changed file are the
