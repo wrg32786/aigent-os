@@ -593,7 +593,9 @@ test('every declared required path resolves at the pinned source commit', (t) =>
     t.skip(`pinned commit ${commit.slice(0, 8)} not present (shallow clone)`);
     return;
   }
-  const tree = spawnSync('git', ['-C', REPO, 'ls-tree', '-r', '--name-only', commit], {
+  // core.quotePath=false: without it, git C-quotes any non-ASCII byte in a
+  // path and Set.has never matches the raw UTF-8 manifest key.
+  const tree = spawnSync('git', ['-C', REPO, '-c', 'core.quotePath=false', 'ls-tree', '-r', '--name-only', commit], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
