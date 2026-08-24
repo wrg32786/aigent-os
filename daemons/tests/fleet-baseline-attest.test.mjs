@@ -618,6 +618,33 @@ test('a byte changed in the namespace policy artifact attests NONCOMPLIANT', () 
   });
 });
 
+// namespace-registry.local.json (issue #48) is deliberately unpinned: it is
+// operator-owned, so it is not in required_files and --attest never reads its
+// content. This proves that by construction rather than by inspection -- a
+// populated local registry present on a fresh install stays COMPLIANT, and
+// tampering the CORE registry still flips NONCOMPLIANT with the local file
+// present, so the two never get coupled by a future manifest change.
+test('a populated local namespace registry does not affect --attest, and core tamper still attests NONCOMPLIANT with it present', () => {
+  withInstall((root) => {
+    const localFile = path.join(root, 'daemons', 'semantic-search', 'namespace-registry.local.json');
+    writeFileSync(localFile, JSON.stringify({
+      schema: 'MemoryNamespaceRegistry/v1',
+      namespaces: [{ path: 'operator-extension', disposition: 'INDEX' }],
+    }, null, 2));
+
+    const green = attest(root);
+    assert.equal(green.verdict, 'COMPLIANT', green.output);
+    assert.equal(green.status, 0, 'populated local registry keeps the fresh install COMPLIANT');
+
+    const coreFile = path.join(root, ...REGISTRY.split('/'));
+    writeFileSync(coreFile, `${readFileSync(coreFile, 'utf8')}\n`);
+    const red = attest(root);
+    assert.equal(red.verdict, 'NONCOMPLIANT', red.output);
+    assert.equal(red.status, 1, 'NONCOMPLIANT exits 1');
+    assert.match(red.output, /required file changed: daemons\/semantic-search\/namespace-registry\.json/);
+  });
+});
+
 // THE v3 MUTATION WITNESS. The expected namespace-registry hash is flipped in
 // the installed manifest while the artifact on disk stays untouched: the
 // exact-install case must turn red, and a byte-identical restore must turn it
