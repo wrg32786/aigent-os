@@ -1,0 +1,7 @@
+{
+  "_comment": "EXAMPLE only. Copy this file to namespace-registry.local.json in the same directory and declare your own vault-relative top-level directories in the copy: namespace-registry.mjs's requireNamespaceRegistry() only reads namespace-registry.local.json, and only that copy is gitignored. Do not rename this file in place. This is the seat-owned extension registry (issue #48): the core namespace-registry.json is product-owned and pinned by the fleet baseline manifest, so a legitimate new vault directory belongs here instead of edited into the pinned file, which would make the seat permanently NONCOMPLIANT. Same schema and row rules as the core file -- one normalized top-level path per row, disposition INDEX/SKIP/DENY, and a non-empty reason on SKIP/DENY rows. A local path may only ADD a new top-level namespace: declaring a path that already exists in the core registry (with any disposition) fails closed everywhere -- embed, search, and doctor -- rather than silently overriding the pinned policy. With no namespace-registry.local.json present at all, only the core registry applies, exactly as before this file existed.",
+  "schema": "MemoryNamespaceRegistry/v1",
+  "namespaces": [
+    { "path": "operator-extension-example", "disposition": "INDEX" }
+  ]
+}
