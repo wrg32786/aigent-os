@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=19
+TOTAL=20
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -605,5 +605,25 @@ mkdir -p "$RULES_SEED_TARGET"
 (cd "$FIXTURE" && bash install.sh --target "$RULES_SEED_TARGET" --no-deps >/dev/null 2>&1)
 grep -q "critical" "$RULES_SEED_TARGET/.claude/rules/post-compact-critical.md"
 printf '[19/%d] operator rules file: existing doctrine kept, starter seeds fresh installs only\n' "$TOTAL"
+
+# ── 20. Existing local namespace registry preserved (issue #48) ─────────────
+# namespace-registry.local.json is operator-owned and never shipped by the
+# framework (SRC never contains it, gitignored), so copy_missing_tree's
+# source-driven daemons/ copy has no path that could ever touch a
+# pre-existing one at TARGET -- this proves that by construction, across a
+# fresh copy install AND a rerun (reinstall) of the same TARGET.
+LOCAL_REGISTRY_TARGET="$WORK/local-registry-target"
+mkdir -p "$LOCAL_REGISTRY_TARGET/daemons/semantic-search"
+cat > "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json" <<'JSON'
+{"schema":"MemoryNamespaceRegistry/v1","namespaces":[{"path":"operator-extension-sentinel","disposition":"INDEX"}]}
+JSON
+LOCAL_REGISTRY_BEFORE="$(cat "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json")"
+(cd "$FIXTURE" && bash install.sh --target "$LOCAL_REGISTRY_TARGET" --no-deps >/dev/null 2>&1)
+test -f "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json"
+test "$(cat "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json")" = "$LOCAL_REGISTRY_BEFORE"
+# Reinstall (rerun against the same TARGET) must not touch it either.
+(cd "$FIXTURE" && bash install.sh --target "$LOCAL_REGISTRY_TARGET" --no-deps >/dev/null 2>&1)
+test "$(cat "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json")" = "$LOCAL_REGISTRY_BEFORE"
+printf '[20/%d] local namespace registry: pre-existing file survives install and reinstall untouched\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

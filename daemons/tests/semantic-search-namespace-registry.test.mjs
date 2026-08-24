@@ -99,6 +99,14 @@ function writeRegistry(box, text) {
   if (text !== null) writeFileSync(target, text);
 }
 
+// The optional, operator-owned extension registry (issue #48). Same shape as
+// writeRegistry above; absent (never called) is the default valid state.
+function writeLocalRegistry(box, text) {
+  const target = path.join(box.sem, 'namespace-registry.local.json');
+  rmSync(target, { recursive: true, force: true });
+  if (text !== null) writeFileSync(target, text);
+}
+
 function addNote(box, relativePath, canary) {
   const target = path.join(box.vault, ...relativePath.split('/'));
   mkdirSync(path.dirname(target), { recursive: true });
@@ -564,6 +572,111 @@ assertInvalidRegistryMutation(
   ])),
   /requires a non-empty reason/i,
 );
+
+// ── Local extension registry (issue #48) ─────────────────────────────────────
+// namespace-registry.local.json is the optional, operator-owned extension: a
+// local row may ADD a new declared top-level path, but never override or
+// duplicate a core path. This is the fix for the measured contradiction --
+// FleetBaselineManifest pins namespace-registry.json, so a legitimate new
+// vault directory could previously only be declared by editing the pinned
+// core file, which made a properly customized seat permanently NONCOMPLIANT.
+
+// 10. A new physical namespace declared ONLY in the local registry is
+// accepted (INDEX content built and returned, doctor reports it PRESENT
+// rather than UNDECLARED) under its declared disposition. Before this fix
+// (loadLocalNamespaceRegistry/composeNamespaceRegistry did not exist and
+// namespace-registry.local.json was never read), this exact fixture is the
+// master-branch red case: the directory is undeclared everywhere.
+{
+  const box = makeSandbox('local-index');
+  const LOCAL_PATH = 'operator-extension';
+  const LOCAL_CANARY = 'CANARY-NAMESPACE-LOCAL-INDEX-7c19ab-extension-body';
+  addNote(box, `${LOCAL_PATH}/note.md`, LOCAL_CANARY);
+  writeLocalRegistry(box, registryText([{ path: LOCAL_PATH, disposition: 'INDEX' }]));
+
+  const embed = runNode(box, 'embed-vault.js');
+  check('local INDEX: embed exits 0', embed.status === 0, embed.stderr.slice(0, 300));
+  const raw = readIndexText(box);
+  check('local INDEX: local-namespace canary is present in embeddings.json', raw.includes(LOCAL_CANARY));
+  check('local INDEX: core healthy canary is also present in the same artifact', raw.includes(HEALTHY));
+
+  const search = runNode(box, 'search-vault.js', ['extension namespace', '--top', '10']);
+  check('local INDEX: search exits 0', search.status === 0, search.stderr.slice(0, 300));
+  check('local INDEX: search returns the local-namespace canary', search.stdout.includes(LOCAL_CANARY));
+
+  const doctor = runDoctor(box);
+  check('local INDEX: doctor exits 0', doctor.status === 0, doctor.all.slice(-500));
+  check(
+    'local INDEX: doctor emits NAMESPACE_INDEX_PRESENT for the locally declared path',
+    new RegExp(`NAMESPACE_INDEX_PRESENT\\s+${LOCAL_PATH}(?:\\s|$)`).test(doctor.stdout),
+  );
+  check('local INDEX: doctor does not report the locally declared path as undeclared', !new RegExp(`NAMESPACE_UNDECLARED\\s+${LOCAL_PATH}(?:\\s|$)`).test(doctor.stdout));
+}
+
+// 11. The local extension is additive, not a blanket bypass: a physical
+// namespace declared in NEITHER registry stays red even while a local
+// registry is present and valid (declaring an unrelated path).
+{
+  const box = makeSandbox('local-present-but-undeclared');
+  writeLocalRegistry(box, registryText([{ path: 'operator-extension', disposition: 'INDEX' }]));
+  establishHealthyControl(box, 'local present but sibling still undeclared');
+  addNote(box, `${ROGUE_DIR}/secret.md`, ROGUE);
+  const before = readIndexText(box);
+
+  const embed = runNode(box, 'embed-vault.js');
+  check('local present but sibling still undeclared: embed exits nonzero', embed.status === 1, embed.all.slice(0, 300));
+  check('local present but sibling still undeclared: embed names the physical directory', embed.all.includes(ROGUE_DIR));
+  check('local present but sibling still undeclared: healthy index unchanged', readIndexText(box) === before && before.includes(HEALTHY));
+
+  const doctor = runDoctor(box);
+  check('local present but sibling still undeclared: doctor exits nonzero', doctor.status === 1, doctor.all.slice(-500));
+  check('local present but sibling still undeclared: doctor emits NAMESPACE_UNDECLARED', /NAMESPACE_UNDECLARED\s+rogue(?:\s|$)/.test(doctor.stdout));
+}
+
+// 12. Duplicate core/local path fails closed everywhere, even when the local
+// disposition matches the core disposition exactly.
+assertInvalidRegistryMutation(
+  'duplicate core/local path',
+  (box) => writeLocalRegistry(box, registryText([{ path: 'feedback', disposition: 'INDEX' }])),
+  /duplicate/i,
+);
+
+// 13. A local row cannot override a core disposition either -- same
+// duplicate-path guard, exercised with a mismatched disposition so an
+// "override" attempt is falsified as its own fixture per the issue's bullet.
+assertInvalidRegistryMutation(
+  'override of a core disposition',
+  (box) => writeLocalRegistry(box, registryText([{ path: 'templates', disposition: 'INDEX' }])),
+  /duplicate/i,
+);
+
+// 14. Invalid/malformed local registry fails closed everywhere, same as a
+// malformed core registry.
+assertInvalidRegistryMutation(
+  'malformed local registry JSON',
+  (box) => writeLocalRegistry(box, '{'),
+  /cannot parse|malformed JSON/i,
+);
+
+// 15. A stale hand-built DENY entry declared ONLY in the local registry is
+// blocked at the query-time chokepoint, exactly like a core DENY row (test 4
+// above) -- proving the composed registry, not just the core one, reaches
+// search-vault.js's existing namespaceDispositionForPath() filter.
+{
+  const box = makeSandbox('local-stale-deny');
+  writeLocalRegistry(box, registryText([
+    { path: PRIVATE_DIR, disposition: 'DENY', reason: 'test-only local confidential namespace' },
+  ]));
+  mkdirSync(path.join(box.vault, PRIVATE_DIR), { recursive: true });
+  writeIndex(box, [
+    indexNote(`${PRIVATE_DIR}/secret.md`, DENIED, [1, 0, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+  ]);
+  check('local stale DENY: healthy INDEX canary is present in the seeded artifact', readIndexText(box).includes(HEALTHY));
+  const search = runNode(box, 'search-vault.js', ['private secret', '--top', '10']);
+  assertSearchIsolation('local stale DENY query-time chokepoint', search, DENIED);
+  check('local stale DENY: denied namespace path is absent from all output', !search.all.includes(`${PRIVATE_DIR}/secret.md`));
+}
 
 // ── Mutation witness: weaken only search's query-time namespace predicate ───
 {

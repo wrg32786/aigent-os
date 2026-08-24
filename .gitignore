@@ -26,6 +26,11 @@ __pycache__/
 # tracked; the real file stays local.
 **/semantic-search/index-deny.json
 
+# The seat-owned namespace extension registry (issue #48): operator-authored
+# local additions to the pinned core namespace-registry.json. Only
+# namespace-registry.local.example.json is tracked.
+**/semantic-search/namespace-registry.local.json
+
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json

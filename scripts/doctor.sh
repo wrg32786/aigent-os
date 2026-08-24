@@ -730,7 +730,13 @@ fi
 # in a temp file, matching check 7b's set -euo pipefail-safe pattern; capturing
 # its status directly (rather than through process substitution) ensures a
 # parser failure cannot be mistaken for an empty, healthy registry.
+#
+# namespace-registry.local.json (issue #48) is the optional, operator-owned
+# extension registry: same schema and row rules as the core file, composed
+# in below rather than reimplemented, so doctor can never drift from what
+# embed-vault.js/search-vault.js's shared namespace-registry.mjs accepts.
 NAMESPACE_REGISTRY="$ROOT/daemons/semantic-search/namespace-registry.json"
+NAMESPACE_LOCAL_REGISTRY="$ROOT/daemons/semantic-search/namespace-registry.local.json"
 if command -v python3 >/dev/null 2>&1; then
   _NAMESPACE_PY=$(mktemp /tmp/doctor_namespace_registry.XXXXXX.py)
   cat > "$_NAMESPACE_PY" << 'NAMESPACEPY'
@@ -764,7 +770,46 @@ def reject_json_constant(value):
     raise ValueError("invalid JSON constant: %s" % value)
 
 
+def validate_rows(namespaces, seen, source_label):
+    rows = []
+    for index, row in enumerate(namespaces):
+        if type(row) is not dict:
+            stop("%s[%d] must be an object" % (source_label, index))
+
+        namespace_path = row.get("path")
+        if type(namespace_path) is not str:
+            stop("%s[%d].path must be a string" % (source_label, index))
+        if (
+            not namespace_path
+            or namespace_path.strip() != namespace_path
+            or namespace_path in (".", "..")
+            or "/" in namespace_path
+            or "\\" in namespace_path
+            or posixpath.isabs(namespace_path)
+            or ntpath.isabs(namespace_path)
+        ):
+            stop("%s[%d].path must be one normalized top-level segment" % (source_label, index))
+
+        key = namespace_path.replace("\\", "/").lower()
+        if key in seen:
+            stop("duplicate namespace path: %s" % namespace_path)
+        seen.add(key)
+
+        disposition = row.get("disposition")
+        if type(disposition) is not str or disposition not in DISPOSITIONS:
+            stop("%s[%d] has invalid disposition: %s" % (source_label, index, disposition))
+        if disposition in ("SKIP", "DENY"):
+            reason = row.get("reason")
+            if type(reason) is not str or not reason.strip():
+                stop("%s[%d] %s row requires a non-empty reason" % (source_label, index, disposition))
+
+        rows.append((namespace_path, disposition, key))
+    return rows
+
+
 registry_path, vault_root = sys.argv[1:3]
+local_registry_path = sys.argv[3] if len(sys.argv) > 3 else None
+
 try:
     with open(registry_path, encoding="utf-8") as registry_file:
         registry_text = registry_file.read()
@@ -785,40 +830,40 @@ namespaces = document.get("namespaces")
 if type(namespaces) is not list:
     stop("namespace registry namespaces must be an array")
 
-rows = []
 seen = set()
-for index, row in enumerate(namespaces):
-    if type(row) is not dict:
-        stop("namespaces[%d] must be an object" % index)
+rows = validate_rows(namespaces, seen, "namespaces")
 
-    namespace_path = row.get("path")
-    if type(namespace_path) is not str:
-        stop("namespaces[%d].path must be a string" % index)
-    if (
-        not namespace_path
-        or namespace_path.strip() != namespace_path
-        or namespace_path in (".", "..")
-        or "/" in namespace_path
-        or "\\" in namespace_path
-        or posixpath.isabs(namespace_path)
-        or ntpath.isabs(namespace_path)
-    ):
-        stop("namespaces[%d].path must be one normalized top-level segment" % index)
+# namespace-registry.local.json: optional, operator-owned. Absent (ENOENT) is
+# valid -- no local rows. Present-but-unusable fails closed exactly like the
+# core file. A local path colliding with a core path (already in `seen`)
+# fails closed via the same duplicate-path check validate_rows uses
+# internally: local rows may add top-level paths only, never override or
+# duplicate a core one.
+if local_registry_path:
+    try:
+        with open(local_registry_path, encoding="utf-8") as local_file:
+            local_text = local_file.read()
+    except FileNotFoundError:
+        local_text = None
+    except (OSError, UnicodeError) as error:
+        stop("local namespace registry missing or unreadable: %s (%s)" % (local_registry_path, error))
 
-    key = namespace_path.replace("\\", "/").lower()
-    if key in seen:
-        stop("duplicate namespace path: %s" % namespace_path)
-    seen.add(key)
+    if local_text is not None:
+        try:
+            local_document = json.loads(local_text, parse_constant=reject_json_constant)
+        except (ValueError, UnicodeError, RecursionError) as error:
+            stop("local namespace registry malformed JSON: %s" % error)
 
-    disposition = row.get("disposition")
-    if type(disposition) is not str or disposition not in DISPOSITIONS:
-        stop("namespaces[%d] has invalid disposition: %s" % (index, disposition))
-    if disposition in ("SKIP", "DENY"):
-        reason = row.get("reason")
-        if type(reason) is not str or not reason.strip():
-            stop("namespaces[%d] %s row requires a non-empty reason" % (index, disposition))
+        if type(local_document) is not dict:
+            stop("local namespace registry root must be an object")
+        if local_document.get("schema") != SCHEMA:
+            stop("local namespace registry schema must equal exactly %s" % SCHEMA)
 
-    rows.append((namespace_path, disposition, key))
+        local_namespaces = local_document.get("namespaces")
+        if type(local_namespaces) is not list:
+            stop("local namespace registry namespaces must be an array")
+
+        rows += validate_rows(local_namespaces, seen, "local namespaces")
 
 physical = []
 if os.path.exists(vault_root):
@@ -856,7 +901,7 @@ NAMESPACEPY
 
   NAMESPACE_OUTPUT=""
   NAMESPACE_RC=0
-  NAMESPACE_OUTPUT="$(python3 "$_NAMESPACE_PY" "$NAMESPACE_REGISTRY" "$ROOT/vault" 2>&1)" || NAMESPACE_RC=$?
+  NAMESPACE_OUTPUT="$(python3 "$_NAMESPACE_PY" "$NAMESPACE_REGISTRY" "$ROOT/vault" "$NAMESPACE_LOCAL_REGISTRY" 2>&1)" || NAMESPACE_RC=$?
   rm -f "$_NAMESPACE_PY"
 
   if [ "$NAMESPACE_RC" -ne 0 ]; then

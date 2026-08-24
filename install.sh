@@ -840,7 +840,9 @@ GI_BLOCK="$AIGENT_TMP/gitignore.block"
 # is opened as a vault, and the settings.local.json Claude Code itself writes
 # for machine-local overrides. The semantic-search index-deny.json belongs here
 # too: it is hand-written rather than generated, but it names the operator's own
-# confidential folders, so it must never be committable from TARGET.
+# confidential folders, so it must never be committable from TARGET. Same
+# treatment for namespace-registry.local.json (issue #48): the seat-owned
+# extension registry, hand-written and never generated.
 cat > "$GI_BLOCK" <<EOF_GI
 $GI_START
 .aigent/
@@ -855,6 +857,7 @@ memory/.daemon-errors.log
 **/runtime/stop-writer/
 **/runtime/NIGHTLY_PASS_STATE.json
 **/semantic-search/index-deny.json
+**/semantic-search/namespace-registry.local.json
 node_modules/
 .obsidian/
 $GI_END
