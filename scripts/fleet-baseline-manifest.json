@@ -1,19 +1,20 @@
 {
-  "schema": "FleetBaselineManifest/v2",
-  "baseline_id": "aigent-os-2026-08-22-30598546",
-  "public_product_commit": "30598546a36a19cc1e2863ecf792d3743276fa06",
+  "schema": "FleetBaselineManifest/v3",
+  "baseline_id": "aigent-os-2026-08-23-3bfe7ea3",
+  "public_product_commit": "3bfe7ea3739498423585bdc8a54b177b7a212469",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
     "scripts/doctor.sh is excluded: it is the measuring instrument, not a member of the measured population.",
-    "daemons/semantic-search/namespace-registry.json pins the product-owned namespace policy artifact. v2 does not attest every semantic-search implementation byte; it pins this policy artifact plus the existing load-bearing population.",
-    "FleetBaselineManifest/v1 (aigent-os-2026-08-19-41051d9e) is superseded by this baseline as the current public baseline and remains historical evidence in git history.",
+    "daemons/semantic-search/namespace-registry.json pins the product-owned namespace policy artifact. v3 does not attest every semantic-search implementation byte; it pins this policy artifact plus the existing load-bearing population.",
+    "FleetBaselineManifest/v2 (aigent-os-2026-08-22-30598546) is superseded by this baseline as the current public baseline and remains historical evidence in git history. FleetBaselineManifest/v1 (aigent-os-2026-08-19-41051d9e) remains historical evidence one generation further back.",
+    "v3 recut reason (program issue #41): daemons/statusline-ctx.sh changed to fix a silent statusline when jq is absent and no delegate is wired (telemetry still wrote, but nothing displayed) — every other hash was recomputed from the same commit and found unchanged.",
     "CLAUDE.md, .claude/settings.json and .gitignore are excluded: the installer rewrites them (marker block, placeholder render, managed ignore block), so their installed bytes are never the repo bytes.",
     ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT.",
     ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes."
   ],
   "required_files": {
-    "daemons/statusline-ctx.sh": "49c1aa9d2336ce3515314e4c7a0bbdaf0c2576082413e53d3b09901d648bdb2e",
+    "daemons/statusline-ctx.sh": "fa30a56b9eb5a2f385065e8d1737ae0ec70084b23737a1f3e1c43fcea196f468",
     "daemons/sessionstart-reinject.mjs": "f088db2faba158af4008dc56321d80cb52a7544d37a952d51472d69fa9e39496",
     "daemons/resume-verb.mjs": "abc505d1581e28c5640eb018e41cfbd1f637da85d36312320abe9c7444052dc5",
     "daemons/caddy.sh": "3985a94194fb5914b77c0f6089188045a08dd863f8143e02ffad85728f5c3b0e",

@@ -526,17 +526,17 @@ test('--attest writes nothing into the tree it attests', () => {
   });
 });
 
-// -- FleetBaselineManifest/v2 -------------------------------------------------
+// -- FleetBaselineManifest/v3 -------------------------------------------------
 
 const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 
-test('v2 manifest identity pins the recut population', () => {
+test('v3 manifest identity pins the recut population', () => {
   const manifest = readManifest();
-  assert.equal(manifest.schema, 'FleetBaselineManifest/v2');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-08-22-30598546');
+  assert.equal(manifest.schema, 'FleetBaselineManifest/v3');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-08-23-3bfe7ea3');
   assert.equal(
     manifest.public_product_commit,
-    '30598546a36a19cc1e2863ecf792d3743276fa06',
+    '3bfe7ea3739498423585bdc8a54b177b7a212469',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
@@ -618,7 +618,7 @@ test('a byte changed in the namespace policy artifact attests NONCOMPLIANT', () 
   });
 });
 
-// THE v2 MUTATION WITNESS. The expected namespace-registry hash is flipped in
+// THE v3 MUTATION WITNESS. The expected namespace-registry hash is flipped in
 // the installed manifest while the artifact on disk stays untouched: the
 // exact-install case must turn red, and a byte-identical restore must turn it
 // green again -- proving the green depends on exactly these bytes.

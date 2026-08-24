@@ -152,6 +152,72 @@ test('delegates the visible line to an existing statusline script unchanged', { 
   }
 });
 
+// --- program issue #41: the no-jq branch must still show something ---------
+//
+// Forces the exact branch the script takes when jq is genuinely absent — the
+// gate is literally `"${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" && command -v jq`,
+// so this env var is indistinguishable, from the script's own perspective,
+// from jq missing off PATH. Reused from the existing pattern in
+// daemons/tests/auto-clear-transport.run1.test.mjs (test 7) rather than
+// fighting PATH-format differences between a Windows-launched node and the
+// bash it spawns. These three cases are NOT gated on skipReason: they must
+// hold regardless of whether jq happens to be installed on the runner.
+const FORCE_NODE = { CTX_TELEMETRY_FORCE_NODE: '1' };
+const visibleLines = (stdout) => stdout.split('\n').filter((l) => l.length > 0);
+
+test('no jq, no delegate: telemetry still lands and a visible line prints once', () => {
+  const home = freshHome();
+  try {
+    const res = run(PAYLOAD, home, FORCE_NODE);
+    assert.equal(res.status, 0, res.stderr);
+    const file = path.join(home, '.claude', 'ctx-refresh', 'sess-abc123.json');
+    assert.ok(existsSync(file), 'telemetry must still be written with no jq');
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).used_percentage, 42.5);
+    const lines = visibleLines(res.stdout);
+    assert.equal(lines.length, 1, `expected exactly one visible line, got ${JSON.stringify(res.stdout)}`);
+    assert.equal(lines[0], 'TestModel | ctx 42%');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('no jq, with delegate: telemetry lands and the delegate output prints exactly once', () => {
+  const home = freshHome();
+  try {
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+    // Dependency-free delegate (no jq call) so this proves the statusline
+    // script's own dispatch, not whether jq happens to exist on the runner.
+    writeFileSync(
+      path.join(home, '.claude', 'statusline-command.sh'),
+      '#!/bin/bash\nINPUT=$(cat)\ncase "$INPUT" in *TestModel*) echo "DELEGATE saw TestModel";; *) echo "DELEGATE saw UNKNOWN";; esac\n',
+    );
+    const res = run(PAYLOAD, home, FORCE_NODE);
+    assert.equal(res.status, 0, res.stderr);
+    const lines = visibleLines(res.stdout);
+    assert.equal(lines.length, 1, `expected the delegate line exactly once, got ${JSON.stringify(res.stdout)}`);
+    assert.equal(lines[0], 'DELEGATE saw TestModel');
+    assert.ok(
+      existsSync(path.join(home, '.claude', 'ctx-refresh', 'sess-abc123.json')),
+      'telemetry still written alongside delegation',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('no jq, malformed payload: no crash, no fabricated percentage', () => {
+  const home = freshHome();
+  try {
+    const res = run('not json at all', home, FORCE_NODE);
+    assert.equal(res.status, 0, 'always exits 0');
+    assert.doesNotMatch(res.stdout, /ctx \d/, 'never fabricates a percentage from unparseable input');
+    const dir = path.join(home, '.claude', 'ctx-refresh');
+    if (existsSync(dir)) assert.deepEqual(readdirSync(dir), []);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('prunes >7-day-idle *.json but never the sensor\'s *.state files', { skip: skipReason }, () => {
   const home = freshHome();
   try {

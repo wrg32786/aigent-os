@@ -24,6 +24,7 @@ INPUT=$(cat)
 
 SENSOR_DIR="$HOME/.claude/ctx-refresh"
 HAS_JQ=0
+DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-$HOME/.claude/statusline-command.sh}"
 
 if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
   HAS_JQ=1
@@ -49,14 +50,22 @@ if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1;
 elif command -v node >/dev/null 2>&1; then
   SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
   if [ -n "$SCRIPT_DIR" ]; then
-    printf '%s' "$INPUT" \
-      | node "$SCRIPT_DIR/ctx-telemetry.mjs" --write-only >/dev/null 2>&1 \
-      || true
+    if [ -f "$DELEGATE" ]; then
+      # A delegate is wired: write telemetry only here, the display block
+      # below invokes the delegate once.
+      printf '%s' "$INPUT" \
+        | node "$SCRIPT_DIR/ctx-telemetry.mjs" --write-only >/dev/null 2>&1 \
+        || true
+    else
+      # No delegate and no jq: ctx-telemetry.mjs's own CLI already writes
+      # telemetry AND prints a built-in line (model + ctx %) — jq just isn't
+      # here to do it, so let Node do both instead of only the write half.
+      printf '%s' "$INPUT" | node "$SCRIPT_DIR/ctx-telemetry.mjs" 2>/dev/null || true
+    fi
   fi
 fi
 
 # Display: delegate to an existing statusline script unchanged, if one is wired.
-DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-$HOME/.claude/statusline-command.sh}"
 if [ -f "$DELEGATE" ]; then
   printf '%s' "$INPUT" | bash "$DELEGATE"
 elif [ "$HAS_JQ" -eq 1 ]; then
