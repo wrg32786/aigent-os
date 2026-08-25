@@ -286,6 +286,54 @@ export function inert(value, max = 500) {
   return JSON.stringify(s);
 }
 
+// The trust-boundary chokepoint (issue #43): every render of text that was
+// PERSISTED rather than typed live this turn -- a vault note chunk, a
+// skill-chain row, anything read off disk whose bytes an earlier turn or a
+// different actor chose -- routes through this one function instead of a
+// per-caller ad hoc render. Persisted text is not the current user's
+// instruction, not the current session's identity, and carries no authority
+// of its own; inert() above already proves the single-line/quoted/bounded
+// render discipline sufficient for P1-P3, this just adds the provenance tag
+// and disposition gate those callers were missing.
+//
+// disposition reuses namespace-registry.mjs's vocabulary directly (a chunk
+// that survived that registry's INDEX filter passes its own disposition
+// straight through) plus the generic 'ALLOW' default for a caller with no
+// namespace concept of its own (a P4-style skill-chain row). Anything NOT in
+// the allowed set refuses closed -- DENY, SKIP, an unrecognized string, and a
+// missing value all refuse identically, because a disposition this function
+// cannot positively confirm as safe is not safe to render. This is a second,
+// independent gate: even if an upstream filter that already excludes DENY/SKIP
+// content regresses, a caller that still passes the row's real disposition
+// through keeps the render itself closed.
+const RENDERABLE_DISPOSITIONS = new Set(['ALLOW', 'INDEX']);
+
+export function renderPersisted({
+  path: sourcePath,
+  text,
+  role,
+  trust = 'persisted-data',
+  disposition = 'ALLOW',
+  max = 500,
+  now,
+} = {}) {
+  if (typeof text !== 'string') return { refused: 'non-string text' };
+  if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) return { refused: 'missing path' };
+  if (typeof role !== 'string' || role.trim().length === 0) return { refused: 'missing role' };
+  if (!RENDERABLE_DISPOSITIONS.has(disposition)) {
+    return { refused: `disposition-not-allowed:${String(disposition).slice(0, 40)}` };
+  }
+
+  const acquiredAt = typeof now === 'string' && now.trim().length ? now : new Date().toISOString();
+  // The hash covers the ORIGINAL text, not the bounded/quoted render below --
+  // it identifies the content, independent of how far any one caller's `max`
+  // happens to truncate it.
+  const sha256 = createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
+  const record = { source: sourcePath, sha256, acquiredAt, trust, role, disposition, authority: 'none' };
+  const line = `[${trust}:${role} ${sourcePath} sha ${sha256} @ ${acquiredAt}] ${inert(text, max)}`;
+  return { line, record };
+}
+
 // Human-readable account of what the selector discarded. Grouped by reason so a
 // systemic defect reads as ONE line ("47x missing-required-field
 // (next_valid_action)") rather than 47 unrelated ones, which is the shape that

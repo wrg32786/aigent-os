@@ -116,6 +116,7 @@ if command -v python3 >/dev/null 2>&1; then
 import json
 import os
 import re
+from datetime import date
 from pathlib import Path
 
 raw = os.environ.get("INPUT", "")
@@ -130,6 +131,17 @@ if not isinstance(prompt, str) or not prompt.strip():
 prompt_lower = prompt.lower()
 
 LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# PINNED to lifecycle-common.mjs's inert() (daemons/lifecycle-common.mjs:283,
+# trust-boundary chokepoint #43). Python cannot import that ES module across
+# the language boundary, so this stays a byte-parity duplicate rather than a
+# shared call -- measured: a bare `node -e` spawn on this host costs ~1-2.5s
+# and this hook's existing python3 spawn alone already costs ~450-560ms
+# against a UserPromptSubmit hook that fires on every single prompt, both far
+# past the ~150ms budget for adding a second interpreter here. Any edit to
+# lifecycle-common.mjs's inert() must be mirrored here -- daemons/tests/
+# persisted-render.test.mjs asserts byte-parity between the two over a shared
+# fixture set by extracting and executing THIS function's real source, so a
+# drift here fails that test rather than shipping silently.
 def inert(value, maximum=500):
     rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
     if len(rendered) > maximum:
@@ -212,6 +224,15 @@ if not top:
             except OSError:
                 pass
 
+# A chain row has no session-id or live-authority concept the way a capsule
+# does (P2's liveBootSession() has nothing to bind against here); the only
+# staleness signal the Date column carries is its own age. A row's chain is
+# reported as data either way -- this only changes whether it is presented as
+# a live recommendation or flagged as a historical reference, per the
+# trust-boundary #43 rule that stale/wrong-referent state must be reported,
+# never silently treated as current.
+# ponytail: fixed 90-day threshold, make configurable if false positives complain.
+STALE_CHAIN_DAYS = 90
 chains_path = os.environ.get("CHAINS", "")
 try:
     for line in Path(chains_path).read_text(encoding="utf-8").splitlines():
@@ -220,10 +241,18 @@ try:
         parts = [part.strip() for part in line.split("|")]
         if len(parts) < 4:
             continue
-        objective, chain = parts[2].lower(), parts[3]
+        date_value, objective, chain = parts[1], parts[2].lower(), parts[3]
         overlap = sum(1 for word in words if word in re.findall(r"\w+", objective))
         if overlap >= 3 and chain:
-            print(f"[CADDY:chain] Prior chain for a similar objective: {inert(chain)} (see SKILL_CHAINS)")
+            try:
+                age_days = (date.today() - date.fromisoformat(date_value)).days
+                provenance = (
+                    f"recorded {date_value}, {age_days}d ago -- STALE, reference only, verify before reuse"
+                    if age_days > STALE_CHAIN_DAYS else f"recorded {date_value}"
+                )
+            except ValueError:
+                provenance = "recorded date unreadable -- reference only, verify before reuse"
+            print(f"[CADDY:chain] {provenance}: prior chain for a similar objective {inert(chain)} (see SKILL_CHAINS)")
             break
 except OSError:
     pass

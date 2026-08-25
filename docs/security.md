@@ -63,6 +63,12 @@ The wiring lives in `.claude/settings.json` and uses an absolute path. The insta
 
 Treat a silent run as "no known phrase appeared", never as "this content is safe". And note that the authority matrix behind it is doctrine rather than enforcement (see above), so a successful injection is not backstopped by a technical control. The real backstop is Claude Code's `permissions` settings and what credentials you left reachable.
 
+## Persisted-Text Trust Boundary
+
+`security-scan.sh` above watches live tool output. A separate boundary covers text that was written earlier and read back later: a vault note chunk returned by semantic search, a recorded skill chain, anything persisted rather than typed this turn. Persisted text is not the current user's instruction, not the current session's identity, and carries no authority of its own, even when the words read like a command.
+
+`daemons/lifecycle-common.mjs` exports `renderPersisted()`, the shared chokepoint every such render should route through. It tags a rendered value with its source path, a content hash, an acquisition timestamp, a trust class, and `authority: 'none'`, and it refuses closed (no partial render) on non-string content, a missing path or role, or a disposition other than the caller's declared safe set (so DENY, SKIP, and an unrecognized value all refuse the same way). `daemons/semantic-search/search-vault.js` routes both the human preview line and the JSON `chunk` field through it, re-deriving each chunk's namespace disposition at render time as a second, independent gate behind the directory-level filter already applied to the index. `daemons/caddy.sh`'s SKILL_CHAINS hint reports a recorded row's age and flags anything older than 90 days as stale rather than presenting it as current advice; its Python-side renderer stays a deliberate byte-parity duplicate of the same JS function (Python cannot import an ES module), pinned by a comment and a regression test that extracts and runs the shipped Python source directly.
+
 ## Best Practices
 
 1. **Review before committing.** Always check `git diff` before pushing. Make sure no secrets, API keys, or sensitive vault content leaked into commits.

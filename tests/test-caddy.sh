@@ -36,4 +36,25 @@ printf '%s' '{"session_id":"routing","prompt":"hello"}' \
   | AIGENT_ROOT="$WORK" AIGENT_ROUTING_REMINDER=1 bash "$ROOT/daemons/caddy.sh" > "$WORK/routing.out"
 grep -F '[CADDY:routing] ROUTE' "$WORK/routing.out" >/dev/null
 
+# Trust boundary #43: a SKILL_CHAINS row has no session-id/live-authority
+# concept, so its only staleness signal is its own recorded Date. An old row
+# must be reported as historical reference, never as a live recommendation.
+cat > "$WORK/memory/SKILL_CHAINS.md" <<'CHAINS'
+| Date | Objective | Chain | Outcome |
+|------|-----------|-------|---------|
+| 2020-01-15 | deploy the staging build | /vercel:deploy -> /vercel:status | success |
+CHAINS
+printf '%s' '{"session_id":"abc","prompt":"let'"'"'s deploy the staging build now"}' \
+  | AIGENT_ROOT="$WORK" bash "$ROOT/daemons/caddy.sh" > "$WORK/chain-stale.out"
+grep -F '[CADDY:chain]' "$WORK/chain-stale.out" >/dev/null
+grep -F 'STALE' "$WORK/chain-stale.out" >/dev/null
+grep -F '2020-01-15' "$WORK/chain-stale.out" >/dev/null
+
+TODAY="$(date +%Y-%m-%d)"
+printf '| Date | Objective | Chain | Outcome |\n|------|-----------|-------|---------|\n| %s | deploy the staging build | /vercel:deploy -> /vercel:status | success |\n' "$TODAY" > "$WORK/memory/SKILL_CHAINS.md"
+printf '%s' '{"session_id":"abc","prompt":"let'"'"'s deploy the staging build now"}' \
+  | AIGENT_ROOT="$WORK" bash "$ROOT/daemons/caddy.sh" > "$WORK/chain-fresh.out"
+grep -F '[CADDY:chain]' "$WORK/chain-fresh.out" >/dev/null
+! grep -F 'STALE' "$WORK/chain-fresh.out" >/dev/null
+
 printf 'caddy regression tests passed\n'

@@ -8,6 +8,9 @@ For changes to the kernel itself (the 16 numbered system documents and extended 
 
 ## [Unreleased]
 
+### Added
+- **Persisted-text trust boundary (issue #43)**: `daemons/lifecycle-common.mjs` exports `renderPersisted()`, a shared chokepoint for rendering text that was persisted rather than typed this turn (a vault note chunk, a recorded skill chain). It tags every render with source path, content hash, acquisition time, trust class, and `authority: 'none'`, and refuses closed on non-string content, missing path/role, or a disposition outside the caller's declared safe set, never a partial render. `daemons/semantic-search/search-vault.js` routes both the human preview line and the JSON `chunk` field through it, re-checking each chunk's namespace disposition at render time as a second gate behind the existing directory-level filter. `daemons/caddy.sh`'s SKILL_CHAINS hint now reports a recorded row's age and flags rows older than 90 days as stale instead of presenting them as current; its Python-side renderer stays a pinned byte-parity duplicate of the same JS function, verified by a regression test that runs the shipped Python source directly. See `docs/security.md#persisted-text-trust-boundary`. Tests: `daemons/tests/persisted-render.test.mjs`, wired into CI.
+
 ### Changed
 - **One-command managed install**: `bash install.sh` now treats the managed runner as the default product path. It requires Node.js 18+, installs and load-verifies `node-pty`, wires the `aigent` command and platform launcher automatically, and finishes with one instruction: open a new terminal and run `aigent`. `--no-deps` and `--no-launcher` remain explicit opt-outs.
 

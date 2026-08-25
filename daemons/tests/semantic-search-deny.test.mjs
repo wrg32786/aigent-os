@@ -90,7 +90,9 @@ function makeSandbox(name, denyFileText) {
   sandboxes.push(root);
 
   const sem = path.join(root, 'daemons', 'semantic-search');
+  const hygiene = path.join(root, 'daemons', 'memory-hygiene');
   mkdirSync(sem, { recursive: true });
+  mkdirSync(hygiene, { recursive: true });
   for (const file of [
     'deny-list.mjs',
     'namespace-registry.mjs',
@@ -100,9 +102,15 @@ function makeSandbox(name, denyFileText) {
   ]) {
     copyFileSync(path.join(SEM, file), path.join(sem, file));
   }
+  // search-vault.js now routes chunk rendering through the trust-boundary #43
+  // chokepoint (renderPersisted() + FRAMING_LINES) -- its dependency chain
+  // grew, so the sandbox must carry it too.
+  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+    copyFileSync(path.join(DAEMONS, file), path.join(root, 'daemons', file));
+  }
   copyFileSync(
-    path.join(DAEMONS, 'frontmatter-reader.cjs'),
-    path.join(root, 'daemons', 'frontmatter-reader.cjs'),
+    path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'),
+    path.join(hygiene, 'resume-framing.mjs'),
   );
   if (denyFileText !== null) writeFileSync(path.join(sem, 'index-deny.json'), denyFileText);
 
