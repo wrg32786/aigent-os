@@ -116,6 +116,7 @@ if command -v python3 >/dev/null 2>&1; then
 import json
 import os
 import re
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -130,23 +131,19 @@ if not isinstance(prompt, str) or not prompt.strip():
     raise SystemExit(0)
 prompt_lower = prompt.lower()
 
-LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
-# PINNED to lifecycle-common.mjs's inert() (daemons/lifecycle-common.mjs:283,
-# trust-boundary chokepoint #43). Python cannot import that ES module across
-# the language boundary, so this stays a byte-parity duplicate rather than a
-# shared call -- measured: a bare `node -e` spawn on this host costs ~1-2.5s
-# and this hook's existing python3 spawn alone already costs ~450-560ms
-# against a UserPromptSubmit hook that fires on every single prompt, both far
-# past the ~150ms budget for adding a second interpreter here. Any edit to
-# lifecycle-common.mjs's inert() must be mirrored here -- daemons/tests/
-# persisted-render.test.mjs asserts byte-parity between the two over a shared
-# fixture set by extracting and executing THIS function's real source, so a
-# drift here fails that test rather than shipping silently.
-def inert(value, maximum=500):
-    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
-    if len(rendered) > maximum:
-        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
-    return json.dumps(rendered, ensure_ascii=True)
+# daemons/render_boundary.py is the repo's canonical Python render boundary
+# (trust-boundary chokepoint #43), already imported by four sibling Python
+# callers. Import it rather than re-deriving the escaping logic here.
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "daemons"))
+try:
+    from render_boundary import inert
+except ImportError:
+    # Fail closed: never re-implement the function here. If the canonical
+    # module cannot be imported, every render that depends on it becomes this
+    # fixed marker instead of either crashing the hook or falling back to
+    # unescaped persisted text.
+    def inert(value, maximum=500):
+        return json.dumps("[unavailable: render_boundary import failed]")
 
 try:
     with open(os.environ["INDEX"], encoding="utf-8") as handle:
@@ -246,10 +243,14 @@ try:
         if overlap >= 3 and chain:
             try:
                 age_days = (date.today() - date.fromisoformat(date_value)).days
-                provenance = (
-                    f"recorded {date_value}, {age_days}d ago -- STALE, reference only, verify before reuse"
-                    if age_days > STALE_CHAIN_DAYS else f"recorded {date_value}"
-                )
+                if age_days < 0:
+                    # A future-dated row is a stronger tampering/wrong-referent
+                    # signal than a merely old one -- never render it as current.
+                    provenance = f"recorded {date_value}, dated in the future -- reference only, verify before reuse"
+                elif age_days > STALE_CHAIN_DAYS:
+                    provenance = f"recorded {date_value}, {age_days}d ago -- STALE, reference only, verify before reuse"
+                else:
+                    provenance = f"recorded {date_value}"
             except ValueError:
                 provenance = "recorded date unreadable -- reference only, verify before reuse"
             print(f"[CADDY:chain] {provenance}: prior chain for a similar objective {inert(chain)} (see SKILL_CHAINS)")

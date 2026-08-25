@@ -34,7 +34,7 @@ import {
   requireDeclaredNamespaceDirectories,
   requireNamespaceRegistry,
 } from './namespace-registry.mjs';
-import { renderPersisted } from '../lifecycle-common.mjs';
+import { inert, renderPersisted } from '../lifecycle-common.mjs';
 import { FRAMING_LINES } from '../memory-hygiene/resume-framing.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -189,11 +189,15 @@ async function main() {
   console.log();
   for (let i = 0; i < rendered.length; i++) {
     const { r, persisted } = rendered[i];
-    const chunkInfo = r.chunkIndex != null ? ` (chunk ${r.chunkIndex + 1}/${r.chunkCount})` : '';
-    console.log(`${i + 1}. [${(r.score * 100).toFixed(1)}%] ${r.title}${chunkInfo}`);
-    console.log(`   Path: ${r.path}`);
+    // title/path/tags/chunkIndex/chunkCount are the same persisted, same
+    // trust-class fields as chunk (all come off the same embeddings.json note
+    // object) -- each goes through inert() here too, or a raw sibling field
+    // can forge a whole extra result line (review R1, finding F3).
+    const chunkInfo = r.chunkIndex != null ? ` (chunk ${Number(r.chunkIndex) + 1}/${Number(r.chunkCount)})` : '';
+    console.log(`${i + 1}. [${(r.score * 100).toFixed(1)}%] ${inert(r.title, 120)}${chunkInfo}`);
+    console.log(`   Path: ${inert(r.path, 200)}`);
     if (r.tags && r.tags.length > 0) {
-      console.log(`   Tags: ${r.tags.join(', ')}`);
+      console.log(`   Tags: ${r.tags.map((t) => inert(t, 60)).join(', ')}`);
     }
     console.log(`   Preview: ${persisted.refused ? `[REFUSED: ${persisted.refused}]` : persisted.line}`);
     console.log();

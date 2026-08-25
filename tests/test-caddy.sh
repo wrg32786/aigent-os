@@ -5,6 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 mkdir -p "$WORK"/{.claude,.aigent/cache,memory,daemons}
+# caddy.sh imports render_boundary.py from $ROOT/daemons (trust-boundary #43,
+# review R1 finding F4); AIGENT_ROOT points this sandbox's $ROOT at $WORK, so
+# the sandbox needs its own copy for the real import path to exercise.
+cp "$ROOT/daemons/render_boundary.py" "$WORK/daemons/render_boundary.py"
 
 cat > "$WORK/.claude/skill-index.json" <<'JSON'
 [
@@ -56,5 +60,13 @@ printf '%s' '{"session_id":"abc","prompt":"let'"'"'s deploy the staging build no
   | AIGENT_ROOT="$WORK" bash "$ROOT/daemons/caddy.sh" > "$WORK/chain-fresh.out"
 grep -F '[CADDY:chain]' "$WORK/chain-fresh.out" >/dev/null
 ! grep -F 'STALE' "$WORK/chain-fresh.out" >/dev/null
+
+FUTURE="$(date -d '+365 days' +%Y-%m-%d 2>/dev/null || date -v+365d +%Y-%m-%d)"
+printf '| Date | Objective | Chain | Outcome |\n|------|-----------|-------|---------|\n| %s | deploy the staging build | /vercel:deploy -> /vercel:status | success |\n' "$FUTURE" > "$WORK/memory/SKILL_CHAINS.md"
+printf '%s' '{"session_id":"abc","prompt":"let'"'"'s deploy the staging build now"}' \
+  | AIGENT_ROOT="$WORK" bash "$ROOT/daemons/caddy.sh" > "$WORK/chain-future.out"
+grep -F '[CADDY:chain]' "$WORK/chain-future.out" >/dev/null
+grep -F 'dated in the future' "$WORK/chain-future.out" >/dev/null
+! grep -F 'STALE' "$WORK/chain-future.out" >/dev/null
 
 printf 'caddy regression tests passed\n'

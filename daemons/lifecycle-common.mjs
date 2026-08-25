@@ -298,14 +298,16 @@ export function inert(value, max = 500) {
 //
 // disposition reuses namespace-registry.mjs's vocabulary directly (a chunk
 // that survived that registry's INDEX filter passes its own disposition
-// straight through) plus the generic 'ALLOW' default for a caller with no
-// namespace concept of its own (a P4-style skill-chain row). Anything NOT in
-// the allowed set refuses closed -- DENY, SKIP, an unrecognized string, and a
-// missing value all refuse identically, because a disposition this function
-// cannot positively confirm as safe is not safe to render. This is a second,
-// independent gate: even if an upstream filter that already excludes DENY/SKIP
-// content regresses, a caller that still passes the row's real disposition
-// through keeps the render itself closed.
+// straight through); a caller with no namespace concept of its own (a
+// P4-style skill-chain row) passes the generic 'ALLOW' explicitly -- there is
+// NO default. Anything NOT in the allowed set refuses closed -- DENY, SKIP,
+// an unrecognized string, and a missing/undefined value all refuse
+// identically, because a disposition this function cannot positively confirm
+// as safe is not safe to render. This is a second, independent gate: even if
+// an upstream filter that already excludes DENY/SKIP content regresses (or
+// simply never declared the row's namespace, which resolves to undefined,
+// not DENY), a caller that still passes the row's real disposition through
+// keeps the render itself closed.
 const RENDERABLE_DISPOSITIONS = new Set(['ALLOW', 'INDEX']);
 
 export function renderPersisted({
@@ -313,24 +315,34 @@ export function renderPersisted({
   text,
   role,
   trust = 'persisted-data',
-  disposition = 'ALLOW',
+  disposition,
   max = 500,
   now,
 } = {}) {
   if (typeof text !== 'string') return { refused: 'non-string text' };
   if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) return { refused: 'missing path' };
   if (typeof role !== 'string' || role.trim().length === 0) return { refused: 'missing role' };
+  // No default: a disposition this function never received is exactly the
+  // "missing value" the allowlist below must refuse, not silently render.
   if (!RENDERABLE_DISPOSITIONS.has(disposition)) {
     return { refused: `disposition-not-allowed:${String(disposition).slice(0, 40)}` };
   }
+  if (!Number.isInteger(max) || max < 1) return { refused: 'invalid max' };
 
   const acquiredAt = typeof now === 'string' && now.trim().length ? now : new Date().toISOString();
+  if (Number.isNaN(Date.parse(acquiredAt))) return { refused: 'invalid now' };
   // The hash covers the ORIGINAL text, not the bounded/quoted render below --
   // it identifies the content, independent of how far any one caller's `max`
   // happens to truncate it.
   const sha256 = createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
   const record = { source: sourcePath, sha256, acquiredAt, trust, role, disposition, authority: 'none' };
-  const line = `[${trust}:${role} ${sourcePath} sha ${sha256} @ ${acquiredAt}] ${inert(text, max)}`;
+  // Every interpolated field except sha256 (fixed hex charset) and acquiredAt
+  // (already proven to parse as a date, so it cannot carry a raw line break)
+  // is persisted, caller- or attacker-influenceable data and goes through
+  // inert() here -- the tag is the entire security product of this function;
+  // an unquoted field in it can forge a second tag and blame it on a
+  // different source (trust-boundary #43 review R1, finding F1/F8).
+  const line = `[${inert(trust, 40)}:${inert(role, 40)} ${inert(sourcePath, 200)} sha ${sha256} @ ${acquiredAt}] ${inert(text, max)}`;
   return { line, record };
 }
 
