@@ -330,14 +330,18 @@ export function renderPersisted({
   if (!Number.isInteger(max) || max < 1) return { refused: 'invalid max' };
 
   const acquiredAt = typeof now === 'string' && now.trim().length ? now : new Date().toISOString();
-  if (Number.isNaN(Date.parse(acquiredAt))) return { refused: 'invalid now' };
+  // Date.parse() alone is not enough: it strips leading whitespace, and
+  // ECMAScript whitespace includes line terminators, so a leading "\n" still
+  // parses and would carry a raw line break into the tag below. The shape
+  // check requires the whole string to already look like an ISO timestamp.
+  if (!/^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/.test(acquiredAt) || Number.isNaN(Date.parse(acquiredAt))) return { refused: 'invalid now' };
   // The hash covers the ORIGINAL text, not the bounded/quoted render below --
   // it identifies the content, independent of how far any one caller's `max`
   // happens to truncate it.
   const sha256 = createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
   const record = { source: sourcePath, sha256, acquiredAt, trust, role, disposition, authority: 'none' };
   // Every interpolated field except sha256 (fixed hex charset) and acquiredAt
-  // (already proven to parse as a date, so it cannot carry a raw line break)
+  // (already shape-checked above against /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/)
   // is persisted, caller- or attacker-influenceable data and goes through
   // inert() here -- the tag is the entire security product of this function;
   // an unquoted field in it can forge a second tag and blame it on a

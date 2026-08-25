@@ -137,7 +137,7 @@ prompt_lower = prompt.lower()
 sys.path.insert(0, os.path.join(os.environ["ROOT"], "daemons"))
 try:
     from render_boundary import inert
-except ImportError:
+except Exception:
     # Fail closed: never re-implement the function here. If the canonical
     # module cannot be imported, every render that depends on it becomes this
     # fixed marker instead of either crashing the hook or falling back to

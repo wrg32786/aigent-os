@@ -69,4 +69,15 @@ grep -F '[CADDY:chain]' "$WORK/chain-future.out" >/dev/null
 grep -F 'dated in the future' "$WORK/chain-future.out" >/dev/null
 ! grep -F 'STALE' "$WORK/chain-future.out" >/dev/null
 
+# A syntax-broken render_boundary.py must fail closed to a fixed marker, not
+# kill the whole caddy.sh Python block silently (review R1 N2: except Exception,
+# not except ImportError -- a SyntaxError is not an ImportError).
+printf '| Date | Objective | Chain | Outcome |\n|------|-----------|-------|---------|\n| %s | deploy the staging build | /vercel:deploy -> /vercel:status | success |\n' "$TODAY" > "$WORK/memory/SKILL_CHAINS.md"
+echo 'def broken(' > "$WORK/daemons/render_boundary.py"
+printf '%s' '{"session_id":"abc","prompt":"let'"'"'s deploy the staging build now"}' \
+  | AIGENT_ROOT="$WORK" bash "$ROOT/daemons/caddy.sh" > "$WORK/chain-broken-module.out"
+grep -F '[CADDY:chain]' "$WORK/chain-broken-module.out" >/dev/null
+grep -F '[unavailable: render_boundary import failed]' "$WORK/chain-broken-module.out" >/dev/null
+cp "$ROOT/daemons/render_boundary.py" "$WORK/daemons/render_boundary.py"
+
 printf 'caddy regression tests passed\n'
