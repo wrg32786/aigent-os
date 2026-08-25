@@ -526,17 +526,17 @@ test('--attest writes nothing into the tree it attests', () => {
   });
 });
 
-// -- FleetBaselineManifest/v5 -------------------------------------------------
+// -- FleetBaselineManifest/v6 -------------------------------------------------
 
 const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 
-test('v5 manifest identity pins the recut population', () => {
+test('v6 manifest identity pins the recut population', () => {
   const manifest = readManifest();
-  assert.equal(manifest.schema, 'FleetBaselineManifest/v5');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-08-24-dde2c681');
+  assert.equal(manifest.schema, 'FleetBaselineManifest/v6');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-08-24-867cb2ea');
   assert.equal(
     manifest.public_product_commit,
-    'dde2c68138f1aa22c26f990a643417ceaa7b5643',
+    '867cb2ea3a27a83fac2f916bdf5ec799d45b70c8',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
