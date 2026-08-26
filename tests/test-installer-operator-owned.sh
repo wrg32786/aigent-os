@@ -23,7 +23,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=10
+TOTAL=16
 SKILL_COUNT=13
 
 fail() {
@@ -291,5 +291,225 @@ printf '[9/%d] duplicate declaration: install refused, target untouched\n' "$TOT
 assert_refused 'core-required' 'pinned as core-required' \
   '{"schema":"OperatorOwnedPaths/v1","paths":["daemons/statusline-ctx.sh"]}'
 printf '[10/%d] core-required declaration: install refused, target untouched\n' "$TOTAL"
+
+# -- 11. Line injection into the declaration protocol (R1 HIGH-1) ------------
+# The declaration reader hands the installer a line-oriented protocol
+# (count:/warn:/keep:). An entry carrying a newline splits into TWO protocol
+# lines, and the second one is attacker-chosen. This exact payload passes every
+# other validator: it is relative, has no .. segment, no empty segment, no **,
+# and as a whole string it collides with no manifest entry. Before the fix it
+# emitted
+#     warn:notes/decoy.md
+#     keep:daemons/statusline-ctx.sh
+# which preserved a planted core daemon instead of quarantining it.
+INJECT_TARGET="$WORK/refuse-inject"
+INJECT_SNAPSHOT="$WORK/refuse-inject-snapshot"
+rm -rf "$INJECT_TARGET" "$INJECT_SNAPSHOT"
+cp -R "$REFUSE_BASE" "$INJECT_TARGET"
+printf '#!/usr/bin/env bash\n# PLANTED-STALE-CORE\nexit 0\n' \
+  > "$INJECT_TARGET/daemons/statusline-ctx.sh"
+# Literal backslash-n in the JSON source; json.load decodes it to a real newline.
+printf '%s' '{"schema":"OperatorOwnedPaths/v1","paths":["notes/decoy.md\nkeep:daemons/statusline-ctx.sh"]}' \
+  | write_declaration "$INJECT_TARGET"
+cp -R "$INJECT_TARGET" "$INJECT_SNAPSHOT"
+set +e
+INJECT_OUT="$(install_into "$INJECT_TARGET" 2>&1)"
+INJECT_RC=$?
+set -e
+[[ "$INJECT_RC" -ne 0 ]] \
+  || fail "injection: install should have refused, exited 0 (the payload was accepted)"
+printf '%s\n' "$INJECT_OUT" | grep -qi 'must not contain a line break' \
+  || fail "injection: refusal did not name the error; got:
+$INJECT_OUT"
+if printf '%s\n' "$INJECT_OUT" | grep -q 'keep daemons/statusline-ctx.sh'; then
+  fail "injection: the payload still reached the keep set"
+fi
+diff -r "$INJECT_SNAPSHOT" "$INJECT_TARGET" >/dev/null 2>&1 \
+  || fail "injection: refused install still wrote into the target"
+printf '[11/%d] protocol line injection: refused by name, payload never reached the keep set\n' "$TOTAL"
+
+# -- 12. Remaining malformed and conflicting declaration shapes (R1 MED-2) ---
+assert_refused 'doublestar' 'but not' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/skills/**/SKILL.md"]}'
+assert_refused 'rewritten' 'rewritten by the installer' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":["CLAUDE.md"]}'
+# R1 LOW-1: a glob that COVERS a rewritten path must refuse too, not just the
+# exact string.
+assert_refused 'rewritten-glob' 'rewritten by the installer' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":["CLAUDE.*"]}'
+assert_refused 'empty-path' 'declares an empty path' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":[""]}'
+assert_refused 'dot-segment' 'empty or . path segment' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/./agents/scout.md"]}'
+assert_refused 'double-slash' 'empty or . path segment' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":[".claude//agents/scout.md"]}'
+assert_refused 'non-object' 'must be a JSON object' \
+  '[".claude/agents/scout.md"]'
+assert_refused 'paths-not-array' 'array of relative path strings' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":".claude/agents/scout.md"}'
+assert_refused 'paths-not-strings' 'array of relative path strings' \
+  '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/agents/scout.md",7]}'
+printf '[12/%d] malformed shapes: **, rewritten (exact and glob), empty path, . and empty segments, non-object, bad paths type all refused\n' "$TOTAL"
+
+# -- 13. Symlink-resolving declarations (R1 MED-2, LOW-2) -------------------
+# Plain `ln -s` on Windows silently COPIES when the process lacks symlink
+# privilege, which would make these pass for the wrong reason. Mirror
+# tests/test-installer-fast.sh: try the MSYS-emulated form, and declare a
+# platform SKIP rather than assert on a link that is not a link.
+make_symlink() {
+  local dest="$1" link="$2"
+  ln -s "$dest" "$link" 2>/dev/null || true
+  if [[ ! -L "$link" ]]; then
+    rm -f "$link"
+    MSYS=winsymlinks ln -s "$dest" "$link" 2>/dev/null || true
+  fi
+  [[ -L "$link" ]]
+}
+
+SYMLINK_PROBE="$WORK/symlink-probe"
+mkdir -p "$SYMLINK_PROBE"
+printf 'sentinel\n' > "$SYMLINK_PROBE/sentinel.txt"
+SYMLINK_BASH=0
+SYMLINK_PYTHON=0
+if make_symlink "$SYMLINK_PROBE/sentinel.txt" "$SYMLINK_PROBE/link.txt"; then
+  SYMLINK_BASH=1
+  # Two guards, two instruments, and on Windows they disagree. MSYS
+  # winsymlinks produces a link bash reports through -L but that a native
+  # python3 sees as an ordinary file, so the reader-side guard below cannot be
+  # exercised here even though the bash-side one can. Ask python directly
+  # rather than assuming the two views match.
+  if python3 -c 'import os, sys; sys.exit(0 if os.path.islink(sys.argv[1]) else 1)' \
+    "$SYMLINK_PROBE/link.txt" 2>/dev/null; then
+    SYMLINK_PYTHON=1
+  fi
+fi
+
+# R1 LOW-2: the declaration FILE itself must not be read through a symlink.
+# Guarded in bash (path_is_symlink_safe), so a bash-visible link is enough.
+if [[ "$SYMLINK_BASH" -eq 1 ]]; then
+  DECL_TARGET="$WORK/refuse-decl-symlink"
+  rm -rf "$DECL_TARGET"
+  cp -R "$REFUSE_BASE" "$DECL_TARGET"
+  printf '%s' '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/agents/scout.md"]}' \
+    > "$SYMLINK_PROBE/outside-declaration.json"
+  mkdir -p "$DECL_TARGET/.aigent"
+  rm -f "$DECL_TARGET/.aigent/operator-owned.json"
+  make_symlink "$SYMLINK_PROBE/outside-declaration.json" \
+    "$DECL_TARGET/.aigent/operator-owned.json" \
+    || fail "declaration symlink: could not create the link"
+  set +e
+  DECL_OUT="$(install_into "$DECL_TARGET" 2>&1)"
+  DECL_RC=$?
+  set -e
+  [[ "$DECL_RC" -ne 0 ]] || fail "declaration symlink: install should have refused, exited 0"
+  printf '%s\n' "$DECL_OUT" | grep -qi 'symlink' \
+    || fail "declaration symlink: refusal did not name a symlink; got:
+$DECL_OUT"
+  printf '[13/%d] declaration file behind a symlink: refused before it is read\n' "$TOTAL"
+else
+  printf '[13/%d] SKIP POSIX symlink probes: this platform cannot create a real symlink\n' "$TOTAL"
+fi
+
+# R1 MED-2: a declared PATH that resolves through a symlink. Guarded inside the
+# python reader, so it needs a link python3 itself can see.
+if [[ "$SYMLINK_PYTHON" -eq 1 ]]; then
+  SYM_TARGET="$WORK/refuse-symlink"
+  rm -rf "$SYM_TARGET"
+  cp -R "$REFUSE_BASE" "$SYM_TARGET"
+  make_symlink "$SYMLINK_PROBE/sentinel.txt" "$SYM_TARGET/.claude/agents/linked.md" \
+    || fail "symlink: could not create the declared link"
+  printf '%s' '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/agents/linked.md"]}' \
+    | write_declaration "$SYM_TARGET"
+  set +e
+  SYM_OUT="$(install_into "$SYM_TARGET" 2>&1)"
+  SYM_RC=$?
+  set -e
+  [[ "$SYM_RC" -ne 0 ]] || fail "symlink: install should have refused, exited 0"
+  printf '%s\n' "$SYM_OUT" | grep -qi 'resolves through a symlink' \
+    || fail "symlink: refusal did not name the error; got:
+$SYM_OUT"
+  printf '[13/%d] declared path behind a symlink: refused by the reader\n' "$TOTAL"
+else
+  printf '[13/%d] SKIP POSIX declared-path symlink probe: python3 does not see this platform link as a symlink\n' "$TOTAL"
+fi
+
+# -- 14..16. A python3 that is present but does not work (R1 HIGH-2) --------
+# `command -v python3` answers "is there a file named python3 on PATH", which is
+# not the question. The question is whether it can run and speak the protocol.
+# The shim below breaks ONLY the probe and the declaration read, and delegates
+# every other python3 call (the settings renderer) to the real interpreter, so
+# these scenarios isolate the declaration path.
+REAL_PYTHON3="$(command -v python3 || true)"
+if [[ -z "$REAL_PYTHON3" ]]; then
+  printf '[14/%d] SKIP POSIX broken-python3 probes: no python3 on PATH to delegate to\n' "$TOTAL"
+  printf '[15/%d] SKIP POSIX broken-python3 probes: no python3 on PATH to delegate to\n' "$TOTAL"
+  printf '[16/%d] SKIP POSIX broken-python3 probes: no python3 on PATH to delegate to\n' "$TOTAL"
+else
+  make_python3_shim() {
+    # Separate `local` statements on purpose: `local a="$1" b="...$a"` reads $a
+    # before this frame's assignment lands, which under `set -u` aborts the
+    # function and hands the caller an empty path. An empty PATH prefix then
+    # silently runs the REAL interpreter, so the scenario would pass for the
+    # wrong reason.
+    local name="$1"
+    local misbehave="$2"
+    local dir="$WORK/shim-$name"
+    mkdir -p "$dir"
+    {
+      printf '#!/bin/sh\n'
+      printf 'case "$1" in -c) %s ;; esac\n' "$misbehave"
+      printf 'for a in "$@"; do case "$a" in *operator-owned.json) %s ;; esac; done\n' "$misbehave"
+      printf 'exec "%s" "$@"\n' "$REAL_PYTHON3"
+    } > "$dir/python3"
+    chmod +x "$dir/python3"
+    printf '%s' "$dir"
+  }
+
+  assert_shim_refused() {
+    local label="$1" expected="$2" shim_dir="$3"
+    local target="$WORK/refuse-$label" snapshot="$WORK/refuse-$label-snapshot"
+    local output rc
+    rm -rf "$target" "$snapshot"
+    cp -R "$REFUSE_BASE" "$target"
+    printf '%s' '{"schema":"OperatorOwnedPaths/v1","paths":[".claude/agents/scout.md"]}' \
+      | write_declaration "$target"
+    cp -R "$target" "$snapshot"
+    set +e
+    output="$(PATH="$shim_dir:$PATH" install_into "$target" 2>&1)"
+    rc=$?
+    set -e
+    [[ "$rc" -ne 0 ]] || fail "$label: install should have refused, exited 0"
+    printf '%s\n' "$output" | grep -qi -- "$expected" \
+      || fail "$label: refusal did not name the error ($expected); got:
+$output"
+    diff -r "$snapshot" "$target" >/dev/null 2>&1 \
+      || fail "$label: refused install still wrote into the target"
+  }
+
+  assert_shim_refused 'py-broken' 'python3 is not available' \
+    "$(make_python3_shim broken 'exit 1')"
+  printf '[14/%d] python3 present but unrunnable: named refusal, target untouched\n' "$TOTAL"
+
+  assert_shim_refused 'py-silent' 'produced no output' \
+    "$(make_python3_shim silent 'exit 0')"
+  printf '[15/%d] python3 exits clean with no output: named refusal, never a silent skip\n' "$TOTAL"
+
+  assert_shim_refused 'py-garbage' 'unrecognized line' \
+    "$(make_python3_shim garbage 'echo garbage-line; exit 0')"
+
+  # The counterpart: with NO declaration file the probe never runs, so a broken
+  # python3 must not block an install that never needed it.
+  NOPY_TARGET="$WORK/nodecl-brokenpy-target"
+  NOPY_SHIM="$(make_python3_shim nodecl 'exit 1')"
+  set +e
+  (PATH="$NOPY_SHIM:$PATH" install_into "$NOPY_TARGET" >/dev/null 2>&1)
+  NOPY_RC=$?
+  set -e
+  [[ "$NOPY_RC" -eq 0 ]] \
+    || fail "no declaration + broken python3: install should have succeeded, rc=$NOPY_RC"
+  test -f "$NOPY_TARGET/.claude/settings.json" \
+    || fail "no declaration + broken python3: install did not complete"
+  printf '[16/%d] unrecognized protocol line refused; no declaration + broken python3 still installs\n' "$TOTAL"
+fi
 
 printf 'operator-owned installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

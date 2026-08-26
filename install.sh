@@ -310,6 +310,17 @@ except (OSError, ValueError, UnicodeError, AttributeError, RecursionError):
 seen = set()
 unmanaged = []
 for entry in entries:
+    # FIRST, before any other check. The output below is a line-oriented
+    # protocol (count:/warn:/keep:) read by the shell. An entry carrying a
+    # newline splits into two protocol lines and the second one is
+    # attacker-chosen, which forges a keep: for a path that would never survive
+    # validation on its own. Carriage return and NUL get the same treatment: CR
+    # is stripped by the reader and NUL truncates.
+    if any(character in entry for character in ("\n", "\r", "\0")):
+        refuse(
+            "%s: a declared path must not contain a line break or NUL character"
+            % display
+        )
     if not entry:
         refuse("%s declares an empty path" % display)
     if entry in seen:
@@ -330,10 +341,16 @@ for entry in entries:
             "%s: %s may use * inside one path segment but not **"
             % (display, entry)
         )
-    if entry in REWRITTEN:
+    # Through matches(), not equality: a glob such as CLAUDE.* covers a
+    # rewritten path just as effectively as naming it, and would otherwise
+    # promise a preservation this mechanism cannot deliver.
+    rewritten_hits = sorted(
+        relative for relative in REWRITTEN if matches(entry, relative)
+    )
+    if rewritten_hits:
         refuse(
-            "%s: %s is rewritten by the installer on every run and cannot be operator-owned"
-            % (display, entry)
+            "%s: %s is rewritten by the installer on every run (%s) and cannot be operator-owned"
+            % (display, entry, rewritten_hits[0])
         )
     collisions = sorted(
         relative for relative in core_required if matches(entry, relative)
@@ -382,6 +399,16 @@ def expand(pattern):
 keep = []
 for entry in entries:
     for relative in expand(entry):
+        # Same protocol guard as the entry check above, applied to the expanded
+        # result: a glob segment is filled in from real directory listings, and
+        # on POSIX a FILENAME may legally contain a newline. Refusing here keeps
+        # the entry-level check from being the only thing standing between a
+        # hostile filename and a forged protocol line.
+        if any(character in relative for character in ("\n", "\r", "\0")):
+            refuse(
+                "%s: %s expands to a path containing a line break or NUL character"
+                % (display, entry)
+            )
         if not os.path.isfile(os.path.join(root, *relative.split("/"))):
             continue
         if not symlink_free(relative):
@@ -400,11 +427,23 @@ PY
 }
 
 if [[ -f "$OPERATOR_OWNED_FILE" ]]; then
-  command -v python3 >/dev/null 2>&1 \
-    || fail "$OPERATOR_OWNED_REL declares operator-owned paths but python3 is not available to read it. Install python3 and rerun, or remove the declaration."
+  # Reading the declaration through a symlink would let a link planted at
+  # .aigent/operator-owned.json pull its contents from outside the target, which
+  # is the same escape every other write site here already refuses.
+  path_is_symlink_safe "$OPERATOR_OWNED_FILE" \
+    || fail "refusing to read $OPERATOR_OWNED_REL through a symlink: $OPERATOR_OWNED_FILE -> $(readlink "$OPERATOR_OWNED_FILE" 2>/dev/null || printf '(unresolvable)'). Remove or replace it manually, then re-run."
+
+  # Run it, do not just look for it on PATH. `command -v` answers "is there a
+  # file named python3", which is a different question from "can it execute" --
+  # a stub shim or a broken install passes the first and fails the second, and
+  # this file is the difference between preserving an operator's work and
+  # quarantining it.
+  python3 -c '' >/dev/null 2>&1 \
+    || fail "$OPERATOR_OWNED_REL declares operator-owned paths but a working python3 is not available to read it. Install python3 and rerun, or remove the declaration."
   OPERATOR_OWNED_OUT="$(read_operator_owned_declaration)" \
     || fail "$OPERATOR_OWNED_REL could not be read"
   OPERATOR_OWNED_WARNINGS=""
+  OPERATOR_OWNED_SAW_COUNT=0
   while IFS= read -r declaration_line; do
     # python3 on Windows writes CRLF and `read -r` keeps the CR, which would
     # otherwise become part of every declared path and match nothing.
@@ -414,6 +453,7 @@ if [[ -f "$OPERATOR_OWNED_FILE" ]]; then
         fail "${declaration_line#error:}"
         ;;
       count:*)
+        OPERATOR_OWNED_SAW_COUNT=1
         printf '  Owned:  %s declared operator-owned path(s) in %s\n' \
           "${declaration_line#count:}" "$OPERATOR_OWNED_REL"
         ;;
@@ -423,8 +463,24 @@ if [[ -f "$OPERATOR_OWNED_FILE" ]]; then
       keep:*)
         OPERATOR_OWNED_KEEP+="${declaration_line#keep:}"$'\n'
         ;;
+      "")
+        # A herestring over empty output yields one empty line. Ignored here so
+        # the catch-all below can be strict about everything else.
+        ;;
+      *)
+        # Anything unrecognized means the reader and this loop disagree about
+        # the protocol. Continuing would silently drop whatever that line was
+        # meant to say, including a keep: the operator is relying on.
+        fail "$OPERATOR_OWNED_REL reader emitted an unrecognized line, refusing to guess what it meant: $declaration_line"
+        ;;
     esac
   done <<< "$OPERATOR_OWNED_OUT"
+  # A reader that exits clean but says nothing would otherwise be
+  # indistinguishable from "no paths declared", which silently quarantines every
+  # file the operator asked to keep. The count line is emitted unconditionally
+  # on success, so its absence means the read did not happen.
+  [[ "$OPERATOR_OWNED_SAW_COUNT" -eq 1 ]] \
+    || fail "$OPERATOR_OWNED_REL was read but the reader produced no output, so no declaration could be applied. Check that python3 works, then re-run."
   [[ -z "$OPERATOR_OWNED_WARNINGS" ]] || printf '%s' "$OPERATOR_OWNED_WARNINGS"
 fi
 

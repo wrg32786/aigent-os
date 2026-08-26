@@ -83,6 +83,10 @@ Reading the declaration requires `python3`, the same runtime `scripts/doctor.sh 
 
 An undeclared pinned path that differs is still `NONCOMPLIANT`. A declared path outside `required_files` is not in the measured population and does not affect the verdict. A declared path that is missing is still a failure, because the installer would have placed core there. If the declaration file is present but unreadable the verdict is `UNKNOWN`: the instrument cannot tell core-owned from operator-owned, which is a failure to measure rather than a measurement that the tree is broken.
 
+**If you automate on this, parse the terminal string, not the exit code.** `DEGRADED` exits `0`, exactly like `COMPLIANT`; only `NONCOMPLIANT` exits `1` and `UNKNOWN` exits `2`. A gate written as `bash scripts/doctor.sh --attest && echo ok` therefore treats declared drift on a core-required path as success. Match the `ATTEST: <terminal>` line if you need to catch it. The summary line `ownership N core-owned, M operator-owned, K missing` accounts for the whole measured population, so those three numbers always add up to the `population` count printed above them.
+
+The declaration lives under `.aigent/`, which the installer's managed `.gitignore` block already excludes, so it stays a local per-install statement of ownership and is never committed out of the target by accident.
+
 `.claude/rules/post-compact-critical.md` keeps its own unconditional preservation and needs no declaration; declaring it explicitly is accepted and behaves identically.
 
 `.claude/settings.json.template` is exempt from this treatment for a different reason: it is unconditionally regenerated from the framework's copy on every run (never gated on "already exists"), so it can never silently keep a planted or stale template in the first place.

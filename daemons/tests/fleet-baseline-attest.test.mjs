@@ -725,7 +725,6 @@ test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED 
 
     const { verdict, status, output } = attest(root);
     assert.equal(verdict, 'DEGRADED', output);
-    assert.notEqual(verdict, 'COMPLIANT', 'declared drift on a pinned path is never clean');
     assert.equal(status, 0, 'DEGRADED exits 0');
     const escaped = escapeForRegExp(target);
     assert.match(
@@ -741,8 +740,31 @@ test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED 
     const population = Object.keys(manifest.required_files).length;
     assert.match(
       output,
-      new RegExp(`ownership ${population - 1} core-owned, 1 operator-owned`),
-      'the summary must state the core-owned/operator-owned split',
+      new RegExp(`ownership ${population - 1} core-owned, 1 operator-owned, 0 missing`),
+      'the summary must state the core-owned/operator-owned/missing split',
+    );
+  });
+});
+
+// The summary is only honest if it accounts for the whole population it claims
+// to have checked. A missing file belongs to neither ownership class, so it
+// needs its own bucket or the numbers quietly fail to add up.
+test('the ownership summary accounts for every required file, missing ones included', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const population = Object.keys(manifest.required_files).length;
+    const [missing] = Object.keys(manifest.required_files);
+    rmSync(path.join(root, ...missing.split('/')));
+
+    const { output } = attest(root);
+    const match = output.match(/ownership (\d+) core-owned, (\d+) operator-owned, (\d+) missing/);
+    assert.ok(match, `expected a three-part ownership line, got:\n${output}`);
+    const [core, operator, absent] = match.slice(1).map(Number);
+    assert.equal(absent, 1, 'the deleted file is counted as missing');
+    assert.equal(
+      core + operator + absent,
+      population,
+      'core-owned + operator-owned + missing must equal the declared population',
     );
   });
 });
@@ -758,6 +780,35 @@ test('a declaration naming only unpinned paths leaves an exact install COMPLIANT
     assert.equal(verdict, 'COMPLIANT', output);
     assert.equal(status, 0, 'COMPLIANT exits 0');
     assert.doesNotMatch(output, /OPERATOR-OWNED/, 'nothing pinned diverged');
+  });
+});
+
+// NEGATIVE COVERAGE for the bounded glob. The population contains nested keys
+// (daemons/transport-deps/package.json), so `daemons/*` must claim the
+// top-level daemons files and NOTHING deeper. Widening the matcher to `.*`
+// silently hands an operator ownership of every pinned file under daemons/,
+// which is exactly the over-claim this asserts against.
+test('a bounded glob does not claim a nested required_files key', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const nested = 'daemons/transport-deps/package.json';
+    assert.ok(
+      manifest.required_files[nested],
+      'the manifest still pins a nested daemons key for this vector to be meaningful',
+    );
+    const file = path.join(root, ...nested.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+    declare(root, ['daemons/*']);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.equal(status, 1, 'an unclaimed pinned path that drifted is tamper');
+    assert.match(output, new RegExp(`required file changed: ${escapeForRegExp(nested)}`));
+    assert.doesNotMatch(
+      output,
+      new RegExp(`OPERATOR-OWNED ${escapeForRegExp(nested)}`),
+      'a single * must not reach across a path separator to claim a nested key',
+    );
   });
 });
 

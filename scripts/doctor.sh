@@ -166,11 +166,13 @@ def operator_owned(relative):
 # failure, because the installer would have placed the framework copy there.
 core_owned = 0
 operator_owned_count = 0
+missing_count = 0
 for relative, expected in manifest["required_files"].items():
     try:
         with open(under_root(relative), "rb") as fh:
             actual = hashlib.sha256(fh.read()).hexdigest()
     except OSError:
+        missing_count += 1
         findings.append("required file missing: %s" % relative)
         continue
     if actual == expected:
@@ -191,9 +193,13 @@ for relative, expected in manifest["required_files"].items():
     core_owned += 1
     findings.append("required file changed: %s" % relative)
 
+# Missing is its own bucket so the three numbers add up to the population line
+# above. Folding absences into either ownership class would make the summary a
+# classification count that silently fails to account for part of what it
+# claims to have checked.
 print(
-    "info:ownership %d core-owned, %d operator-owned"
-    % (core_owned, operator_owned_count)
+    "info:ownership %d core-owned, %d operator-owned, %d missing"
+    % (core_owned, operator_owned_count, missing_count)
 )
 
 # Settings staleness. The installer MERGES into an existing settings.json
