@@ -506,6 +506,13 @@ function scoreWithheld(box, c) {
 }
 
 function scoreStaleIndex(box, c, staleRow) {
+  // An index deleted by a mutation cannot certify that a stale row was
+  // filtered: the same anti-vacuity rule PREREG-001 6 F6 states for the
+  // negative class. Not an environmental gap, so it carries a declaration.
+  if (!existsSync(box.embeddings)) {
+    return record(c.id, c.class, 'unrunnable', 'embeddings index absent: an absent index cannot certify that a stale row was filtered',
+      { requires: `PREREG-001 6 ${SCENARIO} — index removed by the mutation` });
+  }
   const pristine = readFileSync(box.embeddings, 'utf8');
   try {
     let vector;
@@ -559,6 +566,10 @@ const scoreOperator = (box, c) => (c.kind === 'index' ? scorePositive(box, c) : 
 // PREREG-001 3.7. The report must appear on the invocation that LOADS the
 // population, naming the offending path. A later audit does not satisfy it.
 function scoreLoudness(box, c) {
+  if (!existsSync(box.embeddings)) {
+    return record(c.id, c.class, 'unrunnable', 'embeddings index absent: there is no population load to be loud about',
+      { requires: `PREREG-001 6 ${SCENARIO} — index removed by the mutation` });
+  }
   if (c.kind === 'deleted-source') {
     rmSync(path.join(box.vault, ...c.deletePath.split('/')), { force: true });
     const res = search(box, c.query);
@@ -732,6 +743,28 @@ if (harnessErrors.length === 0 && gaps.length === 0) {
 
     indexBuild = buildIndex(box);
     if (SCENARIO === 'F5') scenarioNotes.push(`F5: embed-vault.js exited ${indexBuild.status}`);
+    if (SCENARIO === 'F4') {
+      // Build cleanly, run C-02's query once to capture the rank-1 row's
+      // embedding vector, then append a row with a path inside ops-deny/, the
+      // C-02 DENY canary text as its chunk, and that captured vector, so that
+      // absent any filtering it would score at or above rank 1 (PREREG-001 6 F4).
+      const c2 = byId.get('C-02');
+      const probe = search(box, c2.query);
+      const top = probe.rows?.[0];
+      const index = existsSync(box.embeddings) ? readIndex(box) : null;
+      const donor = index && top ? index.notes.find((n) => n.path === top.path) : null;
+      if (!donor) {
+        harnessErrors.push(`F4: could not capture a rank-1 embedding vector for C-02 (top-1 was ${top?.path || 'nothing'})`);
+      } else {
+        const raw = readFileSync(path.join(CORPUS, ...c2.target.split('/')), 'utf8');
+        const fm = raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+        const chunk = (fm ? raw.slice(fm[0].length) : raw).trim().slice(0, 500);
+        index.notes.push({ path: c2.target, title: 'vault-door-service-log', tags: [], chunk, embedding: donor.embedding, mtime: 0 });
+        index.entryCount = index.notes.length;
+        writeIndex(box, index);
+        scenarioNotes.push(`F4 mutation: captured the rank-1 embedding vector for C-02 from ${top.path} (score ${top.score}) and appended a row at ${c2.target} carrying the DENY canary text with that exact vector`);
+      }
+    }
     if (SCENARIO === 'F6') {
       rmSync(box.embeddings, { force: true });
       scenarioNotes.push('F6 mutation: deleted <sandbox vault>/memory/embeddings.json and ran without rebuilding');
@@ -769,7 +802,12 @@ if (harnessErrors.length === 0 && gaps.length === 0) {
         else { record('PC-01', 'positive-control', 'pass', `rank 1, score ${r1.score}`, { topScore: r1.score }); pcGreen = true; }
       }
 
-      if (!pcGreen) {
+      // PREREG-001 6 PC-01 makes a non-green control fatal to a run that is
+      // trying to report quality. Under F6 a red PC-01 IS the preregistered
+      // observation ("PC-01 goes red, every positive, temporal and operator
+      // case goes red"), so the gate must not convert those preregistered reds
+      // into unrunnables. The gate stays armed everywhere else.
+      if (!pcGreen && SCENARIO !== 'F6') {
         declareUnrunnable(ALL_QUALITY,
           'PC-01 is not rank-1 green: the harness has not demonstrated it can see a hit at all',
           'PREREG-001 6 PC-01 — positive control not green');
