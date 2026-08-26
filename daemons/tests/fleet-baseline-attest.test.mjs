@@ -710,7 +710,12 @@ function escapeForRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED and stays COMPLIANT', () => {
+// THE DEGRADED VECTOR. install.sh refuses to declare a core-required path, so
+// a declared AND divergent pinned path means the declaration was hand-edited
+// after install and core drifted. That is neither clean (COMPLIANT would claim
+// the path as verified core) nor a tamper verdict (the operator did claim
+// ownership). It is DEGRADED. Mapping this back to COMPLIANT turns this red.
+test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED and attests DEGRADED', () => {
   withInstall((root) => {
     const manifest = readManifest();
     const [target] = Object.keys(manifest.required_files);
@@ -719,13 +724,14 @@ test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED 
     declare(root, [target]);
 
     const { verdict, status, output } = attest(root);
-    assert.equal(verdict, 'COMPLIANT', output);
-    assert.equal(status, 0, 'a declared operator-owned divergence is not a failure');
+    assert.equal(verdict, 'DEGRADED', output);
+    assert.notEqual(verdict, 'COMPLIANT', 'declared drift on a pinned path is never clean');
+    assert.equal(status, 0, 'DEGRADED exits 0');
     const escaped = escapeForRegExp(target);
     assert.match(
       output,
       new RegExp(`OPERATOR-OWNED ${escaped} \\(declared; hash differs from core\\)`),
-      'the divergence must be reported on its own distinct line',
+      'the divergence must be reported on its own distinct named line',
     );
     assert.doesNotMatch(
       output,
@@ -738,6 +744,20 @@ test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED 
       new RegExp(`ownership ${population - 1} core-owned, 1 operator-owned`),
       'the summary must state the core-owned/operator-owned split',
     );
+  });
+});
+
+// A declared operator-owned path OUTSIDE required_files is not in the measured
+// population at all, so it cannot drag the terminal anywhere. Pinned drift is
+// the only thing that reaches DEGRADED.
+test('a declaration naming only unpinned paths leaves an exact install COMPLIANT', () => {
+  withInstall((root) => {
+    declare(root, ['.claude/skills/*/SKILL.md', '.claude/agents/my-reviewer.md']);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+    assert.doesNotMatch(output, /OPERATOR-OWNED/, 'nothing pinned diverged');
   });
 });
 
@@ -768,13 +788,15 @@ test('a bounded glob declaration matches within one path segment only', () => {
     const file = path.join(root, ...target.split('/'));
     writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
 
-    // Matches: one * inside the daemons/ segment.
+    // Matches: one * inside the daemons/ segment. The path is claimed, so the
+    // drift reads as declared drift (DEGRADED) rather than tamper.
     declare(root, ['daemons/*']);
     const matched = attest(root);
-    assert.equal(matched.verdict, 'COMPLIANT', matched.output);
+    assert.equal(matched.verdict, 'DEGRADED', matched.output);
+    assert.match(matched.output, new RegExp(`OPERATOR-OWNED ${escapeForRegExp(target)}`));
 
     // Does not match: the * must not cross a separator, so a pattern one level
-    // deeper cannot claim a top-level file.
+    // deeper cannot claim a top-level file, and the drift is plain tamper.
     declare(root, ['daemons/*/*']);
     const unmatched = attest(root);
     assert.equal(unmatched.verdict, 'NONCOMPLIANT', unmatched.output);

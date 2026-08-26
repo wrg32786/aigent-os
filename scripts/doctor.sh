@@ -178,7 +178,15 @@ for relative, expected in manifest["required_files"].items():
         continue
     if operator_owned(relative):
         operator_owned_count += 1
-        print("info:OPERATOR-OWNED %s (declared; hash differs from core)" % relative)
+        # DEGRADED, not COMPLIANT: install.sh REFUSES to declare a
+        # core-required path, so finding one declared here means the
+        # declaration was hand-edited after install and a core-required file
+        # has drifted. Not NONCOMPLIANT either, because the operator did claim
+        # ownership of it. Carried as a finding rather than an info line so the
+        # terminal mapping below sees it.
+        findings.append(
+            "OPERATOR-OWNED %s (declared; hash differs from core)" % relative
+        )
         continue
     core_owned += 1
     findings.append("required file changed: %s" % relative)
@@ -560,14 +568,16 @@ createRequire(process.argv[1])("node-pty");
     fi
   fi
 
-  # An optional-component finding must never pull the verdict back UP from
-  # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT.
+  # A DEGRADED-class finding must never pull the verdict back UP from
+  # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT. Two classes
+  # map here: an absent optional component, and a core-required path the
+  # operator declared and then let drift (see the attest python above).
   TERMINAL="COMPLIANT"
   if [ "${#ATTEST_FINDINGS[@]}" -gt 0 ]; then
     for finding in "${ATTEST_FINDINGS[@]}"; do
       echo "  [detail] $finding"
       case "$finding" in
-        optional*)
+        optional*|OPERATOR-OWNED*)
           if [ "$TERMINAL" = "COMPLIANT" ]; then TERMINAL="DEGRADED"; fi
           ;;
         *)
