@@ -20,7 +20,10 @@ Options:
   --trust-existing      Keep pre-existing files under hooks/, daemons/,
                         .claude/skills/, .claude/agents/, .claude/rules/, and
                         skill-index.json even when they differ from the
-                        framework version, instead of quarantining them
+                        framework version, instead of quarantining them.
+                        All-or-nothing: it also freezes real core fixes. To
+                        keep named paths only, declare them in
+                        <target>/.aigent/operator-owned.json instead
                         (see docs/install-security.md)
   -h, --help            Show this help
 
@@ -200,6 +203,231 @@ printf '  Mode:   %s\n' "$MODE"
 printf '  Deps:   %s\n' "$([[ "$NO_DEPS" -eq 1 ]] && printf 'skip (unmanaged fallback)' || printf 'managed Auto-Refresh (Node.js 18+ required)')"
 printf '  Launch: %s\n' "$([[ "$NO_LAUNCHER" -eq 1 ]] && printf 'files only' || printf 'wire the aigent front door')"
 
+# ── Operator-owned path declarations ──────────────────────────────────────────
+# Generalizes the single hardcoded .claude/rules/post-compact-critical.md
+# exception further down into a declaration the TARGET install owns:
+# <target>/.aigent/operator-owned.json names the relative paths this operator
+# maintains themselves. A declared path that already exists is kept byte for
+# byte; a declared path that does not exist yet still receives the framework
+# copy, so a fresh install is always canonical core; everything undeclared
+# keeps the quarantine / no-clobber behavior below unchanged. That is the
+# difference from --trust-existing, which is all-or-nothing and therefore also
+# freezes real core fixes.
+#
+# JSON rather than a line-oriented .txt because both readers of this file (the
+# installer here and scripts/doctor.sh --attest) already parse JSON with the
+# same runtime, so one parser serves both and a bad file is a distinguishable
+# refusal instead of an ambiguous blank line.
+#
+# python3 only, deliberately. doctor.sh --attest already requires python3 to
+# read this same declaration, and a second implementation of a preservation
+# rule is a rule that can drift into preserving different files under different
+# runtimes. Installs with no declaration file never reach this and still need
+# no python3.
+#
+# This runs before the dry-run report and before the first write of any kind,
+# so a refusal leaves the target exactly as it was found.
+OPERATOR_OWNED_REL=".aigent/operator-owned.json"
+OPERATOR_OWNED_FILE="$TARGET/$OPERATOR_OWNED_REL"
+OPERATOR_OWNED_KEEP=$'\n'
+
+read_operator_owned_declaration() {
+  python3 - \
+    "$OPERATOR_OWNED_FILE" \
+    "$TARGET" \
+    "$SRC/scripts/fleet-baseline-manifest.json" \
+    "$OPERATOR_OWNED_REL" <<'PY'
+import json
+import os
+import re
+import sys
+
+declaration_path, root, manifest_path, display = sys.argv[1:5]
+
+# Trees this installer copies file by file, which is exactly the population the
+# declaration can govern. Anything outside it is a declaration with nothing to
+# preserve, which warns rather than refuses: it is inert, not dangerous, and
+# refusing would break installs whose operator listed a path defensively.
+MANAGED_PREFIXES = (
+    "system/", "vault/", "hooks/", "skills/", "daemons/", "scripts/",
+    "docs/", "memory/", "evals/", "launcher/",
+    ".claude/skills/", ".claude/agents/", ".claude/rules/",
+)
+MANAGED_EXACT = (".claude/skill-index.json",)
+
+# Paths the installer rewrites through a different mechanism entirely: a
+# managed marker block, a JSON merge, or unconditional regeneration. Declaring
+# one would promise a preservation this mechanism cannot deliver, so it is
+# refused instead of accepted and then silently overwritten.
+REWRITTEN = (
+    "CLAUDE.md",
+    ".gitignore",
+    ".claude/settings.json",
+    ".claude/settings.json.template",
+)
+
+
+def refuse(message):
+    print("error:%s" % message)
+    raise SystemExit(0)
+
+
+def matches(pattern, relative):
+    # A single * is bounded to one path segment. ** is refused above rather
+    # than quietly treated as the same thing, because an operator who writes
+    # it means recursion and would otherwise get a narrower rule than they
+    # asked for on a trust boundary.
+    return re.fullmatch(re.escape(pattern).replace(r"\*", "[^/]*"), relative) is not None
+
+
+try:
+    with open(declaration_path, encoding="utf-8") as handle:
+        declaration = json.load(handle)
+except (OSError, UnicodeError):
+    refuse("%s exists but could not be read" % display)
+except (ValueError, RecursionError):
+    refuse("%s could not be parsed as JSON" % display)
+
+if not isinstance(declaration, dict):
+    refuse('%s must be a JSON object with a "paths" array' % display)
+entries = declaration.get("paths")
+if not isinstance(entries, list) or not all(isinstance(item, str) for item in entries):
+    refuse('%s must declare "paths" as an array of relative path strings' % display)
+
+# The framework's own manifest is the authority on what is core-required, so it
+# is read from SRC, never from the target where it could have been edited to
+# widen what a declaration may claim. A source tree without a manifest (minimal
+# fixtures) simply has no core-required population to collide with.
+core_required = ()
+try:
+    with open(manifest_path, encoding="utf-8") as handle:
+        required_files = json.load(handle).get("required_files")
+    if isinstance(required_files, dict):
+        core_required = tuple(required_files)
+except (OSError, ValueError, UnicodeError, AttributeError, RecursionError):
+    core_required = ()
+
+seen = set()
+unmanaged = []
+for entry in entries:
+    if not entry:
+        refuse("%s declares an empty path" % display)
+    if entry in seen:
+        refuse("%s: %s is declared more than once" % (display, entry))
+    seen.add(entry)
+    if entry.startswith("/") or "\\" in entry or re.match(r"^[A-Za-z]:", entry):
+        refuse(
+            "%s: %s must be relative to the install target and use forward slashes"
+            % (display, entry)
+        )
+    segments = entry.split("/")
+    if ".." in segments:
+        refuse("%s: %s must not contain a .. segment" % (display, entry))
+    if any(segment in ("", ".") for segment in segments):
+        refuse("%s: %s must not contain an empty or . path segment" % (display, entry))
+    if "**" in entry:
+        refuse(
+            "%s: %s may use * inside one path segment but not **"
+            % (display, entry)
+        )
+    if entry in REWRITTEN:
+        refuse(
+            "%s: %s is rewritten by the installer on every run and cannot be operator-owned"
+            % (display, entry)
+        )
+    collisions = sorted(
+        relative for relative in core_required if matches(entry, relative)
+    )
+    if collisions:
+        refuse(
+            "%s: %s is pinned as core-required by the baseline manifest (%s) and cannot be operator-owned"
+            % (display, entry, collisions[0])
+        )
+    if entry not in MANAGED_EXACT and not entry.startswith(MANAGED_PREFIXES):
+        unmanaged.append(entry)
+
+
+def symlink_free(relative):
+    walked = root
+    for segment in relative.split("/"):
+        walked = os.path.join(walked, segment)
+        if os.path.islink(walked):
+            return False
+    return True
+
+
+def expand(pattern):
+    # Segment-by-segment expansion instead of a walk of the whole target: a *
+    # never crosses a separator, so only the directories a pattern actually
+    # names are ever listed. A target with a large node_modules/ is never read.
+    frontier = [""]
+    for segment in pattern.split("/"):
+        following = []
+        for base in frontier:
+            directory = os.path.join(root, *base.split("/")) if base else root
+            if "*" in segment:
+                try:
+                    names = sorted(os.listdir(directory))
+                except OSError:
+                    continue
+                for name in names:
+                    if matches(segment, name):
+                        following.append("%s/%s" % (base, name) if base else name)
+            else:
+                following.append("%s/%s" % (base, segment) if base else segment)
+        frontier = following
+    return frontier
+
+
+keep = []
+for entry in entries:
+    for relative in expand(entry):
+        if not os.path.isfile(os.path.join(root, *relative.split("/"))):
+            continue
+        if not symlink_free(relative):
+            refuse(
+                "%s: %s resolves through a symlink inside the target and cannot be operator-owned"
+                % (display, relative)
+            )
+        keep.append(relative)
+
+print("count:%d" % len(entries))
+for entry in unmanaged:
+    print("warn:%s" % entry)
+for relative in dict.fromkeys(keep):
+    print("keep:%s" % relative)
+PY
+}
+
+if [[ -f "$OPERATOR_OWNED_FILE" ]]; then
+  command -v python3 >/dev/null 2>&1 \
+    || fail "$OPERATOR_OWNED_REL declares operator-owned paths but python3 is not available to read it. Install python3 and rerun, or remove the declaration."
+  OPERATOR_OWNED_OUT="$(read_operator_owned_declaration)" \
+    || fail "$OPERATOR_OWNED_REL could not be read"
+  OPERATOR_OWNED_WARNINGS=""
+  while IFS= read -r declaration_line; do
+    # python3 on Windows writes CRLF and `read -r` keeps the CR, which would
+    # otherwise become part of every declared path and match nothing.
+    declaration_line="${declaration_line%$'\r'}"
+    case "$declaration_line" in
+      error:*)
+        fail "${declaration_line#error:}"
+        ;;
+      count:*)
+        printf '  Owned:  %s declared operator-owned path(s) in %s\n' \
+          "${declaration_line#count:}" "$OPERATOR_OWNED_REL"
+        ;;
+      warn:*)
+        OPERATOR_OWNED_WARNINGS+="  [operator-owned] warn ${declaration_line#warn:} is under no installer-managed tree; nothing to preserve there"$'\n'
+        ;;
+      keep:*)
+        OPERATOR_OWNED_KEEP+="${declaration_line#keep:}"$'\n'
+        ;;
+    esac
+  done <<< "$OPERATOR_OWNED_OUT"
+  [[ -z "$OPERATOR_OWNED_WARNINGS" ]] || printf '%s' "$OPERATOR_OWNED_WARNINGS"
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '\n  Planned changes:\n'
   if [[ "$MODE" == "copy" ]]; then
@@ -253,6 +481,18 @@ STAMP="${AIGENT_INSTALL_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 # pre-existing file that differs from the framework's copy is quarantined
 # instead of silently kept, unless --trust-existing was passed. Byte-
 # identical files (e.g. a prior run's own copy) pass through with no action.
+#
+# is_operator_owned lives inside this function rather than at its call sites
+# because copy_missing_file is reached both through copy_missing_tree and from
+# four standalone sites; a guard in the callers would leave the direct calls
+# unprotected. The check sits after the "destination absent" branch on purpose:
+# a declared path that does not exist yet is still a fresh install and still
+# receives the canonical framework copy.
+is_operator_owned() {
+  local relative="${1#"$TARGET"/}"
+  [[ "$OPERATOR_OWNED_KEEP" == *$'\n'"$relative"$'\n'* ]]
+}
+
 copy_missing_file() {
   local source_file="$1" dest_file="$2" sensitive="${3:-0}"
   if [[ ! -e "$dest_file" ]]; then
@@ -261,6 +501,10 @@ copy_missing_file() {
     else
       warn_symlink_escape "$dest_file"
     fi
+    return 0
+  fi
+  if is_operator_owned "$dest_file"; then
+    printf '  [operator-owned] keep %s\n' "${dest_file#"$TARGET"/}"
     return 0
   fi
   [[ "$sensitive" -eq 1 && "$TRUST_EXISTING" -eq 0 ]] || return 0
@@ -502,8 +746,15 @@ safe_mkdir_p "$TARGET/.claude/agents" || fail "cannot create $TARGET/.claude/age
 # framework starter only when the file is absent; an existing file is kept
 # as-is (symlink-guarded, like every other single-file write). Keeping it
 # gives up quarantine protection against a file planted here before the
-# first install — the same accepted tradeoff as CLAUDE.md's free-text
+# first install, the same accepted tradeoff as CLAUDE.md's free-text
 # region, and narrower than hooks/skills/agents, which stay quarantined.
+#
+# Deliberately NOT folded into the operator-owned declaration above. Folding it
+# in would make preservation here conditional on a declaration file that
+# installs upgrading from an earlier version do not have, and would change this
+# site's [keep] line, which is observable behavior with a test behind it. The
+# declaration is a superset in every other respect: an operator may list this
+# path explicitly and get identical treatment.
 RULES_SRC="$SRC/.claude/rules/post-compact-critical.md"
 RULES_DST="$TARGET/.claude/rules/post-compact-critical.md"
 if [[ -f "$RULES_SRC" ]]; then

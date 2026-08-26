@@ -32,7 +32,7 @@ The installer does not:
 - Use `sudo`.
 - Modify shell startup files, `PATH`, global Git configuration, or files outside the target.
 - Fetch and execute an installer script from a remote URL.
-- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below).
+- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below), unless that path is declared operator-owned (see "Operator-owned paths").
 - Replace an invalid existing `.claude/settings.json`.
 - Write through a symlink anywhere inside the target (see "Symlinks" below).
 
@@ -51,6 +51,37 @@ This exists so that installing into an existing project directory -- one that mi
 ```bash
 bash install.sh --target /path/to/project --trust-existing
 ```
+
+`--trust-existing` is all-or-nothing: it keeps every pre-existing trusted-tree file, which also means a genuine core fix shipped in a newer version is never applied. Prefer declaring the specific paths you own, below, so everything else still upgrades.
+
+### Operator-owned paths
+
+Create `<target>/.aigent/operator-owned.json` to name the paths you maintain yourself:
+
+```json
+{
+  "schema": "OperatorOwnedPaths/v1",
+  "paths": [
+    ".claude/skills/*/SKILL.md",
+    ".claude/agents/my-reviewer.md",
+    ".claude/skill-index.json"
+  ]
+}
+```
+
+Entries are paths relative to the install target. A single `*` matches within one path segment and never across a `/`; `**` is not accepted. Semantics:
+
+- A declared path that **exists** is kept byte for byte on every install and update, and the installer prints `[operator-owned] keep <path>`.
+- A declared path that **does not exist yet** receives the framework copy as normal, so a fresh install always gets canonical core.
+- Everything **undeclared** keeps the quarantine and no-clobber behavior described above, unchanged.
+
+The installer refuses to run, with a named error and without writing anything into the target, if the file cannot be parsed, if an entry is absolute or contains a `..` or empty segment, if an entry is declared twice, if an entry resolves through a symlink inside the target, if it uses `**`, if it names a path the installer rewrites through another mechanism (`CLAUDE.md`, `.gitignore`, `.claude/settings.json`, `.claude/settings.json.template`), or if it names a file pinned as core-required in `scripts/fleet-baseline-manifest.json`. An entry under no installer-managed tree is a warning rather than a refusal: it is inert, because the installer never writes there in the first place.
+
+Reading the declaration requires `python3`, the same runtime `scripts/doctor.sh --attest` already needs to read it. Installs with no declaration file are unaffected.
+
+`scripts/doctor.sh --attest` reads the same file so its verdict stays honest about ownership. A pinned path that differs from the framework copy **and** is declared operator-owned is reported as `OPERATOR-OWNED <path> (declared; hash differs from core)` rather than counted as a compliance failure, and the summary states the split as `ownership N core-owned, M operator-owned`. An undeclared pinned path that differs is still `NONCOMPLIANT`. If the declaration file is present but unreadable the verdict is `UNKNOWN`: the instrument cannot tell core-owned from operator-owned, which is a failure to measure rather than a measurement that the tree is broken.
+
+`.claude/rules/post-compact-critical.md` keeps its own unconditional preservation and needs no declaration; declaring it explicitly is accepted and behaves identically.
 
 `.claude/settings.json.template` is exempt from this treatment for a different reason: it is unconditionally regenerated from the framework's copy on every run (never gated on "already exists"), so it can never silently keep a planted or stale template in the first place.
 
