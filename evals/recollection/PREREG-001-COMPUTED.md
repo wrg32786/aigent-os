@@ -120,6 +120,38 @@ query:
 The earlier runs that exposed corrections 1 and 3 are reported as instrument
 shakedown runs in the Phase B build ledger, not as preregistered results.
 
+### Known instrument residue
+
+Recorded, not changed. Each was raised by the non-author Rule-26 review at head
+`a72f68b` and deliberately left alone, because changing any of them would move a
+terminal or a definition that only a `PREREG-002` ruling may move.
+
+- **Finding 7 — dead-retriever DENY/SKIP terminals.** `scoreWithheld` records
+  FAIL when the search process exits non-zero, so F6 shows ten "leaks" across
+  the DENY, SKIP and operator skip/deny cases even though both of PREREG-001
+  3.5's FAIL conditions are false there (no canary reached stdout, and no row
+  was returned at all). The packet enumerates F6's expectations for PC-01,
+  positive, temporal, operator and negative only, and is silent on C, S, X and
+  L. Recorded rather than reclassified: a terminal change here needs a
+  `PREREG-002` ruling, not a runner edit.
+- **Finding 8 — 4.3 item 3 enforced more narrowly than written.**
+  `environmentGaps()` declares the model UNRUNNABLE when the local
+  transformers.js cache file is absent, although packet 4.3 item 3 accepts
+  weights resolved "either from its local cache **or over the network on first
+  use**". On this machine the distinction is moot because `huggingface.co` is
+  unreachable, so the narrow check and the packet's check agree here. It would
+  wrongly declare UNRUNNABLE on a machine with network access and a cold cache.
+- **Finding 10 — duplication inside the runner.** Three hand-rolled
+  inject-row/restore sites (the F4 one has no restore and takes only the first
+  chunk of a multi-chunk donor, harmless because every corpus note is a single
+  chunk); three recursive directory walkers; the frontmatter-stripping regex
+  written out three times; `pristine` re-parsed rather than reused. Also
+  `DENY_PREFIXES` omits the backslash normalization `deny-list.mjs:51` applies,
+  dormant because the committed fixture prefix contains no backslash, and the
+  runner's classifier is deliberately an independent reimplementation rather
+  than an import of the product's. Left as residue: consolidation is worth doing
+  only as a pure refactor that reproduces byte-identical packets.
+
 ## Product identity under test
 
 ```text
