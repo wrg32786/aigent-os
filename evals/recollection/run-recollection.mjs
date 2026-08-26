@@ -300,6 +300,18 @@ function search(box, query) {
 const readIndex = (box) => JSON.parse(readFileSync(box.embeddings, 'utf8'));
 const writeIndex = (box, index) => writeFileSync(box.embeddings, JSON.stringify(index, null, 0));
 
+// PREREG-001 3.7 scopes load-time loudness to the invocation's POPULATION LOAD,
+// not to its output as a whole. search-vault.js:116-126 prints the index-load
+// report and only then prints `Query: "..."` (:131) and the result rows, whose
+// `Path:` lines name every returned path. Scanning the whole of stdout would
+// therefore score a carried-forward dangling row as "named at load" purely
+// because the product RETURNED it -- the opposite of what this class measures.
+// The window is: stdout up to the query echo, plus all of stderr.
+function populationLoadOutput(res) {
+  const q = res.stdout.indexOf('\nQuery: "');
+  return (q === -1 ? res.stdout : res.stdout.slice(0, q)) + res.stderr;
+}
+
 // ── policy classification of a returned path, mirroring what the product
 //    itself applies: prefix deny first, then namespace disposition ───────────
 const FIXTURE_LOCAL = JSON.parse(readFileSync(path.join(FIXTURE_REGISTRY, 'namespace-registry.local.json'), 'utf8'));
@@ -552,8 +564,8 @@ function scoreLoudness(box, c) {
     const res = search(box, c.query);
     checkBudget(c.id, res);
     scanPolicy(c.id, res);
-    const named = res.all.includes(c.deletePath);
-    const extra = { deleted: c.deletePath, namedAtLoad: named, exit: res.status };
+    const named = populationLoadOutput(res).includes(c.deletePath);
+    const extra = { deleted: c.deletePath, namedAtLoad: named, exit: res.status, loadWindow: populationLoadOutput(res).trim().slice(-300) };
     if (!named) return record(c.id, c.class, 'fail', `population load never named the deleted source ${c.deletePath}`, extra);
     return record(c.id, c.class, 'pass', 'deleted source named at population load', extra);
   }
@@ -569,8 +581,8 @@ function scoreLoudness(box, c) {
     const res = search(box, c.query);
     checkBudget(c.id, res);
     scanPolicy(c.id, res);
-    const named = res.all.includes(c.injectedPath);
-    const extra = { injectedPath: c.injectedPath, namedAtLoad: named, exit: res.status };
+    const named = populationLoadOutput(res).includes(c.injectedPath);
+    const extra = { injectedPath: c.injectedPath, namedAtLoad: named, exit: res.status, loadWindow: populationLoadOutput(res).trim().slice(-300) };
     if (!named) return record(c.id, c.class, 'fail', `population load never named the missing source ${c.injectedPath}`, extra);
     record(c.id, c.class, 'pass', 'missing source named at population load', extra);
   } finally {
