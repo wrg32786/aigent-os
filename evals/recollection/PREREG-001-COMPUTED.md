@@ -117,6 +117,58 @@ query:
    F6's preregistered reds into unrunnables. Exempted under F6 only; armed
    everywhere else.
 
+4. `9100103` (finding 1) — an unrecognised `--scenario` ran a full unmutated
+   baseline, labelled the packet with that name, and cited a fabricated
+   `PREREG-001 6 <name>`. An unknown scenario is now a harness error.
+5. `9100103` (finding 2) — no packet encoded any falsifier's expected red, so a
+   falsifier that had stopped falsifying was indistinguishable from one that
+   worked. A scenario table now carries each run's mutation, expected reds,
+   expected passes and expected unrunnable classes, evaluated into the packet.
+6. `9100103` (finding 3) — X and L were declared UNRUNNABLE under F6 citing a
+   packet rule that does not exist, against 3.7. They now record FAIL.
+7. `9100103` (finding 4) — the packet wrote the pinned hash constant rather than
+   the observed sandbox hashes 1.3 asks for, hiding F5's own mutation. Observed
+   hashes are now recorded, with the four unpinned copies recorded not gated.
+8. `9100103` (finding 5) — the PC-01 gate was keyed on the scenario label rather
+   than on whether the index actually exists.
+9. `9100103` (finding 6) — a non-zero exit was charged as a budget breach, which
+   let a dead retriever override its own declared UNRUNNABLE.
+10. `9100103` (finding 9) — fixed case ids and stale-index rows were
+   dereferenced unguarded and per-class counts were never checked. An integrity
+   block now fails closed; `--self-check` is its runnable witness.
+
+Corrections 4 to 10 came from the non-author Rule-26 review at head `a72f68b`.
+None of them touched a threshold, `tau`, K, a class count, a query, a gate, a
+budget or a corpus byte, and the three frozen fixture hashes were re-verified
+byte-identical before and after. Every reported result was re-executed on the
+corrected instrument and reproduced the previous baseline numbers exactly.
+
+4. `9100103` (finding 1) — an unrecognised `--scenario` ran a full unmutated
+   baseline, labelled the packet with that name, and cited a fabricated
+   `PREREG-001 6 <name>`. An unknown scenario is now a harness error.
+5. `9100103` (finding 2) — no packet encoded any falsifier's expected red, so a
+   falsifier that had stopped falsifying was indistinguishable from one that
+   worked. A scenario table now carries each run's mutation, expected reds,
+   expected passes and expected unrunnable classes, evaluated into the packet.
+6. `9100103` (finding 3) — X and L were declared UNRUNNABLE under F6 citing a
+   packet rule that does not exist, against 3.7. They now record FAIL.
+7. `9100103` (finding 4) — the packet wrote the pinned hash constant rather than
+   the observed sandbox hashes 1.3 asks for, hiding F5's own mutation. Observed
+   hashes are now recorded, with the four unpinned copies recorded not gated.
+8. `9100103` (finding 5) — the PC-01 gate was keyed on the scenario label rather
+   than on whether the index actually exists.
+9. `9100103` (finding 6) — a non-zero exit was charged as a budget breach, which
+   let a dead retriever override its own declared UNRUNNABLE.
+10. `9100103` (finding 9) — fixed case ids and stale-index rows were
+   dereferenced unguarded and per-class counts were never checked. An integrity
+   block now fails closed; `--self-check` is its runnable witness.
+
+Corrections 4 to 10 came from the non-author Rule-26 review at head `a72f68b`.
+None of them touched a threshold, `tau`, K, a class count, a query, a gate, a
+budget or a corpus byte, and the three frozen fixture hashes were re-verified
+byte-identical before and after. Every reported result was re-executed on the
+corrected instrument and reproduced the previous baseline numbers exactly.
+
 The earlier runs that exposed corrections 1 and 3 are reported as instrument
 shakedown runs in the Phase B build ledger, not as preregistered results.
 
