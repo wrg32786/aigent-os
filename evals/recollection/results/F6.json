@@ -4,8 +4,8 @@
   "scenario": "F6",
   "product_commit": "cdb7022e5a08ef78f9923944fb4aff51bfea48a1",
   "terminal": "FAIL",
-  "ran_at": "2026-08-26T21:25:32.585Z",
-  "wall_ms": 58695,
+  "ran_at": "2026-08-26T23:26:15.749Z",
+  "wall_ms": 100110,
   "hashes": {
     "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
     "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
@@ -16,7 +16,7 @@
       "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96"
     }
   },
-  "runtime_hashes": {
+  "runtime_hashes_pinned": {
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
     "daemons/semantic-search/namespace-registry.local.example.json": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
     "daemons/semantic-search/namespace-registry.mjs": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
@@ -25,6 +25,68 @@
     "daemons/semantic-search/deny-list.mjs": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
     "daemons/lifecycle-common.mjs": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
     "evals/run-evals.mjs": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d"
+  },
+  "runtime_hashes_observed": {
+    "daemons/semantic-search/namespace-registry.json": {
+      "observed": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "pinned": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.local.example.json": {
+      "observed": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "pinned": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.mjs": {
+      "observed": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "pinned": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/search-vault.js": {
+      "observed": "202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5",
+      "pinned": "202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/embed-vault.js": {
+      "observed": "51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3",
+      "pinned": "51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/deny-list.mjs": {
+      "observed": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "pinned": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "matchesPin": true
+    },
+    "daemons/lifecycle-common.mjs": {
+      "observed": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+      "pinned": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+      "matchesPin": true
+    },
+    "evals/run-evals.mjs": {
+      "observed": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "pinned": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "matchesPin": true
+    },
+    "scripts/doctor.sh": {
+      "observed": "cd5c676817419fe39f76698948a68a9966f8571c12c28ab573fbeafdbe7089e8",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/frontmatter-reader.cjs": {
+      "observed": "7664da67a777f985519e00eec8d5ddc7070e8706124da95bfea24f7b6a84a241",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/capsule-content-gate.mjs": {
+      "observed": "6fd30933a4085a5ab81933f9ce97b7e0b248c7f5658bb921b1dbcdb03bab6728",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/memory-hygiene/resume-framing.mjs": {
+      "observed": "df7b8146b7d9fc27d80c665e58f720fc608db63c886aaed63758aa28b1c85ad5",
+      "pinned": null,
+      "matchesPin": null
+    }
   },
   "model": {
     "name": "Xenova/all-MiniLM-L6-v2",
@@ -47,13 +109,252 @@
     "totalMemBytes": 68191178752
   },
   "environment_gaps": [],
+  "scenario_spec": {
+    "mutation": "delete <sandbox vault>/memory/embeddings.json and run without rebuilding",
+    "note": null,
+    "caveat": null,
+    "expected_red_ids": [
+      "PC-01",
+      "P-01",
+      "P-02",
+      "P-03",
+      "P-04",
+      "P-05",
+      "P-06",
+      "P-07",
+      "P-08",
+      "P-09",
+      "P-10",
+      "P-11",
+      "P-12",
+      "P-13",
+      "P-14",
+      "P-15",
+      "P-16",
+      "P-17",
+      "P-18",
+      "P-19",
+      "P-20",
+      "P-21",
+      "P-22",
+      "P-23",
+      "P-24",
+      "T-01",
+      "T-02",
+      "T-03",
+      "T-04",
+      "T-05",
+      "T-06",
+      "T-07",
+      "T-08",
+      "O-01",
+      "O-02",
+      "O-03"
+    ],
+    "expected_pass_ids": [],
+    "expected_unrunnable_classes": [
+      "negative"
+    ]
+  },
+  "expected_red": [
+    {
+      "id": "PC-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-03",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-04",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-05",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-06",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-07",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-08",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-09",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-10",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-11",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-12",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-13",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-14",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-15",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-16",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-17",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-18",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-19",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-20",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-21",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-22",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-23",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "P-24",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-03",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-04",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-05",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-06",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-07",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "T-08",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "O-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "O-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "O-03",
+      "expected": "fail",
+      "observed": "fail"
+    }
+  ],
+  "expected_pass": [],
+  "expected_unrunnable": [
+    {
+      "class": "negative",
+      "expected": "unrunnable",
+      "n": 12,
+      "unrunnable": 12
+    }
+  ],
+  "expected_red_observed": true,
   "scenario_notes": [
     "F6 mutation: deleted <sandbox vault>/memory/embeddings.json and ran without rebuilding"
   ],
   "index_build": {
     "exit": 0,
-    "ms": 2058,
-    "tail": "[deny] 4 file(s) excluded by index-deny.json\nFound 92 markdown files to consider.\nKeeping 0 unchanged entries, embedding 92 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/92 files\r  Progress: 20/92 files\r  Progress: 30/92 files\r  Progress: 40/92 files\r  Progress: 50/92 files\r  Progress: 60/92 files\r  Progress: 70/92 files\r  Progress: 80/92 files\r  Progress: 90/92 files\r  Progress: 92/92 files\nEmbedded 92 files, produced 92 entries.\n\nSaved embeddings.json — 92 entries, 760.6 KB\nIndex updated: 2026-08-26T21:24:37.677Z\n"
+    "ms": 2343,
+    "tail": "[deny] 4 file(s) excluded by index-deny.json\nFound 92 markdown files to consider.\nKeeping 0 unchanged entries, embedding 92 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/92 files\r  Progress: 20/92 files\r  Progress: 30/92 files\r  Progress: 40/92 files\r  Progress: 50/92 files\r  Progress: 60/92 files\r  Progress: 70/92 files\r  Progress: 80/92 files\r  Progress: 90/92 files\r  Progress: 92/92 files\nEmbedded 92 files, produced 92 entries.\n\nSaved embeddings.json — 92 entries, 760.6 KB\nIndex updated: 2026-08-26T23:24:38.824Z\n"
   },
   "doctor_namespace_records": null,
   "classes": [
@@ -182,15 +483,15 @@
       "gate": "3 of 3",
       "n": 3,
       "pass": 0,
-      "fail": 0,
-      "unrunnable": 3,
-      "failingIds": [],
-      "unrunnableIds": [
+      "fail": 3,
+      "unrunnable": 0,
+      "failingIds": [
         "X-01",
         "X-02",
         "X-03"
       ],
-      "status": "UNRUNNABLE"
+      "unrunnableIds": [],
+      "status": "FAIL"
     },
     {
       "class": "undeclared",
@@ -229,374 +530,25 @@
       "gate": "2 of 2",
       "n": 2,
       "pass": 0,
-      "fail": 0,
-      "unrunnable": 2,
-      "failingIds": [],
-      "unrunnableIds": [
+      "fail": 2,
+      "unrunnable": 0,
+      "failingIds": [
         "L-02",
         "L-01"
       ],
-      "status": "UNRUNNABLE"
+      "unrunnableIds": [],
+      "status": "FAIL"
     }
   ],
   "positive_control": {
     "id": "PC-01",
     "class": "positive-control",
     "status": "fail",
-    "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+    "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
   },
   "inversions": [],
   "policy_false_positives": [],
-  "budget_breaches": [
-    {
-      "id": "PC-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-04",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-05",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-06",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-07",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-08",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-09",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-10",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-11",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-12",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-13",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-14",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-15",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-16",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-17",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-18",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-19",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-20",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-21",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-22",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-23",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "P-24",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-04",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-05",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-06",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-07",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-08",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-09",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-10",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-11",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "N-12",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-04",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-05",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-06",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-07",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "T-08",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-04",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-05",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "C-06",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "S-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "S-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "S-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "S-04",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "O-01",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "O-02",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    },
-    {
-      "id": "O-03",
-      "breaches": [
-        "no timing line parsed from human-mode output"
-      ]
-    }
-  ],
+  "budget_breaches": [],
   "harness_errors": [],
   "undeclared_unrunnable": [],
   "cases": [
@@ -604,151 +556,151 @@
       "id": "PC-01",
       "class": "positive-control",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-01",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-02",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-03",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-04",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-05",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-06",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-07",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-08",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-09",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-10",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-11",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-12",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-13",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-14",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-15",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-16",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-17",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-18",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-19",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-20",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-21",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-22",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-23",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "P-24",
       "class": "positive",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "requires": "PREREG-001 6 F6 — search process exited non-zero",
@@ -946,7 +898,7 @@
       "id": "O-01",
       "class": "operator",
       "status": "fail",
-      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-uREDVZ\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
+      "detail": "search exited 1: Embeddings index not found at C:\\Users\\will\\AppData\\Local\\Temp\\recollection-f6-yxUDSv\\vault\\memory\\embeddings.json\nRun: node embed-vault.js"
     },
     {
       "id": "O-02",
@@ -961,49 +913,47 @@
       "detail": "search exited 1"
     },
     {
-      "requires": "PREREG-001 6 F6 — index removed by the mutation",
+      "injectedPath": "templates/stale-injected-zither.md",
       "id": "X-01",
       "class": "stale-index",
-      "status": "unrunnable",
-      "detail": "embeddings index absent: an absent index cannot certify that a stale row was filtered"
+      "status": "fail",
+      "detail": "index absent"
     },
     {
-      "requires": "PREREG-001 6 F6 — index removed by the mutation",
+      "injectedPath": "ops-deny/stale-injected-pelican.md",
       "id": "X-02",
       "class": "stale-index",
-      "status": "unrunnable",
-      "detail": "embeddings index absent: an absent index cannot certify that a stale row was filtered"
+      "status": "fail",
+      "detail": "index absent"
     },
     {
-      "requires": "PREREG-001 6 F6 — index removed by the mutation",
+      "injectedPath": "scratch/stale-injected-obsidian.md",
       "id": "X-03",
       "class": "stale-index",
-      "status": "unrunnable",
-      "detail": "embeddings index absent: an absent index cannot certify that a stale row was filtered"
+      "status": "fail",
+      "detail": "index absent"
     },
     {
-      "requires": "PREREG-001 6 F6 — index removed by the mutation",
       "id": "L-02",
       "class": "loudness",
-      "status": "unrunnable",
-      "detail": "embeddings index absent: there is no population load to be loud about"
+      "status": "fail",
+      "detail": "index absent"
     },
     {
-      "requires": "PREREG-001 6 F6 — index removed by the mutation",
       "id": "L-01",
       "class": "loudness",
-      "status": "unrunnable",
-      "detail": "embeddings index absent: there is no population load to be loud about"
+      "status": "fail",
+      "detail": "index absent"
     },
     {
-      "requires": "PREREG-001 6 F6 — coverage cases are scored in the baseline and F5 runs",
+      "requires": "runner scenario table: F6 does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)",
       "id": "U-01",
       "class": "undeclared",
       "status": "unrunnable",
       "detail": "F6: the undeclared overlay is not part of this mutation"
     },
     {
-      "requires": "PREREG-001 6 F6 — coverage cases are scored in the baseline and F5 runs",
+      "requires": "runner scenario table: F6 does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)",
       "id": "U-02",
       "class": "undeclared",
       "status": "unrunnable",
