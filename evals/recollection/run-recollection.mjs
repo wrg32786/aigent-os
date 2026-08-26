@@ -246,6 +246,42 @@ function runtimeHashGaps(box) {
   return bad;
 }
 
+// PREREG-001 1.3 requires the RUN to record the eight hashes, and it means the
+// sandbox copies the run actually executed. Writing the pinned constant instead
+// made a mutation invisible: the F5 packet at head a72f68b reported the pin for
+// namespace-registry.json even though F5's whole mutation is editing that file.
+// The four unpinned copies the sandbox also carries are recorded, not gated.
+function sandboxFileMap(box) {
+  return {
+    'daemons/semantic-search/namespace-registry.json': path.join(box.sem, 'namespace-registry.json'),
+    'daemons/semantic-search/namespace-registry.local.example.json': path.join(box.sem, 'namespace-registry.local.example.json'),
+    'daemons/semantic-search/namespace-registry.mjs': path.join(box.sem, 'namespace-registry.mjs'),
+    'daemons/semantic-search/search-vault.js': path.join(box.sem, 'search-vault.js'),
+    'daemons/semantic-search/embed-vault.js': path.join(box.sem, 'embed-vault.js'),
+    'daemons/semantic-search/deny-list.mjs': path.join(box.sem, 'deny-list.mjs'),
+    'daemons/lifecycle-common.mjs': path.join(box.root, 'daemons', 'lifecycle-common.mjs'),
+    'evals/run-evals.mjs': path.join(EVALS, 'run-evals.mjs'),
+    // recorded, never gated: the packet pins no value for these
+    'scripts/doctor.sh': path.join(box.root, 'scripts', 'doctor.sh'),
+    'daemons/frontmatter-reader.cjs': path.join(box.root, 'daemons', 'frontmatter-reader.cjs'),
+    'daemons/capsule-content-gate.mjs': path.join(box.root, 'daemons', 'capsule-content-gate.mjs'),
+    'daemons/memory-hygiene/resume-framing.mjs': path.join(box.root, 'daemons', 'memory-hygiene', 'resume-framing.mjs'),
+  };
+}
+
+function observedRuntimeHashes(box) {
+  if (!box) return null;
+  const out = {};
+  for (const [label, file] of Object.entries(sandboxFileMap(box))) {
+    const observed = existsSync(file) ? fileHash(file) : 'ABSENT';
+    const pinned = RUNTIME_HASHES[label] || null;
+    out[label] = pinned
+      ? { observed, pinned, matchesPin: observed === pinned }
+      : { observed, pinned: null, matchesPin: null };
+  }
+  return out;
+}
+
 function runNode(box, script, args = []) {
   const r = spawnSync(process.execPath, [path.join(box.sem, script), ...args], {
     encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
@@ -385,6 +421,12 @@ function provenanceFailure(row) {
 //    accounting: a breach never converts a correct hit into a miss. ──────────
 const budgetBreaches = [];
 function checkBudget(id, res) {
+  // A process that exited non-zero produced no timing line because it never
+  // reached search-vault.js:206, not because it was slow. Charging that as a
+  // budget breach let a dead retriever override its own declared UNRUNNABLE and
+  // force the run terminal to FAIL (58 spurious breaches in the F6 packet at
+  // head a72f68b). Budget accounting only applies to a run that happened.
+  if (res.status !== 0) return [];
   const b = [];
   if (!res.timings) b.push('no timing line parsed from human-mode output');
   else {
@@ -506,12 +548,13 @@ function scoreWithheld(box, c) {
 }
 
 function scoreStaleIndex(box, c, staleRow) {
-  // An index deleted by a mutation cannot certify that a stale row was
-  // filtered: the same anti-vacuity rule PREREG-001 6 F6 states for the
-  // negative class. Not an environmental gap, so it carries a declaration.
+  // PREREG-001 5.1 reserves UNRUNNABLE for a missing item from the finite 4.3
+  // list; 3.7 adds that a case whose mechanism is absent is "never UNRUNNABLE
+  // and never a skip". An index removed by a mutation is neither, so this is a
+  // FAIL. The earlier `requires: "PREREG-001 6 F6"` cited a rule the packet
+  // does not contain.
   if (!existsSync(box.embeddings)) {
-    return record(c.id, c.class, 'unrunnable', 'embeddings index absent: an absent index cannot certify that a stale row was filtered',
-      { requires: `PREREG-001 6 ${SCENARIO} — index removed by the mutation` });
+    return record(c.id, c.class, 'fail', 'index absent', { injectedPath: staleRow?.path ?? null });
   }
   const pristine = readFileSync(box.embeddings, 'utf8');
   try {
@@ -566,10 +609,8 @@ const scoreOperator = (box, c) => (c.kind === 'index' ? scorePositive(box, c) : 
 // PREREG-001 3.7. The report must appear on the invocation that LOADS the
 // population, naming the offending path. A later audit does not satisfy it.
 function scoreLoudness(box, c) {
-  if (!existsSync(box.embeddings)) {
-    return record(c.id, c.class, 'unrunnable', 'embeddings index absent: there is no population load to be loud about',
-      { requires: `PREREG-001 6 ${SCENARIO} — index removed by the mutation` });
-  }
+  // Same rule as scoreStaleIndex above: 3.7 forbids UNRUNNABLE for this class.
+  if (!existsSync(box.embeddings)) return record(c.id, c.class, 'fail', 'index absent');
   if (c.kind === 'deleted-source') {
     rmSync(path.join(box.vault, ...c.deletePath.split('/')), { force: true });
     const res = search(box, c.query);
@@ -600,6 +641,60 @@ function scoreLoudness(box, c) {
     writeFileSync(box.embeddings, pristine);
   }
 }
+
+// ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
+// One source of truth for what each run mutates and what it must turn red. A
+// scenario name this table does not contain is a harness error: before this
+// existed, `--scenario F9` silently ran an unmutated baseline, labelled the
+// packet F9, and cited a fabricated "PREREG-001 6 F9" in its declarations.
+//
+// `expectedRed` / `expectedRedClasses` are checked at packet time and written
+// into every packet, so a falsifier that stops falsifying is visible in the
+// artifact rather than only in prose.
+const SCENARIOS = {
+  BASELINE: {
+    mutation: 'none (unmutated corpus)',
+    expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: true,
+  },
+  F1: {
+    mutation: "delete case P-07's target note from the sandbox vault, then a FULL rebuild",
+    expectedRed: ['P-07'], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false,
+  },
+  F2: {
+    mutation: 'add a long research/ note paraphrasing N-04 without answering it, then a full rebuild',
+    expectedRed: ['N-04'], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false,
+    caveat: 'N-04 is already FAIL on the unmutated corpus (top-1 0.5771, far above tau 0.30), so this '
+      + 'falsifier cannot demonstrate a green-to-red TRANSITION here. What it demonstrates is that the '
+      + 'mutation lands and the negative-class instrument responds: top-1 rises and the injected '
+      + 'distractor takes rank 1. That is evidence about tau, not about the falsifier.',
+  },
+  F3: {
+    mutation: "rewrite T-03's superseded note to duplicate the current note's body and restate the T-03 query",
+    expectedRed: ['T-03'], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false,
+    expectInversionsAtLeast: 1,
+  },
+  F4: {
+    mutation: "inject a row inside ops-deny/ carrying C-02's DENY canary text with the captured rank-1 embedding vector",
+    expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01', 'C-02'],
+    unrunnableClasses: [], runU: false,
+    note: 'confirmatory, not destructive: the expected observation is that C-02 stays PASS and the canary never reaches stdout',
+  },
+  F5: {
+    mutation: 'copy the undeclared overlay in as scratch/ AND delete the feedback row from the sandbox core registry',
+    expectedRed: [], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
+    unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'],
+    runU: true,
+  },
+  F6: {
+    mutation: 'delete <sandbox vault>/memory/embeddings.json and run without rebuilding',
+    expectedRed: ['PC-01'], expectedRedClasses: ['positive', 'temporal', 'operator'], expectPass: [],
+    unrunnableClasses: ['negative'], runU: false,
+  },
+};
 
 // ── gates, PREREG-001 5.2 ────────────────────────────────────────────────────
 const GATES = [
@@ -652,6 +747,61 @@ const staleRows = JSON.parse(readFileSync(path.join(HERE, 'cases', 'stale-index.
 const byId = new Map(cases.map((c) => [c.id, c]));
 if (byId.size !== cases.length) harnessErrors.push('duplicate case id in queries.json');
 
+// ── fixture integrity, PREREG-001 2 and 5.1 ──────────────────────────────────
+// Every fixed id the scenarios dereference must exist, the X ids must line up
+// with stale-index.json, and the per-class counts must equal the frozen
+// section-2 table. Without this, fixture drift crashed the runner on an
+// unguarded byId.get(...).target with no packet written at all -- a silent
+// disappearance, which is exactly what a harness error is for.
+export function integrityErrors(caseList, staleList, gates) {
+  const errors = [];
+  const ids = new Map(caseList.map((c) => [c.id, c]));
+  const FIXED = ['PC-01', 'P-07', 'C-02', 'T-03', 'L-01', 'L-02', 'U-01', 'U-02', 'N-04'];
+  for (const id of FIXED) if (!ids.has(id)) errors.push(`fixture integrity: case ${id} is referenced by name but absent from queries.json`);
+  if (ids.has('P-07') && !ids.get('P-07').target) errors.push('fixture integrity: P-07 has no target');
+  if (ids.has('C-02') && !ids.get('C-02').target) errors.push('fixture integrity: C-02 has no target');
+  if (ids.has('T-03') && !(ids.get('T-03').current && ids.get('T-03').superseded)) errors.push('fixture integrity: T-03 is missing current/superseded');
+
+  const xCases = caseList.filter((c) => c.class === 'stale-index').map((c) => c.id).sort();
+  const xRows = (staleList || []).map((s) => s.id).sort();
+  if (xCases.join(',') !== xRows.join(',')) {
+    errors.push(`fixture integrity: stale-index case ids [${xCases}] do not match stale-index.json rows [${xRows}]`);
+  }
+
+  for (const g of gates) {
+    const n = caseList.filter((c) => c.class === g.klass).length;
+    if (n !== g.n) errors.push(`fixture integrity: class ${g.klass} has ${n} case(s), frozen section-2 count is ${g.n}`);
+  }
+  const scored = caseList.filter((c) => c.class !== 'positive-control').length;
+  if (scored !== 64) errors.push(`fixture integrity: ${scored} scored cases, frozen section-2 total is 64`);
+  return errors;
+}
+
+// The runnable red witness for the block above, kept permanently so it cannot
+// rot: mutate an in-memory COPY of the frozen cases and assert it is caught.
+// Never touches the committed fixture. Run: --self-check
+if (argv.includes('--self-check')) {
+  const staleSelf = JSON.parse(readFileSync(path.join(HERE, 'cases', 'stale-index.json'), 'utf8')).rows;
+  const clean = integrityErrors(cases, staleSelf, GATES);
+  const renamed = cases.map((c) => (c.id === 'P-07' ? { ...c, id: 'P-99' } : c));
+  const mutated = integrityErrors(renamed, staleSelf, GATES);
+  const dropped = integrityErrors(cases.filter((c) => c.id !== 'N-01'), staleSelf, GATES);
+  const xDrift = integrityErrors(cases, staleSelf.slice(1), GATES);
+  const ok = clean.length === 0 && mutated.length > 0 && dropped.length > 0 && xDrift.length > 0;
+  console.log(`clean fixture      : ${clean.length} error(s) ${clean.length === 0 ? 'OK' : `FAIL ${clean}`}`);
+  console.log(`renamed P-07->P-99 : ${mutated.length} error(s) ${mutated.length ? `OK — ${mutated[0]}` : 'FAIL (not caught)'}`);
+  console.log(`dropped N-01       : ${dropped.length} error(s) ${dropped.length ? `OK — ${dropped[0]}` : 'FAIL (not caught)'}`);
+  console.log(`stale-index drift  : ${xDrift.length} error(s) ${xDrift.length ? `OK — ${xDrift[0]}` : 'FAIL (not caught)'}`);
+  console.log(ok ? 'SELF-CHECK PASS' : 'SELF-CHECK FAIL');
+  process.exit(ok ? 0 : 1);
+}
+
+if (!Object.hasOwn(SCENARIOS, SCENARIO)) {
+  harnessErrors.push(`unknown scenario "${SCENARIO}": expected one of ${Object.keys(SCENARIOS).join(', ')}. `
+    + 'Refusing to run an unmutated baseline under an unrecognised label.');
+}
+const SPEC = SCENARIOS[SCENARIO] || { mutation: null, expectedRed: [], expectedRedClasses: [], expectPass: [], unrunnableClasses: [], runU: false };
+
 // Lexical copy limit, enforced mechanically over the corpus and the query
 // file. A violation is a harness error, never a pass (PREREG-001 2 rule 2).
 {
@@ -675,6 +825,9 @@ if (byId.size !== cases.length) harnessErrors.push('duplicate case id in queries
     }
   }
 }
+
+const staleRowsForIntegrity = JSON.parse(readFileSync(path.join(HERE, 'cases', 'stale-index.json'), 'utf8')).rows;
+harnessErrors.push(...integrityErrors(cases, staleRowsForIntegrity, GATES));
 
 const gaps = environmentGaps();
 const ALL_QUALITY = cases
@@ -807,7 +960,11 @@ if (harnessErrors.length === 0 && gaps.length === 0) {
       // observation ("PC-01 goes red, every positive, temporal and operator
       // case goes red"), so the gate must not convert those preregistered reds
       // into unrunnables. The gate stays armed everywhere else.
-      if (!pcGreen && SCENARIO !== 'F6') {
+      // Gate on the OBSERVABLE, not on the scenario label. Keyed on
+      // SCENARIO !== 'F6' this trusted a name: a silently no-op rmSync would
+      // have left a live index and let full scoring run while the packet still
+      // claimed the index had been killed.
+      if (!pcGreen && existsSync(box.embeddings)) {
         declareUnrunnable(ALL_QUALITY,
           'PC-01 is not rank-1 green: the harness has not demonstrated it can see a hit at all',
           'PREREG-001 6 PC-01 — positive control not green');
@@ -834,7 +991,7 @@ if (harnessErrors.length === 0 && gaps.length === 0) {
         // U-01/U-02: the overlay is copied in ONLY for these cases. A
         // physically present undeclared directory makes every other
         // invocation exit 1 (PREREG-001 1.4).
-        if (SCENARIO === 'BASELINE') {
+        if (SPEC.runU) {
           cpSync(path.join(OVERLAY, 'scratch'), path.join(box.vault, 'scratch'), { recursive: true });
           doctor = doctorNamespaceRecords(box);
           for (const id of ['U-01', 'U-02']) scoreUndeclared(box, byId.get(id), doctor);
@@ -842,7 +999,7 @@ if (harnessErrors.length === 0 && gaps.length === 0) {
         } else {
           declareUnrunnable(['U-01', 'U-02'],
             `${SCENARIO}: the undeclared overlay is not part of this mutation`,
-            `PREREG-001 6 ${SCENARIO} — coverage cases are scored in the baseline and F5 runs`);
+            `runner scenario table: ${SCENARIO} does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)`);
         }
       }
     }
@@ -872,6 +1029,27 @@ const classReport = GATES.map((g) => {
   };
 });
 
+// ── expected-red accounting, PREREG-001 6 ────────────────────────────────────
+// "A falsifier that does not produce its expected red is itself a FAIL of the
+// benchmark, not of the product." Checked here and written into the packet, so
+// a falsifier that stops falsifying shows up in the artifact.
+const statusOf = (id) => (results.find((r) => r.id === id) || {}).status || 'not-run';
+const expectedRedIds = [
+  ...SPEC.expectedRed,
+  ...cases.filter((c) => (SPEC.expectedRedClasses || []).includes(c.class)).map((c) => c.id),
+];
+const expectedRedObserved = expectedRedIds.map((id) => ({ id, expected: 'fail', observed: statusOf(id) }));
+const expectedPassObserved = (SPEC.expectPass || []).map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
+const expectedUnrunnableObserved = (SPEC.unrunnableClasses || []).map((klass) => {
+  const rows = results.filter((r) => r.class === klass);
+  return { class: klass, expected: 'unrunnable', n: rows.length, unrunnable: rows.filter((r) => r.status === 'unrunnable').length };
+});
+const inversionShortfall = SPEC.expectInversionsAtLeast != null && inversions.length < SPEC.expectInversionsAtLeast;
+const expectedRedHolds = expectedRedObserved.every((r) => r.observed === 'fail')
+  && expectedPassObserved.every((r) => r.observed === 'pass')
+  && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
+  && !inversionShortfall;
+
 const pc01 = results.find((r) => r.id === 'PC-01') || null;
 const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
 const anyFail = results.some((r) => r.status === 'fail');
@@ -892,10 +1070,23 @@ const packet = {
   ran_at: new Date().toISOString(),
   wall_ms: wall,
   hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash, frozen },
-  runtime_hashes: RUNTIME_HASHES,
+  runtime_hashes_pinned: RUNTIME_HASHES,
+  runtime_hashes_observed: observedRuntimeHashes(box),
   model,
   environment: env,
   environment_gaps: gaps,
+  scenario_spec: {
+    mutation: SPEC.mutation,
+    note: SPEC.note || null,
+    caveat: SPEC.caveat || null,
+    expected_red_ids: expectedRedIds,
+    expected_pass_ids: SPEC.expectPass || [],
+    expected_unrunnable_classes: SPEC.unrunnableClasses || [],
+  },
+  expected_red: expectedRedObserved,
+  expected_pass: expectedPassObserved,
+  expected_unrunnable: expectedUnrunnableObserved,
+  expected_red_observed: expectedRedHolds,
   scenario_notes: scenarioNotes,
   index_build: indexBuild ? { exit: indexBuild.status, ms: indexBuild.ms, tail: indexBuild.all.slice(-800) } : null,
   doctor_namespace_records: doctor ? doctor.failedRecords : null,
@@ -928,6 +1119,11 @@ if (JSON_OUT) {
   console.log(`  policy false positives: ${policyFalsePositives.length}`);
   console.log(`  budget breaches: ${budgetBreaches.length}`);
   for (const b of budgetBreaches) console.log(`    ${b.id}: ${b.breaches.join('; ')}`);
+  console.log(`  expected red holds: ${expectedRedHolds}${SPEC.mutation ? ` (mutation: ${SPEC.mutation})` : ''}`);
+  for (const r of expectedRedObserved) console.log(`    expect FAIL ${r.id}: ${r.observed}`);
+  for (const r of expectedPassObserved) console.log(`    expect PASS ${r.id}: ${r.observed}`);
+  for (const r of expectedUnrunnableObserved) console.log(`    expect UNRUNNABLE ${r.class}: ${r.unrunnable}/${r.n}`);
+  if (SPEC.caveat) console.log(`    caveat: ${SPEC.caveat}`);
   console.log(`  harness errors: ${harnessErrors.length}`);
   for (const h of harnessErrors) console.log(`    ${h}`);
   console.log(`  undeclared unrunnable: ${undeclaredUnrunnable.length}`);
