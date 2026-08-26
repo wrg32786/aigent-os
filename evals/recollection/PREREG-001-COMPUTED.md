@@ -75,14 +75,10 @@ note, `reference/tuning-fork-calibration-log.md`, and in no other note.
 ## Benchmark artifact identities, as committed
 
 ```text
-committed head SHA (corpus, fixtures, cases, runner)
+corpus/fixtures/cases/runner first committed at
                          ff522ac6f0e187707b3ba33a0d87feeb66c54dca
 tree                     52985f1ce651968104702fba5c0f759995a17faa
 branch                   titus/44-phase-b
-
-evals/recollection/run-recollection.mjs
-  sha256                 69580436f4d0f0a46d00e2e43da6ac94d8e7184741e1575b59583da46d9b64f7
-  git blob               d0c8d05a13f635a57b4896c2eefd0daa5496fd2c
 
 evals/recollection/cases/queries.json
   sha256                 2012f0523333498e33c6350e1c289357742ff1689f733ff55411377e765a037f
@@ -90,6 +86,39 @@ evals/recollection/cases/queries.json
 evals/recollection/cases/stale-index.json
   sha256                 41fef6cfaf355d3eab09bc97a22916b16c36afc2995237cee8f3ab75d759b980
 ```
+
+### Instrument identity for the reported runs
+
+The corpus, the overlay, the fixture registry and the query population are
+frozen and were never edited after the three hashes above were computed. The
+RUNNER is the instrument, not the fixture, and it was corrected three times
+before the reported sequence was executed. Every reported run in
+`results/` was produced by the single version below.
+
+```text
+evals/recollection/run-recollection.mjs   (final, used for every reported run)
+  sha256                 2c0fc5e119646598325074e505b1e2e76085bbb9b91b44e7eae49fe386cda1cb
+  committed at           9ba01260bb083996ca3222be1c0d596834bf731b
+```
+
+The three corrections, each moving an assertion toward the packet's wording and
+none of them touching a threshold, `tau`, K, a class count, a corpus byte or a
+query:
+
+1. `74a6aacf` — load-time loudness was scanning the whole of stdout for the
+   offending path. `search-vault.js` prints a `Path:` line for every returned
+   row, and a carried-forward dangling row (`embed-vault.js:253-257`) IS
+   returned, so the defect L-01/L-02 exist to catch was being scored as
+   evidence of its own absence. Rescoped to the population-load window that
+   PREREG-001 3.7 actually names.
+2. `9ba01260` — the F4 mutation had never been implemented, making that
+   falsifier vacuous. Implemented as PREREG-001 6 F4 specifies.
+3. `9ba01260` — the PREREG-001 6 PC-01 gate was firing under F6 and converting
+   F6's preregistered reds into unrunnables. Exempted under F6 only; armed
+   everywhere else.
+
+The earlier runs that exposed corrections 1 and 3 are reported as instrument
+shakedown runs in the Phase B build ledger, not as preregistered results.
 
 ## Product identity under test
 
