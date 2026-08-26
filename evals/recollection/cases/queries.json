@@ -1,0 +1,448 @@
+{
+  "schema": "RecollectionCases/v1",
+  "preregistration": "recollection-44/PREREG-001",
+  "note": "Frozen query population. Ids, counts and class membership are fixed by PREREG-001 section 2 and may not be edited in response to a result.",
+  "cases": [
+    {
+      "id": "P-01",
+      "class": "positive",
+      "query": "why did two bench experiments have to be started over one afternoon",
+      "target": "daily/2026-02-17.md"
+    },
+    {
+      "id": "P-02",
+      "class": "positive",
+      "query": "do we have to give notice in writing to stop the managed printing agreement",
+      "target": "daily/2026-03-19.md"
+    },
+    {
+      "id": "P-03",
+      "class": "positive",
+      "query": "an engineer was approached directly by a supplier about pricing, what should they do",
+      "target": "memory/vendor-contact-protocol.md"
+    },
+    {
+      "id": "P-04",
+      "class": "positive",
+      "query": "how long after an outage is the writeup due and how long should it be",
+      "target": "memory/incident-postmortem-format.md"
+    },
+    {
+      "id": "P-05",
+      "class": "positive",
+      "query": "when does someone become eligible for a new machine and who has to ask",
+      "target": "memory/laptop-refresh-cycle.md"
+    },
+    {
+      "id": "P-06",
+      "class": "positive",
+      "query": "what stops a retried write from being applied twice by the server",
+      "target": "concepts/idempotency-key.md"
+    },
+    {
+      "id": "P-07",
+      "class": "positive",
+      "query": "what should a pipeline do when the downstream side cannot keep up",
+      "target": "concepts/back-pressure.md"
+    },
+    {
+      "id": "P-08",
+      "class": "positive",
+      "query": "where do messages end up once every retry has been exhausted",
+      "target": "concepts/dead-letter-queue.md"
+    },
+    {
+      "id": "P-09",
+      "class": "positive",
+      "query": "what gates the later markets on the handheld rollout",
+      "target": "projects/orchard-mobile-launch.md"
+    },
+    {
+      "id": "P-10",
+      "class": "positive",
+      "query": "what makes replacing the old matcher awkward for existing saved reports",
+      "target": "projects/lantern-search-rewrite.md"
+    },
+    {
+      "id": "P-11",
+      "class": "positive",
+      "query": "who knows the electrical layout of the benches and how do I reach them",
+      "target": "people/tobias-brenner.md"
+    },
+    {
+      "id": "P-12",
+      "class": "positive",
+      "query": "how quickly does legal turn around an ordinary review",
+      "target": "people/priya-raghunathan.md"
+    },
+    {
+      "id": "P-13",
+      "class": "positive",
+      "query": "who should a floor facing pilot be run past first",
+      "target": "people/emeka-nwosu.md"
+    },
+    {
+      "id": "P-14",
+      "class": "positive",
+      "query": "which firing alarm gives warning before the absolute reading looks wrong",
+      "target": "agents/kiln-temperature-watcher.md"
+    },
+    {
+      "id": "P-15",
+      "class": "positive",
+      "query": "what decides the order items are collected on a picking round",
+      "target": "agents/warehouse-picker.md"
+    },
+    {
+      "id": "P-16",
+      "class": "positive",
+      "query": "did the shape of the mesh or the placement matter more for water yield",
+      "target": "research/desert-fog-harvesting.md"
+    },
+    {
+      "id": "P-17",
+      "class": "positive",
+      "query": "why did adding a waterproof layer defeat the point of the grown material",
+      "target": "research/mycelium-packaging-strength.md"
+    },
+    {
+      "id": "P-18",
+      "class": "positive",
+      "query": "what question is still open about playing sound at damaged reefs",
+      "target": "research/reef-noise-recruitment.md"
+    },
+    {
+      "id": "P-19",
+      "class": "positive",
+      "query": "users say notes at the bottom disappear on the last printed sheet",
+      "target": "feedback/print-layout-cuts-footnotes.md"
+    },
+    {
+      "id": "P-20",
+      "class": "positive",
+      "query": "users keep retrying the same rejected file because the message is vague",
+      "target": "feedback/attachment-size-error-unclear.md"
+    },
+    {
+      "id": "P-21",
+      "class": "positive",
+      "query": "where should everyone stand once the building has been evacuated",
+      "target": "reference/fire-drill-assembly-points.md"
+    },
+    {
+      "id": "P-22",
+      "class": "positive",
+      "query": "may staff leave a car in the visitor spaces near the main entrance",
+      "target": "reference/parking-permit-zones.md"
+    },
+    {
+      "id": "P-23",
+      "class": "positive",
+      "query": "what happens if a cabinet would draw more than it is provisioned for",
+      "target": "ops-index/rack-power-budget.md"
+    },
+    {
+      "id": "P-24",
+      "class": "positive",
+      "query": "why can some door readers not take the latest software line",
+      "target": "ops-index/badge-reader-firmware.md"
+    },
+    {
+      "id": "N-01",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "what does it cost us per month to store the overnight copies"
+    },
+    {
+      "id": "N-02",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "which error rate makes our own breaker trip open in production"
+    },
+    {
+      "id": "N-03",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "who replaced the previous head of the reliability group"
+    },
+    {
+      "id": "N-04",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "how much honey did each roof colony give in its second season"
+    },
+    {
+      "id": "N-05",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "which release added the missing timestamps to returned documents"
+    },
+    {
+      "id": "N-06",
+      "class": "negative",
+      "kind": "near-miss",
+      "query": "which entrance do refrigerated trailers use at the eastern site"
+    },
+    {
+      "id": "N-07",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "what water temperature suits gyokuro green tea"
+    },
+    {
+      "id": "N-08",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "how do I retension a derailleur cable on a road bicycle"
+    },
+    {
+      "id": "N-09",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "when did Byzantine rule over Ravenna finally end"
+    },
+    {
+      "id": "N-10",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "why is the aurora usually green instead of red"
+    },
+    {
+      "id": "N-11",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "which bend joins two ropes of unequal thickness safely"
+    },
+    {
+      "id": "N-12",
+      "class": "negative",
+      "kind": "off-domain",
+      "query": "how many earth years does Neptune take to circle the sun"
+    },
+    {
+      "id": "T-01",
+      "class": "temporal",
+      "query": "what is the retention window on the automatic overnight copies today",
+      "current": "memory/backup-retention.md",
+      "superseded": "memory/backup-retention-superseded.md",
+      "validLine": "Valid from 2026-02-01"
+    },
+    {
+      "id": "T-02",
+      "class": "temporal",
+      "query": "how long does one person carry the pager before handing it on now",
+      "current": "memory/oncall-rotation.md",
+      "superseded": "memory/oncall-rotation-superseded.md",
+      "validLine": "Valid from 2025-12-01"
+    },
+    {
+      "id": "T-03",
+      "class": "temporal",
+      "query": "what amount may a line manager approve alone at the moment",
+      "current": "memory/expense-approval.md",
+      "superseded": "memory/expense-approval-superseded.md",
+      "validLine": "Valid from 2026-04-01"
+    },
+    {
+      "id": "T-04",
+      "class": "temporal",
+      "query": "how is the harbor switch being staged these days",
+      "current": "projects/harbor-cutover.md",
+      "superseded": "projects/harbor-cutover-superseded.md",
+      "validLine": "Valid from 2026-02-15"
+    },
+    {
+      "id": "T-05",
+      "class": "temporal",
+      "query": "how is the atlas pricing arranged now and what separates the bands",
+      "current": "projects/atlas-tiering.md",
+      "superseded": "projects/atlas-tiering-superseded.md",
+      "validLine": "Valid from 2026-06-01"
+    },
+    {
+      "id": "T-06",
+      "class": "temporal",
+      "query": "how does somebody visiting the office get online currently",
+      "current": "reference/guest-network.md",
+      "superseded": "reference/guest-network-superseded.md",
+      "validLine": "Valid from 2025-09-01"
+    },
+    {
+      "id": "T-07",
+      "class": "temporal",
+      "query": "who moves our parcels across borders at present",
+      "current": "reference/parcel-carrier.md",
+      "superseded": "reference/parcel-carrier-superseded.md",
+      "validLine": "Valid from 2026-05-01"
+    },
+    {
+      "id": "T-08",
+      "class": "temporal",
+      "query": "how far in advance can a meeting space be held now",
+      "current": "reference/room-booking.md",
+      "superseded": "reference/room-booking-superseded.md",
+      "validLine": "Valid from 2026-03-01"
+    },
+    {
+      "id": "C-01",
+      "class": "deny",
+      "query": "what sequence turns off the perimeter system for engineering work",
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "canary": "CANARY-NS-DENY-6e1b90-bypass-body",
+      "mechanism": "namespace"
+    },
+    {
+      "id": "C-02",
+      "class": "deny",
+      "query": "which part of the strongroom entrance failed at the last check",
+      "target": "ops-deny/vault-door-service-log.md",
+      "canary": "CANARY-NS-DENY-c07f25-vaultdoor-body",
+      "mechanism": "namespace"
+    },
+    {
+      "id": "C-03",
+      "class": "deny",
+      "query": "where is the senior group travelling and where are they staying",
+      "target": "ops-deny/executive-travel-manifest.md",
+      "canary": "CANARY-NS-DENY-af3d68-manifest-body",
+      "mechanism": "namespace"
+    },
+    {
+      "id": "C-04",
+      "class": "deny",
+      "query": "is there a quiet way to signal being under duress at the keypad",
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "canary": "CANARY-NS-DENY-6e1b90-bypass-body",
+      "mechanism": "namespace"
+    },
+    {
+      "id": "C-05",
+      "class": "deny",
+      "query": "when does the other side let us into their data room",
+      "target": "projects/confidential-client/merger-diligence-timeline.md",
+      "canary": "CANARY-PREFIX-DENY-3ad0f1-diligence-body",
+      "mechanism": "prefix"
+    },
+    {
+      "id": "C-06",
+      "class": "deny",
+      "query": "what figure do the lawyers think this actually lands at",
+      "target": "projects/confidential-client/settlement-figure-memo.md",
+      "canary": "CANARY-PREFIX-DENY-7c92be-settlement-body",
+      "mechanism": "prefix"
+    },
+    {
+      "id": "S-01",
+      "class": "skip",
+      "query": "is there a fill in the blanks shape for writing up an outage",
+      "target": "templates/incident-report.md",
+      "canary": "CANARY-SKIP-TEMPLATE-c48b17-incident-body"
+    },
+    {
+      "id": "S-02",
+      "class": "skip",
+      "query": "what must every step of the standard procedure skeleton carry",
+      "target": "templates/runbook.md",
+      "canary": "CANARY-SKIP-TEMPLATE-a91c86-runbook-body"
+    },
+    {
+      "id": "S-03",
+      "class": "skip",
+      "query": "is there a demonstration document showing a table being reshaped with made up columns",
+      "target": "examples/sample-migration.md",
+      "canary": "CANARY-SKIP-EXAMPLE-05fa74-migration-body"
+    },
+    {
+      "id": "S-04",
+      "class": "skip",
+      "query": "is there a headings only draft of a procedure nobody finished",
+      "target": "ops-skip/draft-runbook-shell.md",
+      "canary": "CANARY-SKIP-OPS-d3e881-runbook-body"
+    },
+    {
+      "id": "X-01",
+      "class": "stale-index",
+      "query": "how are the brass tuning pins wound and seated when restringing a zither",
+      "injectedPath": "templates/stale-injected-zither.md",
+      "canary": "CANARY-STALE-X01-7e21ab-skip-injected",
+      "expectedDisposition": "SKIP"
+    },
+    {
+      "id": "X-02",
+      "class": "stale-index",
+      "query": "which handlers moved the birds from the northern hatchery and in what crates",
+      "injectedPath": "ops-deny/stale-injected-pelican.md",
+      "canary": "CANARY-STALE-X02-4f80cd-deny-injected",
+      "expectedDisposition": "DENY"
+    },
+    {
+      "id": "X-03",
+      "class": "stale-index",
+      "query": "what does the obsidian knapping inventory record about each core and flake",
+      "injectedPath": "scratch/stale-injected-obsidian.md",
+      "canary": "CANARY-STALE-X03-b16e93-undeclared-injected",
+      "expectedDisposition": "undeclared"
+    },
+    {
+      "id": "U-01",
+      "class": "undeclared",
+      "runtime": "embed-vault.js",
+      "expectStderr": "REFUSING to run: undeclared vault namespace director(y|ies): scratch",
+      "doctorRecord": "NAMESPACE_UNDECLARED scratch"
+    },
+    {
+      "id": "U-02",
+      "class": "undeclared",
+      "runtime": "search-vault.js",
+      "query": "what is inside the directory that nobody declared",
+      "expectStderr": "REFUSING to run: undeclared vault namespace director(y|ies): scratch",
+      "doctorRecord": "NAMESPACE_UNDECLARED scratch"
+    },
+    {
+      "id": "O-01",
+      "class": "operator",
+      "kind": "index",
+      "query": "how often is the closed cooling circuit flushed and what brings that forward",
+      "target": "ops-index/coolant-loop-schedule.md"
+    },
+    {
+      "id": "O-02",
+      "class": "operator",
+      "kind": "skip",
+      "query": "is there abandoned sizing arithmetic whose input assumption changed",
+      "target": "ops-skip/scratch-capacity-math.md",
+      "canary": "CANARY-SKIP-OPS-5a0c47-capacity-body"
+    },
+    {
+      "id": "O-03",
+      "class": "operator",
+      "kind": "deny",
+      "query": "what did the anonymous disclosure channel receive most recently",
+      "target": "ops-deny/whistleblower-intake-notes.md",
+      "canary": "CANARY-NS-DENY-24ca03-intake-body"
+    },
+    {
+      "id": "L-01",
+      "class": "loudness",
+      "kind": "deleted-source",
+      "deletePath": "research/wool-insulation-moisture.md",
+      "query": "how does the natural fibre insulation behave after it gets soaked"
+    },
+    {
+      "id": "L-02",
+      "class": "loudness",
+      "kind": "phantom-row",
+      "injectedPath": "reference/never-existed-phantom.md",
+      "canary": "CANARY-PHANTOM-L02-0d5c74-never-existed",
+      "chunk": "CANARY-PHANTOM-L02-0d5c74-never-existed. This row points at a source file that has never existed anywhere in the corpus at any time.",
+      "query": "what does the phantom row claim to describe"
+    },
+    {
+      "id": "PC-01",
+      "class": "positive-control",
+      "query": "which item carries the asset tag ZEPHYRLOCK-8829-QUARTZWEAVE",
+      "target": "reference/tuning-fork-calibration-log.md",
+      "canary": "ZEPHYRLOCK-8829-QUARTZWEAVE"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "schema": "RecollectionStaleIndexRows/v1",
+  "preregistration": "recollection-44/PREREG-001",
+  "note": "Exact text and target paths of the hand-built non-INDEX index rows injected directly into embeddings.json for X-01..X-03 (PREREG-001 1.4).",
+  "rows": [
+    {
+      "id": "X-01",
+      "path": "templates/stale-injected-zither.md",
+      "title": "stale-injected-zither",
+      "canary": "CANARY-STALE-X01-7e21ab-skip-injected",
+      "chunk": "CANARY-STALE-X01-7e21ab-skip-injected. The zither restringing procedure for the brass tuning pins is recorded here, including the winding direction and the seating order of each pin.",
+      "query": "how are the brass tuning pins wound and seated when restringing a zither",
+      "disposition": "SKIP"
+    },
+    {
+      "id": "X-02",
+      "path": "ops-deny/stale-injected-pelican.md",
+      "title": "stale-injected-pelican",
+      "canary": "CANARY-STALE-X02-4f80cd-deny-injected",
+      "chunk": "CANARY-STALE-X02-4f80cd-deny-injected. The pelican transfer roster for the northern hatchery is recorded here, naming every handler and the crate each bird travelled in.",
+      "query": "which handlers moved the birds from the northern hatchery and in what crates",
+      "disposition": "DENY"
+    },
+    {
+      "id": "X-03",
+      "path": "scratch/stale-injected-obsidian.md",
+      "title": "stale-injected-obsidian",
+      "canary": "CANARY-STALE-X03-b16e93-undeclared-injected",
+      "chunk": "CANARY-STALE-X03-b16e93-undeclared-injected. The obsidian knapping workshop inventory lists every core and every flake by weight, with the quarry each one came from.",
+      "query": "what does the obsidian knapping inventory record about each core and flake",
+      "disposition": "undeclared"
+    }
+  ]
+}
