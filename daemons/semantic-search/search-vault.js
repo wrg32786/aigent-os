@@ -7,6 +7,21 @@
  *   node search-vault.js "what did we decide about audio routing"
  *   node search-vault.js "what did we decide about the marketing strategy" --top 10
  *   node search-vault.js "audio routing" --json   # JSON only output
+ *
+ * Trust boundary (issue #43): a note chunk is persisted, operator- or
+ * agent-written text, never the current instruction. Both the human preview
+ * line and the JSON `chunk` field render through lifecycle-common.mjs's
+ * renderPersisted(): single-line, quoted, bounded, tagged with source path /
+ * content hash / acquisition time, gated on the row's namespace disposition.
+ * `chunk` keeps its field name (nothing else in this repo parses it) but its
+ * VALUE changed shape: previously the raw, unbounded chunk text; now the
+ * tagged provenance line (`[persisted-data:vault-chunk <path> sha <hash> @
+ * <iso>] "<bounded text>"`). A new `chunkProvenance` field carries the same
+ * data as discrete fields for a consumer that wants them without parsing the
+ * tag. A chunk whose disposition is not renderable (DENY/SKIP/malformed) now
+ * renders as `[REFUSED: <reason>]` instead of any text at all -- this is a
+ * second, independent gate behind the namespace filter already applied to
+ * index.notes below.
  */
 
 import { pipeline } from '@xenova/transformers';
@@ -19,6 +34,8 @@ import {
   requireDeclaredNamespaceDirectories,
   requireNamespaceRegistry,
 } from './namespace-registry.mjs';
+import { inert, renderPersisted } from '../lifecycle-common.mjs';
+import { FRAMING_LINES } from '../memory-hygiene/resume-framing.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -143,12 +160,21 @@ async function main() {
 
   const searchTime = Date.now() - t1;
 
-  // Output
-  const jsonOut = results.map(r => ({
+  // Output. Every result's chunk renders through the trust-boundary
+  // chokepoint exactly once, reused for both the JSON and human sites -- see
+  // the header comment above for why the disposition is re-derived here
+  // rather than trusted from the earlier index.notes filter.
+  const rendered = results.map((r) => {
+    const disposition = namespaceDispositionForPath(NAMESPACE_REGISTRY, r.path);
+    return { r, persisted: renderPersisted({ path: r.path, text: r.chunk, role: 'vault-chunk', disposition, max: 500 }) };
+  });
+
+  const jsonOut = rendered.map(({ r, persisted }) => ({
     path: r.path,
     title: r.title,
     score: parseFloat(r.score.toFixed(4)),
-    chunk: r.chunk,
+    chunk: persisted.refused ? `[REFUSED: ${persisted.refused}]` : persisted.line,
+    chunkProvenance: persisted.refused ? { refused: persisted.refused } : persisted.record,
     ...(r.chunkIndex != null ? { chunkIndex: r.chunkIndex, chunkCount: r.chunkCount } : {}),
   }));
 
@@ -159,15 +185,21 @@ async function main() {
 
   // Human-readable output
   console.log('─'.repeat(60));
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const chunkInfo = r.chunkIndex != null ? ` (chunk ${r.chunkIndex + 1}/${r.chunkCount})` : '';
-    console.log(`${i + 1}. [${(r.score * 100).toFixed(1)}%] ${r.title}${chunkInfo}`);
-    console.log(`   Path: ${r.path}`);
+  console.log(FRAMING_LINES[0]);
+  console.log();
+  for (let i = 0; i < rendered.length; i++) {
+    const { r, persisted } = rendered[i];
+    // title/path/tags/chunkIndex/chunkCount are the same persisted, same
+    // trust-class fields as chunk (all come off the same embeddings.json note
+    // object) -- each goes through inert() here too, or a raw sibling field
+    // can forge a whole extra result line (review R1, finding F3).
+    const chunkInfo = r.chunkIndex != null ? ` (chunk ${Number(r.chunkIndex) + 1}/${Number(r.chunkCount)})` : '';
+    console.log(`${i + 1}. [${(r.score * 100).toFixed(1)}%] ${inert(r.title, 120)}${chunkInfo}`);
+    console.log(`   Path: ${inert(r.path, 200)}`);
     if (r.tags && r.tags.length > 0) {
-      console.log(`   Tags: ${r.tags.join(', ')}`);
+      console.log(`   Tags: ${r.tags.map((t) => inert(t, 60)).join(', ')}`);
     }
-    console.log(`   Preview: ${r.chunk.slice(0, 200).replace(/\n/g, ' ').trim()}...`);
+    console.log(`   Preview: ${persisted.refused ? `[REFUSED: ${persisted.refused}]` : persisted.line}`);
     console.log();
   }
   console.log('─'.repeat(60));

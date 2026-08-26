@@ -11,8 +11,13 @@
 //
 //   $ node daemons/tests/semantic-search-namespace-registry.test.mjs
 //   WITNESS GREEN: stale DENY content blocked and healthy INDEX content returned
-//   WITNESS RED AS EXPECTED: replacing the query-time namespace predicate with
-//   true leaked CANARY-NAMESPACE-DENY-4f61c8-private-body
+//   WITNESS GREEN (defense in depth): removing the upstream namespace filter
+//   alone no longer leaks CANARY-NAMESPACE-DENY-4f61c8-private-body -- caught
+//   by search-vault.js's render-step disposition gate (trust-boundary #43,
+//   renderPersisted() in lifecycle-common.mjs). Before #43 this same mutation
+//   leaked the DENY content; defeating BOTH layers (this filter and the
+//   render-step gate) is covered by persisted-render.test.mjs's own
+//   "DENY defense-in-depth" case, not duplicated here.
 //   WITNESS GREEN: restoring the original search source blocked stale DENY again
 //   All 201 namespace registry checks passed
 //
@@ -122,13 +127,21 @@ function makeSandbox(name, options = {}) {
   sandboxes.push(root);
 
   const sem = path.join(root, 'daemons', 'semantic-search');
+  const hygiene = path.join(root, 'daemons', 'memory-hygiene');
   mkdirSync(sem, { recursive: true });
+  mkdirSync(hygiene, { recursive: true });
   for (const file of ['deny-list.mjs', 'namespace-registry.mjs', 'embed-vault.js', 'search-vault.js']) {
     copyFileSync(path.join(SEM, file), path.join(sem, file));
   }
+  // search-vault.js now routes chunk rendering through the trust-boundary #43
+  // chokepoint (renderPersisted() + FRAMING_LINES) -- its dependency chain
+  // grew, so the sandbox must carry it too.
+  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+    copyFileSync(path.join(DAEMONS, file), path.join(root, 'daemons', file));
+  }
   copyFileSync(
-    path.join(DAEMONS, 'frontmatter-reader.cjs'),
-    path.join(root, 'daemons', 'frontmatter-reader.cjs'),
+    path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'),
+    path.join(hygiene, 'resume-framing.mjs'),
   );
 
   const registry = Object.hasOwn(options, 'registryText')
@@ -712,9 +725,14 @@ assertInvalidRegistryMutation(
     restored = runNode(box, 'search-vault.js', ['private secret', '--top', '10']);
   }
 
-  const mutantRed = mutant && mutant.status === 0 && mutant.stdout.includes(DENIED);
-  check('mutation witness: replacing the predicate with true makes the same stale-DENY contract RED', mutantRed, mutant?.all.slice(-500) || 'mutation did not run');
-  if (mutantRed) console.log(`WITNESS RED AS EXPECTED: replacing the query-time namespace predicate with true leaked ${DENIED}`);
+  // trust-boundary #43 added a second, independent gate: search-vault.js
+  // re-derives each chunk's disposition at render time and refuses to render
+  // anything not INDEX. Defeating ONLY this upstream filter no longer leaks
+  // DENIED content -- it is caught downstream instead. Defeating BOTH layers
+  // is persisted-render.test.mjs's own "DENY defense-in-depth" case.
+  const mutantStillSafe = mutant && mutant.status === 0 && !mutant.all.includes(DENIED) && mutant.all.includes('[REFUSED:');
+  check('mutation witness: removing the upstream predicate alone no longer leaks (render-step gate catches it)', mutantStillSafe, mutant?.all.slice(-500) || 'mutation did not run');
+  if (mutantStillSafe) console.log(`WITNESS GREEN (defense in depth): removing the upstream namespace filter alone no longer leaks ${DENIED} -- caught by search-vault.js's render-step disposition gate (trust-boundary #43)`);
 
   const restoredGreen = restored.status === 0 && !restored.all.includes(DENIED) && restored.stdout.includes(HEALTHY);
   check('mutation witness: restoring the source makes the contract GREEN again', restoredGreen, restored.all.slice(-500));

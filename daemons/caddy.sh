@@ -116,6 +116,8 @@ if command -v python3 >/dev/null 2>&1; then
 import json
 import os
 import re
+import sys
+from datetime import date
 from pathlib import Path
 
 raw = os.environ.get("INPUT", "")
@@ -129,12 +131,19 @@ if not isinstance(prompt, str) or not prompt.strip():
     raise SystemExit(0)
 prompt_lower = prompt.lower()
 
-LINE_BREAKING = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
-def inert(value, maximum=500):
-    rendered = re.sub(r"[ \t]+", " ", LINE_BREAKING.sub(" ", str("" if value is None else value))).strip()
-    if len(rendered) > maximum:
-        rendered = f"{rendered[:maximum]}…[+{len(rendered) - maximum} chars]"
-    return json.dumps(rendered, ensure_ascii=True)
+# daemons/render_boundary.py is the repo's canonical Python render boundary
+# (trust-boundary chokepoint #43), already imported by four sibling Python
+# callers. Import it rather than re-deriving the escaping logic here.
+sys.path.insert(0, os.path.join(os.environ["ROOT"], "daemons"))
+try:
+    from render_boundary import inert
+except Exception:
+    # Fail closed: never re-implement the function here. If the canonical
+    # module cannot be imported, every render that depends on it becomes this
+    # fixed marker instead of either crashing the hook or falling back to
+    # unescaped persisted text.
+    def inert(value, maximum=500):
+        return json.dumps("[unavailable: render_boundary import failed]")
 
 try:
     with open(os.environ["INDEX"], encoding="utf-8") as handle:
@@ -212,6 +221,15 @@ if not top:
             except OSError:
                 pass
 
+# A chain row has no session-id or live-authority concept the way a capsule
+# does (P2's liveBootSession() has nothing to bind against here); the only
+# staleness signal the Date column carries is its own age. A row's chain is
+# reported as data either way -- this only changes whether it is presented as
+# a live recommendation or flagged as a historical reference, per the
+# trust-boundary #43 rule that stale/wrong-referent state must be reported,
+# never silently treated as current.
+# ponytail: fixed 90-day threshold, make configurable if false positives complain.
+STALE_CHAIN_DAYS = 90
 chains_path = os.environ.get("CHAINS", "")
 try:
     for line in Path(chains_path).read_text(encoding="utf-8").splitlines():
@@ -220,10 +238,22 @@ try:
         parts = [part.strip() for part in line.split("|")]
         if len(parts) < 4:
             continue
-        objective, chain = parts[2].lower(), parts[3]
+        date_value, objective, chain = parts[1], parts[2].lower(), parts[3]
         overlap = sum(1 for word in words if word in re.findall(r"\w+", objective))
         if overlap >= 3 and chain:
-            print(f"[CADDY:chain] Prior chain for a similar objective: {inert(chain)} (see SKILL_CHAINS)")
+            try:
+                age_days = (date.today() - date.fromisoformat(date_value)).days
+                if age_days < 0:
+                    # A future-dated row is a stronger tampering/wrong-referent
+                    # signal than a merely old one -- never render it as current.
+                    provenance = f"recorded {date_value}, dated in the future -- reference only, verify before reuse"
+                elif age_days > STALE_CHAIN_DAYS:
+                    provenance = f"recorded {date_value}, {age_days}d ago -- STALE, reference only, verify before reuse"
+                else:
+                    provenance = f"recorded {date_value}"
+            except ValueError:
+                provenance = "recorded date unreadable -- reference only, verify before reuse"
+            print(f"[CADDY:chain] {provenance}: prior chain for a similar objective {inert(chain)} (see SKILL_CHAINS)")
             break
 except OSError:
     pass
