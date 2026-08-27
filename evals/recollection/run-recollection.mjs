@@ -676,6 +676,17 @@ const SCENARIOS = {
     expectedRed: ['T-03'], expectedRedClasses: [], expectPass: ['PC-01'],
     unrunnableClasses: [], runU: false,
     expectInversionsAtLeast: 1,
+    // T-03 is already FAIL on the unmutated corpus, and the unmutated corpus
+    // already carries two inversions (T-02, T-04), so `expectedRed: ['T-03']`
+    // and `expectInversionsAtLeast: 1` are BOTH already true before F3 runs.
+    // The green-to-red transition this falsifier actually produces is T-03
+    // entering the inversion list, so that is what must be asserted by id.
+    expectInversionIds: ['T-03'],
+    caveat: 'T-03 is already FAIL on the unmutated corpus (its superseded note sits at rank 2 like every '
+      + 'other pair), and the unmutated corpus already records two inversions, T-02 and T-04. So neither '
+      + 'the expected-red id nor a bare inversion count can witness this mutation. The green-to-red '
+      + 'transition lives in WHICH ids invert: T-03 is absent from the baseline inversion list and present '
+      + 'after the mutation, which is the clause expectInversionIds asserts.',
   },
   F4: {
     mutation: "inject a row inside ops-deny/ carrying C-02's DENY canary text with the captured rank-1 embedding vector",
@@ -1045,19 +1056,38 @@ const expectedUnrunnableObserved = (SPEC.unrunnableClasses || []).map((klass) =>
   return { class: klass, expected: 'unrunnable', n: rows.length, unrunnable: rows.filter((r) => r.status === 'unrunnable').length };
 });
 const inversionShortfall = SPEC.expectInversionsAtLeast != null && inversions.length < SPEC.expectInversionsAtLeast;
-const expectedRedHolds = expectedRedObserved.every((r) => r.observed === 'fail')
+// Assert WHICH ids inverted, not just how many. A count clause is satisfied by
+// inversions the mutation did not cause (see the F3 caveat).
+const missingInversionIds = (SPEC.expectInversionIds || []).filter((id) => !inversions.some((v) => v.id === id));
+// A harness-errored run has no measurement to hold: .every() over the empty
+// fallback SPEC is vacuously true, which printed "expected red holds: true"
+// beside "harness errors: 1".
+const expectedRedHolds = harnessErrors.length === 0
+  && expectedRedObserved.every((r) => r.observed === 'fail')
   && expectedPassObserved.every((r) => r.observed === 'pass')
   && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
-  && !inversionShortfall;
+  && !inversionShortfall
+  && missingInversionIds.length === 0;
 
 const pc01 = results.find((r) => r.id === 'PC-01') || null;
 const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
 const anyFail = results.some((r) => r.status === 'fail');
 const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
 
+// PREREG-001 1.3: "Any run whose sandbox copies of these files do not hash to
+// the values above is UNRUNNABLE, not a result." The pre-mutation gate at
+// runtimeHashGaps() cannot see a file a scenario edits afterwards, so the
+// observed hashes are sampled again here and a pinned file that drifted feeds
+// the terminal instead of sitting inert in the packet. Unpinned entries carry
+// pinned: null and never trip this.
+const observedHashes = observedRuntimeHashes(box);
+const pinDrift = Object.entries(observedHashes || {})
+  .filter(([, v]) => v.pinned !== null && v.matchesPin === false)
+  .map(([file, v]) => ({ file, expected: v.pinned, observed: v.observed }));
+
 let terminal;
 if (harnessErrors.length) terminal = 'HARNESS-ERROR';
-else if (anyFail || policyFalsePositives.length || budgetBreaches.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
+else if (anyFail || policyFalsePositives.length || budgetBreaches.length || pinDrift.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
 else if (anyUnrunnable) terminal = 'UNRUNNABLE';
 else terminal = 'PASS';
 
@@ -1070,8 +1100,10 @@ const packet = {
   ran_at: new Date().toISOString(),
   wall_ms: wall,
   hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash, frozen },
+  instrument_sha256: fileHash(fileURLToPath(import.meta.url)),
   runtime_hashes_pinned: RUNTIME_HASHES,
-  runtime_hashes_observed: observedRuntimeHashes(box),
+  runtime_hashes_observed: observedHashes,
+  runtime_hash_pin_drift: pinDrift,
   model,
   environment: env,
   environment_gaps: gaps,

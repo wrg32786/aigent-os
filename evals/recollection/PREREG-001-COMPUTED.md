@@ -96,10 +96,17 @@ before the reported sequence was executed. Every reported run in
 `results/` was produced by the single version below.
 
 ```text
-evals/recollection/run-recollection.mjs   (final, used for every reported run)
-  sha256                 2c0fc5e119646598325074e505b1e2e76085bbb9b91b44e7eae49fe386cda1cb
-  committed at           9ba01260bb083996ca3222be1c0d596834bf731b
+evals/recollection/run-recollection.mjs   (current, used for every reported run)
+  sha256                 26ec197dece7bda1896b2671151fb45c1264d47859c7627b694d87edfaca8be4
+
+superseded instrument versions, kept so older packets stay attributable:
+  9e5b180e85aad0995f6585458dfc68eb690bcaf56b986924cd983763ce8358d6  at 9100103
+  2c0fc5e119646598325074e505b1e2e76085bbb9b91b44e7eae49fe386cda1cb  at 9ba01260
 ```
+
+Every result packet now carries this value in its own `instrument_sha256`
+field, so a packet says which instrument produced it without depending on this
+file or on the private ledger.
 
 The three corrections, each moving an assertion toward the packet's wording and
 none of them touching a threshold, `tau`, K, a class count, a corpus byte or a
@@ -143,31 +150,34 @@ budget or a corpus byte, and the three frozen fixture hashes were re-verified
 byte-identical before and after. Every reported result was re-executed on the
 corrected instrument and reproduced the previous baseline numbers exactly.
 
-4. `9100103` (finding 1) — an unrecognised `--scenario` ran a full unmutated
-   baseline, labelled the packet with that name, and cited a fabricated
-   `PREREG-001 6 <name>`. An unknown scenario is now a harness error.
-5. `9100103` (finding 2) — no packet encoded any falsifier's expected red, so a
-   falsifier that had stopped falsifying was indistinguishable from one that
-   worked. A scenario table now carries each run's mutation, expected reds,
-   expected passes and expected unrunnable classes, evaluated into the packet.
-6. `9100103` (finding 3) — X and L were declared UNRUNNABLE under F6 citing a
-   packet rule that does not exist, against 3.7. They now record FAIL.
-7. `9100103` (finding 4) — the packet wrote the pinned hash constant rather than
-   the observed sandbox hashes 1.3 asks for, hiding F5's own mutation. Observed
-   hashes are now recorded, with the four unpinned copies recorded not gated.
-8. `9100103` (finding 5) — the PC-01 gate was keyed on the scenario label rather
-   than on whether the index actually exists.
-9. `9100103` (finding 6) — a non-zero exit was charged as a budget breach, which
-   let a dead retriever override its own declared UNRUNNABLE.
-10. `9100103` (finding 9) — fixed case ids and stale-index rows were
-   dereferenced unguarded and per-class counts were never checked. An integrity
-   block now fails closed; `--self-check` is its runnable witness.
+11. (R2-1) — F3's expected red was vacuous. `expectedRed: ['T-03']` and
+   `expectInversionsAtLeast: 1` are both already true on the UNMUTATED corpus:
+   T-03 is FAIL at baseline like every other temporal pair, and the baseline
+   already records two inversions (T-02, T-04). A no-op F3 would therefore have
+   reported `expected_red_observed: true`. Added `expectInversionIds: ['T-03']`
+   and a conjunction clause requiring every listed id to appear in the inversion
+   list, plus an F3 caveat naming where the real transition lives.
+12. (R2-3) — on a harness-errored run `SPEC` falls back to an empty object and
+   `.every()` over empty arrays is vacuously true, so `--scenario F9` printed
+   "expected red holds: true" beside "harness errors: 1". The conjunction now
+   requires `harnessErrors.length === 0`.
+13. (R2-4) — the packet carried no instrument identity; the runner's sha256
+   lived only in this file and the private ledger. Each packet now carries
+   `instrument_sha256`.
+14. (R2-5) — `runtimeHashGaps()` gates BEFORE a scenario's mutation while
+   `observedRuntimeHashes()` samples after, and `matchesPin: false` fed nothing
+   in the terminal computation. A pinned file whose observed hash drifted now
+   trips the FAIL branch, and the drift list is recorded as
+   `runtime_hash_pin_drift`. Unpinned entries carry `pinned: null` and never
+   trip it. Observed effect on the seven scenarios: none.
+15. (R2-2) — this file duplicated corrections 4 to 10 and their closing
+   paragraph verbatim. The duplicate was verified byte-identical to the
+   original before deletion; one copy remains.
 
-Corrections 4 to 10 came from the non-author Rule-26 review at head `a72f68b`.
-None of them touched a threshold, `tau`, K, a class count, a query, a gate, a
-budget or a corpus byte, and the three frozen fixture hashes were re-verified
-byte-identical before and after. Every reported result was re-executed on the
-corrected instrument and reproduced the previous baseline numbers exactly.
+Corrections 11 to 15 came from the non-author round-2 certification at head
+`49a2c02`. As with 4 to 10, none touched a threshold, `tau`, K, a class count, a
+query, a gate, a budget or a corpus byte, and the three frozen fixture hashes
+were re-verified byte-identical before and after.
 
 The earlier runs that exposed corrections 1 and 3 are reported as instrument
 shakedown runs in the Phase B build ledger, not as preregistered results.
@@ -193,6 +203,12 @@ terminal or a definition that only a `PREREG-002` ruling may move.
   use**". On this machine the distinction is moot because `huggingface.co` is
   unreachable, so the narrow check and the packet's check agree here. It would
   wrongly declare UNRUNNABLE on a machine with network access and a cold cache.
+- **Round-2 note — one observed hash is not a sandbox observation.**
+  `sandboxFileMap()` resolves `evals/run-evals.mjs` to the real tree rather than
+  to a sandbox copy, because the sandbox never carries one. So eleven of the
+  twelve `runtime_hashes_observed` entries describe sandbox files and that one
+  describes the working tree. It is pinned and it matches, but it is not
+  evidence about the sandbox.
 - **Finding 10 — duplication inside the runner.** Three hand-rolled
   inject-row/restore sites (the F4 one has no restore and takes only the first
   chunk of a multi-chunk donor, harmless because every corpus note is a single
