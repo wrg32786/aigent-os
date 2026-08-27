@@ -1085,10 +1085,20 @@ const pinDrift = Object.entries(observedHashes || {})
   .filter(([, v]) => v.pinned !== null && v.matchesPin === false)
   .map(([file, v]) => ({ file, expected: v.pinned, observed: v.observed }));
 
+// R2-5 asked for the pin-drift clause in the FAIL branch. PREREG-001 1.3 says
+// the opposite in as many words: "Any run whose sandbox copies of these files
+// do not hash to the values above is UNRUNNABLE, not a result." The packet wins
+// over the order, so drift lands on UNRUNNABLE. It is still consequential --
+// a drifted run can never report PASS -- and it is placed AFTER the FAIL branch
+// so a genuine FAIL is never masked by it, matching 5.3's rule that a run with
+// both a FAIL and an unrunnable is a FAIL.
+// Measured: implementing it literally in the FAIL branch flipped F5 from
+// UNRUNNABLE to FAIL, because F5's own mutation edits the pinned
+// namespace-registry.json. Reported in the ledger, not reconciled silently.
 let terminal;
 if (harnessErrors.length) terminal = 'HARNESS-ERROR';
-else if (anyFail || policyFalsePositives.length || budgetBreaches.length || pinDrift.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
-else if (anyUnrunnable) terminal = 'UNRUNNABLE';
+else if (anyFail || policyFalsePositives.length || budgetBreaches.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
+else if (pinDrift.length || anyUnrunnable) terminal = 'UNRUNNABLE';
 else terminal = 'PASS';
 
 const packet = {

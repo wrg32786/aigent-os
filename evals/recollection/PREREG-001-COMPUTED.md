@@ -97,7 +97,7 @@ single version below, and each packet names that version itself.
 
 ```text
 evals/recollection/run-recollection.mjs   (current, used for every reported run)
-  sha256                 ff63ed79cd56dd0bc8d371816c671e73b8818ebb98ae8c379a1197ce1005d58a
+  sha256                 3ebe2e4426b68201792cde8fa36d85c9f7acbf65926be51a2b7e4a978a87b3cc
 
 superseded instrument versions, kept so older packets stay attributable:
   9e5b180e85aad0995f6585458dfc68eb690bcaf56b986924cd983763ce8358d6  at 9100103
@@ -166,10 +166,20 @@ corrected instrument and reproduced the previous baseline numbers exactly.
    `instrument_sha256`.
 14. (R2-5) — `runtimeHashGaps()` gates BEFORE a scenario's mutation while
    `observedRuntimeHashes()` samples after, and `matchesPin: false` fed nothing
-   in the terminal computation. A pinned file whose observed hash drifted now
-   trips the FAIL branch, and the drift list is recorded as
-   `runtime_hash_pin_drift`. Unpinned entries carry `pinned: null` and never
-   trip it. Observed effect on the seven scenarios: none.
+   in the terminal computation. A pinned file whose observed hash drifted is now
+   consequential, and the drift list is recorded as `runtime_hash_pin_drift`.
+   Unpinned entries carry `pinned: null` and never trip it.
+   **Deviation from the order, stated because the packet outranks it.** R2-5
+   asked for the clause in the FAIL branch. PREREG-001 1.3 says the opposite in
+   as many words: "Any run whose sandbox copies of these files do not hash to
+   the values above is UNRUNNABLE, not a result." Drift therefore lands on
+   UNRUNNABLE, placed AFTER the FAIL branch so a genuine FAIL is never masked by
+   it, which also matches 5.3's rule that a run with both a FAIL and an
+   unrunnable is a FAIL. Measured, not assumed: implementing it literally in the
+   FAIL branch flipped F5 from UNRUNNABLE to FAIL, because F5's own mutation
+   edits the pinned `namespace-registry.json` (observed `2c02459c`, pinned
+   `5bcc603c`). The order predicted no terminal change; there is one, and this
+   is it.
 15. (R2-2) — this file duplicated corrections 4 to 10 and their closing
    paragraph verbatim. The duplicate was verified byte-identical to the
    original before deletion; one copy remains.
