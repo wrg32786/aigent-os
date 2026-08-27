@@ -91,13 +91,13 @@ evals/recollection/cases/stale-index.json
 
 The corpus, the overlay, the fixture registry and the query population are
 frozen and were never edited after the three hashes above were computed. The
-RUNNER is the instrument, not the fixture, and it was corrected three times
-before the reported sequence was executed. Every reported run in
-`results/` was produced by the single version below.
+RUNNER is the instrument, not the fixture, and it has been corrected across
+three review rounds. Every reported run in `results/` was produced by the
+single version below, and each packet names that version itself.
 
 ```text
 evals/recollection/run-recollection.mjs   (current, used for every reported run)
-  sha256                 26ec197dece7bda1896b2671151fb45c1264d47859c7627b694d87edfaca8be4
+  sha256                 ff63ed79cd56dd0bc8d371816c671e73b8818ebb98ae8c379a1197ce1005d58a
 
 superseded instrument versions, kept so older packets stay attributable:
   9e5b180e85aad0995f6585458dfc68eb690bcaf56b986924cd983763ce8358d6  at 9100103
