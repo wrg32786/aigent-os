@@ -4,8 +4,8 @@
   "scenario": "BASELINE",
   "product_commit": "cdb7022e5a08ef78f9923944fb4aff51bfea48a1",
   "terminal": "FAIL",
-  "ran_at": "2026-08-26T23:14:42.509Z",
-  "wall_ms": 167563,
+  "ran_at": "2026-08-27T01:40:29.689Z",
+  "wall_ms": 86301,
   "hashes": {
     "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
     "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
@@ -16,6 +16,7 @@
       "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96"
     }
   },
+  "instrument_sha256": "3ebe2e4426b68201792cde8fa36d85c9f7acbf65926be51a2b7e4a978a87b3cc",
   "runtime_hashes_pinned": {
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
     "daemons/semantic-search/namespace-registry.local.example.json": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
@@ -88,6 +89,7 @@
       "matchesPin": null
     }
   },
+  "runtime_hash_pin_drift": [],
   "model": {
     "name": "Xenova/all-MiniLM-L6-v2",
     "quantized": true,
@@ -117,8 +119,11 @@
     "expected_pass_ids": [
       "PC-01"
     ],
-    "expected_unrunnable_classes": []
+    "expected_unrunnable_classes": [],
+    "expected_inversion_ids": [],
+    "expected_inversions_at_least": null
   },
+  "missing_inversion_ids": [],
   "expected_red": [],
   "expected_pass": [
     {
@@ -132,8 +137,8 @@
   "scenario_notes": [],
   "index_build": {
     "exit": 0,
-    "ms": 2612,
-    "tail": "[deny] 4 file(s) excluded by index-deny.json\nFound 92 markdown files to consider.\nKeeping 0 unchanged entries, embedding 92 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/92 files\r  Progress: 20/92 files\r  Progress: 30/92 files\r  Progress: 40/92 files\r  Progress: 50/92 files\r  Progress: 60/92 files\r  Progress: 70/92 files\r  Progress: 80/92 files\r  Progress: 90/92 files\r  Progress: 92/92 files\nEmbedded 92 files, produced 92 entries.\n\nSaved embeddings.json — 92 entries, 760.6 KB\nIndex updated: 2026-08-26T23:11:58.768Z\n"
+    "ms": 1941,
+    "tail": "[deny] 4 file(s) excluded by index-deny.json\nFound 92 markdown files to consider.\nKeeping 0 unchanged entries, embedding 92 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/92 files\r  Progress: 20/92 files\r  Progress: 30/92 files\r  Progress: 40/92 files\r  Progress: 50/92 files\r  Progress: 60/92 files\r  Progress: 70/92 files\r  Progress: 80/92 files\r  Progress: 90/92 files\r  Progress: 92/92 files\nEmbedded 92 files, produced 92 entries.\n\nSaved embeddings.json — 92 entries, 760.6 KB\nIndex updated: 2026-08-27T01:39:05.551Z\n"
   },
   "doctor_namespace_records": [
     "NAMESPACE_UNDECLARED scratch"
