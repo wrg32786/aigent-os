@@ -1,0 +1,19 @@
+{
+  "schema": "MemoryNamespaceRegistry/v1",
+  "namespaces": [
+    {
+      "path": "ops-index",
+      "disposition": "INDEX"
+    },
+    {
+      "path": "ops-skip",
+      "disposition": "SKIP",
+      "reason": "unfinished operational scaffolding, not authored memory"
+    },
+    {
+      "path": "ops-deny",
+      "disposition": "DENY",
+      "reason": "restricted physical-security material, never indexed or returned"
+    }
+  ]
+}

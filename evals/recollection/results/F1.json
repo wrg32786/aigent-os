@@ -1,0 +1,956 @@
+{
+  "preregistration": "recollection-44/PREREG-001",
+  "packet_sha256": "6a45b8992492bf947e5abc6fcd079d63530c1ab4015a28eee29dcc8c0be252c4",
+  "scenario": "F1",
+  "product_commit": "cdb7022e5a08ef78f9923944fb4aff51bfea48a1",
+  "terminal": "FAIL",
+  "ran_at": "2026-08-27T01:41:05.173Z",
+  "wall_ms": 34650,
+  "hashes": {
+    "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
+    "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
+    "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96",
+    "frozen": {
+      "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
+      "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
+      "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96"
+    }
+  },
+  "instrument_sha256": "3ebe2e4426b68201792cde8fa36d85c9f7acbf65926be51a2b7e4a978a87b3cc",
+  "runtime_hashes_pinned": {
+    "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+    "daemons/semantic-search/namespace-registry.local.example.json": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+    "daemons/semantic-search/namespace-registry.mjs": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+    "daemons/semantic-search/search-vault.js": "202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5",
+    "daemons/semantic-search/embed-vault.js": "51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3",
+    "daemons/semantic-search/deny-list.mjs": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+    "daemons/lifecycle-common.mjs": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+    "evals/run-evals.mjs": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d"
+  },
+  "runtime_hashes_observed": {
+    "daemons/semantic-search/namespace-registry.json": {
+      "observed": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "pinned": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.local.example.json": {
+      "observed": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "pinned": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.mjs": {
+      "observed": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "pinned": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/search-vault.js": {
+      "observed": "202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5",
+      "pinned": "202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/embed-vault.js": {
+      "observed": "51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3",
+      "pinned": "51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/deny-list.mjs": {
+      "observed": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "pinned": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "matchesPin": true
+    },
+    "daemons/lifecycle-common.mjs": {
+      "observed": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+      "pinned": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+      "matchesPin": true
+    },
+    "evals/run-evals.mjs": {
+      "observed": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "pinned": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "matchesPin": true
+    },
+    "scripts/doctor.sh": {
+      "observed": "cd5c676817419fe39f76698948a68a9966f8571c12c28ab573fbeafdbe7089e8",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/frontmatter-reader.cjs": {
+      "observed": "7664da67a777f985519e00eec8d5ddc7070e8706124da95bfea24f7b6a84a241",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/capsule-content-gate.mjs": {
+      "observed": "6fd30933a4085a5ab81933f9ce97b7e0b248c7f5658bb921b1dbcdb03bab6728",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/memory-hygiene/resume-framing.mjs": {
+      "observed": "df7b8146b7d9fc27d80c665e58f720fc608db63c886aaed63758aa28b1c85ad5",
+      "pinned": null,
+      "matchesPin": null
+    }
+  },
+  "runtime_hash_pin_drift": [],
+  "model": {
+    "name": "Xenova/all-MiniLM-L6-v2",
+    "quantized": true,
+    "files": {
+      "config.json": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7",
+      "onnx/model_quantized.onnx": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+      "tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+      "tokenizer_config.json": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+    }
+  },
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "version": "Windows 11 Pro",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra X7 358H",
+    "cpuCount": 16,
+    "node": "v24.15.0",
+    "totalMemBytes": 68191178752
+  },
+  "environment_gaps": [],
+  "scenario_spec": {
+    "mutation": "delete case P-07's target note from the sandbox vault, then a FULL rebuild",
+    "note": null,
+    "caveat": null,
+    "expected_red_ids": [
+      "P-07"
+    ],
+    "expected_pass_ids": [
+      "PC-01"
+    ],
+    "expected_unrunnable_classes": [],
+    "expected_inversion_ids": [],
+    "expected_inversions_at_least": null
+  },
+  "missing_inversion_ids": [],
+  "expected_red": [
+    {
+      "id": "P-07",
+      "expected": "fail",
+      "observed": "fail"
+    }
+  ],
+  "expected_pass": [
+    {
+      "id": "PC-01",
+      "expected": "pass",
+      "observed": "pass"
+    }
+  ],
+  "expected_unrunnable": [],
+  "expected_red_observed": true,
+  "scenario_notes": [
+    "F1 mutation: deleted concepts/back-pressure.md from the sandbox vault, then a FULL rebuild (carry-forward at embed-vault.js:253-257 retains rows for a deleted source, so --changed-only would not do)"
+  ],
+  "index_build": {
+    "exit": 0,
+    "ms": 981,
+    "tail": "[deny] 4 file(s) excluded by index-deny.json\nFound 91 markdown files to consider.\nKeeping 0 unchanged entries, embedding 91 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/91 files\r  Progress: 20/91 files\r  Progress: 30/91 files\r  Progress: 40/91 files\r  Progress: 50/91 files\r  Progress: 60/91 files\r  Progress: 70/91 files\r  Progress: 80/91 files\r  Progress: 90/91 files\r  Progress: 91/91 files\nEmbedded 91 files, produced 91 entries.\n\nSaved embeddings.json — 91 entries, 752.4 KB\nIndex updated: 2026-08-27T01:40:31.813Z\n"
+  },
+  "doctor_namespace_records": null,
+  "classes": [
+    {
+      "class": "positive",
+      "label": "positive quality",
+      "gate": "hit@5 on >= 22 of 24",
+      "n": 24,
+      "pass": 22,
+      "fail": 2,
+      "unrunnable": 0,
+      "failingIds": [
+        "P-07",
+        "P-13"
+      ],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "negative",
+      "label": "negative / no answer",
+      "gate": ">= 11 of 12 with top-1 score < tau (0.3)",
+      "n": 12,
+      "pass": 5,
+      "fail": 7,
+      "unrunnable": 0,
+      "failingIds": [
+        "N-01",
+        "N-02",
+        "N-03",
+        "N-04",
+        "N-05",
+        "N-06",
+        "N-10"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "temporal",
+      "label": "temporal",
+      "gate": ">= 7 of 8 three-condition passes AND 0 inversions",
+      "n": 8,
+      "pass": 0,
+      "fail": 8,
+      "unrunnable": 0,
+      "failingIds": [
+        "T-01",
+        "T-02",
+        "T-03",
+        "T-04",
+        "T-05",
+        "T-06",
+        "T-07",
+        "T-08"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "deny",
+      "label": "confidential DENY",
+      "gate": "6 of 6",
+      "n": 6,
+      "pass": 6,
+      "fail": 0,
+      "unrunnable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "skip",
+      "label": "SKIP",
+      "gate": "4 of 4",
+      "n": 4,
+      "pass": 4,
+      "fail": 0,
+      "unrunnable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "stale-index",
+      "label": "stale non-INDEX",
+      "gate": "3 of 3",
+      "n": 3,
+      "pass": 3,
+      "fail": 0,
+      "unrunnable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "undeclared",
+      "label": "undeclared coverage",
+      "gate": "2 of 2",
+      "n": 2,
+      "pass": 0,
+      "fail": 0,
+      "unrunnable": 2,
+      "failingIds": [],
+      "unrunnableIds": [
+        "U-01",
+        "U-02"
+      ],
+      "status": "UNRUNNABLE"
+    },
+    {
+      "class": "operator",
+      "label": "operator-owned",
+      "gate": "3 of 3",
+      "n": 3,
+      "pass": 3,
+      "fail": 0,
+      "unrunnable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "loudness",
+      "label": "load-time loudness",
+      "gate": "2 of 2",
+      "n": 2,
+      "pass": 0,
+      "fail": 2,
+      "unrunnable": 0,
+      "failingIds": [
+        "L-02",
+        "L-01"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    }
+  ],
+  "positive_control": {
+    "topScore": 0.6579,
+    "id": "PC-01",
+    "class": "positive-control",
+    "status": "pass",
+    "detail": "rank 1, score 0.6579"
+  },
+  "inversions": [
+    {
+      "id": "T-02",
+      "currentRank": 2,
+      "supersededRank": 1
+    },
+    {
+      "id": "T-04",
+      "currentRank": 2,
+      "supersededRank": 1
+    }
+  ],
+  "policy_false_positives": [],
+  "budget_breaches": [],
+  "harness_errors": [],
+  "undeclared_unrunnable": [],
+  "cases": [
+    {
+      "topScore": 0.6579,
+      "id": "PC-01",
+      "class": "positive-control",
+      "status": "pass",
+      "detail": "rank 1, score 0.6579"
+    },
+    {
+      "rank": 4,
+      "topPath": "ops-index/generator-fuel-testing.md",
+      "topScore": 0.3672,
+      "target": "daily/2026-02-17.md",
+      "id": "P-01",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 4, score 0.2997"
+    },
+    {
+      "rank": 1,
+      "topPath": "daily/2026-03-19.md",
+      "topScore": 0.5255,
+      "target": "daily/2026-03-19.md",
+      "id": "P-02",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5255"
+    },
+    {
+      "rank": 1,
+      "topPath": "memory/vendor-contact-protocol.md",
+      "topScore": 0.6485,
+      "target": "memory/vendor-contact-protocol.md",
+      "id": "P-03",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6485"
+    },
+    {
+      "rank": 4,
+      "topPath": "feedback/session-timeout-during-forms.md",
+      "topScore": 0.4333,
+      "target": "memory/incident-postmortem-format.md",
+      "id": "P-04",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 4, score 0.3716"
+    },
+    {
+      "rank": 2,
+      "topPath": "daily/2026-05-21.md",
+      "topScore": 0.3548,
+      "target": "memory/laptop-refresh-cycle.md",
+      "id": "P-05",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3504"
+    },
+    {
+      "rank": 1,
+      "topPath": "concepts/idempotency-key.md",
+      "topScore": 0.5715,
+      "target": "concepts/idempotency-key.md",
+      "id": "P-06",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5715"
+    },
+    {
+      "rank": null,
+      "topPath": "concepts/bulkhead-isolation.md",
+      "topScore": 0.3142,
+      "target": "concepts/back-pressure.md",
+      "id": "P-07",
+      "class": "positive",
+      "status": "fail",
+      "detail": "target not in top 5; top-1 was concepts/bulkhead-isolation.md at 0.3142"
+    },
+    {
+      "rank": 1,
+      "topPath": "concepts/dead-letter-queue.md",
+      "topScore": 0.5044,
+      "target": "concepts/dead-letter-queue.md",
+      "id": "P-08",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5044"
+    },
+    {
+      "rank": 1,
+      "topPath": "projects/orchard-mobile-launch.md",
+      "topScore": 0.3475,
+      "target": "projects/orchard-mobile-launch.md",
+      "id": "P-09",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.3475"
+    },
+    {
+      "rank": 2,
+      "topPath": "agents/invoice-matcher.md",
+      "topScore": 0.4025,
+      "target": "projects/lantern-search-rewrite.md",
+      "id": "P-10",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3847"
+    },
+    {
+      "rank": 1,
+      "topPath": "people/tobias-brenner.md",
+      "topScore": 0.3081,
+      "target": "people/tobias-brenner.md",
+      "id": "P-11",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.3081"
+    },
+    {
+      "rank": 3,
+      "topPath": "daily/2026-05-07.md",
+      "topScore": 0.5329,
+      "target": "people/priya-raghunathan.md",
+      "id": "P-12",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 3, score 0.3767"
+    },
+    {
+      "rank": null,
+      "topPath": "memory/oncall-rotation-superseded.md",
+      "topScore": 0.2184,
+      "target": "people/emeka-nwosu.md",
+      "id": "P-13",
+      "class": "positive",
+      "status": "fail",
+      "detail": "target not in top 5; top-1 was memory/oncall-rotation-superseded.md at 0.2184"
+    },
+    {
+      "rank": 1,
+      "topPath": "agents/kiln-temperature-watcher.md",
+      "topScore": 0.4175,
+      "target": "agents/kiln-temperature-watcher.md",
+      "id": "P-14",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4175"
+    },
+    {
+      "rank": 1,
+      "topPath": "agents/warehouse-picker.md",
+      "topScore": 0.5358,
+      "target": "agents/warehouse-picker.md",
+      "id": "P-15",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5358"
+    },
+    {
+      "rank": 1,
+      "topPath": "research/desert-fog-harvesting.md",
+      "topScore": 0.443,
+      "target": "research/desert-fog-harvesting.md",
+      "id": "P-16",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.443"
+    },
+    {
+      "rank": 2,
+      "topPath": "research/wool-insulation-moisture.md",
+      "topScore": 0.3875,
+      "target": "research/mycelium-packaging-strength.md",
+      "id": "P-17",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3079"
+    },
+    {
+      "rank": 1,
+      "topPath": "research/reef-noise-recruitment.md",
+      "topScore": 0.6666,
+      "target": "research/reef-noise-recruitment.md",
+      "id": "P-18",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6666"
+    },
+    {
+      "rank": 1,
+      "topPath": "feedback/print-layout-cuts-footnotes.md",
+      "topScore": 0.6301,
+      "target": "feedback/print-layout-cuts-footnotes.md",
+      "id": "P-19",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6301"
+    },
+    {
+      "rank": 1,
+      "topPath": "feedback/attachment-size-error-unclear.md",
+      "topScore": 0.5708,
+      "target": "feedback/attachment-size-error-unclear.md",
+      "id": "P-20",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5708"
+    },
+    {
+      "rank": 1,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "topScore": 0.4893,
+      "target": "reference/fire-drill-assembly-points.md",
+      "id": "P-21",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4893"
+    },
+    {
+      "rank": 1,
+      "topPath": "reference/parking-permit-zones.md",
+      "topScore": 0.4973,
+      "target": "reference/parking-permit-zones.md",
+      "id": "P-22",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4973"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/rack-power-budget.md",
+      "topScore": 0.5386,
+      "target": "ops-index/rack-power-budget.md",
+      "id": "P-23",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5386"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/badge-reader-firmware.md",
+      "topScore": 0.4497,
+      "target": "ops-index/badge-reader-firmware.md",
+      "id": "P-24",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4497"
+    },
+    {
+      "top1": 0.3999,
+      "topPath": "memory/backup-retention-superseded.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-01",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.3999 >= tau 0.3 (memory/backup-retention-superseded.md)"
+    },
+    {
+      "top1": 0.4512,
+      "topPath": "concepts/circuit-breaker.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-02",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4512 >= tau 0.3 (concepts/circuit-breaker.md)"
+    },
+    {
+      "top1": 0.4371,
+      "topPath": "people/marisol-okonkwo.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-03",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4371 >= tau 0.3 (people/marisol-okonkwo.md)"
+    },
+    {
+      "top1": 0.5771,
+      "topPath": "research/urban-beehive-yields.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-04",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.5771 >= tau 0.3 (research/urban-beehive-yields.md)"
+    },
+    {
+      "top1": 0.4466,
+      "topPath": "feedback/search-results-lack-dates.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-05",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4466 >= tau 0.3 (feedback/search-results-lack-dates.md)"
+    },
+    {
+      "top1": 0.4204,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "nearThreshold": false,
+      "kind": "near-miss",
+      "id": "N-06",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4204 >= tau 0.3 (reference/fire-drill-assembly-points.md)"
+    },
+    {
+      "top1": 0.1655,
+      "topPath": "research/wool-insulation-moisture.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-07",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.1655 < tau 0.3"
+    },
+    {
+      "top1": 0.1239,
+      "topPath": "agents/kiln-temperature-watcher.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-08",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.1239 < tau 0.3"
+    },
+    {
+      "top1": 0.2016,
+      "topPath": "concepts/canary-release.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-09",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.2016 < tau 0.3"
+    },
+    {
+      "top1": 0.3136,
+      "topPath": "research/vertical-strawberry-lighting.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-10",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.3136 >= tau 0.3 (research/vertical-strawberry-lighting.md)"
+    },
+    {
+      "top1": 0.1909,
+      "topPath": "projects/atlas-tiering-superseded.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-11",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.1909 < tau 0.3"
+    },
+    {
+      "top1": 0.2401,
+      "topPath": "reference/room-booking.md",
+      "nearThreshold": false,
+      "kind": "off-domain",
+      "id": "N-12",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.2401 < tau 0.3"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "memory/backup-retention.md",
+      "superseded": "memory/backup-retention-superseded.md",
+      "id": "T-01",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "currentRank": 2,
+      "supersededRank": 1,
+      "current": "memory/oncall-rotation.md",
+      "superseded": "memory/oncall-rotation-superseded.md",
+      "id": "T-02",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 1"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "memory/expense-approval.md",
+      "superseded": "memory/expense-approval-superseded.md",
+      "id": "T-03",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "currentRank": 2,
+      "supersededRank": 1,
+      "current": "projects/harbor-cutover.md",
+      "superseded": "projects/harbor-cutover-superseded.md",
+      "id": "T-04",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 1"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "projects/atlas-tiering.md",
+      "superseded": "projects/atlas-tiering-superseded.md",
+      "id": "T-05",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "reference/guest-network.md",
+      "superseded": "reference/guest-network-superseded.md",
+      "id": "T-06",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "reference/parcel-carrier.md",
+      "superseded": "reference/parcel-carrier-superseded.md",
+      "id": "T-07",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": 2,
+      "current": "reference/room-booking.md",
+      "superseded": "reference/room-booking-superseded.md",
+      "id": "T-08",
+      "class": "temporal",
+      "status": "fail",
+      "detail": "superseded note present at rank 2"
+    },
+    {
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "targetReturned": false,
+      "topPath": "memory/oncall-rotation.md",
+      "topScore": 0.3457,
+      "id": "C-01",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "ops-deny/vault-door-service-log.md",
+      "targetReturned": false,
+      "topPath": "daily/2026-05-07.md",
+      "topScore": 0.3406,
+      "id": "C-02",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "ops-deny/executive-travel-manifest.md",
+      "targetReturned": false,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "topScore": 0.3664,
+      "id": "C-03",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "targetReturned": false,
+      "topPath": "feedback/mobile-keyboard-covers-submit.md",
+      "topScore": 0.3579,
+      "id": "C-04",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "projects/confidential-client/merger-diligence-timeline.md",
+      "targetReturned": false,
+      "topPath": "people/yuki-tanabe.md",
+      "topScore": 0.3444,
+      "id": "C-05",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "projects/confidential-client/settlement-figure-memo.md",
+      "targetReturned": false,
+      "topPath": "people/priya-raghunathan.md",
+      "topScore": 0.2941,
+      "id": "C-06",
+      "class": "deny",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "templates/incident-report.md",
+      "targetReturned": false,
+      "topPath": "concepts/dead-letter-queue.md",
+      "topScore": 0.3134,
+      "id": "S-01",
+      "class": "skip",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "templates/runbook.md",
+      "targetReturned": false,
+      "topPath": "memory/oncall-rotation-superseded.md",
+      "topScore": 0.2737,
+      "id": "S-02",
+      "class": "skip",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "examples/sample-migration.md",
+      "targetReturned": false,
+      "topPath": "feedback/export-loses-column-order.md",
+      "topScore": 0.2833,
+      "id": "S-03",
+      "class": "skip",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "ops-skip/draft-runbook-shell.md",
+      "targetReturned": false,
+      "topPath": "people/marisol-okonkwo.md",
+      "topScore": 0.4002,
+      "id": "S-04",
+      "class": "skip",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/coolant-loop-schedule.md",
+      "topScore": 0.4998,
+      "target": "ops-index/coolant-loop-schedule.md",
+      "id": "O-01",
+      "class": "operator",
+      "status": "pass",
+      "detail": "rank 1, score 0.4998"
+    },
+    {
+      "target": "ops-skip/scratch-capacity-math.md",
+      "targetReturned": false,
+      "topPath": "memory/expense-approval-superseded.md",
+      "topScore": 0.213,
+      "id": "O-02",
+      "class": "operator",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "target": "ops-deny/whistleblower-intake-notes.md",
+      "targetReturned": false,
+      "topPath": "people/samuel-adeyemi.md",
+      "topScore": 0.3109,
+      "id": "O-03",
+      "class": "operator",
+      "status": "pass",
+      "detail": "absent from results"
+    },
+    {
+      "injectedPath": "templates/stale-injected-zither.md",
+      "expectedDisposition": "SKIP",
+      "returned": false,
+      "topPath": "memory/oncall-rotation-superseded.md",
+      "id": "X-01",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "dropped by the index filter"
+    },
+    {
+      "injectedPath": "ops-deny/stale-injected-pelican.md",
+      "expectedDisposition": "DENY",
+      "returned": false,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "id": "X-02",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "dropped by the index filter"
+    },
+    {
+      "injectedPath": "scratch/stale-injected-obsidian.md",
+      "expectedDisposition": "undeclared",
+      "returned": false,
+      "topPath": "reference/tuning-fork-calibration-log.md",
+      "id": "X-03",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "dropped by the index filter"
+    },
+    {
+      "injectedPath": "reference/never-existed-phantom.md",
+      "namedAtLoad": false,
+      "exit": 0,
+      "loadWindow": "Loading index... 92 entries loaded.",
+      "id": "L-02",
+      "class": "loudness",
+      "status": "fail",
+      "detail": "population load never named the missing source reference/never-existed-phantom.md"
+    },
+    {
+      "deleted": "research/wool-insulation-moisture.md",
+      "namedAtLoad": false,
+      "exit": 0,
+      "loadWindow": "Loading index... 91 entries loaded.",
+      "id": "L-01",
+      "class": "loudness",
+      "status": "fail",
+      "detail": "population load never named the deleted source research/wool-insulation-moisture.md"
+    },
+    {
+      "requires": "runner scenario table: F1 does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)",
+      "id": "U-01",
+      "class": "undeclared",
+      "status": "unrunnable",
+      "detail": "F1: the undeclared overlay is not part of this mutation"
+    },
+    {
+      "requires": "runner scenario table: F1 does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)",
+      "id": "U-02",
+      "class": "undeclared",
+      "status": "unrunnable",
+      "detail": "F1: the undeclared overlay is not part of this mutation"
+    }
+  ]
+}
