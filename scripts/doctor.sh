@@ -100,6 +100,7 @@ if [ "$ATTEST" -eq 1 ]; then
 import hashlib
 import json
 import os
+import re
 import sys
 
 manifest_path, root = sys.argv[1:3]
@@ -120,17 +121,86 @@ print("info:commit %s" % manifest["public_product_commit"])
 # files and COMPLIANT over 1 file print identically without this line.
 print("info:population %d required files" % len(manifest["required_files"]))
 
+# Operator-owned declarations (install.sh, <root>/.aigent/operator-owned.json).
+# A path the operator declares and maintains themselves is not core the
+# installer placed, so reporting its divergence as a compliance failure would
+# be wrong. Reporting it silently as compliant core would be worse. It gets its
+# own line and its own count instead.
+#
+# An unreadable declaration is deliberately UNKNOWN rather than NONCOMPLIANT:
+# it means this instrument cannot tell core-owned from operator-owned, which is
+# a failure to measure the tree, not a measurement that the tree is broken.
+OPERATOR_OWNED_RELATIVE = ".aigent/operator-owned.json"
+operator_owned_patterns = ()
+declaration_path = under_root(OPERATOR_OWNED_RELATIVE)
+if os.path.exists(declaration_path):
+    try:
+        with open(declaration_path, encoding="utf-8") as fh:
+            declared = json.load(fh)
+        entries = declared["paths"]
+        if not isinstance(entries, list) or not all(
+            isinstance(item, str) for item in entries
+        ):
+            raise ValueError("paths is not an array of strings")
+        operator_owned_patterns = tuple(entries)
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError, RecursionError):
+        print(
+            "unmeasurable:%s is present but unreadable, so core-owned and "
+            "operator-owned paths cannot be told apart" % OPERATOR_OWNED_RELATIVE
+        )
+        raise SystemExit(0)
+
+
+def operator_owned(relative):
+    # Same bounded-glob rule install.sh applies: a single * matches within one
+    # path segment and never across a separator.
+    for pattern in operator_owned_patterns:
+        if re.fullmatch(re.escape(pattern).replace(r"\*", "[^/]*"), relative):
+            return True
+    return False
+
+
 # Required files, byte for byte. A missing file and a changed file are the
-# same terminal but not the same fact, so they stay separate lines.
+# same terminal but not the same fact, so they stay separate lines. A declared
+# operator-owned path is still required to EXIST: a missing one is a real
+# failure, because the installer would have placed the framework copy there.
+core_owned = 0
+operator_owned_count = 0
+missing_count = 0
 for relative, expected in manifest["required_files"].items():
     try:
         with open(under_root(relative), "rb") as fh:
             actual = hashlib.sha256(fh.read()).hexdigest()
     except OSError:
+        missing_count += 1
         findings.append("required file missing: %s" % relative)
         continue
-    if actual != expected:
-        findings.append("required file changed: %s" % relative)
+    if actual == expected:
+        core_owned += 1
+        continue
+    if operator_owned(relative):
+        operator_owned_count += 1
+        # DEGRADED, not COMPLIANT: install.sh REFUSES to declare a
+        # core-required path, so finding one declared here means the
+        # declaration was hand-edited after install and a core-required file
+        # has drifted. Not NONCOMPLIANT either, because the operator did claim
+        # ownership of it. Carried as a finding rather than an info line so the
+        # terminal mapping below sees it.
+        findings.append(
+            "OPERATOR-OWNED %s (declared; hash differs from core)" % relative
+        )
+        continue
+    core_owned += 1
+    findings.append("required file changed: %s" % relative)
+
+# Missing is its own bucket so the three numbers add up to the population line
+# above. Folding absences into either ownership class would make the summary a
+# classification count that silently fails to account for part of what it
+# claims to have checked.
+print(
+    "info:ownership %d core-owned, %d operator-owned, %d missing"
+    % (core_owned, operator_owned_count, missing_count)
+)
 
 # Settings staleness. The installer MERGES into an existing settings.json
 # rather than replacing it, so a settings file rendered from an older template
@@ -469,6 +539,7 @@ ATTESTPY
 
   ATTEST_FINDINGS=()
   RUNNER_ROOT=""
+  ATTEST_UNMEASURABLE=""
   while IFS= read -r line; do
     # python3 on Windows writes CRLF, and `read -r` keeps the CR. Without this
     # strip the runner root parsed below ends in a bare CR, the node-pty probe
@@ -479,8 +550,16 @@ ATTESTPY
       info:*)            echo "  ${line#info:}" ;;
       runner-required:*) RUNNER_ROOT="${line#runner-required:}" ;;
       finding:*)         ATTEST_FINDINGS+=("${line#finding:}") ;;
+      unmeasurable:*)    ATTEST_UNMEASURABLE="${line#unmeasurable:}" ;;
     esac
   done <<< "$ATTEST_OUT"
+
+  # "Cannot tell what this tree is" is not the same as "this tree is broken".
+  # It returns before the runner probe so a single verdict is still printed.
+  if [ -n "$ATTEST_UNMEASURABLE" ]; then
+    echo "  [detail] $ATTEST_UNMEASURABLE"
+    attest_verdict UNKNOWN
+  fi
 
   # Managed runner. Same load probe install.sh runs after npm rebuild, so
   # "installed but unloadable" is caught here exactly as it is at install time.
@@ -495,14 +574,16 @@ createRequire(process.argv[1])("node-pty");
     fi
   fi
 
-  # An optional-component finding must never pull the verdict back UP from
-  # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT.
+  # A DEGRADED-class finding must never pull the verdict back UP from
+  # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT. Two classes
+  # map here: an absent optional component, and a core-required path the
+  # operator declared and then let drift (see the attest python above).
   TERMINAL="COMPLIANT"
   if [ "${#ATTEST_FINDINGS[@]}" -gt 0 ]; then
     for finding in "${ATTEST_FINDINGS[@]}"; do
       echo "  [detail] $finding"
       case "$finding" in
-        optional*)
+        optional*|OPERATOR-OWNED*)
           if [ "$TERMINAL" = "COMPLIANT" ]; then TERMINAL="DEGRADED"; fi
           ;;
         *)

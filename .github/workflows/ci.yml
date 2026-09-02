@@ -116,15 +116,25 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # 60, not 30: the operator-owned suite performs several full installs per
+    # run, and the Windows leg is by far the slowest of the three.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
+      # The operator-owned declaration reader requires a WORKING python3, and
+      # several scenarios assert on its refusals. Printing the version first
+      # makes a runner image with a broken or absent interpreter visible here
+      # rather than as a confusing assertion failure later.
+      - name: Python version
+        shell: bash
+        run: python3 --version
       - name: Installer regression suite
         shell: bash
         run: |
           set -euo pipefail
           bash tests/test-installer-fast.sh
+          bash tests/test-installer-operator-owned.sh
           bash tests/test-installer-slow-smoke.sh
           bash tests/test-web-install.sh
 

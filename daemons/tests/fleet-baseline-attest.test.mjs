@@ -686,3 +686,200 @@ test('attest output states the declared population count', () => {
     );
   });
 });
+
+// -- Operator-owned declarations (issue #49) ---------------------------------
+// install.sh preserves paths an operator declares in .aigent/operator-owned.json
+// instead of quarantining them. This instrument has to stay honest about that
+// split: a declared path that diverges is the operator's, not tampered core,
+// and an UNDECLARED divergence is still a compliance failure.
+//
+// doctor.sh is a read-only measuring instrument pointed at arbitrary trees, so
+// it never assumes the installer's own refusal rules held for the tree in front
+// of it. A declaration naming a manifest-pinned path is refused at install
+// time, but it can still be hand-written afterwards, and this is what the
+// instrument must then report.
+const DECLARATION = '.aigent/operator-owned.json';
+
+function declare(root, paths) {
+  const file = path.join(root, ...DECLARATION.split('/'));
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ schema: 'OperatorOwnedPaths/v1', paths }, null, 2)}\n`);
+}
+
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// THE DEGRADED VECTOR. install.sh refuses to declare a core-required path, so
+// a declared AND divergent pinned path means the declaration was hand-edited
+// after install and core drifted. That is neither clean (COMPLIANT would claim
+// the path as verified core) nor a tamper verdict (the operator did claim
+// ownership). It is DEGRADED. Mapping this back to COMPLIANT turns this red.
+test('a declared operator-owned pinned path that differs reports OPERATOR-OWNED and attests DEGRADED', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const [target] = Object.keys(manifest.required_files);
+    const file = path.join(root, ...target.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+    declare(root, [target]);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'DEGRADED', output);
+    assert.equal(status, 0, 'DEGRADED exits 0');
+    const escaped = escapeForRegExp(target);
+    assert.match(
+      output,
+      new RegExp(`OPERATOR-OWNED ${escaped} \\(declared; hash differs from core\\)`),
+      'the divergence must be reported on its own distinct named line',
+    );
+    assert.doesNotMatch(
+      output,
+      new RegExp(`required file changed: ${escaped}`),
+      'a declared path must not also be reported as a compliance failure',
+    );
+    const population = Object.keys(manifest.required_files).length;
+    assert.match(
+      output,
+      new RegExp(`ownership ${population - 1} core-owned, 1 operator-owned, 0 missing`),
+      'the summary must state the core-owned/operator-owned/missing split',
+    );
+  });
+});
+
+// The summary is only honest if it accounts for the whole population it claims
+// to have checked. A missing file belongs to neither ownership class, so it
+// needs its own bucket or the numbers quietly fail to add up.
+test('the ownership summary accounts for every required file, missing ones included', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const population = Object.keys(manifest.required_files).length;
+    const [missing] = Object.keys(manifest.required_files);
+    rmSync(path.join(root, ...missing.split('/')));
+
+    const { output } = attest(root);
+    const match = output.match(/ownership (\d+) core-owned, (\d+) operator-owned, (\d+) missing/);
+    assert.ok(match, `expected a three-part ownership line, got:\n${output}`);
+    const [core, operator, absent] = match.slice(1).map(Number);
+    assert.equal(absent, 1, 'the deleted file is counted as missing');
+    assert.equal(
+      core + operator + absent,
+      population,
+      'core-owned + operator-owned + missing must equal the declared population',
+    );
+  });
+});
+
+// A declared operator-owned path OUTSIDE required_files is not in the measured
+// population at all, so it cannot drag the terminal anywhere. Pinned drift is
+// the only thing that reaches DEGRADED.
+test('a declaration naming only unpinned paths leaves an exact install COMPLIANT', () => {
+  withInstall((root) => {
+    declare(root, ['.claude/skills/*/SKILL.md', '.claude/agents/my-reviewer.md']);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'COMPLIANT', output);
+    assert.equal(status, 0, 'COMPLIANT exits 0');
+    assert.doesNotMatch(output, /OPERATOR-OWNED/, 'nothing pinned diverged');
+  });
+});
+
+// NEGATIVE COVERAGE for the bounded glob. The population contains nested keys
+// (daemons/transport-deps/package.json), so `daemons/*` must claim the
+// top-level daemons files and NOTHING deeper. Widening the matcher to `.*`
+// silently hands an operator ownership of every pinned file under daemons/,
+// which is exactly the over-claim this asserts against.
+test('a bounded glob does not claim a nested required_files key', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const nested = 'daemons/transport-deps/package.json';
+    assert.ok(
+      manifest.required_files[nested],
+      'the manifest still pins a nested daemons key for this vector to be meaningful',
+    );
+    const file = path.join(root, ...nested.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+    declare(root, ['daemons/*']);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.equal(status, 1, 'an unclaimed pinned path that drifted is tamper');
+    assert.match(output, new RegExp(`required file changed: ${escapeForRegExp(nested)}`));
+    assert.doesNotMatch(
+      output,
+      new RegExp(`OPERATOR-OWNED ${escapeForRegExp(nested)}`),
+      'a single * must not reach across a path separator to claim a nested key',
+    );
+  });
+});
+
+test('an UNDECLARED pinned path that differs still attests NONCOMPLIANT with a declaration present', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const [declared, undeclared] = Object.keys(manifest.required_files);
+    const file = path.join(root, ...undeclared.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+    // The declaration exists and is valid, but names a different path. Presence
+    // of a declaration file must never soften anything it does not name.
+    declare(root, [declared]);
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.equal(status, 1, 'NONCOMPLIANT exits 1');
+    assert.match(output, new RegExp(`required file changed: ${escapeForRegExp(undeclared)}`));
+    assert.doesNotMatch(output, /OPERATOR-OWNED/, 'nothing was legitimately operator-owned here');
+  });
+});
+
+test('a bounded glob declaration matches within one path segment only', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const target = Object.keys(manifest.required_files)
+      .find((relative) => relative.startsWith('daemons/') && relative.split('/').length === 2);
+    assert.ok(target, 'the manifest pins at least one top-level daemons/ file');
+    const file = path.join(root, ...target.split('/'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+
+    // Matches: one * inside the daemons/ segment. The path is claimed, so the
+    // drift reads as declared drift (DEGRADED) rather than tamper.
+    declare(root, ['daemons/*']);
+    const matched = attest(root);
+    assert.equal(matched.verdict, 'DEGRADED', matched.output);
+    assert.match(matched.output, new RegExp(`OPERATOR-OWNED ${escapeForRegExp(target)}`));
+
+    // Does not match: the * must not cross a separator, so a pattern one level
+    // deeper cannot claim a top-level file, and the drift is plain tamper.
+    declare(root, ['daemons/*/*']);
+    const unmatched = attest(root);
+    assert.equal(unmatched.verdict, 'NONCOMPLIANT', unmatched.output);
+  });
+});
+
+test('an unreadable operator-owned declaration attests UNKNOWN, not COMPLIANT', () => {
+  withInstall((root) => {
+    const file = path.join(root, ...DECLARATION.split('/'));
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, '{ not json\n');
+
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'UNKNOWN', output);
+    assert.equal(status, 2, 'UNKNOWN exits 2');
+    assert.match(output, /operator-owned\.json is present but unreadable/);
+  });
+});
+
+test('a declared path that is MISSING is still a compliance failure', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const [target] = Object.keys(manifest.required_files);
+    rmSync(path.join(root, ...target.split('/')));
+    declare(root, [target]);
+
+    const { verdict, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.match(
+      output,
+      new RegExp(`required file missing: ${escapeForRegExp(target)}`),
+      'declaring a path does not excuse its absence; the installer would have placed core there',
+    );
+  });
+});
