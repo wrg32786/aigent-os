@@ -1,5 +1,5 @@
 {
-  "schema": "FleetBaselineManifest/v6",
+  "schema": "FleetBaselineManifest/v7",
   "baseline_id": "aigent-os-2026-08-24-867cb2ea",
   "public_product_commit": "867cb2ea3a27a83fac2f916bdf5ec799d45b70c8",
   "notes": [
@@ -16,7 +16,7 @@
     ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT.",
     ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes.",
     "Operator-owned declarations (program issue #49) change how a required_files hash mismatch is REPORTED, never which paths are pinned or what they hash to. The terminal semantics live in docs/install-security.md, section 'Operator-owned paths'.",
-    "daemons/resume-verb.mjs repinned (program issue #49, blocker G1): the resume verb gained the optional declared lifecycle extension step, so its blob changed and the previous hash no longer describes core. Only that one entry moved; every other hash was recomputed and found unchanged. baseline_id and public_product_commit are deliberately NOT recut here, so for this one entry the hash is newer than the commit those labels name."
+    "v7 recut reason (program issue #49, G1 lifecycle extension seam): daemons/resume-verb.mjs changed to render an optional target-owned lifecycle-extension declaration as a step after the core acknowledgement -- every other hash was recomputed from the same commit and found unchanged. daemons/lifecycle-extension.mjs, the module that reads and validates that declaration, is deliberately NOT added to required_files: the population rule above admits what the settings template wires as a hook or statusLine plus the entry points install.sh names by path, and this module is neither, being reached only as an import of the pinned daemons/resume-verb.mjs. Admitting an imported module took an explicit rule extension when daemons/render_boundary.py was added in v6, so the same decision belongs to a release-time cut rather than to this change. baseline_id and public_product_commit stay at 867cb2ea because the attest pinned-commit case requires a reachable commit; those labels now lag the merges made since that cut plus this change, and a release-time recut should resettle them."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "fa30a56b9eb5a2f385065e8d1737ae0ec70084b23737a1f3e1c43fcea196f468",
