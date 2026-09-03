@@ -90,9 +90,15 @@ function refuse(declarationPath, reason) {
   };
 }
 
-function fieldProblem(value) {
-  if (typeof value !== 'string') return 'must be a string';
-  if (value.trim().length === 0) return 'must not be empty';
+function fieldProblem(rawValue) {
+  if (typeof rawValue !== 'string') return 'must be a string';
+  // Trim BEFORE measuring anything below. The loader stores `raw[field].trim()`
+  // (see the FIELDS loop), so validating the untrimmed string checked a
+  // different string than the one that gets accepted and sent: a field padded
+  // with whitespace could sit over the cap, or carry a trailing newline, and be
+  // refused for a property its trimmed form never had.
+  const value = rawValue.trim();
+  if (value.length === 0) return 'must not be empty';
   // One line, always. A multi-line instruction could open a line of its own
   // inside the injected procedure and impersonate a core step or a fence.
   // inert() folds line breaks at render time too; this is the second,

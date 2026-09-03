@@ -261,21 +261,68 @@ test('the shipped example declaration is accepted by the validator that reads it
   assert.ok(result.extension.capsule_ack, 'the example must arm a capsule ack');
 });
 
+// ── Step-anchor helpers, used by WITNESS C ───────────────────────────────────
+//
+// Bind to the numbered-list markers themselves, so the step doing the finding
+// IS the step being checked, rather than a raw substring search that could
+// match a mention of the same words anywhere else in the document.
+function parseSteps(skillText) {
+  const steps = [];
+  const re = /^(\d+)\.\s+\*\*/gm;
+  let m;
+  while ((m = re.exec(skillText)) !== null) {
+    steps.push({ num: Number(m[1]), index: m.index });
+  }
+  return steps;
+}
+
+// The text belonging to step `num`: from its own heading up to the next step's
+// heading, or the next `## ` section for the last step.
+function stepBlock(skillText, steps, num) {
+  const ordered = [...steps].sort((a, b) => a.index - b.index);
+  const at = ordered.findIndex((s) => s.num === num);
+  if (at === -1) return null;
+  const start = ordered[at].index;
+  if (at + 1 < ordered.length) return skillText.slice(start, ordered[at + 1].index);
+  const nextSection = skillText.indexOf('\n## ', start);
+  return skillText.slice(start, nextSection === -1 ? undefined : nextSection);
+}
+
 // ── WITNESS C — capsule-side ordering ────────────────────────────────────────
 
 test('WITNESS C: the capsule skill runs the extension BEFORE its terminal literal', () => {
   const skill = readFileSync(CAPSULE_SKILL, 'utf8');
   const literal = 'Capsule Complete, Ready For Clear';
 
-  const extensionAt = skill.indexOf('lifecycle-extension.json');
-  assert.notEqual(extensionAt, -1, 'the capsule skill must name the declaration it reads');
+  // Bound to the STEP NUMBERS, not to where a string happens to sit in the
+  // file. The old assertion compared two raw substring positions --
+  // `skill.indexOf('lifecycle-extension.json') < skill.indexOf(literal)` --
+  // with no notion of which numbered step either string belonged to. A step
+  // renumbered or relocated, with a stray mention of the filename left behind
+  // in earlier prose, would leave both indexes exactly where a passing test
+  // expected them: a proxy, not a binding on the actual ordering (see the
+  // companion test below, which proves the substring form misses exactly
+  // that). The numbered list itself has to run 1..7 in reading order, or step
+  // identity below means nothing.
+  const steps = parseSteps(skill);
+  assert.deepEqual(steps.map((s) => s.num), [1, 2, 3, 4, 5, 6, 7],
+    'the capsule skill must number its steps 1 through 7 in reading order');
+
+  const extensionBlock = stepBlock(skill, steps, 6);
+  assert.match(extensionBlock, /^6\. \*\*EXTENSION ACK/, 'step 6 must be the EXTENSION ACK step');
+  assert.match(extensionBlock, /lifecycle-extension\.(json|mjs)/,
+    'the extension step must name the declaration or the renderer it runs');
 
   // The literal is the LAST instruction. Its byte budget is why: the checkpoint
   // compares the captured transcript offset against the live size, and a tool
   // call landing after the literal spends margin the cycle does not have.
-  const literalAt = skill.indexOf(literal);
-  assert.notEqual(literalAt, -1, 'the terminal literal must survive');
-  assert.ok(extensionAt < literalAt,
+  const stopBlock = stepBlock(skill, steps, 7);
+  assert.match(stopBlock, /^7\. \*\*STOP\./, 'step 7 must be the STOP step');
+  assert.ok(stopBlock.includes(literal), 'the terminal literal must live inside the STOP step');
+
+  const step6 = steps.find((s) => s.num === 6);
+  const step7 = steps.find((s) => s.num === 7);
+  assert.ok(step6.index < step7.index,
     'the extension step must precede the terminal literal, or the governed seat never clears');
 
   // The ordering stands, but its ORIGINAL justification was withdrawn in review
@@ -284,18 +331,39 @@ test('WITNESS C: the capsule skill runs the extension BEFORE its terminal litera
   // (auto-clear-transport.mjs:470, 'ackFresh !== true && ...'). A test that
   // demanded the skill keep citing that constant was actively defending a false
   // explanation, so it now demands the opposite.
-  // Scoped to the extension step's own block. The skill cites the byte budget
-  // elsewhere for a different, pre-existing purpose; what must not survive is
-  // citing it as the reason for THIS ordering.
-  const blockStart = skill.indexOf('6. **EXTENSION ACK');
-  const blockEnd = skill.indexOf('7. **STOP.');
-  assert.ok(blockStart !== -1 && blockEnd > blockStart, 'the extension step must be step 6, before step 7');
-  const block = skill.slice(blockStart, blockEnd);
-  assert.doesNotMatch(block, /CHECKPOINT_TAIL_TOLERANCE_BYTES/,
+  // Scoped to the SAME anchor-derived block, not a second raw indexOf pair. The
+  // skill cites the byte budget elsewhere for a different, pre-existing
+  // purpose; what must not survive is citing it as the reason for THIS
+  // ordering.
+  assert.doesNotMatch(extensionBlock, /CHECKPOINT_TAIL_TOLERANCE_BYTES/,
     'the withdrawn byte-budget mechanism must not be cited as the reason for the ordering');
-  assert.match(block, /and on nothing after it/,
+  assert.match(extensionBlock, /and on nothing after it/,
     'the skill must give the reason that survives: the clear is gated on the acknowledgement '
     + 'and on nothing after it, so a step placed after the literal races the clear');
+});
+
+test('WITNESS C: the ordering binds to step numbers, not just substring position', () => {
+  // S1 (review round 1): "The extension could be renumbered to run after the
+  // literal while the filename mention stayed in an earlier 'why' paragraph,
+  // and the witness would stay green." Prove it, and prove the anchor-bound
+  // check above closes it. RENUMBER the two step headings without moving a
+  // single byte of their content -- textual order is untouched, so a bare
+  // substring search cannot see it; it never looked at a step number.
+  const skill = readFileSync(CAPSULE_SKILL, 'utf8');
+  const literal = 'Capsule Complete, Ready For Clear';
+  assert.ok(skill.includes('6. **EXTENSION ACK') && skill.includes('7. **STOP.'),
+    'fixture check: the real skill must still carry the two headings this mutation targets');
+  const mutant = skill
+    .replace('6. **EXTENSION ACK', '9. **EXTENSION ACK')
+    .replace('7. **STOP.', '6. **STOP.');
+
+  const oldStyleStillPasses = mutant.indexOf('lifecycle-extension.json') < mutant.indexOf(literal);
+  assert.ok(oldStyleStillPasses,
+    'fixture check: renumbering alone must be invisible to a substring-only comparison, '
+    + 'which is exactly the gap being closed');
+
+  assert.notDeepEqual(parseSteps(mutant).map((s) => s.num), [1, 2, 3, 4, 5, 6, 7],
+    'a step-number-bound check must catch the same relocation the substring check missed');
 });
 
 // ── M2 — an accepted declaration may never render truncated ──────────────────
@@ -421,4 +489,38 @@ test('N1: bidi and format controls are refused, and the fold strips them', () =>
   assert.doesNotMatch(foldDeclaredLine('a‮b⁦c‎d'),
     /[‎‏‪-‮⁦-⁩﻿]/,
     'the fold is the second guard and must strip them too');
+});
+
+// ── N2 — validation must measure what gets stored ─────────────────────────────
+
+test('N2: length (and the single-line check) apply to the trimmed field, not the raw one', () => {
+  // fieldProblem used to measure `value.length` on the RAW string while the
+  // loader stored `raw[field].trim()` -- two different strings on either side
+  // of the same cap. A field padded with whitespace could sit over the cap and
+  // be refused even though the string that would actually be stored and sent
+  // fits comfortably underneath it.
+  const padded = `${' '.repeat(10)}${'x'.repeat(495)}${' '.repeat(10)}`;
+  assert.equal(padded.length, 515, 'the fixture must sit over the cap only because of padding');
+  assert.equal(padded.trim().length, 495, 'the trimmed fixture must sit under the cap');
+
+  const result = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: padded });
+  assert.equal(result.extension.warning, null,
+    'padding that trims away must not push a field over the cap');
+  assert.ok(result.extension.resume_ack.length <= FIELD_MAX_CHARS,
+    'the accepted field must be the trimmed string, not the padded one');
+
+  // The same gap affected the single-line check: a trailing newline is outside
+  // what trim() keeps, so a field that is one line once trimmed was refused for
+  // carrying whitespace nobody would ever see.
+  const trailingNewline = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: 'notify: done\n' });
+  assert.equal(trailingNewline.extension.warning, null,
+    'a trailing newline outside the trimmed text must not refuse the field');
+
+  // The resolved-length rule (M2's capsule-id budget) must still apply to the
+  // trimmed template, not the raw one.
+  const paddedWithSlot = `${' '.repeat(10)}notify ${CAPSULE_ID_SLOT} done${' '.repeat(10)}`;
+  const withSlot = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: paddedWithSlot });
+  assert.equal(withSlot.extension.warning, null, 'a padded slot template must still validate on its trimmed form');
+  assert.ok(withSlot.prompt.includes(`notify ${CAPSULE_ID} done`),
+    'the slot must still resolve correctly once the padding is trimmed');
 });
