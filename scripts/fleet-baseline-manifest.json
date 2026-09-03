@@ -15,12 +15,13 @@
     "CLAUDE.md, .claude/settings.json and .gitignore are excluded: the installer rewrites them (marker block, placeholder render, managed ignore block), so their installed bytes are never the repo bytes.",
     ".claude/skill-index.json and skills/*/SKILL.md are excluded: caddy-enroll and operator-authored skills legitimately change them, so hashing them would report every customized install as NONCOMPLIANT.",
     ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes.",
-    "Operator-owned declarations (program issue #49) change how a required_files hash mismatch is REPORTED, never which paths are pinned or what they hash to. The terminal semantics live in docs/install-security.md, section 'Operator-owned paths'."
+    "Operator-owned declarations (program issue #49) change how a required_files hash mismatch is REPORTED, never which paths are pinned or what they hash to. The terminal semantics live in docs/install-security.md, section 'Operator-owned paths'.",
+    "daemons/resume-verb.mjs repinned (program issue #49, blocker G1): the resume verb gained the optional declared lifecycle extension step, so its blob changed and the previous hash no longer describes core. Only that one entry moved; every other hash was recomputed and found unchanged. baseline_id and public_product_commit are deliberately NOT recut here, so for this one entry the hash is newer than the commit those labels name."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "fa30a56b9eb5a2f385065e8d1737ae0ec70084b23737a1f3e1c43fcea196f468",
     "daemons/sessionstart-reinject.mjs": "f088db2faba158af4008dc56321d80cb52a7544d37a952d51472d69fa9e39496",
-    "daemons/resume-verb.mjs": "abc505d1581e28c5640eb018e41cfbd1f637da85d36312320abe9c7444052dc5",
+    "daemons/resume-verb.mjs": "3afdbe6a99cd7bf1dbf6e68fc3f09f6d3146e0bf86eb73a143e70c49b9b53d2f",
     "daemons/caddy.sh": "bb7744ba48916bba539dd3be6761f17d3a565c7b909b47de6f29765a72e81405",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
     "daemons/precompact-flush.mjs": "eb93bc6bed70e24400229d4930c7ec9b3f806476562f20ea83f6da4cc3b8b07a",
