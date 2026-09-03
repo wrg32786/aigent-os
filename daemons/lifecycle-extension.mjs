@@ -60,7 +60,7 @@ export function foldDeclaredLine(value) {
   return String(value ?? '')
     .replace(/[\r\n\u2028\u2029\u0085]+/g, ' ')
     // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ')
     .replace(/[ \t]+/g, ' ')
     .trim();
 }
@@ -98,8 +98,11 @@ function fieldProblem(value) {
   // inert() folds line breaks at render time too; this is the second,
   // independent guard, refusing the file rather than silently reshaping it.
   if (/[\r\n]/.test(value)) return 'must be a single line';
+  // Bidi and format controls join C0/DEL: a declaration is one VISIBLE line the
+  // seat sends verbatim, and an override can reverse or hide the text the
+  // operator read back, so what was approved and what is sent stop matching.
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(value)) return 'must not contain control characters';
+  if (/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(value)) return 'must not contain control or bidi characters';
   if (value.split(CAPSULE_ID_SLOT).length > 2) return `must use ${CAPSULE_ID_SLOT} at most once`;
   // Measure what will actually be SENT, charging the slot its full id budget.
   // Measuring the template instead is what let an accepted declaration render
@@ -140,7 +143,9 @@ export function loadLifecycleExtension(projectRoot) {
 
   let raw;
   try {
-    raw = JSON.parse(text);
+    // Windows editors write a BOM by default; refusing one turns an ordinary
+    // edit into a silently unarmed handshake.
+    raw = JSON.parse(text.replace(/^\uFEFF/, ''));
   } catch (error) {
     return refuse(declarationPath, `is not valid JSON (${error.message})`);
   }

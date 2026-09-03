@@ -23,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { runResumeVerb } from '../resume-verb.mjs';
-import { FIELD_MAX_CHARS, CAPSULE_ID_SLOT } from '../lifecycle-extension.mjs';
+import { FIELD_MAX_CHARS, CAPSULE_ID_SLOT, foldDeclaredLine } from '../lifecycle-extension.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAPSULE_SKILL = path.join(__dirname, '..', '..', 'skills', 'context-capsule', 'SKILL.md');
@@ -391,4 +391,34 @@ test('M3: the capsule skill runs the shared renderer instead of reading the decl
     'the skill must invoke the shared renderer');
   assert.doesNotMatch(block, /Read `\.aigent\/lifecycle-extension\.json`/,
     'the skill must not instruct the model to read the declaration itself');
+});
+
+// ── S2 / N1 — encoding hazards a Windows-first fleet actually hits ───────────
+
+test('S2: a leading UTF-8 BOM does not refuse an otherwise valid declaration', () => {
+  // PowerShell and Notepad write a BOM by default, so refusing one turns an
+  // ordinary Windows edit into a silently unarmed handshake.
+  const result = promptFor(`﻿${JSON.stringify({
+    schema: 'LifecycleExtension/v1',
+    resume_ack: `notify: ${FIXTURE_TOKEN} {capsule_id}`,
+  })}`);
+  assert.equal(result.extension.warning, null, 'a BOM must not refuse a valid declaration');
+  assert.ok(result.prompt.includes(`${FIXTURE_TOKEN} ${CAPSULE_ID}`),
+    'the declared line must still render');
+});
+
+test('N1: bidi and format controls are refused, and the fold strips them', () => {
+  // A declaration is one VISIBLE line the seat is told to send verbatim. A bidi
+  // override can reverse or hide the text an operator reads back, so what the
+  // reviewer approves and what the seat sends stop being the same thing.
+  const cases = [['RLO', '‮'], ['LRE', '‪'], ['PDF', '‬'], ['LRI', '⁦'],
+    ['PDI', '⁩'], ['LRM', '‎'], ['RLM', '‏'], ['ZWNBSP', '﻿']];
+  for (const [label, ch] of cases) {
+    const r = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: `notify: a${ch}b` });
+    assert.ok(String(r.extension.warning).startsWith(WARNING_PREFIX), `${label} must be refused`);
+    assert.equal(r.extension.resume_ack, null, `${label} must not survive`);
+  }
+  assert.doesNotMatch(foldDeclaredLine('a‮b⁦c‎d'),
+    /[‎‏‪-‮⁦-⁩﻿]/,
+    'the fold is the second guard and must strip them too');
 });
