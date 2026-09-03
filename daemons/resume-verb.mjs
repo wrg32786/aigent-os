@@ -37,6 +37,7 @@ import {
   selectCapsule, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
+import { loadLifecycleExtension, resolveLifecycleAck } from './lifecycle-extension.mjs';
 
 // Deterministic session-id authority (principal's order 2026-08-10, replacing
 // the abandoned PATCH-001O content classification): the resumed context gets its
@@ -243,7 +244,31 @@ function rejectionReport(rejected) {
 // this procedure. Placement and escaping are two independent guards — escaping
 // stops a value from forming a line of its own, placement stops even a
 // convincing one from being read before the rules it would try to suspend.
-function procedurePrompt(loaded, rejected = null, bootSession = null, receiptPath = 'memory/runtime/boot-receipt.json') {
+// The declared lifecycle extension, rendered as step 5 or not at all.
+//
+// A refused declaration produces ONE warning line with a fixed greppable
+// prefix, and changes nothing else about the procedure. That is the fail-safe
+// the whole seam rests on: an operator whose supervisor is holding greps the
+// prefix and finds the cause, while the seat itself refreshes exactly as a
+// stock install would.
+function extensionLines(extension, loaded) {
+  if (!extension) return [];
+  const lines = [];
+  if (extension.warning) lines.push(extension.warning);
+  const ack = resolveLifecycleAck(extension.resume_ack, loaded?.id);
+  if (ack) {
+    lines.push(`5. EXTENSION ACK (declared by this install, runs AFTER step 4): ${inert(ack)}`);
+  }
+  return lines;
+}
+
+function procedurePrompt(
+  loaded,
+  rejected = null,
+  bootSession = null,
+  receiptPath = 'memory/runtime/boot-receipt.json',
+  extension = null,
+) {
   const lines = [];
   lines.push('[RESUME VERB] This is a post-clear boot. Your ENTIRE job: load → re-ground → ACT on waiting_on. Resumption is proven by the action taken, never by this text being in context.');
   lines.push('');
@@ -290,6 +315,14 @@ function procedurePrompt(loaded, rejected = null, bootSession = null, receiptPat
   lines.push('2. RE-GROUND against live memory — re-read the latest session log and active priorities, surface anything that changed since the capsule was written. This folds in what /open would do, in full.');
   lines.push('3. ACT — take the one next step from waiting_on / next_valid_action resolved against step 2; on any conflict, live memory wins over stale capsule content. The verb ends when that action is TAKEN, not when it is summarized.');
   lines.push('4. ACK (if a supervising process demands one) — reply in exactly the format demanded, emitted ONLY after step 3\'s action is taken, never before.');
+  // The optional declared extension, and the ONE place it may run: after the
+  // core acknowledgement, never in place of a core step. The declared text is
+  // operator-authored but still read off disk, so it renders through inert()
+  // like every other persisted value — folded to one line, quoted, bounded. Two
+  // independent guards, matching the placement/escaping pair used below: the
+  // loader refuses a multi-line or over-long field outright, and inert() means
+  // even an accepted one cannot own a line start.
+  for (const line of extensionLines(extension, loaded)) lines.push(line);
   lines.push('');
   lines.push('No stillness clock (resume is the wake-up, not the seal), but stay terminal: if you are still reading past re-grounding without having taken the step from waiting_on, stop reading and act.');
   if (loaded) {
@@ -328,6 +361,15 @@ export function runResumeVerb({ projectRoot, source, sessionId }) {
     const rel = path.relative(projectRoot, path.join(memRoot(projectRoot), 'runtime', 'boot-receipt.json'));
     if (rel && !rel.startsWith('..')) receiptPath = rel.split(path.sep).join('/');
   } catch { /* keep the generic fallback */ }
+  // Fail-open by construction: the loader never throws, and this catch covers
+  // even that. An extension problem may add a warning line and may cost the
+  // seat its declared announcement, but it may never cost the seat its resume.
+  let extension = null;
+  try { extension = loadLifecycleExtension(projectRoot); } catch (e) {
+    logErr(projectRoot, 'resume-verb', `lifecycle extension load threw: ${e?.message || e}`);
+    extension = null;
+  }
+  if (extension?.warning) logErr(projectRoot, 'resume-verb', extension.warning);
   return {
     source: String(source || ''),
     sessionId: String(sessionId || ''),
@@ -339,6 +381,10 @@ export function runResumeVerb({ projectRoot, source, sessionId }) {
     // The ledger is part of the RESULT, not just the prompt text, so a test or a
     // supervising script can assert on it instead of scraping prose.
     rejected,
-    prompt: procedurePrompt(loaded, rejected, bootSession, receiptPath),
+    // The declared extension is part of the RESULT for the same reason the
+    // ledger and the boot session are: a supervisor or a test asserts on data,
+    // never by scraping prose.
+    extension: extension || { resume_ack: null, capsule_ack: null, warning: null },
+    prompt: procedurePrompt(loaded, rejected, bootSession, receiptPath, extension),
   };
 }

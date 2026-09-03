@@ -107,6 +107,33 @@ Covered by `daemons/tests/resume-session-authority.test.mjs`: the required regre
 
 If a fork wires multiple agents/sessions that need to pause for a conducted, multi-party lifecycle event (a coordinated clear across several concurrent sessions, for example), point `AIGENT_COORDINATION_STATE` at a JSON file carrying a `phase` field. While `phase` is non-terminal (anything other than `done`/`cancelled`/`closed`/`complete`/`aborted`), `sessionstart-reinject.mjs` defers to the external conductor instead of running its own warm-start orientation or resume-verb procedure; this guard is checked before the `source==='clear'` branch, so a live coordinator wins even across a clear. Unset by default: a single-operator install never touches this seam.
 
+## Declared lifecycle extension
+
+An install supervised by an outside process usually needs the two verbs to announce completion in that process's own protocol. Without a seam the only way to carry that is a forked copy of `skills/resume/SKILL.md` or `skills/context-capsule/SKILL.md`, which the installer then treats as drift and quarantines, so the next clear never announces and the supervisor holds the seat forever. The seam turns that handshake into a declaration the install owns.
+
+Copy `daemons/lifecycle-extension.example.json` to `<target>/.aigent/lifecycle-extension.json` and edit it:
+
+```json
+{
+  "schema": "LifecycleExtension/v1",
+  "resume_ack": "As the final action, notify the supervising process with this exact body: EXAMPLE-PROTOCOL resumed {capsule_id}",
+  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}"
+}
+```
+
+Both fields are optional. Each is one line, at most 500 characters, free of control characters, and may use `{capsule_id}` at most once. `.aigent/` sits outside every installer-managed tree, so the declaration survives an install and an update without needing an entry in `.aigent/operator-owned.json`.
+
+What runs where:
+
+- **Resume.** `daemons/lifecycle-extension.mjs` resolves `resume_ack` against the loaded capsule id, and `daemons/resume-verb.mjs` renders it as step 5 of the injected procedure, after the core acknowledgement. A template carrying `{capsule_id}` renders nothing when no capsule was loaded, so a degraded resume can never invite a fabricated id.
+- **Capsule.** `capsule_ack` runs as step 6 of the capsule skill, after all core work and immediately before the terminal literal. This one is deliberately not last. The literal has to be the final bytes in the transcript because the checkpoint measures the tail against `CHECKPOINT_TAIL_TOLERANCE_BYTES`, and a tool call landing after it exceeds the budget, so the capsule reads as stale and the seat holds instead of clearing.
+
+An install that declares nothing runs the unmodified standalone lifecycle, and nothing about either verb changes.
+
+Failure is fail-open and loud. An unreadable, malformed, or invalid declaration is refused whole, both fields go null, and the procedure carries one line beginning `LIFECYCLE-EXTENSION: declaration ignored:` naming the path and the reason. The same line goes to the daemon error log. This is the opposite of the namespace registry's fail-closed `process.exit(1)`, and the difference is deliberate: that registry gates indexing, where refusing to run is safe, while this gates session start, where refusing to run wedges every clear on the seat. A partial declaration is never salvaged, because a half-armed handshake looks exactly like a working one.
+
+The declaration is data, never code. Nothing loads a module or spawns a process, and core never learns any particular supervisor's vocabulary. The declared text is still read off disk, so it renders through `inert()` like every other persisted value, folded to one line and quoted, and the loader independently refuses a multi-line or over-long field. Placement and escaping are two separate guards: an accepted field cannot own a line start, and it is rendered below the core steps where it could not suspend one anyway.
+
 ## Context-pressure self-refresh (retired in v0.9.1)
 
 `daemons/ctx-refresh-sensor.mjs` is now a compatibility stub (`process.exit(0)`): the 60%/75% self-refresh reflex, the `CAPSULE_VERB_AUTOFIRE` autofire path, and the request-gated refresh cycle it depended on (`refresh-request.mjs`, `refresh-cycle.mjs`, `refresh-cursor.mjs`) are removed along with the rest of the tower. The file is kept only because an existing `settings.json` may still name it as a `PreToolUse` hook; it does nothing when invoked. `daemons/statusline-ctx.sh` still writes `~/.claude/ctx-refresh/<session-id>.json`; nothing in the box currently reads that file, but a fork is free to re-wire its own sensor against it.
@@ -128,6 +155,8 @@ The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a f
 | `daemons/capsule-verb.mjs` | `validateCapsuleText()`: required fields + content gate |
 | `daemons/curated-close-pointer.mjs` | Compatibility pointer writer (audit/orientation hint only, resume never reads it) |
 | `daemons/resume-verb.mjs` | Resume verb container: SessionStart(clear) hook |
+| `daemons/lifecycle-extension.mjs` | Optional declared lifecycle extension: loader and validator, fail-open |
+| `daemons/lifecycle-extension.example.json` | Template to copy to `<target>/.aigent/lifecycle-extension.json` |
 | `daemons/sessionstart-reinject.mjs` | Warm-start reinject + resume-verb carrier: SessionStart(all sources) hook |
 | `daemons/stop-capsule-writer.mjs` | Every-turn rolling capsule delta writer: Stop hook |
 | `daemons/ctx-refresh-sensor.mjs` | Compatibility stub (PreToolUse): self-refresh reflex retired |

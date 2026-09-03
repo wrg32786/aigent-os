@@ -41,5 +41,6 @@ Everything the selector skipped is printed in the injected procedure under `CAPS
 2. **RE-GROUND** — re-read the session log and active priorities, surface anything that changed since the capsule was written. On any conflict, live memory wins over capsule content.
 3. **ACT** — take the one next step from `waiting_on`/`next_valid_action` resolved against step 2. Terminal: done when the action is TAKEN, not summarized.
 4. **ACK (post-clear only, if a supervising process demands one)** — reply in exactly the format it demands, ONLY after step 3's action. The exact format lives in that instruction, never guessed.
+5. **EXTENSION ACK (only if this install declares one).** `.aigent/lifecycle-extension.json` may declare a `resume_ack`. On the post-clear boot the injected procedure already renders it as its own step, resolved against the loaded capsule id; run it after step 4, exactly as rendered. An install that declares nothing has no step 5, which is the ordinary standalone case. A declaration the runtime refused prints one line beginning `LIFECYCLE-EXTENSION: declaration ignored:` and there is then nothing to run: report that line rather than improvising a substitute.
 
 No stillness clock — resume is the wake-up, not the seal — but stay terminal: still reading past re-grounding without acting is the exact trap this verb exists to prevent.

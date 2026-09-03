@@ -39,7 +39,11 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
    - **Stage directives** — anything decision-shaped or instruction-shaped that isn't already banked goes to `vault/memory/MEMORY_CANDIDATES.md`. A directive that exists only inside a capsule dies with that capsule: the capsule is spent on the next resume, and the directive is not meant to be.
    - **One `vault/memory/SESSION_LOG.md` line**, newest first: `- <YYYY-MM-DD> <capsule-id>: <one-line summary>`.
 5. **SYNC fail-soft.** After the capsule and any memory edits land, run `node daemons/vault-sync.mjs`. It resolves the installed root from `.aigent/state.json`, stages only capsule/memory changes, and handles no-remote or push-failure outcomes without prompting or gating the lifecycle. Fail-soft is deliberate: a fresh install has no remote, and the lifecycle must never wedge because one is absent. But if it reports a failure and a remote IS configured, that is a real finding — say so plainly rather than moving on, because unsynced memory is memory you will lose.
-6. **STOP. Emit this EXACT line, nothing else, and then be silent:**
+6. **EXTENSION ACK, only if this install declares one.** Read `.aigent/lifecycle-extension.json`. If it is absent, skip this step: that is the ordinary standalone install and there is nothing to run. If it declares a `capsule_ack`, run that instruction now, exactly as written, substituting the confirmed capsule id for `{capsule_id}`. This is the whole seam for a supervised install: the handshake a supervising process needs is a declaration the install owns, never a forked copy of this skill.
+
+   **Why it runs HERE and not after step 7**, even though an extension otherwise follows the core acknowledgement: step 7's literal has to be the last bytes in the transcript. The checkpoint compares the captured offset against the live transcript size against `CHECKPOINT_TAIL_TOLERANCE_BYTES`, and the measured legitimate case already spends most of that budget. A tool call landing after the literal exceeds it, the capsule reads as stale, and the seat holds instead of clearing. Running the extension one step earlier costs nothing and keeps both mechanisms intact.
+
+7. **STOP. Emit this EXACT line, nothing else, and then be silent:**
 
    ```
    Capsule Complete, Ready For Clear
@@ -80,13 +84,14 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 - Trivial sessions a fresh session could reconstruct from memory alone.
 - Inside a dispatched sub-agent (the dispatch brief IS the capsule).
 
-**Declining still ends at Step 6.** If this invocation is an **injected**
+**Declining still ends at Step 7.** If this invocation is an **injected**
 `/context-capsule` from the auto-clear cycle (not the operator's own),
-"trivial" only excuses the WRITE — steps 2–5 — never the ack. Before going
+"trivial" only excuses the WRITE — steps 2–5 — never step 6 and never the
+ack. Before going
 quiet: (a) confirm a valid prior capsule already exists on disk for this
 session — `daemons/stop-capsule-writer.mjs` wrote one on the last `Stop`
 event, and the checkpoint's capsule-exists gate feeds on it being there,
-so verify rather than assume; (b) still emit the exact literal from Step 6,
+so verify rather than assume; (b) still emit the exact literal from Step 7,
 `Capsule Complete, Ready For Clear`, as the final act, then go silent. The
 cycle is waiting on that literal alone — "nothing to capsule" is not an
 exemption from producing it. The completion acknowledgement is still required when an existing valid capsule is reused. The injected cycle waits on that exact literal; "nothing to capsule" is not a completion signal.

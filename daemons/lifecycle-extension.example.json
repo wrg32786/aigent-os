@@ -1,0 +1,5 @@
+{
+  "schema": "LifecycleExtension/v1",
+  "resume_ack": "As the final action, notify the supervising process with this exact body: EXAMPLE-PROTOCOL resumed {capsule_id}",
+  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}"
+}
