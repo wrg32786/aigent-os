@@ -89,6 +89,72 @@ function cosineSimilarity(a, b) {
   return denom === 0 ? 0 : dot / denom;
 }
 
+// ── Temporal supersession ────────────────────────────────────────────────────
+// A note may carry a validity window in its BODY, in the form
+// `Valid from <YYYY-MM-DD>` or `Valid from <YYYY-MM-DD> to <YYYY-MM-DD>`. The
+// line lives in the body rather than in frontmatter because embed-vault.js:294
+// stores a slice of the raw body as the chunk, so a frontmatter-only date could
+// never reach a returned row. A CLOSED window whose end date has passed marks a
+// superseded note: still true as history, but it must not outrank a note that
+// still governs.
+//
+// Superseded rows are DEMOTED below every non-superseded row, never dropped, so
+// a query that nothing current answers can still reach the historical rule. The
+// demotion runs after the deny and namespace filters below and before the
+// dedupe-and-truncate, so a demoted row genuinely leaves the top K rather than
+// being reordered inside it, and both output sites are fed from that one order.
+//
+// Three deliberate non-behaviours:
+//   - a row with no validity line is untouched: this is opt-in note metadata,
+//     not a schema every note must satisfy;
+//   - an OPEN window is current by construction and is never demoted;
+//   - a validity line whose dates do not parse is REPORTED on stderr and left
+//     exactly where cosine put it. A date this file cannot read must never
+//     silently change a ranking.
+//
+// Expiry is a property of the NOTE, not of one chunk: a long note's later
+// chunks carry no validity line, so the ended windows are collected per path
+// first and then applied to every chunk of that path.
+//
+// AIGENT_SEARCH_DISABLE_SUPERSESSION=1 turns the demotion off. It exists so a
+// test can witness that the demotion, and not something else, is what moved a
+// row (daemons/tests/semantic-search-supersession.test.mjs).
+const SUPERSESSION_OFF = process.env.AIGENT_SEARCH_DISABLE_SUPERSESSION === '1';
+const VALIDITY_LINE = /^Valid from (.+?)\s*$/m;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function endedWindowPaths(rows, nowMs) {
+  const ended = new Set();
+  for (const r of rows) {
+    const m = typeof r.chunk === 'string' ? r.chunk.match(VALIDITY_LINE) : null;
+    if (!m) continue;
+    const parts = m[1].split(' to ');
+    if (parts.length === 1) continue; // open window: still current
+    const from = String(parts[0]).trim();
+    const to = String(parts[1]).trim();
+    // Dates are read as whole UTC days, so a window ends at the last instant of
+    // its end date and the comparison does not depend on the reader's timezone.
+    const end = parts.length === 2 && ISO_DAY.test(from) && ISO_DAY.test(to)
+      ? Date.parse(`${to}T23:59:59.999Z`)
+      : NaN;
+    if (Number.isNaN(end)) {
+      console.error(`search-vault: unreadable validity line in ${inert(r.path, 200)}: ${inert(m[0], 120)} (rank left unchanged)`);
+      continue;
+    }
+    if (nowMs > end) ended.add(r.path);
+  }
+  return ended;
+}
+
+function demoteSuperseded(rows, nowMs) {
+  if (SUPERSESSION_OFF) return rows;
+  const ended = endedWindowPaths(rows, nowMs);
+  if (ended.size === 0) return rows;
+  // Array.prototype.sort is stable, so keying only on the ended flag preserves
+  // the descending cosine order inside each of the two groups.
+  return rows.slice().sort((a, b) => (ended.has(a.path) ? 1 : 0) - (ended.has(b.path) ? 1 : 0));
+}
+
 // ── Embed query ──────────────────────────────────────────────────────────────
 let embedder = null;
 
@@ -149,10 +215,15 @@ async function main() {
   // Sort descending
   scored.sort((a, b) => b.score - a.score);
 
+  // Demote every chunk whose validity window has ended below every chunk whose
+  // has not. Placed here, between the sort and the truncation below, so a
+  // demoted row leaves the top K instead of being reordered inside it.
+  const ranked = demoteSuperseded(scored, Date.now());
+
   // Deduplicate by file path — keep best-scoring chunk per file
   const seen = new Set();
   const results = [];
-  for (const r of scored) {
+  for (const r of ranked) {
     if (!seen.has(r.path)) {
       seen.add(r.path);
       results.push(r);
