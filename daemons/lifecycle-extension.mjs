@@ -27,6 +27,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { inert } from './lifecycle-common.mjs';
 
 export const LIFECYCLE_EXTENSION_REL = path.join('.aigent', 'lifecycle-extension.json');
@@ -34,11 +35,36 @@ const SCHEMA = 'LifecycleExtension/v1';
 const FIELDS = Object.freeze(['resume_ack', 'capsule_ack']);
 const ALLOWED_KEYS = new Set(['schema', ...FIELDS]);
 export const CAPSULE_ID_SLOT = '{capsule_id}';
-// Bound reused from inert()'s own default rather than invented here, so the
-// render and the validation can never disagree about what "too long" means.
+// ONE bound, used by the validator and by the renderer, so the two can never
+// disagree about what "too long" means. They used to be separate literals: the
+// validator measured the TEMPLATE and the renderer measured the SUBSTITUTED
+// string, so a template sitting exactly on the cap passed validation and then
+// rendered with the capsule id cut in half.
 // Measured at adoption: core's longest authored procedure line is 372 chars and
 // the real handshake text this must carry is 322, so 500 clears both.
 export const FIELD_MAX_CHARS = 500;
+// The budget a {capsule_id} slot is charged at validation time. A declaration is
+// accepted only if it still fits with an id this long substituted, so an
+// accepted declaration can never render truncated. Real ids measure in the 20s
+// to 60s of characters; 128 is deliberate headroom.
+export const CAPSULE_ID_MAX_CHARS = 128;
+// The declared text is a PROTOCOL BODY: the seat is told to send it verbatim,
+// so the render must not quote or escape it the way inert() does for diagnostic
+// values. A quote or a backslash in the body reached the seat escaped and the
+// supervisor never matched it. What the render still guarantees is the property
+// that matters for safety, which is that the value can never own a line of its
+// own inside the injected procedure: every line-breaking and control character
+// is folded to a space. The validator already refuses such a field outright;
+// this is the second, independent guard.
+export function foldDeclaredLine(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\u2028\u2029\u0085]+/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
 export const WARNING_PREFIX = 'LIFECYCLE-EXTENSION: declaration ignored:';
 
 // A rejected declaration is rejected WHOLE. Accepting the readable half of a
@@ -74,8 +100,19 @@ function fieldProblem(value) {
   if (/[\r\n]/.test(value)) return 'must be a single line';
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) return 'must not contain control characters';
-  if (value.length > FIELD_MAX_CHARS) return `must be at most ${FIELD_MAX_CHARS} characters`;
   if (value.split(CAPSULE_ID_SLOT).length > 2) return `must use ${CAPSULE_ID_SLOT} at most once`;
+  // Measure what will actually be SENT, charging the slot its full id budget.
+  // Measuring the template instead is what let an accepted declaration render
+  // truncated.
+  const resolvedMax = value.includes(CAPSULE_ID_SLOT)
+    ? value.length - CAPSULE_ID_SLOT.length + CAPSULE_ID_MAX_CHARS
+    : value.length;
+  if (resolvedMax > FIELD_MAX_CHARS) {
+    return value.includes(CAPSULE_ID_SLOT)
+      ? `must be at most ${FIELD_MAX_CHARS} characters once ${CAPSULE_ID_SLOT} is substituted `
+        + `(worst case ${resolvedMax}, allowing ${CAPSULE_ID_MAX_CHARS} for the id)`
+      : `must be at most ${FIELD_MAX_CHARS} characters`;
+  }
   return null;
 }
 
@@ -145,5 +182,60 @@ export function resolveLifecycleAck(template, capsuleId) {
   if (typeof template !== 'string' || template.length === 0) return null;
   if (!template.includes(CAPSULE_ID_SLOT)) return template;
   if (typeof capsuleId !== 'string' || capsuleId.trim().length === 0) return null;
-  return template.split(CAPSULE_ID_SLOT).join(capsuleId.trim());
+  const resolved = template.split(CAPSULE_ID_SLOT).join(capsuleId.trim());
+  // The validator charged the slot CAPSULE_ID_MAX_CHARS, so this is unreachable
+  // for any id inside that budget. It is here because the alternative to
+  // returning nothing is handing the seat a truncated body it was told to send
+  // verbatim, and a silently wrong handshake is worse than an absent one.
+  if (resolved.length > FIELD_MAX_CHARS) return null;
+  return resolved;
+}
+
+// ── The capsule surface's entry point ────────────────────────────────────────
+//
+// The resume surface reaches this module through resume-verb.mjs. The capsule
+// surface is a SKILL, so without an entry point of its own the only way for it
+// to honor a declaration was to instruct the model to read the JSON itself.
+// That is how one file came to be REFUSED on resume and HONORED on capsule:
+// two readers, one of which was a paragraph of English with no validator behind
+// it. This CLI gives both surfaces the same loader, the same validator and the
+// same renderer.
+//
+// Contract: print the resolved line on stdout, or print nothing and put one
+// greppable warning on stderr. ALWAYS exit 0 -- this runs inside the capsule
+// verb, and a non-zero exit there would turn a bad declaration into a failed
+// capsule, which is the fail-closed behavior this seam exists to avoid.
+export function renderCli(argv, out = process.stdout, err = process.stderr) {
+  try {
+    if (argv[0] !== 'render') {
+      err.write(`${WARNING_PREFIX} unknown command: ${inert(argv[0] ?? '')}\n`);
+      return 0;
+    }
+    const field = argv[1];
+    if (!FIELDS.includes(field)) {
+      err.write(`${WARNING_PREFIX} unknown field: ${inert(field ?? '')}\n`);
+      return 0;
+    }
+    const opts = new Map();
+    for (let i = 2; i < argv.length; i += 2) opts.set(argv[i], argv[i + 1]);
+    const root = opts.get('--root') || process.cwd();
+    const capsuleId = opts.get('--capsule-id') || '';
+
+    const extension = loadLifecycleExtension(root);
+    if (extension.warning) {
+      err.write(`${extension.warning}\n`);
+      return 0;
+    }
+    const line = resolveLifecycleAck(extension[field], capsuleId);
+    if (line) out.write(`${foldDeclaredLine(line)}\n`);
+    return 0;
+  } catch (error) {
+    // Even an unexpected throw degrades to "no extension", loudly.
+    err.write(`${WARNING_PREFIX} renderer failed: ${inert(error?.message || String(error))}\n`);
+    return 0;
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = renderCli(process.argv.slice(2));
 }

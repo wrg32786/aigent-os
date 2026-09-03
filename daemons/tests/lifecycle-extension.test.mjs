@@ -21,7 +21,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { runResumeVerb } from '../resume-verb.mjs';
+import { FIELD_MAX_CHARS, CAPSULE_ID_SLOT } from '../lifecycle-extension.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAPSULE_SKILL = path.join(__dirname, '..', '..', 'skills', 'context-capsule', 'SKILL.md');
@@ -63,6 +65,15 @@ function mkFixture(declaration = null) {
     );
   }
   return { base, root };
+}
+
+
+// The capsule surface renders through a CLI over the SAME loader, so this
+// helper drives exactly what the capsule skill runs.
+function renderCapsuleAck(root, capsuleId) {
+  const mod = path.join(__dirname, '..', 'lifecycle-extension.mjs');
+  const r = spawnSync(process.execPath, [mod, 'render', 'capsule_ack', '--capsule-id', capsuleId, '--root', root], { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 function promptFor(declaration) {
@@ -267,6 +278,117 @@ test('WITNESS C: the capsule skill runs the extension BEFORE its terminal litera
   assert.ok(extensionAt < literalAt,
     'the extension step must precede the terminal literal, or the governed seat never clears');
 
-  assert.match(skill, /CHECKPOINT_TAIL_TOLERANCE_BYTES/,
-    'the skill must keep citing the mechanism that forces this ordering');
+  // The ordering stands, but its ORIGINAL justification was withdrawn in review
+  // round 1: the transcript-tail byte budget cannot fire here, because its only
+  // enforcement site is short-circuited by the very ack the literal sets
+  // (auto-clear-transport.mjs:470, 'ackFresh !== true && ...'). A test that
+  // demanded the skill keep citing that constant was actively defending a false
+  // explanation, so it now demands the opposite.
+  // Scoped to the extension step's own block. The skill cites the byte budget
+  // elsewhere for a different, pre-existing purpose; what must not survive is
+  // citing it as the reason for THIS ordering.
+  const blockStart = skill.indexOf('6. **EXTENSION ACK');
+  const blockEnd = skill.indexOf('7. **STOP.');
+  assert.ok(blockStart !== -1 && blockEnd > blockStart, 'the extension step must be step 6, before step 7');
+  const block = skill.slice(blockStart, blockEnd);
+  assert.doesNotMatch(block, /CHECKPOINT_TAIL_TOLERANCE_BYTES/,
+    'the withdrawn byte-budget mechanism must not be cited as the reason for the ordering');
+  assert.match(block, /and on nothing after it/,
+    'the skill must give the reason that survives: the clear is gated on the acknowledgement '
+    + 'and on nothing after it, so a step placed after the literal races the clear');
+});
+
+// ── M2 — an accepted declaration may never render truncated ──────────────────
+
+test('M2: a declaration accepted by the validator can never render truncated', () => {
+  // Validation measured the TEMPLATE, the render measured the SUBSTITUTED
+  // string, and the two bounds were separate literals. A template at exactly
+  // the documented maximum carrying {capsule_id} therefore passed validation
+  // and then rendered with the capsule id cut in half, while the seat was told
+  // to send it exactly as rendered: the half-armed handshake that whole-file
+  // rejection exists to prevent.
+  const head = 'notify the supervising process with this exact body: ';
+  const filler = 'y'.repeat(FIELD_MAX_CHARS - head.length - CAPSULE_ID_SLOT.length);
+  const template = `${head}${filler}${CAPSULE_ID_SLOT}`;
+  assert.equal(template.length, FIELD_MAX_CHARS, 'the fixture must sit exactly on the cap');
+
+  const result = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: template });
+
+  // Two acceptable outcomes, and truncation is neither: refuse it up front with
+  // the named warning, or render it whole.
+  if (result.extension.warning) {
+    assert.ok(String(result.extension.warning).startsWith(WARNING_PREFIX),
+      'a refusal must carry the fixed greppable prefix');
+    assert.equal(result.extension.resume_ack, null, 'a refused field must not survive');
+  } else {
+    assert.ok(result.prompt.includes(CAPSULE_ID),
+      'the capsule id must reach the seat whole, never cut');
+  }
+  assert.doesNotMatch(result.prompt, /\[\+\d+ chars\]/,
+    'nothing the seat is told to send verbatim may be silently truncated');
+});
+
+// ── M4 — the declared body is sent byte for byte ─────────────────────────────
+
+test('M4: the declared body renders byte for byte, unquoted, on both surfaces', () => {
+  // The protocol is an exact-body match, so a JSON-quoting render corrupts it:
+  // a body carrying a quote or a backslash reached the seat escaped, and the
+  // seat would then send bytes the supervisor never matches.
+  const body = 'X-LIFECYCLE ack \"quoted\" C:\\dir\\name {\"k\":\"v\"}';
+  const declaration = {
+    schema: 'LifecycleExtension/v1',
+    resume_ack: `notify with this exact body: ${body}`,
+    capsule_ack: `notify with this exact body: ${body}`,
+  };
+
+  const resume = promptFor(declaration);
+  assert.equal(resume.extension.warning, null, 'the declaration must be accepted');
+  assert.ok(resume.prompt.includes(body),
+    'the resume surface must carry the declared body unescaped and unquoted');
+
+  const fixture = mkFixture(declaration);
+  try {
+    const rendered = renderCapsuleAck(fixture.root, CAPSULE_ID);
+    assert.equal(rendered.status, 0, 'the capsule renderer must always exit 0');
+    assert.equal(rendered.stdout.trim(), `notify with this exact body: ${body}`,
+      'both surfaces must render the identical line, byte for byte');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// ── M3 — the capsule surface goes through the SAME loader ────────────────────
+
+test('M3: a declaration the resume surface refuses is refused on the capsule surface too', () => {
+  // The capsule skill used to instruct the model to read the raw JSON itself,
+  // so one file could be REFUSED on resume and HONORED on capsule. Both
+  // surfaces now run the same loader.
+  const bad = { schema: 'Typo/v1', capsule_ack: 'notify: X-LIFECYCLE done {capsule_id}' };
+
+  const resume = promptFor(bad);
+  assert.ok(String(resume.extension.warning).startsWith(WARNING_PREFIX),
+    'the resume surface must refuse a wrong schema');
+
+  const fixture = mkFixture(bad);
+  try {
+    const out = renderCapsuleAck(fixture.root, CAPSULE_ID);
+    assert.equal(out.status, 0, 'the renderer must fail open, always exit 0');
+    assert.equal(out.stdout.trim(), '',
+      'a refused declaration must render NOTHING on the capsule surface');
+    assert.ok(out.stderr.includes(WARNING_PREFIX),
+      'and must say so with the same greppable warning the resume surface uses');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('M3: the capsule skill runs the shared renderer instead of reading the declaration itself', () => {
+  const skill = readFileSync(CAPSULE_SKILL, 'utf8');
+  const blockStart = skill.indexOf('6. **EXTENSION ACK');
+  const blockEnd = skill.indexOf('7. **STOP.');
+  const block = skill.slice(blockStart, blockEnd);
+  assert.match(block, /node daemons\/lifecycle-extension\.mjs render capsule_ack/,
+    'the skill must invoke the shared renderer');
+  assert.doesNotMatch(block, /Read `\.aigent\/lifecycle-extension\.json`/,
+    'the skill must not instruct the model to read the declaration itself');
 });
