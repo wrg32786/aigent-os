@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-09-04-554d10a3",
-  "public_product_commit": "554d10a39e5490d507481d6379364a9a5dea18de",
+  "baseline_id": "aigent-os-2026-09-04-8ca833af",
+  "public_product_commit": "8ca833afbca63096f7da784cc802799dd9ab0bb8",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -25,7 +25,7 @@
     "daemons/sessionstart-reinject.mjs": "af62ac18954e7ec773e3051ac23fb89e8b1731e74dcac9b1e5bbd1320fd3ff52",
     "daemons/resume-verb.mjs": "f1d1ddc498cc514a13504d4f46d5a6d6d9fc7b7255935fc086d29602042d6297",
     "daemons/lifecycle-extension.mjs": "2819d6600b8c48922bdde7cbe95409a003d574bb2487e3489f7ba02e819840a2",
-    "daemons/caddy.sh": "ec3fcfcb388ee6927df5d07e0e69f0a740a0f973fd639ed73de2f7a596a7cfff",
+    "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
     "daemons/precompact-flush.mjs": "eb93bc6bed70e24400229d4930c7ec9b3f806476562f20ea83f6da4cc3b8b07a",
     "daemons/ctx-refresh-sensor.mjs": "0978848f6fac08f66fa7c6842e666c19eed6d05b82836a316b9c3c2be49e6cfb",
@@ -48,7 +48,7 @@
     "daemons/lifecycle-common.mjs": "f391a128ce975b61b84fa0e643c651466d0733c32dadca71d9f2bb697e57c4c1",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
-    "daemons/memory-root.sh": "4d33c67e589131e9031bede6cf0428965e16de862b177f58794ca2bc6a07ce85",
+    "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
     "daemons/render_boundary.py": "ec2ed2b238d46cc964770d86dd3abe37913a611343871d348b8525e289ff1ff3",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
