@@ -524,3 +524,54 @@ test('N2: length (and the single-line check) apply to the trimmed field, not the
   assert.ok(withSlot.prompt.includes(`notify ${CAPSULE_ID} done`),
     'the slot must still resolve correctly once the padding is trimmed');
 });
+
+// ── Round 2: a declared field that cannot render must say so ─────────────────
+//
+// Two paths produced NOTHING at all. A resume_ack carrying {capsule_id} on a
+// degraded boot with no capsule rendered no step, and a capsule_ack whose
+// substituted length crossed the cap printed nothing on either stream. Both
+// are fail-open, which is right, and both were fail-SILENT, which is not: the
+// seam's own contract is that an operator chasing a supervisor hold greps one
+// token and finds the cause, and on these two paths there was no token to
+// find. Neither warning may echo the declared text, since the point of holding
+// the step is that there is nothing truthful to send.
+
+test('R2: a resume_ack that needs an id on a boot with no capsule warns instead of vanishing', () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'lifecycle-ext-'));
+  const root = path.join(base, 'test-root');
+  mkdirSync(path.join(root, 'memory', 'capsules'), { recursive: true });
+  mkdirSync(path.join(root, '.aigent'), { recursive: true });
+  writeFileSync(path.join(root, '.aigent', 'lifecycle-extension.json'), JSON.stringify({
+    schema: 'LifecycleExtension/v1',
+    resume_ack: `notify: ${FIXTURE_TOKEN} {capsule_id}`,
+  }));
+  try {
+    const degraded = runResumeVerb({ projectRoot: root, source: 'clear', sessionId: 'sid-1' });
+    assert.equal(degraded.degraded, true);
+    assert.ok(!degraded.prompt.includes(FIXTURE_TOKEN), 'the held step must not leak the declared text');
+    assert.match(degraded.prompt, /LIFECYCLE-EXTENSION: resume_ack not rendered/,
+      'a declared field that is held must leave a greppable reason in the procedure');
+    assert.match(degraded.extension.rendered.warning, /resume_ack not rendered/,
+      'the reason is data on the result, not only prose');
+    assert.equal(degraded.extension.rendered.resume_ack, null);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('R2: a capsule_ack whose substituted length crosses the cap warns on stderr instead of printing nothing', () => {
+  const fixture = mkFixture({
+    schema: 'LifecycleExtension/v1',
+    capsule_ack: `notify: ${FIXTURE_TOKEN} {capsule_id}`,
+  });
+  try {
+    const r = renderCapsuleAck(fixture.root, 'x'.repeat(FIELD_MAX_CHARS));
+    assert.equal(r.status, 0, 'the renderer never fails a capsule');
+    assert.equal(r.stdout, '', 'an over-cap body must not be handed to the seat');
+    assert.match(r.stderr, /LIFECYCLE-EXTENSION: capsule_ack not rendered/,
+      'silence on the capsule surface reads as "no declaration", so the hold must be named');
+    assert.ok(!r.stderr.includes(FIXTURE_TOKEN), 'the warning must not echo the declared text');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});

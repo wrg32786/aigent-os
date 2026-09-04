@@ -65,7 +65,12 @@ export function foldDeclaredLine(value) {
     .trim();
 }
 
-export const WARNING_PREFIX = 'LIFECYCLE-EXTENSION: declaration ignored:';
+// ONE greppable token on every diagnostic this seam emits. An operator chasing
+// a supervisor hold-timeout greps it and finds the cause, whichever path held
+// the handshake: a refused declaration, or an accepted field that could not be
+// rendered truthfully.
+export const WARNING_TOKEN = 'LIFECYCLE-EXTENSION:';
+export const WARNING_PREFIX = `${WARNING_TOKEN} declaration ignored:`;
 
 // A rejected declaration is rejected WHOLE. Accepting the readable half of a
 // malformed file is how an operator ends up believing a handshake is armed
@@ -183,23 +188,42 @@ export function loadLifecycleExtension(projectRoot) {
 /**
  * Resolve one declared field against the loaded capsule id.
  *
- * Returns null when there is nothing to run: no declaration, or a template that
- * needs an id when no capsule was loaded. That second case is the fail-safe the
- * degraded resume path depends on -- with no capsule there is nothing truthful
- * to announce, so the step must not render at all rather than invite a
- * fabricated id.
+ * Always returns {line, warning}. line is null when there is nothing to run: no
+ * declaration, or a template that needs an id when no capsule was loaded. That
+ * second case is the fail-safe the degraded resume path depends on -- with no
+ * capsule there is nothing truthful to announce, so the step must not render at
+ * all rather than invite a fabricated id.
+ *
+ * A HELD field is never silent. When a declaration exists and its field does
+ * not render, warning names the field and the reason, under the same greppable
+ * token as a refusal. Silence on either surface reads as "nothing declared",
+ * which is exactly the half-armed handshake this seam exists to prevent. The
+ * warning never echoes the declared text: the reason the step is held is that
+ * there is nothing truthful to send.
  */
-export function resolveLifecycleAck(template, capsuleId) {
-  if (typeof template !== 'string' || template.length === 0) return null;
-  if (!template.includes(CAPSULE_ID_SLOT)) return template;
-  if (typeof capsuleId !== 'string' || capsuleId.trim().length === 0) return null;
+export function resolveLifecycleAck(template, capsuleId, field = 'field') {
+  if (typeof template !== 'string' || template.length === 0) return { line: null, warning: null };
+  if (!template.includes(CAPSULE_ID_SLOT)) return { line: template, warning: null };
+  if (typeof capsuleId !== 'string' || capsuleId.trim().length === 0) {
+    return {
+      line: null,
+      // Spelled without the slot literal: an unsubstituted slot must never
+      // appear anywhere in the injected procedure, warnings included.
+      warning: `${WARNING_TOKEN} ${field} not rendered: it carries a capsule id slot and no capsule was loaded to fill it`,
+    };
+  }
   const resolved = template.split(CAPSULE_ID_SLOT).join(capsuleId.trim());
   // The validator charged the slot CAPSULE_ID_MAX_CHARS, so this is unreachable
   // for any id inside that budget. It is here because the alternative to
-  // returning nothing is handing the seat a truncated body it was told to send
+  // holding the step is handing the seat a truncated body it was told to send
   // verbatim, and a silently wrong handshake is worse than an absent one.
-  if (resolved.length > FIELD_MAX_CHARS) return null;
-  return resolved;
+  if (resolved.length > FIELD_MAX_CHARS) {
+    return {
+      line: null,
+      warning: `${WARNING_TOKEN} ${field} not rendered: with this capsule id substituted it is ${resolved.length} characters, over the ${FIELD_MAX_CHARS} cap`,
+    };
+  }
+  return { line: resolved, warning: null };
 }
 
 // ── The capsule surface's entry point ────────────────────────────────────────
@@ -237,7 +261,8 @@ export function renderCli(argv, out = process.stdout, err = process.stderr) {
       err.write(`${extension.warning}\n`);
       return 0;
     }
-    const line = resolveLifecycleAck(extension[field], capsuleId);
+    const { line, warning } = resolveLifecycleAck(extension[field], capsuleId, field);
+    if (warning) err.write(`${warning}\n`);
     if (line) out.write(`${foldDeclaredLine(line)}\n`);
     return 0;
   } catch (error) {
