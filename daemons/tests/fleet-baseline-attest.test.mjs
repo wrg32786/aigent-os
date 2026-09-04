@@ -569,13 +569,13 @@ test('--attest writes nothing into the tree it attests', () => {
 
 const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 
-test('v7 manifest identity pins the recut population', () => {
+test('v8 manifest identity pins the recut population', () => {
   const manifest = readManifest();
-  assert.equal(manifest.schema, 'FleetBaselineManifest/v7');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-09-03-73a968b8');
+  assert.equal(manifest.schema, 'FleetBaselineManifest/v8');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-09-04-fe1349c9');
   assert.equal(
     manifest.public_product_commit,
-    '73a968b8a26334c17082f14d090c704e40878e8b',
+    'fe1349c940befed61f0df9ad98ef86e1688cfd00',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
