@@ -39,7 +39,17 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
    - **Stage directives** — anything decision-shaped or instruction-shaped that isn't already banked goes to `vault/memory/MEMORY_CANDIDATES.md`. A directive that exists only inside a capsule dies with that capsule: the capsule is spent on the next resume, and the directive is not meant to be.
    - **One `vault/memory/SESSION_LOG.md` line**, newest first: `- <YYYY-MM-DD> <capsule-id>: <one-line summary>`.
 5. **SYNC fail-soft.** After the capsule and any memory edits land, run `node daemons/vault-sync.mjs`. It resolves the installed root from `.aigent/state.json`, stages only capsule/memory changes, and handles no-remote or push-failure outcomes without prompting or gating the lifecycle. Fail-soft is deliberate: a fresh install has no remote, and the lifecycle must never wedge because one is absent. But if it reports a failure and a remote IS configured, that is a real finding — say so plainly rather than moving on, because unsynced memory is memory you will lose.
-6. **STOP. Emit this EXACT line, nothing else, and then be silent:**
+6. **EXTENSION ACK, only if this install declares one.** Run this and act on what it prints:
+
+   ```
+   node daemons/lifecycle-extension.mjs render capsule_ack --capsule-id <the confirmed capsule id> --root <the installed root>
+   ```
+
+   If it prints a line, do exactly what that line says, now, before step 7. If it prints nothing and stderr is empty, there is no declaration to run and this step is over: that is the ordinary standalone install. If stderr carries a line beginning `LIFECYCLE-EXTENSION:`, a declaration exists but is not being run, either refused whole (`declaration ignored:`) or held because its field could not be rendered truthfully (`capsule_ack not rendered:`), so report that line and improvise no substitute. It always exits 0, so a bad declaration can never fail the capsule. Do not open `.aigent/lifecycle-extension.json` yourself: this command is the only reader, which is what keeps a declaration refused on resume refused here too, by the same validator.
+
+   **Why it runs HERE and not after step 7**, even though an extension otherwise follows the core acknowledgement: step 7's literal IS the acknowledgement the supervising machinery watches for, and the clear is gated on that acknowledgement and on nothing after it. The moment the literal is observed the clear can be minted, mid-turn, without waiting for anything else this turn does. A step placed after the literal therefore runs inside a window the core already treats as closed, and races the clear it is meant to precede. Running the extension one step earlier costs nothing and removes the race.
+
+7. **STOP. Emit this EXACT line, nothing else, and then be silent:**
 
    ```
    Capsule Complete, Ready For Clear
@@ -80,13 +90,14 @@ A rolling, best-effort version of this write already runs on every `Stop` event 
 - Trivial sessions a fresh session could reconstruct from memory alone.
 - Inside a dispatched sub-agent (the dispatch brief IS the capsule).
 
-**Declining still ends at Step 6.** If this invocation is an **injected**
+**Declining still ends at Step 7.** If this invocation is an **injected**
 `/context-capsule` from the auto-clear cycle (not the operator's own),
-"trivial" only excuses the WRITE — steps 2–5 — never the ack. Before going
+"trivial" only excuses the WRITE — steps 2–5 — never step 6 and never the
+ack. Before going
 quiet: (a) confirm a valid prior capsule already exists on disk for this
 session — `daemons/stop-capsule-writer.mjs` wrote one on the last `Stop`
 event, and the checkpoint's capsule-exists gate feeds on it being there,
-so verify rather than assume; (b) still emit the exact literal from Step 6,
+so verify rather than assume; (b) still emit the exact literal from Step 7,
 `Capsule Complete, Ready For Clear`, as the final act, then go silent. The
 cycle is waiting on that literal alone — "nothing to capsule" is not an
 exemption from producing it. The completion acknowledgement is still required when an existing valid capsule is reused. The injected cycle waits on that exact literal; "nothing to capsule" is not a completion signal.

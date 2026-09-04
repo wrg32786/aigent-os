@@ -1734,6 +1734,69 @@ test('a transcript line observed half-written still acks once it completes', () 
   }
 });
 
+// M1 WITNESS (program issue #49, G1 review round 1). What gates the clear, and
+// what does NOT.
+//
+// The G1 seam runs a declared extension step on the capsule surface BEFORE the
+// terminal literal. The reason first written for that ordering was the
+// transcript-tail byte budget, and that reason is FALSE: the only enforcement
+// site is `ackFresh !== true && ...` (auto-clear-transport.mjs:470), and the
+// literal is precisely what sets ackFresh, so post-literal bytes can never
+// produce checkpoint-transcript-short.
+//
+// The real reason is this: the clear is gated on the ack and on NOTHING after
+// it. The checkpoint record the gate reads is written by the Stop hook on every
+// turn end, so it can already be satisfied from an EARLIER turn; once the
+// literal is observed mid-turn, no further condition stands between the seat
+// and a minted clear. A step placed after the literal therefore runs in a
+// window the core already considers closed.
+test('the clear is gated on the capsule ack, and transcript growth after the ack does not gate it', () => {
+  // Arm 1, control. Everything else satisfied, ack absent: refused BY NAME, so
+  // the ack is demonstrably the thing standing between the seat and a clear.
+  const noAck = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    primeForTranscriptAck(noAck);
+    noAck.attemptAutomaticClear();
+    assert.equal(noAck.runner.lastReason?.code, 'runner-capsule-not-acked',
+      'without the ack the clear must refuse, and the ack must be what is missing');
+  } finally {
+    noAck.cleanup();
+  }
+
+  // Arm 2. The seat prints the terminal literal and the runner observes it live
+  // off the transcript, mid-turn. Then an extension step running AFTER the
+  // literal lands a tool call and its result in the transcript, well past
+  // CHECKPOINT_TAIL_TOLERANCE_BYTES. The clear must still go through: neither
+  // the ack gate nor the byte budget holds it, and nothing waits for the turn
+  // to end. That is the window a post-literal step would run in.
+  const acked = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    primeForTranscriptAck(acked);
+    appendExactCapsuleAck(acked);
+    assert.equal(acked.runner._checkCapsuleAck(), true, 'the literal must ack');
+    assert.equal(acked.runner.capsuleAckSeen, true, 'the ack must latch');
+
+    fs.appendFileSync(
+      acked.fixture.transcriptPath,
+      `\n{"type":"assistant","message":{"content":[{"type":"tool_use","name":"post_literal_extension",`
+      + `"input":{"body":"${'x'.repeat(CHECKPOINT_TAIL_TOLERANCE_BYTES + 1)}"}}]}}\n`,
+    );
+
+    acked.attemptAutomaticClear();
+    const code = acked.runner.lastReason?.code ?? null;
+    assert.notEqual(code, 'runner-capsule-not-acked',
+      'the ack is latched, so the ack gate must no longer refuse');
+    assert.notEqual(code, 'checkpoint-transcript-short',
+      'the byte budget must not fire either: the live ack supersedes it, which is exactly why '
+      + 'the byte budget was never the mechanism protecting the capsule-side ordering');
+    assert.ok(acked.runner.phase === 'prepared' || acked.runner.phase === 'submitted'
+      || acked.runner.phase === 'cleared' || code === null,
+      `the clear must proceed past the gates; phase=${acked.runner.phase} code=${code}`);
+  } finally {
+    acked.cleanup();
+  }
+});
+
 // The second half of the same invariant: no cursor may advance past bytes
 // that were never examined. The scan reads at most 262144 bytes from `from`,
 // but the old cursor advanced to (size - literal length), computed from the
