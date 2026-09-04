@@ -17,7 +17,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from memory_root import MemoryRootError, die, resolve_memory_root, seat_base_from_env  # noqa: E402
+from memory_root import MemoryRootError, die, env_seat_base, resolve_memory_root, seat_base_from_env  # noqa: E402
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -56,8 +56,18 @@ def memory_path(vault: Path | None = None) -> Path:
     memory sits beside a dead default tree read the dead tree's
     BODY_STATE.json and wrote its runtime state there.
     """
-    base = seat_base_from_env() if vault is None else Path(vault)
-    return _resolved(base)
+    env_base = env_seat_base()
+    if vault is None:
+        return _resolved(env_base if env_base is not None else seat_base_from_env())
+    if env_base is not None:
+        # The vault the seat itself produced (memory root's parent) maps back
+        # to the seat's declared root. Resolving UNDER that vault instead would
+        # lose a declaration whose last segment is not "memory": "state/mem"
+        # has parent "state", and "state" declares nothing.
+        seat_root = _resolved(env_base)
+        if Path(vault) == seat_root.parent:
+            return seat_root
+    return _resolved(Path(vault))
 
 
 def resolve_vault_path() -> Path:

@@ -497,6 +497,17 @@ test('ledgers: a declared seat keeps its skill ledgers in the one tree; a stock 
       assert.equal(door(stockNoSeed.root, ['--ledgers', '--relative'], env).stdout.trim(), 'vault/memory');
     }
     assert.equal(door(declared.root, ['--ledgers']).stdout.trim(), path.join(declared.root, 'memory'));
+    // One spawn, both answers: --with-ledgers is the two single answers on two
+    // lines, from the resolver and from the door with and without node.
+    for (const fx of [declared, stock, stockNoSeed]) {
+      const both = spawnSync(process.execPath, [RESOLVER, '--root', fx.root, '--with-ledgers', '--relative'], { encoding: 'utf8' });
+      const expected = `${spawnSync(process.execPath, [RESOLVER, '--root', fx.root, '--relative'], { encoding: 'utf8' }).stdout.trim()}\n${ask(fx, ['--relative']).stdout.trim()}`;
+      assert.equal(both.stdout.trim(), expected, 'the resolver pairs the two answers');
+      for (const env of [process.env, { ...process.env, PATH: pruned }]) {
+        if (fx === declared && env.PATH === pruned) continue; // no node: a declaration refuses, as pinned elsewhere
+        assert.equal(door(fx.root, ['--with-ledgers', '--relative'], env).stdout.trim(), expected, 'the door pairs the same two answers');
+      }
+    }
   } finally {
     for (const fx of [declared, stock, stockNoSeed]) rmSync(fx.base, { recursive: true, force: true });
   }
@@ -560,5 +571,52 @@ test('W5c: the Python state daemon reads and writes the declared tree and leaves
     assert.ok(!existsSync(path.join(broken.root, 'vault', 'memory', 'runtime')), 'nothing is written around a broken declaration');
   } finally {
     for (const fx of [live, nested, broken]) rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
+test('W5c: a declared root whose last segment is not "memory", and a seat directory named "vault", both keep their declaration', { skip: !PYTHON && 'python not available' }, () => {
+  // Two shapes that lost the declaration once: a vault handed back into the
+  // resolver (whose parent "state" declares nothing) and an AIGENT_VAULT that
+  // is the install root but happens to be named vault.
+  const odd = mkRoot({ dirs: ['state/mem'], declare: 'state/mem' });
+  const base = mkdtempSync(path.join(tmpdir(), 'memory-root-'));
+  const named = path.join(base, 'vault');
+  mkdirSync(path.join(named, '.aigent'), { recursive: true });
+  mkdirSync(path.join(named, 'brain'), { recursive: true });
+  writeFileSync(path.join(named, '.aigent', 'state.json'), JSON.stringify({ schemaVersion: 1, memory_root: 'brain' }));
+  try {
+    const daemon = path.join(DAEMONS, 'runtime', 'update-active-state.py');
+    const r1 = spawnSync(PYTHON, [daemon], { encoding: 'utf8', env: { ...process.env, AIGENT_ROOT: odd.root, AIGENT_VAULT: odd.root, AIGENT_STATE_HOME_DIR: odd.root } });
+    assert.equal(r1.status, 0, r1.stderr);
+    assert.ok(existsSync(path.join(odd.root, 'state', 'mem', 'runtime', 'ACTIVE_STATE.json')), 'state lands in the declared tree');
+    assert.ok(!existsSync(path.join(odd.root, 'state', 'vault')), 'no default tree grows under the declared root\'s parent');
+    assert.ok(!existsSync(path.join(odd.root, 'vault')), 'no default tree grows at the seat');
+    const r2 = spawnSync(PYTHON, [daemon], { encoding: 'utf8', env: { ...process.env, AIGENT_VAULT: named, AIGENT_ROOT: undefined, AIGENT_STATE_HOME_DIR: undefined } });
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.ok(existsSync(path.join(named, 'brain', 'runtime', 'ACTIVE_STATE.json')), 'a seat directory named vault keeps its declaration');
+    assert.ok(!existsSync(path.join(named, 'memory')) && !existsSync(path.join(base, 'memory')), 'nothing resolves to a parent or a default');
+  } finally {
+    rmSync(odd.base, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('W5d: the Python door returns the declared root byte for byte through node, for a non-ASCII root and one with an apostrophe', { skip: !PYTHON && 'python not available' }, () => {
+  const bases = [];
+  try {
+    for (const name of ['sèat-ü', "seat's root"]) {
+      const base = mkdtempSync(path.join(tmpdir(), 'memory-root-'));
+      bases.push(base);
+      const root = path.join(base, name);
+      mkdirSync(path.join(root, '.aigent'), { recursive: true });
+      mkdirSync(path.join(root, 'mine'), { recursive: true });
+      writeFileSync(path.join(root, '.aigent', 'state.json'), JSON.stringify({ schemaVersion: 1, memory_root: 'mine' }));
+      const r = spawnSync(PYTHON, ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from memory_root import resolve_memory_root; print(resolve_memory_root(sys.argv[2]))', DAEMONS, root], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stdout.trim(), path.join(root, 'mine'), `${name}: the door must hand back the declared root, not a re-decoded one`);
+      assert.ok(existsSync(r.stdout.trim()), `${name}: the returned path must exist`);
+    }
+  } finally {
+    for (const base of bases) rmSync(base, { recursive: true, force: true });
   }
 });

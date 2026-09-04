@@ -13,10 +13,12 @@ STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
 # The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
 # install that predates it.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
-if ! MEMORY_ROOT="$(aigent_memory_root "$STATE_BASE" 2>&1)"; then
-  printf 'FAIL memory root: %s\n' "$MEMORY_ROOT"
+if ! MEMORY_ROOTS="$(aigent_memory_root "$STATE_BASE" --with-ledgers 2>&1)"; then
+  printf 'FAIL memory root: %s\n' "$MEMORY_ROOTS"
   exit 1
 fi
+MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
+LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
 
 SKILLS_ROOT="$ROOT/skills"
 DAEMONS_ROOT="$ROOT/daemons"
@@ -269,8 +271,8 @@ else
   ck "HEAT_INDEX.json schema" FAIL "missing or invalid"
 fi
 
-if [[ -f "$MEMORY_ROOT/CADDY_MUTES.json" ]]; then
-  if CADDY_FILE="$MEMORY_ROOT/CADDY_MUTES.json" python3 -c \
+if [[ -f "$LEDGERS_ROOT/CADDY_MUTES.json" ]]; then
+  if CADDY_FILE="$LEDGERS_ROOT/CADDY_MUTES.json" python3 -c \
     'import json, os; json.load(open(os.environ["CADDY_FILE"], encoding="utf-8"))' 2>/dev/null; then
     ck "CADDY_MUTES.json parses" PASS
   else

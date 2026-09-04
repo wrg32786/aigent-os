@@ -11,12 +11,13 @@ ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # A broken declaration is reported on stderr and this best-effort script exits
 # without writing anywhere.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
-MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
-  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
-# The skill ledgers and the mute file: the same tree on a declared seat, the
-# pre-existing memory/ seed tree on a stock install (where they ship).
-LEDGERS_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" --ledgers 2>&1)" \
-  || { printf '%s\n' "$LEDGERS_ROOT" >&2; exit 0; }
+# One spawn answers both: the memory root, and the ledgers root (the same
+# tree on a declared seat, the pre-existing memory/ seed tree on a stock
+# install, where the skill ledgers and the mute file ship).
+MEMORY_ROOTS="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" --with-ledgers 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOTS" >&2; exit 0; }
+MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
+LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
 REPO_INDEX="$ROOT/.claude/skill-index.json"
 GLOBAL_INDEX="$HOME/.claude/skills/skill-index.json"
 INDEX="$REPO_INDEX"

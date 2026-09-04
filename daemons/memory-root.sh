@@ -12,7 +12,7 @@
 # shell daemons that call this are best-effort, and a wrong tree is worse
 # than a skipped hint.
 #
-#   aigent_memory_root <base> [--relative] [--allow-missing] [--ledgers]
+#   aigent_memory_root <base> [--relative] [--allow-missing] [--ledgers] [--with-ledgers]
 #
 # Prints the path on stdout and returns 0, or prints one MEMORY-ROOT: line on
 # stderr and returns 1. The node binary is found on PATH like everywhere else
@@ -20,7 +20,7 @@
 # for one) get the undeclared default and refuse only a declaration.
 
 aigent_memory_root() {
-  local base="" relative=0 allow_missing=0 ledgers=0 arg
+  local base="" relative=0 allow_missing=0 ledgers=0 with_ledgers=0 arg
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # --default: the resolver's default relative root, and nothing else. The
@@ -36,6 +36,7 @@ aigent_memory_root() {
       --relative) relative=1 ;;
       --allow-missing) allow_missing=1 ;;
       --ledgers) ledgers=1 ;;
+      --with-ledgers) with_ledgers=1 ;;
       --*) printf 'MEMORY-ROOT: unknown argument: %s\n' "$arg" >&2; return 1 ;;
       *) if [ -n "$base" ]; then printf 'MEMORY-ROOT: base given twice\n' >&2; return 1; fi; base="$arg" ;;
     esac
@@ -49,6 +50,7 @@ aigent_memory_root() {
     [ "$relative" -eq 1 ] && args+=(--relative)
     [ "$allow_missing" -eq 1 ] && args+=(--allow-missing)
     [ "$ledgers" -eq 1 ] && args+=(--ledgers)
+    [ "$with_ledgers" -eq 1 ] && args+=(--with-ledgers)
     node "$here/memory-root.cjs" "${args[@]}"
     return $?
   fi
@@ -60,17 +62,23 @@ aigent_memory_root() {
   # Undeclared, no node: the resolver's own default rule, and nothing else.
   # The skill ledgers of an undeclared install live in the <base>/memory seed
   # tree when it exists, exactly as the resolver answers --ledgers.
-  local candidate
-  if [ "$ledgers" -eq 1 ] && [ -d "$base/memory" ]; then
-    if [ "$relative" -eq 1 ]; then printf 'memory\n'; else printf '%s/memory\n' "$base"; fi
-    return 0
-  fi
+  local candidate memory_rel="vault/memory" ledgers_rel
   for candidate in vault/memory memory; do
-    if [ -d "$base/$candidate" ]; then
-      if [ "$relative" -eq 1 ]; then printf '%s\n' "$candidate"; else printf '%s/%s\n' "$base" "$candidate"; fi
-      return 0
-    fi
+    if [ -d "$base/$candidate" ]; then memory_rel="$candidate"; break; fi
   done
-  if [ "$relative" -eq 1 ]; then printf 'vault/memory\n'; else printf '%s/vault/memory\n' "$base"; fi
+  ledgers_rel="$memory_rel"
+  [ -d "$base/memory" ] && ledgers_rel="memory"
+  _aigent_mr_print() {
+    if [ "$relative" -eq 1 ]; then printf '%s\n' "$1"; else printf '%s/%s\n' "$base" "$1"; fi
+  }
+  if [ "$with_ledgers" -eq 1 ]; then
+    _aigent_mr_print "$memory_rel"
+    _aigent_mr_print "$ledgers_rel"
+  elif [ "$ledgers" -eq 1 ]; then
+    _aigent_mr_print "$ledgers_rel"
+  else
+    _aigent_mr_print "$memory_rel"
+  fi
+  unset -f _aigent_mr_print
   return 0
 }

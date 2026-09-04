@@ -204,7 +204,9 @@ function resolveMemoryRoot(base, options) {
 // --default prints the resolver's default relative root and nothing else, so a
 // shell consumer can ask "is this seat's root the default?" without carrying
 // the literal itself.
-const CLI_FLAGS = new Set(['--root', '--relative', '--allow-missing', '--json', '--default', '--ledgers']);
+// --with-ledgers prints the memory root and the ledgers root on two lines, so
+// a per-prompt hook pays for one process instead of two.
+const CLI_FLAGS = new Set(['--root', '--relative', '--allow-missing', '--json', '--default', '--ledgers', '--with-ledgers']);
 
 function cli(argv, out = process.stdout, err = process.stderr) {
   const opts = new Map();
@@ -247,8 +249,12 @@ function cli(argv, out = process.stdout, err = process.stderr) {
     if (opts.has('--json')) {
       out.write(`${JSON.stringify(described)}\n`);
     } else {
-      const answer = opts.has('--ledgers') ? described.ledgers : described;
-      out.write(`${opts.has('--relative') ? answer.relative : answer.root}\n`);
+      const pick = (answer) => (opts.has('--relative') ? answer.relative : answer.root);
+      if (opts.has('--with-ledgers')) {
+        out.write(`${pick(described)}\n${pick(described.ledgers)}\n`);
+      } else {
+        out.write(`${pick(opts.has('--ledgers') ? described.ledgers : described)}\n`);
+      }
     }
     return 0;
   } catch (error) {

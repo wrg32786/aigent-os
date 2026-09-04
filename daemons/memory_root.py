@@ -87,26 +87,28 @@ def resolve_memory_root(
     raise MemoryRootError(last_error if last_error.startswith(ERROR_TOKEN) else f"{ERROR_TOKEN} {last_error}")
 
 
-def seat_base_from_env() -> Path:
-    """The seat root a harness-launched daemon resolves under.
+def env_seat_base() -> Path | None:
+    """The seat base the environment names, or None when it names nothing.
 
     ``AIGENT_STATE_HOME_DIR`` (the test and probe diversion lever) is honored
-    first, exactly as the JavaScript callers honor it. ``AIGENT_VAULT`` may
-    name the seat root or its ``vault/`` directory (both forms predate this
-    module); the ``vault/`` form is normalized to its parent. Then
-    ``AIGENT_ROOT``, then the historical ``~/.aigent`` home.
+    first, as the JavaScript callers honor it. Then ``AIGENT_VAULT``, which the
+    shipped settings set to the install root and which this daemon family has
+    always preferred; it is taken as given, never trimmed, because an install
+    whose root directory is itself named ``vault`` must keep its declaration
+    (an ``AIGENT_VAULT`` that names a bare ``vault/`` directory still
+    resolves, since the resolver's undeclared rule finds that directory's own
+    ``memory/``). Then ``AIGENT_ROOT``.
     """
-    diverted = os.environ.get("AIGENT_STATE_HOME_DIR")
-    if diverted and diverted.strip():
-        return Path(diverted)
-    explicit = os.environ.get("AIGENT_VAULT")
-    if explicit and explicit.strip():
-        candidate = Path(explicit)
-        return candidate.parent if candidate.name.lower() == "vault" else candidate
-    root = os.environ.get("AIGENT_ROOT")
-    if root and root.strip():
-        return Path(root)
-    return Path(os.path.expanduser("~/.aigent"))
+    for name in ("AIGENT_STATE_HOME_DIR", "AIGENT_VAULT", "AIGENT_ROOT"):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return Path(value)
+    return None
+
+
+def seat_base_from_env() -> Path:
+    """The seat base for a harness-launched daemon: the environment's, else the historical home."""
+    return env_seat_base() or Path(os.path.expanduser("~/.aigent"))
 
 
 def memory_root_from_env(*, ledgers: bool = False) -> Path:
