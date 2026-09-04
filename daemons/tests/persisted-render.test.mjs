@@ -58,7 +58,7 @@ function makeSearchSandbox(name) {
   for (const file of ['deny-list.mjs', 'namespace-registry.mjs', 'namespace-registry.json', 'embed-vault.js', 'search-vault.js']) {
     copyFileSync(path.join(SEM, file), path.join(sem, file));
   }
-  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'memory-root.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, file), path.join(root, 'daemons', file));
   }
   copyFileSync(path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'), path.join(hygiene, 'resume-framing.mjs'));
@@ -418,6 +418,7 @@ const HEALTHY_CHUNK = 'CANARY-HEALTHY-7d21ab-ordinary vault content that should 
   const cgPath = path.join(sandboxRoot, 'capsule-content-gate.mjs');
   copyFileSync(path.join(DAEMONS, 'frontmatter-reader.cjs'), frPath);
   copyFileSync(path.join(DAEMONS, 'capsule-content-gate.mjs'), cgPath);
+  copyFileSync(path.join(DAEMONS, 'memory-root.cjs'), path.join(sandboxRoot, 'memory-root.cjs'));
   const original = readFileSync(path.join(DAEMONS, 'lifecycle-common.mjs'), 'utf8');
   const gate = "  if (!RENDERABLE_DISPOSITIONS.has(disposition)) {\n    return { refused: `disposition-not-allowed:${String(disposition).slice(0, 40)}` };\n  }";
   check('witness setup: disposition gate has one scriptable occurrence', (original.split(gate).length - 1) === 1);
@@ -473,6 +474,10 @@ const HEALTHY_CHUNK = 'CANARY-HEALTHY-7d21ab-ordinary vault content that should 
     return r.stdout || '';
   }
 
+  // caddy.sh sources its memory-root door from its own directory, so the
+  // vendored copy needs the door and the resolver beside it.
+  copyFileSync(path.join(DAEMONS, 'memory-root.sh'), path.join(sandboxRoot, 'memory-root.sh'));
+  copyFileSync(path.join(DAEMONS, 'memory-root.cjs'), path.join(sandboxRoot, 'memory-root.cjs'));
   writeFileSync(caddyPath, caddySrc);
   const baselineOut = runCaddy('2020-01-15');
   const baselineGreen = /STALE/.test(baselineOut);

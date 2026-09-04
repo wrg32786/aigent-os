@@ -112,7 +112,7 @@ export const CAPSULE_REQUEST_TEXT = '/context-capsule';
 // single chunk of text+CR is read by the terminal as PASTED CONTENT, so the
 // CR lands in the composer instead of submitting. The Enter rides its own
 // delayed write (see _fireWake / _writeWakeEnter, mirroring _writeControl).
-export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from vault/memory/capsules and proceed.';
+export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from the capsules directory under this install\'s memory root and proceed.';
 export const DEFAULT_RUNNER_TICK_MS = 100;
 export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
 // Post-submit fuse: the clear round-trip spans the child finishing its

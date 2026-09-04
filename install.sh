@@ -140,6 +140,20 @@ TARGET="$(abspath "$TARGET")"
 MODE="copy"
 [[ "$SRC" == "$TARGET" ]] && MODE="in-place"
 
+# ── Memory root ───────────────────────────────────────────────────────────────
+# Where this seat's memory tree lives, relative to TARGET. Declared in the
+# install marker (.aigent/state.json, field memory_root) and resolved by
+# daemons/memory-root.cjs, the ONE resolver every hook, the runner, the
+# nightly pass, vault sync, semantic search, doctor and this installer share.
+# A stock install declares nothing and gets vault/memory. A declared root is
+# created and seeded HERE, and the default tree is not, so a seat with its own
+# layout never grows a dead default tree beside its live one. A broken
+# declaration fails the install: every hook would refuse it the same way.
+. "$SRC/daemons/memory-root.sh"
+MEMORY_REL="$(aigent_memory_root "$TARGET" --relative --allow-missing 2>&1)" \
+  || fail "memory root: $MEMORY_REL"
+MEMORY_DEFAULT_REL="$(aigent_memory_root --default)"
+
 COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals launcher)
 
 # ── Symlink-escape guard ──────────────────────────────────────────────────────
@@ -596,6 +610,10 @@ copy_missing_tree() {
   local source="$1"
   local destination="$2"
   local sensitive="${3:-0}"
+  # Optional: one relative subtree of source to leave out entirely. Used to
+  # copy vault/ without vault/memory when the seat declares its memory root
+  # elsewhere, so no dead default tree is created beside the live one.
+  local exclude="${4:-}"
   [[ -d "$source" ]] || return 0
   safe_mkdir_p "$destination" || return 0
   # Guard against source and destination canonicalizing to the same directory
@@ -613,6 +631,7 @@ copy_missing_tree() {
   while IFS= read -r -d '' rel; do
     rel="${rel#./}"
     [[ -n "$rel" ]] || continue
+    if [[ -n "$exclude" && ( "$rel" == "$exclude" || "$rel" == "$exclude"/* ) ]]; then continue; fi
     # `|| true`: this is a many-directory tree copy, so one symlinked
     # directory should skip (safe_mkdir_p already printed the warning) and
     # let the rest of the tree continue -- not abort the whole install via
@@ -622,6 +641,7 @@ copy_missing_tree() {
 
   while IFS= read -r -d '' rel; do
     rel="${rel#./}"
+    if [[ -n "$exclude" && ( "$rel" == "$exclude" || "$rel" == "$exclude"/* ) ]]; then continue; fi
     # `|| true`: copy_missing_file's return value is not meaningful success/
     # failure signaling here (it handles and reports its own outcomes), so a
     # non-zero return must never be allowed to trip set -e and abort the
@@ -648,14 +668,14 @@ seed_nightly_templates() {
     return 0
   fi
 
-  safe_mkdir_p "$TARGET/vault/memory/runtime" \
-    || fail "cannot create $TARGET/vault/memory/runtime"
+  safe_mkdir_p "$TARGET/$MEMORY_REL/runtime" \
+    || fail "cannot create $TARGET/$MEMORY_REL/runtime"
 
   local memory_file
   for memory_file in DREAM_LOG.md MEMORY_CANDIDATES.md SWEEP_LOG.md; do
     copy_missing_file \
       "$template_root/$memory_file" \
-      "$TARGET/vault/memory/$memory_file" \
+      "$TARGET/$MEMORY_REL/$memory_file" \
       0 || true
   done
 
@@ -665,7 +685,7 @@ seed_nightly_templates() {
     NIGHTLY_CAPTURE_CANDIDATES.jsonl PROCEDURES.jsonl SELF_MODEL.json; do
     copy_missing_file \
       "$template_root/runtime/$runtime_file" \
-      "$TARGET/vault/memory/runtime/$runtime_file" \
+      "$TARGET/$MEMORY_REL/runtime/$runtime_file" \
       0 || true
   done
 
@@ -673,10 +693,10 @@ seed_nightly_templates() {
   # their public templates while keeping nightly's own canonical seeds isolated
   # above so an operational ledger is never copied from a development vault.
   for runtime_file in ACTIVE_STATE.json STATE_EVENTS.jsonl; do
-    if [[ -f "$SRC/memory/runtime/$runtime_file" ]]; then
+    if [[ -f "$SRC/memory/runtime/$runtime_file" ]]; then # memory-root: source template, not a memory tree
       copy_missing_file \
         "$SRC/memory/runtime/$runtime_file" \
-        "$TARGET/vault/memory/runtime/$runtime_file" \
+        "$TARGET/$MEMORY_REL/runtime/$runtime_file" \
         0 || true
     fi
   done
@@ -707,6 +727,25 @@ if [[ "$MODE" == "copy" ]]; then
           "top-level skill trees are reviewed multiline procedures copied into the installed framework"
         ;;
       hooks|daemons) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
+      vault)
+        if [[ "$MEMORY_REL" == "$MEMORY_DEFAULT_REL" ]]; then
+          copy_missing_tree "$SRC/vault" "$TARGET/vault" 0
+        else
+          # The seat declared its memory root elsewhere: copy the vault
+          # without its memory subtree, and seed those templates into the
+          # declared root instead (missing-only, existing memory untouched).
+          copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "memory"
+          copy_missing_tree "$SRC/$dir/memory" "$TARGET/$MEMORY_REL" 0 # memory-root: source template, not a memory tree
+        fi
+        ;;
+      memory)
+        if [[ "$MEMORY_REL" == "$MEMORY_DEFAULT_REL" ]]; then
+          copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0
+        else
+          # Same seeds, same declared root, no stray memory/ tree.
+          copy_missing_tree "$SRC/$dir" "$TARGET/$MEMORY_REL" 0
+        fi
+        ;;
       *)             copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 ;;
     esac
     printf '  [ok] %s/\n' "$dir"
@@ -1119,7 +1158,7 @@ safe_mkdir_p "$TARGET/vault/daily" || fail "cannot create $TARGET/vault/daily (s
 safe_mkdir_p "$TARGET/vault/projects" || fail "cannot create $TARGET/vault/projects (see symlink warning above)"
 safe_mkdir_p "$TARGET/vault/people" || fail "cannot create $TARGET/vault/people (see symlink warning above)"
 safe_mkdir_p "$TARGET/vault/concepts" || fail "cannot create $TARGET/vault/concepts (see symlink warning above)"
-safe_mkdir_p "$TARGET/vault/memory" || fail "cannot create $TARGET/vault/memory (see symlink warning above)"
+safe_mkdir_p "$TARGET/$MEMORY_REL" || fail "cannot create $TARGET/$MEMORY_REL (see symlink warning above)"
 safe_mkdir_p "$TARGET/.aigent" || fail "cannot create $TARGET/.aigent (see symlink warning above)"
 
 STATE_FILE="$TARGET/.aigent/state.json"
@@ -1153,11 +1192,11 @@ GI_BLOCK="$AIGENT_TMP/gitignore.block"
 cat > "$GI_BLOCK" <<EOF_GI
 $GI_START
 .aigent/
-vault/memory/embeddings.json
-vault/memory/HEAT_INDEX.json
-vault/memory/HEAT_INDEX.json.tmp-*
-vault/memory/.daemon-errors.log
-memory/.daemon-errors.log
+$MEMORY_REL/embeddings.json
+$MEMORY_REL/HEAT_INDEX.json
+$MEMORY_REL/HEAT_INDEX.json.tmp-*
+$MEMORY_REL/.daemon-errors.log
+$( [[ "$MEMORY_REL" == "memory" ]] || printf '%s\n' 'memory/.daemon-errors.log' )
 .claude/settings.aigent.json
 .claude/settings.local.json
 **/runtime/utterance-journal*.jsonl

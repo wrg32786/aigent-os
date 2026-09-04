@@ -13,7 +13,14 @@
 # Spec: [[concepts/Somatic v0.5.x polish — Tier 2 observability]]
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-TIER2_OBS_LOG="$ROOT/memory/.tier2-observations.log"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+. "$(cd "$(dirname "$0")" && pwd)/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+TIER2_OBS_LOG="$MEMORY_ROOT/.tier2-observations.log"
 
 # Git-Bash path fix for Python
 ROOT_PY="$ROOT"

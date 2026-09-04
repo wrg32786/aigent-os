@@ -3,8 +3,15 @@
 # Parses current session JSONL, computes tokens + estimated cost, appends to usage log
 
 VAULT="${AIGENT_ROOT:-.}"
-mkdir -p "$VAULT/vault/memory"
-USAGE_LOG="$VAULT/vault/memory/usage_log.md"
+# The usage log lives in the seat's memory root, resolved by the one resolver
+# every hook uses. A broken declaration is reported and nothing is written.
+. "$VAULT/daemons/memory-root.sh"
+if ! MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$VAULT}" 2>&1)"; then
+  printf '%s\n' "$MEMORY_ROOT" >&2
+  exit 0
+fi
+mkdir -p "$MEMORY_ROOT"
+USAGE_LOG="$MEMORY_ROOT/usage_log.md"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$HOME/.claude/projects}"
 TODAY=$(date +%Y-%m-%d)
 TIME=$(date +%H:%M:%S)

@@ -7,16 +7,23 @@
 # Spec: [[concepts/aigent-OS Refactor Spec]] Phase 3
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-DAEMON_ERR_LOG="${ROOT}/memory/.daemon-errors.log"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+. "$(cd "$(dirname "$0")" && pwd)/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+DAEMON_ERR_LOG="${MEMORY_ROOT}/.daemon-errors.log"
 
 _GLOBAL_INDEX="$HOME/.claude/skills/skill-index.json"
 _REPO_INDEX="$ROOT/.claude/skill-index.json"
 [ -f "$_GLOBAL_INDEX" ] && INDEX="$_GLOBAL_INDEX" || INDEX="$_REPO_INDEX"
 
-BODY_STATE="$ROOT/memory/BODY_STATE.json"
-HEAT_INDEX="$ROOT/memory/HEAT_INDEX.json"
-CANDIDATES="$ROOT/memory/MEMORY_CANDIDATES.md"
-HESTIA_LOG="$ROOT/memory/HESTIA_SWEEP_LOG.md"
+BODY_STATE="$MEMORY_ROOT/BODY_STATE.json"
+HEAT_INDEX="$MEMORY_ROOT/HEAT_INDEX.json"
+CANDIDATES="$MEMORY_ROOT/MEMORY_CANDIDATES.md"
+HESTIA_LOG="$MEMORY_ROOT/HESTIA_SWEEP_LOG.md"
 
 # ── Skill index health ──────────────────────────────────────────────────────
 if [ -f "$INDEX" ]; then

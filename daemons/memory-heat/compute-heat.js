@@ -39,7 +39,10 @@ const AIGENT_ROOT = process.env.AIGENT_ROOT || path.resolve(SCRIPT_DIR, '..', '.
 const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || path.join(AIGENT_ROOT, 'vault');
 const JSONL_ROOT = process.env.AIGENT_JSONL_ROOT || null;
 
-const OUTPUT = path.join(VAULT_ROOT, 'memory', 'HEAT_INDEX.json');
+// The index is written into the seat's memory root through the one resolver
+// every core writer uses (declared in .aigent/state.json, default vault/memory).
+const { resolveMemoryRoot } = require('../memory-root.cjs');
+const OUTPUT = path.join(resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT), 'HEAT_INDEX.json');
 const PINLIST_FILE = path.join(SCRIPT_DIR, 'pinlist.json');
 
 const WEIGHTS = {

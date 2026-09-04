@@ -177,6 +177,7 @@ test('mutation proof: rename failure is named, preserves the prior index, and re
     .replace(reportLine, '/* mutation: report removed */');
   assert.notEqual(mutated, source);
   copyFileSync(FRONTMATTER_READER, path.join(root, 'frontmatter-reader.cjs'));
+  copyFileSync(path.join(REPO_ROOT, 'daemons', 'memory-root.cjs'), path.join(root, 'memory-root.cjs'));
   const brokenModule = write(root, 'modules/compute-heat-broken.cjs', mutated);
   const runner = atomicRunner(root);
   const brokenOutput = path.join(root, 'broken', 'vault', 'memory', 'HEAT_INDEX.json');

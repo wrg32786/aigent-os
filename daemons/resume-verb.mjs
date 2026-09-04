@@ -33,7 +33,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  capsuleValue, inert, logErr, markCapsuleConsumed, memRoot, rejectionSummary, scalar,
+  capsuleValue, inert, logErr, markCapsuleConsumed, memRoot, describeMemoryRoot, MemoryRootError, rejectionSummary, scalar,
   selectCapsule, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
@@ -274,12 +274,22 @@ function procedurePrompt(
   loaded,
   rejected = null,
   bootSession = null,
-  receiptPath = 'memory/runtime/boot-receipt.json',
+  receiptPath = '<memory root>/runtime/boot-receipt.json',
   extension = null,
+  memoryRootError = null,
 ) {
   const lines = [];
   lines.push('[RESUME VERB] This is a post-clear boot. Your ENTIRE job: load → re-ground → ACT on waiting_on. Resumption is proven by the action taken, never by this text being in context.');
   lines.push('');
+  if (memoryRootError) {
+    // The seat's memory root could not be resolved, so NOTHING was read and
+    // nothing will be written: no capsule, no receipt, no journal. The seat
+    // hears it here, the error log cannot be reached, and the fix is the
+    // declaration in .aigent/state.json, never a fallback to another tree.
+    lines.push(`MEMORY ROOT UNRESOLVED: ${inert(memoryRootError, 600)}`);
+    lines.push('No memory tree was read or written this boot. Fix the memory_root declaration in .aigent/state.json (or remove it to use the default) before relying on any capsule, receipt or journal.');
+    lines.push('');
+  }
   if (loaded) {
     lines.push('A capsule was selected (newest valid by created_at). Its values are quoted under CAPSULE DATA at the END of this procedure — read them there, after the fences and steps below.');
   } else {
@@ -353,23 +363,34 @@ function procedurePrompt(
 }
 
 export function runResumeVerb({ projectRoot, source, sessionId }) {
+  // The memory root is resolved ONCE, up front. A MemoryRootError means the
+  // seat's declaration is broken; every read below would land on a tree that
+  // is not this seat's, so none of them run. The boot still completes (never
+  // break session start) with the fault named in the procedure and on stderr,
+  // because the error log itself lives under the root that failed.
+  let memoryRootError = null;
   let loaded = null;
   let rejected = null;
-  try { ({ loaded, rejected } = loadCapsule(projectRoot)); } catch (e) {
-    logErr(projectRoot, 'resume-verb', `loadCapsule threw: ${e?.stack || e}`);
-    loaded = null;
-  }
   let bootSession = null;
-  try { bootSession = liveBootSession(projectRoot, sessionId); } catch { bootSession = null; }
-  // The procedure names the receipt by its RESOLVED path for this seat's active
-  // layout (memRoot() prefers vault/memory) — a hardcoded memory/... literal
-  // points at nothing, or at the wrong file, on the primary layout. Resolution
-  // failure keeps the generic literal: never break session start.
-  let receiptPath = 'memory/runtime/boot-receipt.json';
+  // The procedure names the receipt by its RESOLVED path for this seat's
+  // declared layout. On a broken root the documented default literal stays,
+  // and the paragraph above has already declared it unread.
+  let receiptPath = '<memory root>/runtime/boot-receipt.json';
   try {
-    const rel = path.relative(projectRoot, path.join(memRoot(projectRoot), 'runtime', 'boot-receipt.json'));
-    if (rel && !rel.startsWith('..')) receiptPath = rel.split(path.sep).join('/');
-  } catch { /* keep the generic fallback */ }
+    const described = describeMemoryRoot(String(process.env.AIGENT_STATE_HOME_DIR || projectRoot));
+    receiptPath = `${described.relative}/runtime/boot-receipt.json`;
+  } catch (error) {
+    if (!(error instanceof MemoryRootError)) throw error;
+    memoryRootError = error.message;
+    try { process.stderr.write(`${error.message}\n`); } catch { /* nowhere louder */ }
+  }
+  if (!memoryRootError) {
+    try { ({ loaded, rejected } = loadCapsule(projectRoot)); } catch (e) {
+      logErr(projectRoot, 'resume-verb', `loadCapsule threw: ${e?.stack || e}`);
+      loaded = null;
+    }
+    try { bootSession = liveBootSession(projectRoot, sessionId); } catch { bootSession = null; }
+  }
   // Fail-open by construction: the loader never throws, and this catch covers
   // even that. An extension problem may add a warning line and may cost the
   // seat its declared announcement, but it may never cost the seat its resume.
@@ -401,6 +422,9 @@ export function runResumeVerb({ projectRoot, source, sessionId }) {
     // ledger and the boot session are: a supervisor or a test asserts on data,
     // never by scraping prose.
     extension: extension || { resume_ack: null, capsule_ack: null, warning: null, rendered: { resume_ack: null, warning: null } },
-    prompt: procedurePrompt(loaded, rejected, bootSession, receiptPath, extension),
+    // A broken memory root is part of the RESULT, so a supervisor or a test
+    // asserts on it as data.
+    memoryRootError,
+    prompt: procedurePrompt(loaded, rejected, bootSession, receiptPath, extension, memoryRootError),
   };
 }

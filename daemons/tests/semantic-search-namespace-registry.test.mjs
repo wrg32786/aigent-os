@@ -136,7 +136,7 @@ function makeSandbox(name, options = {}) {
   // search-vault.js now routes chunk rendering through the trust-boundary #43
   // chokepoint (renderPersisted() + FRAMING_LINES) -- its dependency chain
   // grew, so the sandbox must carry it too.
-  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'memory-root.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, file), path.join(root, 'daemons', file));
   }
   copyFileSync(
@@ -172,6 +172,11 @@ function makeSandbox(name, options = {}) {
   writeFileSync(path.join(root, '.claude', 'agents', 'fixture.md'), '# fixture agent\n');
   mkdirSync(path.join(root, 'scripts'), { recursive: true });
   copyFileSync(DOCTOR, path.join(root, 'scripts', 'doctor.sh'));
+  // doctor sources its memory-root door from its own tree (../daemons), so
+  // the vendored copy needs the door and the resolver beside it.
+  mkdirSync(path.join(root, 'daemons'), { recursive: true });
+  copyFileSync(path.join(ROOT, 'daemons', 'memory-root.sh'), path.join(root, 'daemons', 'memory-root.sh'));
+  copyFileSync(path.join(ROOT, 'daemons', 'memory-root.cjs'), path.join(root, 'daemons', 'memory-root.cjs'));
 
   const vault = path.join(root, 'vault');
   mkdirSync(path.join(vault, 'daily'), { recursive: true });

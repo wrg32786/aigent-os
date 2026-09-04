@@ -2,7 +2,14 @@
 # reflex-sweep.sh — Autonomic: surface sweep prompt when Hestia is overdue (>7d)
 # UserPromptSubmit hook. Silent when sweep is current.
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
-HESTIA_LOG="$ROOT/memory/HESTIA_SWEEP_LOG.md"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+. "$(cd "$(dirname "$0")/.." && pwd)/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+HESTIA_LOG="$MEMORY_ROOT/HESTIA_SWEEP_LOG.md"
 [ -f "$HESTIA_LOG" ] || { echo "[SOMATIC:sweep] Hestia sweep log missing — run /sweep-now"; exit 0; }
 LAST_DATE=$(grep -oP '\d{4}-\d{2}-\d{2}' "$HESTIA_LOG" | tail -1)
 [ -z "$LAST_DATE" ] && { echo "[SOMATIC:sweep] No sweep dates found — run /sweep-now"; exit 0; }

@@ -7,12 +7,13 @@ export PYTHONIOENCODING=utf-8
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
-if [[ -d "$STATE_BASE/vault/memory" ]]; then
-  MEMORY_ROOT="$STATE_BASE/vault/memory"
-elif [[ -d "$STATE_BASE/memory" ]]; then
-  MEMORY_ROOT="$STATE_BASE/memory"
-else
-  MEMORY_ROOT="$STATE_BASE/vault/memory"
+# One resolver for the whole core (daemons/memory-root.cjs): declared in
+# .aigent/state.json, default vault/memory. A broken declaration is a FAIL
+# here, never a silent fallback to a tree that is not this seat's.
+. "$ROOT/daemons/memory-root.sh"
+if ! MEMORY_ROOT="$(aigent_memory_root "$STATE_BASE" 2>&1)"; then
+  printf 'FAIL memory root: %s\n' "$MEMORY_ROOT"
+  exit 1
 fi
 
 SKILLS_ROOT="$ROOT/skills"

@@ -95,6 +95,20 @@ if [ "$ATTEST" -eq 1 ]; then
     attest_verdict UNKNOWN
   fi
 
+  # The Auto-Refresh kill switch lives under the seat's memory root, which
+  # only daemons/memory-root.cjs decides. Resolve it here and pass the result
+  # (or the refusal) into the reader below.
+  AIGENT_DOCTOR_MEMORY_REL=""
+  AIGENT_DOCTOR_MEMORY_ERROR=""
+  # The instrument carries its own door: doctor runs from the source tree
+  # against a target, and the target may predate the door.
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/daemons/memory-root.sh"
+  if ! AIGENT_DOCTOR_MEMORY_REL="$(aigent_memory_root "$ROOT" --relative 2>&1)"; then
+    AIGENT_DOCTOR_MEMORY_ERROR="$AIGENT_DOCTOR_MEMORY_REL"
+    AIGENT_DOCTOR_MEMORY_REL=""
+  fi
+  export AIGENT_DOCTOR_MEMORY_REL AIGENT_DOCTOR_MEMORY_ERROR
+
   ATTEST_RC=0
   ATTEST_OUT="$(python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
 import hashlib
@@ -509,18 +523,20 @@ if auto_refresh["expected"] == "enabled":
             "Auto-Refresh expected enabled but %s=1"
             % auto_refresh["kill_switch_env"]
         )
-    # Mirrors memRoot() in daemons/lifecycle-common.mjs: the FIRST existing
-    # root wins. Checking both would fail an install that merely still has a
-    # stale marker under the root the runtime never reads.
-    for candidate in auto_refresh["kill_switch_roots"]:
-        if os.path.isdir(under_root(candidate)):
-            marker = "%s/%s" % (candidate, auto_refresh["kill_switch_file"])
-            if os.path.exists(under_root(marker)):
-                findings.append(
-                    "Auto-Refresh expected enabled but the kill switch is set: %s"
-                    % marker
-                )
-            break
+    # The kill switch lives under the seat's memory root, resolved by the one
+    # resolver the runtime uses (passed in from the shell as MEMORY_REL). An
+    # install whose root could not be resolved has no working Auto-Refresh
+    # either, so that is a finding of its own.
+    memory_rel = os.environ.get("AIGENT_DOCTOR_MEMORY_REL", "")
+    if not memory_rel:
+        findings.append("memory root unresolved: %s" % os.environ.get("AIGENT_DOCTOR_MEMORY_ERROR", "no resolver output"))
+    else:
+        marker = "%s/%s" % (memory_rel, auto_refresh["kill_switch_file"])
+        if os.path.exists(under_root(marker)):
+            findings.append(
+                "Auto-Refresh expected enabled but the kill switch is set: %s"
+                % marker
+            )
     print("runner-required:%s" % under_root(manifest["managed_runner"]["dependency_root"]))
 
 for name, spec in manifest["optional_components"].items():
@@ -646,10 +662,25 @@ else
   warn "vault/daily/ missing -- auto-capture hook will fail to write daily notes. Run with --fix to create."
 fi
 
-if [ -f "$ROOT/vault/memory/ACTIVE_PRIORITIES.md" ]; then
-  pass "vault/memory/ACTIVE_PRIORITIES.md found"
+# The memory root is whatever the seat declares in .aigent/state.json, resolved
+# by daemons/memory-root.cjs, the one resolver every hook uses. A broken
+# declaration is a FAIL: every hook would refuse the same way, so the install
+# has no working memory until it is fixed.
+MEMORY_ROOT=""
+MEMORY_REL=""
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/daemons/memory-root.sh"
+if MEMORY_REL="$(aigent_memory_root "$ROOT" --relative 2>&1)"; then
+  MEMORY_ROOT="$ROOT/$MEMORY_REL"
+  pass "memory root resolves ($MEMORY_REL)"
 else
-  warn "vault/memory/ACTIVE_PRIORITIES.md missing -- expected after first /close (per-user, may be empty on fresh install)"
+  fail "memory root does not resolve: $MEMORY_REL"
+  MEMORY_REL=""
+fi
+
+if [ -n "$MEMORY_ROOT" ] && [ -f "$MEMORY_ROOT/ACTIVE_PRIORITIES.md" ]; then
+  pass "$MEMORY_REL/ACTIVE_PRIORITIES.md found"
+else
+  warn "$MEMORY_REL/ACTIVE_PRIORITIES.md missing -- expected after first /close (per-user, may be empty on fresh install)"
 fi
 
 # -- 4. CLAUDE.md --------------------------------------------------------------

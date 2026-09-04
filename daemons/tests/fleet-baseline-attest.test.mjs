@@ -448,11 +448,18 @@ test('an unloadable node-pty attests NONCOMPLIANT while Auto-Refresh is expected
 test('an Auto-Refresh kill switch attests NONCOMPLIANT against an enabled baseline', () => {
   withInstall((root) => {
     const manifest = readManifest();
-    const [primaryRoot] = manifest.auto_refresh.kill_switch_roots;
+    // The kill switch lives under the memory root, and only the one resolver
+    // the manifest names decides where that is. The test asks the same
+    // resolver rather than guessing a tree.
+    assert.equal(manifest.auto_refresh.memory_root_resolver, 'daemons/memory-root.cjs');
+    const resolved = spawnSync(process.execPath, [
+      path.join(root, ...manifest.auto_refresh.memory_root_resolver.split('/')), '--root', root, '--relative',
+    ], { encoding: 'utf8' });
+    assert.equal(resolved.status, 0, resolved.stderr);
     writeFileSync(
       path.join(
         root,
-        ...primaryRoot.split('/'),
+        ...resolved.stdout.trim().split('/'),
         ...manifest.auto_refresh.kill_switch_file.split('/'),
       ),
       '',
@@ -462,6 +469,38 @@ test('an Auto-Refresh kill switch attests NONCOMPLIANT against an enabled baseli
     assert.equal(verdict, 'NONCOMPLIANT', output);
     assert.match(output, /kill switch is set/);
   });
+});
+
+test('a declared memory root that does not resolve attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const marker = path.join(root, '.aigent', 'state.json');
+    writeFileSync(marker, JSON.stringify({ schemaVersion: 1, status: 'ready', completedAt: null, memory_root: 'gone/memory' }));
+
+    const { verdict, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.match(output, /memory root unresolved: MEMORY-ROOT:/);
+  });
+});
+
+test('the pinned product commit is an ancestor of the tree under test', (t) => {
+  const manifest = readManifest();
+  const commit = manifest.public_product_commit;
+  const probe = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${commit}^{commit}`]);
+  if (probe.status !== 0) {
+    const shallow = spawnSync('git', ['-C', REPO, 'rev-parse', '--is-shallow-repository'], { encoding: 'utf8' });
+    assert.equal(shallow.stdout?.trim(), 'true',
+      `pinned commit ${commit} is unreachable in a full clone -- wrong or rewritten public_product_commit`);
+    t.skip(`pinned commit ${commit.slice(0, 8)} not present (shallow clone)`);
+    return;
+  }
+  // A squash merge rewrites the commit the baseline claims to measure out of
+  // the ancestry even when the trees are identical. The baseline then names a
+  // commit no reader of this branch can reach by walking history. The merge
+  // that lands a recut must therefore be a normal merge, and this test is
+  // what refuses the other kind.
+  const ancestor = spawnSync('git', ['-C', REPO, 'merge-base', '--is-ancestor', commit, 'HEAD'], { encoding: 'utf8' });
+  assert.equal(ancestor.status, 0,
+    `public_product_commit ${commit.slice(0, 8)} is not an ancestor of HEAD; the baseline names a commit this tree did not come from`);
 });
 
 test('a missing manifest attests UNKNOWN, not NONCOMPLIANT', () => {

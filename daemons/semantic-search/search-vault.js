@@ -36,6 +36,7 @@ import {
 } from './namespace-registry.mjs';
 import { inert, renderPersisted } from '../lifecycle-common.mjs';
 import { FRAMING_LINES } from '../memory-hygiene/resume-framing.mjs';
+import { resolveMemoryRoot } from '../memory-root.cjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
@@ -43,7 +44,8 @@ const __dirname = dirname(__filename);
 
 const AIGENT_ROOT = process.env.AIGENT_ROOT || join(__dirname, '..', '..');
 const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
-const EMBEDDINGS_PATH = join(VAULT_ROOT, 'memory', 'embeddings.json');
+// Same resolver, same tree as the indexer and every hook.
+const EMBEDDINGS_PATH = join(resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT), 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_TOP_K = 5;
 

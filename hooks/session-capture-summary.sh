@@ -7,8 +7,18 @@ TODAY=$(date +%Y-%m-%d)
 mkdir -p "$VAULT/vault/daily"
 DAILY="$VAULT/vault/daily/$TODAY.md"
 TIME=$(date +%H:%M:%S)
-ERRLOG="$VAULT/memory/.daemon-errors.log"
-mkdir -p "$(dirname "$ERRLOG")"
+# The error log lives in the seat's memory root, resolved by the one resolver
+# every hook uses. Before this the hook created a stray memory/ tree at the
+# root of every stock install. A broken declaration is reported to stderr and
+# the hook keeps going without a log path.
+. "$VAULT/daemons/memory-root.sh"
+if MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$VAULT}" 2>&1)"; then
+  ERRLOG="$MEMORY_ROOT/.daemon-errors.log"
+  mkdir -p "$(dirname "$ERRLOG")"
+else
+  printf '%s\n' "$MEMORY_ROOT" >&2
+  ERRLOG=/dev/null
+fi
 
 # Exit if no daily note or no captures
 [ ! -f "$DAILY" ] && exit 0

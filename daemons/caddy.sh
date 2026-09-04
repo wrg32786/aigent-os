@@ -6,20 +6,27 @@
 set -u
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
 REPO_INDEX="$ROOT/.claude/skill-index.json"
 GLOBAL_INDEX="$HOME/.claude/skills/skill-index.json"
 INDEX="$REPO_INDEX"
 [[ -f "$INDEX" ]] || INDEX="$GLOBAL_INDEX"
 [[ -f "$INDEX" ]] || exit 0
 
-DAEMON_ERR_LOG="$ROOT/memory/.daemon-errors.log"
+DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
 mkdir -p "$(dirname "$DAEMON_ERR_LOG")" "$ROOT/.aigent/cache" 2>/dev/null || true
 
 INPUT="$(cat 2>/dev/null)"
 [[ -n "$INPUT" ]] || exit 0
 INPUT_LOWER="$(printf '%s' "$INPUT" | tr '[:upper:]' '[:lower:]')"
 
-MUTES_FILE="$ROOT/memory/CADDY_MUTES.json"
+MUTES_FILE="$MEMORY_ROOT/CADDY_MUTES.json"
 class_muted() {
   local class="$1"
   [[ -f "$MUTES_FILE" ]] || return 1
@@ -108,8 +115,8 @@ if printf '%s' "$INPUT_LOWER" | grep -qE \
   class_muted body || printf '%s\n' '[CADDY:body] BODY-CHECK — Compose current context, memory, decision, delegation, and token pressure.'
 fi
 
-LEDGER="$ROOT/memory/SKILL_LEDGER.md"
-CHAINS="$ROOT/memory/SKILL_CHAINS.md"
+LEDGER="$MEMORY_ROOT/SKILL_LEDGER.md"
+CHAINS="$MEMORY_ROOT/SKILL_CHAINS.md"
 
 if command -v python3 >/dev/null 2>&1; then
   INPUT="$INPUT" INDEX="$INDEX" LEDGER="$LEDGER" CHAINS="$CHAINS" ROOT="$ROOT" python3 <<'PY' 2>>"$DAEMON_ERR_LOG" || true

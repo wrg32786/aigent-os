@@ -192,10 +192,18 @@ if [ -f "$tpl" ] && [ ! -e "$json" ]; then
   echo "  [harness] settings.json rendered ($ROOT)"
 fi
 
-# H3. Vault runtime folders
-for folder in vault/daily vault/projects vault/people vault/concepts vault/memory; do
+# H3. Vault runtime folders. The memory folder is wherever the seat declares
+# it (daemons/memory-root.cjs, default vault/memory), so a seat with a declared
+# root never grows a dead default tree beside its live one.
+for folder in vault/daily vault/projects vault/people vault/concepts; do
   mkdir -p "$ROOT/$folder"
 done
+. "$ROOT/daemons/memory-root.sh"
+if ! MEMORY_REL="$(aigent_memory_root "$ROOT" --relative --allow-missing 2>&1)"; then
+  printf '%s\n' "$MEMORY_REL" >&2
+  exit 1
+fi
+mkdir -p "$ROOT/$MEMORY_REL"
 echo "  [harness] vault folders ensured"
 # ─────────────────────────────────────────────────────────────────────────────
 
