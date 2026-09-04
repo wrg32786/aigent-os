@@ -383,13 +383,22 @@ test('M2: a declaration accepted by the validator can never render truncated', (
   const result = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: template });
 
   // Two acceptable outcomes, and truncation is neither: refuse it up front with
-  // the named warning, or render it whole.
+  // the named warning, or render it whole. A third outcome, accepted by the
+  // validator and then HELD at render time, is not acceptable here: that is the
+  // validator failing to charge the slot its id budget and the second guard
+  // catching what the first should have. The assertion is on the rendered step,
+  // not the whole prompt, because the capsule id is quoted under CAPSULE DATA
+  // regardless and would satisfy a prompt-wide search vacuously.
   if (result.extension.warning) {
     assert.ok(String(result.extension.warning).startsWith(WARNING_PREFIX),
       'a refusal must carry the fixed greppable prefix');
     assert.equal(result.extension.resume_ack, null, 'a refused field must not survive');
   } else {
-    assert.ok(result.prompt.includes(CAPSULE_ID),
+    assert.equal(result.extension.rendered.warning, null,
+      'an accepted declaration must never be held at render time; the validator charges the slot up front');
+    assert.equal(result.extension.rendered.resume_ack, template.split(CAPSULE_ID_SLOT).join(CAPSULE_ID),
+      'the rendered line must be the template with the id substituted whole');
+    assert.ok(result.prompt.includes(`${head}${filler}${CAPSULE_ID}`),
       'the capsule id must reach the seat whole, never cut');
   }
   assert.doesNotMatch(result.prompt, /\[\+\d+ chars\]/,
