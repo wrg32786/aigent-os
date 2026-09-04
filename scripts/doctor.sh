@@ -95,7 +95,7 @@ if [ "$ATTEST" -eq 1 ]; then
     attest_verdict UNKNOWN
   fi
 
-  # The Auto-Refresh kill switch lives under the seat's memory root, which
+  # The Auto-Refresh kill switch lives under the memory root of the seat, which
   # only daemons/memory-root.cjs decides. Resolve it here and pass the result
   # (or the refusal) into the reader below.
   AIGENT_DOCTOR_MEMORY_REL=""
@@ -525,7 +525,7 @@ if auto_refresh["expected"] == "enabled":
             "Auto-Refresh expected enabled but %s=1"
             % auto_refresh["kill_switch_env"]
         )
-    # The kill switch lives under the seat's memory root, resolved by the one
+    # The kill switch lives under the memory root of the seat, resolved by the one
     # resolver the runtime uses (passed in from the shell as MEMORY_REL). An
     # install whose root could not be resolved has no working Auto-Refresh
     # either, so that is a finding of its own.
