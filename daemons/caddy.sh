@@ -10,7 +10,9 @@ ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # reader and writer shares (declared in .aigent/state.json, default vault/memory).
 # A broken declaration is reported on stderr and this best-effort script exits
 # without writing anywhere.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
+CADDY_DIR=$(dirname "${BASH_SOURCE[0]}")
+CADDY_DIR=$(cd "$CADDY_DIR" && pwd)
+. "$CADDY_DIR/memory-root.sh"
 # One spawn answers both: the memory root, and the ledgers root (the same
 # tree on a declared seat, the pre-existing memory/ seed tree on a stock
 # install, where the skill ledgers and the mute file ship).

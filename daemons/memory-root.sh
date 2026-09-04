@@ -22,7 +22,8 @@
 aigent_memory_root() {
   local base="" relative=0 allow_missing=0 ledgers=0 with_ledgers=0 arg
   local here
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  here=$(dirname "${BASH_SOURCE[0]}")
+  here=$(cd "$here" && pwd)
   # --default: the resolver's default relative root, and nothing else. The
   # no-node spelling below is the one literal this file carries, pinned to
   # the resolver's by test.

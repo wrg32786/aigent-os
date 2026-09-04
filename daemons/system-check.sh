@@ -12,7 +12,9 @@ STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
 # here, never a silent fallback to a tree that is not this seat's.
 # The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
 # install that predates it.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
+SYSTEM_CHECK_DIR=$(dirname "${BASH_SOURCE[0]}")
+SYSTEM_CHECK_DIR=$(cd "$SYSTEM_CHECK_DIR" && pwd)
+. "$SYSTEM_CHECK_DIR/memory-root.sh"
 if ! MEMORY_ROOTS="$(aigent_memory_root "$STATE_BASE" --with-ledgers 2>&1)"; then
   printf 'FAIL memory root: %s\n' "$MEMORY_ROOTS"
   exit 1

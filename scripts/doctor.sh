@@ -102,7 +102,9 @@ if [ "$ATTEST" -eq 1 ]; then
   AIGENT_DOCTOR_MEMORY_ERROR=""
   # The instrument carries its own door: doctor runs from the source tree
   # against a target, and the target may predate the door.
-  . "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/daemons/memory-root.sh"
+  DOCTOR_DIR=$(dirname "${BASH_SOURCE[0]}")
+  DOCTOR_DIR=$(cd "$DOCTOR_DIR" && pwd)
+  . "$DOCTOR_DIR/../daemons/memory-root.sh"
   if ! AIGENT_DOCTOR_MEMORY_REL="$(aigent_memory_root "$ROOT" --relative 2>&1)"; then
     AIGENT_DOCTOR_MEMORY_ERROR="$AIGENT_DOCTOR_MEMORY_REL"
     AIGENT_DOCTOR_MEMORY_REL=""
@@ -668,7 +670,9 @@ fi
 # has no working memory until it is fixed.
 MEMORY_ROOT=""
 MEMORY_REL=""
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/daemons/memory-root.sh"
+DOCTOR_DIR=$(dirname "${BASH_SOURCE[0]}")
+DOCTOR_DIR=$(cd "$DOCTOR_DIR" && pwd)
+. "$DOCTOR_DIR/../daemons/memory-root.sh"
 if MEMORY_REL="$(aigent_memory_root "$ROOT" --relative 2>&1)"; then
   MEMORY_ROOT="$ROOT/$MEMORY_REL"
   pass "memory root resolves ($MEMORY_REL)"
