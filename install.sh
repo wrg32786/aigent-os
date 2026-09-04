@@ -149,10 +149,19 @@ MODE="copy"
 # created and seeded HERE, and the default tree is not, so a seat with its own
 # layout never grows a dead default tree beside its live one. A broken
 # declaration fails the install: every hook would refuse it the same way.
-. "$SRC/daemons/memory-root.sh"
-MEMORY_REL="$(aigent_memory_root "$TARGET" --relative --allow-missing 2>&1)" \
-  || fail "memory root: $MEMORY_REL"
-MEMORY_DEFAULT_REL="$(aigent_memory_root --default)"
+if [[ -f "$SRC/daemons/memory-root.sh" ]]; then
+  . "$SRC/daemons/memory-root.sh"
+  MEMORY_REL="$(aigent_memory_root "$TARGET" --relative --allow-missing 2>&1)" \
+    || fail "memory root: $MEMORY_REL"
+  MEMORY_DEFAULT_REL="$(aigent_memory_root --default)"
+elif grep -q '"memory_root"' "$TARGET/.aigent/state.json" 2>/dev/null; then
+  fail "MEMORY-ROOT: $TARGET/.aigent/state.json declares memory_root but this source tree has no daemons/memory-root.sh to resolve it"
+else
+  # A source tree without the door installs the documented default, as it
+  # always did.
+  MEMORY_REL="vault/memory" # memory-root: no-node default
+  MEMORY_DEFAULT_REL="$MEMORY_REL"
+fi
 
 COPY_DIRS=(system vault hooks skills daemons scripts docs memory evals launcher)
 

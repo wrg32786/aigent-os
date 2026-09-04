@@ -426,7 +426,7 @@ test('W5a: no core reader or writer constructs the memory root by hand', () => {
     acc[file] = (acc[file] || 0) + 1;
     return acc;
   }, {});
-  assert.deepEqual(byFile, { 'install.sh': 3, 'launcher/install.ps1': 1, 'launcher/install.sh': 1 },
+  assert.deepEqual(byFile, { 'install.sh': 4, 'launcher/install.ps1': 1, 'launcher/install.sh': 1 },
     `the exemption list is fixed, saw ${exemptions.join(', ')}`);
 });
 
