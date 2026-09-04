@@ -13,6 +13,10 @@ ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
 MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
   || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+# The skill ledgers and the mute file: the same tree on a declared seat, the
+# pre-existing memory/ seed tree on a stock install (where they ship).
+LEDGERS_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" --ledgers 2>&1)" \
+  || { printf '%s\n' "$LEDGERS_ROOT" >&2; exit 0; }
 REPO_INDEX="$ROOT/.claude/skill-index.json"
 GLOBAL_INDEX="$HOME/.claude/skills/skill-index.json"
 INDEX="$REPO_INDEX"
@@ -26,7 +30,7 @@ INPUT="$(cat 2>/dev/null)"
 [[ -n "$INPUT" ]] || exit 0
 INPUT_LOWER="$(printf '%s' "$INPUT" | tr '[:upper:]' '[:lower:]')"
 
-MUTES_FILE="$MEMORY_ROOT/CADDY_MUTES.json"
+MUTES_FILE="$LEDGERS_ROOT/CADDY_MUTES.json"
 class_muted() {
   local class="$1"
   [[ -f "$MUTES_FILE" ]] || return 1
@@ -115,8 +119,8 @@ if printf '%s' "$INPUT_LOWER" | grep -qE \
   class_muted body || printf '%s\n' '[CADDY:body] BODY-CHECK — Compose current context, memory, decision, delegation, and token pressure.'
 fi
 
-LEDGER="$MEMORY_ROOT/SKILL_LEDGER.md"
-CHAINS="$MEMORY_ROOT/SKILL_CHAINS.md"
+LEDGER="$LEDGERS_ROOT/SKILL_LEDGER.md"
+CHAINS="$LEDGERS_ROOT/SKILL_CHAINS.md"
 
 if command -v python3 >/dev/null 2>&1; then
   INPUT="$INPUT" INDEX="$INDEX" LEDGER="$LEDGER" CHAINS="$CHAINS" ROOT="$ROOT" python3 <<'PY' 2>>"$DAEMON_ERR_LOG" || true

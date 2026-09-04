@@ -1,14 +1,16 @@
 """The Python door to daemons/memory-root.cjs.
 
 Every Python daemon that reads or writes memory asks here, and here asks the
-one resolver: the shell door ``daemons/memory-root.sh`` (which delegates to
-``memory-root.cjs`` when node is present and otherwise applies only the
-resolver's default rule for an undeclared root), or the resolver's CLI
-directly when bash is not available. This module carries NO rule of its own:
-it cannot name a tree, so a Python daemon cannot disagree with a hook about
-where memory is. A declaration that cannot be resolved raises
-``MemoryRootError`` whose message starts with ``MEMORY-ROOT:``; the daemon
-that called must stop rather than touch a tree that may not be this seat's.
+one resolver. The resolver's CLI is tried first, with no shell in between, so
+the base path reaches it byte for byte (a shell re-parse can strip quotes
+from a path that carries one). When node is absent the shell door
+``daemons/memory-root.sh`` answers instead: it refuses a declaration it
+cannot resolve and applies only the resolver's default rule for an
+undeclared root. This module carries NO rule of its own: it cannot name a
+tree, so a Python daemon cannot disagree with a hook about where memory is.
+A declaration that cannot be resolved raises ``MemoryRootError`` whose
+message starts with ``MEMORY-ROOT:``; the daemon that called must stop
+rather than touch a tree that may not be this seat's.
 """
 
 from __future__ import annotations
@@ -27,12 +29,24 @@ class MemoryRootError(RuntimeError):
     """A declared memory root that could not be resolved. Message carries the token."""
 
 
-def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, check=False)
+def _run(argv: list[str], base_text: str) -> subprocess.CompletedProcess[str]:
+    # The resolver prints UTF-8; decoding with the console code page turns a
+    # non-ASCII root into a different, nonexistent path returned as success.
+    env = dict(os.environ, AIGENT_MEMORY_ROOT_BASE=base_text)
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="strict", check=False, env=env)
 
 
-def resolve_memory_root(base: str | os.PathLike[str], *, relative: bool = False) -> Path | str:
+def resolve_memory_root(
+    base: str | os.PathLike[str],
+    *,
+    relative: bool = False,
+    ledgers: bool = False,
+) -> Path | str:
     """Resolve the memory root under ``base`` through the one resolver.
+
+    ``ledgers=True`` asks for the skill-ledger location instead: the same
+    tree when a root is declared, and on an undeclared install the
+    pre-existing ``<base>/memory`` seed tree when it exists.
 
     Returns an absolute ``Path`` (or the root-relative string with
     ``relative=True``). Raises ``MemoryRootError`` when the resolver refuses
@@ -41,24 +55,28 @@ def resolve_memory_root(base: str | os.PathLike[str], *, relative: bool = False)
     base_text = os.fspath(base)
     if not base_text.strip():
         raise MemoryRootError(f"{ERROR_TOKEN} a base directory is required to resolve the memory root")
+    flags = (["--relative"] if relative else []) + (["--ledgers"] if ledgers else [])
     door = _HERE / "memory-root.sh"
     resolver = _HERE / "memory-root.cjs"
     attempts: list[list[str]] = []
-    if shutil.which("bash") and door.is_file():
-        args = ["aigent_memory_root", base_text] + (["--relative"] if relative else [])
-        attempts.append([
-            "bash", "-c", '. "$1" && shift && aigent_memory_root "$@"', "_", str(door), *args[1:],
-        ])
     if shutil.which("node") and resolver.is_file():
-        attempts.append(["node", str(resolver), "--root", base_text] + (["--relative"] if relative else []))
+        attempts.append(["node", str(resolver), "--root", base_text, *flags])
+    if shutil.which("bash") and door.is_file():
+        # The base travels in the environment, not in argv: an MSYS bash
+        # re-parses argv as paths and can strip a quote from one, which turns
+        # a declared root into a different, undeclared directory that then
+        # resolves to the default tree with exit 0.
+        attempts.append([
+            "bash", "-c", '. "$1" && shift && aigent_memory_root "$AIGENT_MEMORY_ROOT_BASE" "$@"', "_", str(door), *flags,
+        ])
     if not attempts:
-        raise MemoryRootError(f"{ERROR_TOKEN} neither bash nor node is available to resolve the memory root under {base_text}")
+        raise MemoryRootError(f"{ERROR_TOKEN} neither node nor bash is available to resolve the memory root under {base_text}")
     last_error = ""
     for argv in attempts:
         try:
-            result = _run(argv)
-        except OSError as error:  # the binary vanished between which() and run()
-            last_error = f"{ERROR_TOKEN} resolver could not start ({error})"
+            result = _run(argv, base_text)
+        except (OSError, UnicodeDecodeError) as error:
+            last_error = f"{ERROR_TOKEN} resolver could not run ({error})"
             continue
         if result.returncode == 0 and result.stdout.strip():
             value = result.stdout.strip().splitlines()[-1]
@@ -69,18 +87,31 @@ def resolve_memory_root(base: str | os.PathLike[str], *, relative: bool = False)
     raise MemoryRootError(last_error if last_error.startswith(ERROR_TOKEN) else f"{ERROR_TOKEN} {last_error}")
 
 
-def memory_root_from_env() -> Path:
-    """The seat's memory root for a daemon launched by the harness.
+def seat_base_from_env() -> Path:
+    """The seat root a harness-launched daemon resolves under.
 
     ``AIGENT_STATE_HOME_DIR`` (the test and probe diversion lever) is honored
-    first, exactly as the JavaScript callers honor it, then ``AIGENT_ROOT``,
-    then ``AIGENT_VAULT``, then the historical ``~/.aigent`` home.
+    first, exactly as the JavaScript callers honor it. ``AIGENT_VAULT`` may
+    name the seat root or its ``vault/`` directory (both forms predate this
+    module); the ``vault/`` form is normalized to its parent. Then
+    ``AIGENT_ROOT``, then the historical ``~/.aigent`` home.
     """
-    for name in ("AIGENT_STATE_HOME_DIR", "AIGENT_ROOT", "AIGENT_VAULT"):
-        value = os.environ.get(name)
-        if value and value.strip():
-            return Path(resolve_memory_root(value))
-    return Path(resolve_memory_root(os.path.expanduser("~/.aigent")))
+    diverted = os.environ.get("AIGENT_STATE_HOME_DIR")
+    if diverted and diverted.strip():
+        return Path(diverted)
+    explicit = os.environ.get("AIGENT_VAULT")
+    if explicit and explicit.strip():
+        candidate = Path(explicit)
+        return candidate.parent if candidate.name.lower() == "vault" else candidate
+    root = os.environ.get("AIGENT_ROOT")
+    if root and root.strip():
+        return Path(root)
+    return Path(os.path.expanduser("~/.aigent"))
+
+
+def memory_root_from_env(*, ledgers: bool = False) -> Path:
+    """The seat's memory root (or skill-ledger root) for a harness-launched daemon."""
+    return Path(resolve_memory_root(seat_base_from_env(), ledgers=ledgers))
 
 
 def die(error: MemoryRootError) -> int:

@@ -477,6 +477,31 @@ test('W5b: driven against a declared root, every hook writes into it and the dea
   }
 });
 
+// ── the skill ledgers: one tree when declared, the stock seed tree otherwise ──
+
+test('ledgers: a declared seat keeps its skill ledgers in the one tree; a stock install keeps them in its memory/ seed tree', () => {
+  const declared = mkRoot({ dirs: ['memory', 'vault/memory'], declare: 'memory' });
+  const stock = mkRoot({ dirs: ['vault/memory', 'memory'] });
+  const stockNoSeed = mkRoot({ dirs: ['vault/memory'] });
+  try {
+    const ask = (fx, extra = []) => spawnSync(process.execPath, [RESOLVER, '--root', fx.root, '--ledgers', ...extra], { encoding: 'utf8' });
+    assert.equal(ask(declared).stdout.trim(), path.join(declared.root, 'memory'), 'declared: the ledgers are in the one tree');
+    assert.equal(ask(stock, ['--relative']).stdout.trim(), 'memory', 'stock: the ledgers are where the seed tree ships them');
+    assert.equal(ask(stockNoSeed, ['--relative']).stdout.trim(), 'vault/memory', 'no seed tree: the ledgers fall to the memory root');
+    // The shell door agrees, with and without node.
+    const pruned = (process.env.PATH || '').split(path.delimiter)
+      .filter((dir) => dir && !existsSync(path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node')))
+      .join(path.delimiter);
+    for (const env of [process.env, { ...process.env, PATH: pruned }]) {
+      assert.equal(door(stock.root, ['--ledgers', '--relative'], env).stdout.trim(), 'memory');
+      assert.equal(door(stockNoSeed.root, ['--ledgers', '--relative'], env).stdout.trim(), 'vault/memory');
+    }
+    assert.equal(door(declared.root, ['--ledgers']).stdout.trim(), path.join(declared.root, 'memory'));
+  } finally {
+    for (const fx of [declared, stock, stockNoSeed]) rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
 // ── the resolver CLI, which every shell consumer calls ───────────────────────
 
 test('CLI: prints the resolved root, honors --relative and --allow-missing, refuses a malformed invocation', () => {

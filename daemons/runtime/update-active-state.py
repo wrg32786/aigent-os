@@ -17,7 +17,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from memory_root import MemoryRootError, die, memory_root_from_env  # noqa: E402
+from memory_root import MemoryRootError, die, resolve_memory_root, seat_base_from_env  # noqa: E402
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,23 +33,31 @@ def _native_path(value: str) -> Path:
 
 
 
-_MEMORY_ROOT: Path | None = None
+_RESOLVED: dict[tuple[str, bool], Path] = {}
+
+
+def _resolved(base: Path, ledgers: bool = False) -> Path:
+    key = (str(base), ledgers)
+    if key not in _RESOLVED:
+        _RESOLVED[key] = Path(resolve_memory_root(base, ledgers=ledgers))
+    return _RESOLVED[key]
 
 
 def memory_path(vault: Path | None = None) -> Path:
-    """The seat's memory root, from the one resolver, cached for the run.
+    """The memory root, from the one resolver, cached per base for the run.
 
-    Before this, the daemon scored candidate directories by which of them
-    "looked like" the operational vault and then appended "memory" itself,
-    which on a seat whose live memory sits beside a dead default tree read
-    the dead tree's BODY_STATE.json and wrote its runtime state there. The
-    vault argument is accepted for the call sites' shape and ignored: the
-    memory root is not derived from the vault, the vault is derived from it.
+    With no argument the seat's base comes from the environment (the
+    diversion lever first, then AIGENT_VAULT, AIGENT_ROOT, the home). With an
+    explicit vault the resolver is asked under that vault: an undeclared
+    vault answers its own memory/ (the daemon's historical contract for a
+    directory handed to it), a declared one answers its declaration. Before
+    this, the daemon scored candidate directories by how much they looked
+    like a vault and appended "memory" itself, which on a seat whose live
+    memory sits beside a dead default tree read the dead tree's
+    BODY_STATE.json and wrote its runtime state there.
     """
-    global _MEMORY_ROOT
-    if _MEMORY_ROOT is None:
-        _MEMORY_ROOT = memory_root_from_env()
-    return _MEMORY_ROOT
+    base = seat_base_from_env() if vault is None else Path(vault)
+    return _resolved(base)
 
 
 def resolve_vault_path() -> Path:
@@ -58,8 +66,18 @@ def resolve_vault_path() -> Path:
 
 
 def resolve_framework_memory(vault: Path) -> Path:
-    """Framework-owned indexes live in the same tree as everything else now."""
-    return memory_path(vault)
+    """Where the skill ledgers live: the resolver's --ledgers answer.
+
+    The same tree on a declared seat; on a stock install the pre-existing
+    <root>/memory seed tree, which is where SKILL_GAPS.md ships. The base is
+    the seat root, not the vault handed in, because that seed tree sits
+    beside the vault rather than inside it.
+    """
+    seat = seat_base_from_env()
+    if vault is not None and str(vault) != str(seat) and Path(vault).parent != seat:
+        # An explicit vault outside the environment's seat: its own base.
+        seat = Path(vault).parent if Path(vault).name.lower() == "vault" else Path(vault)
+    return _resolved(seat, ledgers=True)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

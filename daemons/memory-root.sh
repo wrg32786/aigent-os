@@ -12,7 +12,7 @@
 # shell daemons that call this are best-effort, and a wrong tree is worse
 # than a skipped hint.
 #
-#   aigent_memory_root <base> [--relative] [--allow-missing]
+#   aigent_memory_root <base> [--relative] [--allow-missing] [--ledgers]
 #
 # Prints the path on stdout and returns 0, or prints one MEMORY-ROOT: line on
 # stderr and returns 1. The node binary is found on PATH like everywhere else
@@ -20,7 +20,7 @@
 # for one) get the undeclared default and refuse only a declaration.
 
 aigent_memory_root() {
-  local base="" relative=0 allow_missing=0 arg
+  local base="" relative=0 allow_missing=0 ledgers=0 arg
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # --default: the resolver's default relative root, and nothing else. The
@@ -35,6 +35,7 @@ aigent_memory_root() {
     case "$arg" in
       --relative) relative=1 ;;
       --allow-missing) allow_missing=1 ;;
+      --ledgers) ledgers=1 ;;
       --*) printf 'MEMORY-ROOT: unknown argument: %s\n' "$arg" >&2; return 1 ;;
       *) if [ -n "$base" ]; then printf 'MEMORY-ROOT: base given twice\n' >&2; return 1; fi; base="$arg" ;;
     esac
@@ -47,6 +48,7 @@ aigent_memory_root() {
     local args=(--root "$base")
     [ "$relative" -eq 1 ] && args+=(--relative)
     [ "$allow_missing" -eq 1 ] && args+=(--allow-missing)
+    [ "$ledgers" -eq 1 ] && args+=(--ledgers)
     node "$here/memory-root.cjs" "${args[@]}"
     return $?
   fi
@@ -56,7 +58,13 @@ aigent_memory_root() {
     return 1
   fi
   # Undeclared, no node: the resolver's own default rule, and nothing else.
+  # The skill ledgers of an undeclared install live in the <base>/memory seed
+  # tree when it exists, exactly as the resolver answers --ledgers.
   local candidate
+  if [ "$ledgers" -eq 1 ] && [ -d "$base/memory" ]; then
+    if [ "$relative" -eq 1 ]; then printf 'memory\n'; else printf '%s/memory\n' "$base"; fi
+    return 0
+  fi
   for candidate in vault/memory memory; do
     if [ -d "$base/$candidate" ]; then
       if [ "$relative" -eq 1 ]; then printf '%s\n' "$candidate"; else printf '%s/%s\n' "$base" "$candidate"; fi

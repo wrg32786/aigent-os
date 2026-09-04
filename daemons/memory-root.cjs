@@ -142,12 +142,24 @@ function refuseSymlinks(base, segments) {
   }
 }
 
+// The skill ledgers (SKILL_LEDGER.md, SKILL_CHAINS.md, SKILL_GAPS.md and the
+// caddy mute file) are the one family a STOCK install keeps in a second seed
+// tree, <base>/memory, beside its vault/memory. That is the pre-existing stock
+// layout and it stays. A declared root has one tree and the ledgers live in
+// it. This is the only place that decides which.
+function ledgersFor(base, memory, declared) {
+  if (declared) return memory;
+  const seed = { root: path.join(base, 'memory'), relative: 'memory' };
+  return fs.existsSync(seed.root) ? seed : memory;
+}
+
 /**
  * Describe the memory root under `base`.
  *
- * Returns {root, relative, source} where source is 'configured' or 'default'.
- * `root` is path.join(base, relative), never realpath-resolved, so a caller
- * that compares it to its own join sees the same string.
+ * Returns {root, relative, source, ledgers: {root, relative}} where source is
+ * 'configured' or 'default'. `root` is path.join(base, relative), never
+ * realpath-resolved, so a caller that compares it to its own join sees the
+ * same string.
  */
 function describeMemoryRoot(base, { allowMissing = false } = {}) {
   if (typeof base !== 'string' || base.trim().length === 0) {
@@ -171,17 +183,18 @@ function describeMemoryRoot(base, { allowMissing = false } = {}) {
     if (!stat && !allowMissing) {
       throw new MemoryRootError(`${root}: configured memory root does not exist (declared in ${markerPath(base)})`);
     }
-    return { root, relative: declared.relative, source: 'configured' };
+    const memory = { root, relative: declared.relative };
+    return { ...memory, source: 'configured', ledgers: ledgersFor(base, memory, true) };
   }
   for (const candidate of UNCONFIGURED_CANDIDATES) {
     const root = path.join(base, ...candidate.split('/'));
-    if (fs.existsSync(root)) return { root, relative: candidate, source: 'default' };
+    if (fs.existsSync(root)) {
+      const memory = { root, relative: candidate };
+      return { ...memory, source: 'default', ledgers: ledgersFor(base, memory, false) };
+    }
   }
-  return {
-    root: path.join(base, ...DEFAULT_MEMORY_ROOT.split('/')),
-    relative: DEFAULT_MEMORY_ROOT,
-    source: 'default',
-  };
+  const memory = { root: path.join(base, ...DEFAULT_MEMORY_ROOT.split('/')), relative: DEFAULT_MEMORY_ROOT };
+  return { ...memory, source: 'default', ledgers: ledgersFor(base, memory, false) };
 }
 
 function resolveMemoryRoot(base, options) {
@@ -191,7 +204,7 @@ function resolveMemoryRoot(base, options) {
 // --default prints the resolver's default relative root and nothing else, so a
 // shell consumer can ask "is this seat's root the default?" without carrying
 // the literal itself.
-const CLI_FLAGS = new Set(['--root', '--relative', '--allow-missing', '--json', '--default']);
+const CLI_FLAGS = new Set(['--root', '--relative', '--allow-missing', '--json', '--default', '--ledgers']);
 
 function cli(argv, out = process.stdout, err = process.stderr) {
   const opts = new Map();
@@ -234,7 +247,8 @@ function cli(argv, out = process.stdout, err = process.stderr) {
     if (opts.has('--json')) {
       out.write(`${JSON.stringify(described)}\n`);
     } else {
-      out.write(`${opts.has('--relative') ? described.relative : described.root}\n`);
+      const answer = opts.has('--ledgers') ? described.ledgers : described;
+      out.write(`${opts.has('--relative') ? answer.relative : answer.root}\n`);
     }
     return 0;
   } catch (error) {
