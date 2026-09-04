@@ -313,9 +313,9 @@ test('WITNESS C: the capsule skill runs the extension BEFORE its terminal litera
   assert.match(extensionBlock, /lifecycle-extension\.(json|mjs)/,
     'the extension step must name the declaration or the renderer it runs');
 
-  // The literal is the LAST instruction. Its byte budget is why: the checkpoint
-  // compares the captured transcript offset against the live size, and a tool
-  // call landing after the literal spends margin the cycle does not have.
+  // The literal is the LAST instruction. The clear is gated on that
+  // acknowledgement and on nothing after it, so anything placed after the
+  // literal races the clear it is meant to precede.
   const stopBlock = stepBlock(skill, steps, 7);
   assert.match(stopBlock, /^7\. \*\*STOP\./, 'step 7 must be the STOP step');
   assert.ok(stopBlock.includes(literal), 'the terminal literal must live inside the STOP step');
@@ -582,5 +582,104 @@ test('R2: a capsule_ack whose substituted length crosses the cap warns on stderr
     assert.ok(!r.stderr.includes(FIXTURE_TOKEN), 'the warning must not echo the declared text');
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// ── Round 3: the CLI argument path is a reader too, and it validates ─────────
+//
+// Round 2 found that renderCli parsed its arguments with a blind pair scan and
+// no validator behind it. A flag name could be taken as a value and land in the
+// body the seat sends byte for byte; a misspelled or valueless --root, or an
+// installed root with a space that reached the process unquoted, made the
+// loader hit ENOENT and the CLI print nothing on either stream, which the
+// capsule skill tells the seat to read as "no declaration, ordinary standalone
+// install". Every malformed invocation now refuses under the same token.
+
+function renderCliArgs(args) {
+  const mod = path.join(__dirname, '..', 'lifecycle-extension.mjs');
+  const r = spawnSync(process.execPath, [mod, ...args], { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+test('R3-1: a flag taken as a value, an unknown flag, a stray token and a missing --root all refuse, none silently', () => {
+  const fixture = mkFixture({
+    schema: 'LifecycleExtension/v1',
+    capsule_ack: `notify: ${FIXTURE_TOKEN} {capsule_id}`,
+  });
+  try {
+    const cases = [
+      ['flag taken as a value', ['render', 'capsule_ack', '--capsule-id', '--root', fixture.root], /--capsule-id needs a value/],
+      ['unknown flag', ['render', 'capsule_ack', '--capsule-id', CAPSULE_ID, '--rot', fixture.root], /unknown argument: "--rot"/],
+      ['stray token from an unquoted id with a space', ['render', 'capsule_ack', '--capsule-id', '2026-09-03', 's268', '--root', fixture.root], /unknown argument: "s268"/],
+      ['--root that is not a directory', ['render', 'capsule_ack', '--capsule-id', CAPSULE_ID, '--root', path.join(fixture.root, 'Will Smith', 'aigent')], /--root is not a directory/],
+      ['duplicate flag', ['render', 'capsule_ack', '--root', fixture.root, '--root', fixture.root], /--root given twice/],
+    ];
+    for (const [label, args, reason] of cases) {
+      const r = renderCliArgs(args);
+      assert.equal(r.status, 0, `${label}: the renderer never fails a capsule`);
+      assert.equal(r.stdout, '', `${label}: nothing may reach the seat from a malformed invocation`);
+      assert.ok(r.stderr.startsWith(WARNING_PREFIX), `${label}: the refusal must carry the fixed greppable prefix, got ${JSON.stringify(r.stderr)}`);
+      assert.match(r.stderr, reason, `${label}: the refusal must name what was wrong`);
+      assert.ok(!r.stderr.includes(FIXTURE_TOKEN), `${label}: the warning must not echo the declared text`);
+    }
+    // The well-formed invocation still renders, so the validator did not close
+    // the door it was meant to guard.
+    const ok = renderCapsuleAck(fixture.root, CAPSULE_ID);
+    assert.equal(ok.stdout.trim(), `notify: ${FIXTURE_TOKEN} ${CAPSULE_ID}`);
+    assert.equal(ok.stderr, '');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('R3-2: the data channel carries the exact body both surfaces send, including runs of spaces', () => {
+  const body = `notify  the   supervising process with this exact body: ${FIXTURE_TOKEN} {capsule_id}`;
+  const expected = body.split(CAPSULE_ID_SLOT).join(CAPSULE_ID);
+  const fixture = mkFixture({ schema: 'LifecycleExtension/v1', resume_ack: body, capsule_ack: body });
+  try {
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    assert.equal(result.extension.rendered.resume_ack, expected, 'the rendered data must be the body the seat is told to send');
+    assert.ok(result.prompt.includes(`runs AFTER step 4): ${expected}`), 'the prompt must carry that exact body');
+    const cli = renderCapsuleAck(fixture.root, CAPSULE_ID);
+    assert.equal(cli.stdout, `${expected}\n`, 'the capsule surface must carry that exact body');
+    assert.equal(foldDeclaredLine(expected), expected, 'the fold must be the identity on an accepted body');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('R3-3: the unicode line breakers the fold names are refused by the validator, not silently reshaped', () => {
+  for (const [name, ch] of [['LINE SEPARATOR', '\u2028'], ['PARAGRAPH SEPARATOR', '\u2029'], ['NEXT LINE', '\u0085']]) {
+    const result = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: `notify: ${FIXTURE_TOKEN}${ch}second line` });
+    assert.ok(String(result.extension.warning || '').startsWith(WARNING_PREFIX), `${name} must refuse the declaration`);
+    assert.match(String(result.extension.warning), /must be a single line/, `${name} is a line breaker`);
+    assert.equal(result.extension.resume_ack, null);
+  }
+});
+
+test('R3-4: a read failure that is not ENOENT is reported on both surfaces, never swallowed', () => {
+  // A directory where the file should be: the loader must not read it as "no
+  // declaration". EISDIR is the one non-ENOENT code a test can make portably.
+  const fixture = mkFixture(null);
+  try {
+    mkdirSync(path.join(fixture.root, '.aigent', 'lifecycle-extension.json'), { recursive: true });
+    const result = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
+    assert.ok(String(result.extension.warning || '').startsWith(WARNING_PREFIX), 'resume must warn');
+    assert.match(String(result.extension.warning), /cannot be read \(EISDIR\)/);
+    const cli = renderCapsuleAck(fixture.root, CAPSULE_ID);
+    assert.equal(cli.status, 0);
+    assert.equal(cli.stdout, '');
+    assert.match(cli.stderr, /cannot be read \(EISDIR\)/, 'the capsule surface must warn too');
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+test('R3-6: no refusal reason carries the raw slot literal into the procedure', () => {
+  const twoSlots = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: 'a {capsule_id} b {capsule_id}' });
+  const overBudget = promptFor({ schema: 'LifecycleExtension/v1', resume_ack: `${'y'.repeat(FIELD_MAX_CHARS - CAPSULE_ID_SLOT.length + 1)}{capsule_id}` });
+  for (const [label, result] of [['two slots', twoSlots], ['over budget with a slot', overBudget]]) {
+    assert.ok(String(result.extension.warning || '').startsWith(WARNING_PREFIX), `${label} must refuse`);
+    assert.ok(!result.prompt.includes(CAPSULE_ID_SLOT), `${label}: an unsubstituted slot must never reach the seat, warnings included`);
   }
 });

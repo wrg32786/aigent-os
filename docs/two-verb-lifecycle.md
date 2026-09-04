@@ -121,7 +121,7 @@ Copy `daemons/lifecycle-extension.example.json` to `<target>/.aigent/lifecycle-e
 }
 ```
 
-Both fields are optional. Each is one line, at most 500 characters, free of control characters, and may use `{capsule_id}` at most once. `.aigent/` sits outside every installer-managed tree, so the declaration survives an install and an update without needing an entry in `.aigent/operator-owned.json`.
+Both fields are optional. Each is one line (no line-breaking character of any kind, including U+2028, U+2029 and U+0085), at most 500 characters, free of control and bidi characters, and may use `{capsule_id}` at most once. `.aigent/` sits outside every installer-managed tree, so the declaration survives an install and an update without needing an entry in `.aigent/operator-owned.json`.
 
 What runs where:
 

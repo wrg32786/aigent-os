@@ -37,7 +37,7 @@ import {
   selectCapsule, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
-import { loadLifecycleExtension, resolveLifecycleAck, foldDeclaredLine } from './lifecycle-extension.mjs';
+import { loadLifecycleExtension, resolveLifecycleAck } from './lifecycle-extension.mjs';
 
 // Deterministic session-id authority (principal's order 2026-08-10, replacing
 // the abandoned PATCH-001O content classification): the resumed context gets its
@@ -260,11 +260,12 @@ function extensionLines(extension) {
   if (extension.rendered?.warning) lines.push(extension.rendered.warning);
   const ack = extension.rendered?.resume_ack;
   if (ack) {
-    // Rendered through the shared non-quoting fold, NOT inert(): this is a
-    // protocol body the seat is told to send verbatim, so quoting it would
-    // corrupt every declaration carrying a quote or a backslash. The fold still
-    // guarantees it cannot own a line of its own.
-    lines.push(`5. EXTENSION ACK (declared by this install, runs AFTER step 4): ${foldDeclaredLine(ack)}`);
+    // Already folded by resolveLifecycleAck through the seam's non-quoting
+    // single-line fold, NOT inert(): this is a protocol body the seat is told
+    // to send verbatim, so quoting it would corrupt every declaration carrying
+    // a quote or a backslash. The fold still guarantees it cannot own a line
+    // of its own, and the same string is what lands on the result as data.
+    lines.push(`5. EXTENSION ACK (declared by this install, runs AFTER step 4): ${ack}`);
   }
   return lines;
 }

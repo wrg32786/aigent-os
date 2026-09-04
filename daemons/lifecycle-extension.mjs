@@ -25,7 +25,7 @@
 // going. Fail-open is not fail-silent: the warning exists so an operator
 // chasing a supervisor hold-timeout can grep one token and find the cause.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inert } from './lifecycle-common.mjs';
@@ -34,6 +34,7 @@ export const LIFECYCLE_EXTENSION_REL = path.join('.aigent', 'lifecycle-extension
 const SCHEMA = 'LifecycleExtension/v1';
 const FIELDS = Object.freeze(['resume_ack', 'capsule_ack']);
 const ALLOWED_KEYS = new Set(['schema', ...FIELDS]);
+const CLI_FLAGS = new Set(['--root', '--capsule-id']);
 export const CAPSULE_ID_SLOT = '{capsule_id}';
 // ONE bound, used by the validator and by the renderer, so the two can never
 // disagree about what "too long" means. They used to be separate literals: the
@@ -55,13 +56,15 @@ export const CAPSULE_ID_MAX_CHARS = 128;
 // that matters for safety, which is that the value can never own a line of its
 // own inside the injected procedure: every line-breaking and control character
 // is folded to a space. The validator already refuses such a field outright;
-// this is the second, independent guard.
+// this is the second, independent guard. On an ACCEPTED body the fold is the
+// identity: it touches only characters the validator refuses, so the data a
+// supervisor asserts on, the resume step and the capsule stdout are one string.
+// Runs of ordinary spaces are the operator's bytes and are left alone.
 export function foldDeclaredLine(value) {
   return String(value ?? '')
     .replace(/[\r\n\u2028\u2029\u0085]+/g, ' ')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ')
-    .replace(/[ \t]+/g, ' ')
     .trim();
 }
 
@@ -108,13 +111,15 @@ function fieldProblem(rawValue) {
   // inside the injected procedure and impersonate a core step or a fence.
   // inert() folds line breaks at render time too; this is the second,
   // independent guard, refusing the file rather than silently reshaping it.
-  if (/[\r\n]/.test(value)) return 'must be a single line';
+  if (/[\r\n\u2028\u2029\u0085]/.test(value)) return 'must be a single line';
   // Bidi and format controls join C0/DEL: a declaration is one VISIBLE line the
   // seat sends verbatim, and an override can reverse or hide the text the
   // operator read back, so what was approved and what is sent stop matching.
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(value)) return 'must not contain control or bidi characters';
-  if (value.split(CAPSULE_ID_SLOT).length > 2) return `must use ${CAPSULE_ID_SLOT} at most once`;
+  // Reasons are spelled without the slot literal: they land in the injected
+  // procedure, and an unsubstituted slot must never appear there.
+  if (value.split(CAPSULE_ID_SLOT).length > 2) return 'must carry the capsule id slot at most once';
   // Measure what will actually be SENT, charging the slot its full id budget.
   // Measuring the template instead is what let an accepted declaration render
   // truncated.
@@ -123,7 +128,7 @@ function fieldProblem(rawValue) {
     : value.length;
   if (resolvedMax > FIELD_MAX_CHARS) {
     return value.includes(CAPSULE_ID_SLOT)
-      ? `must be at most ${FIELD_MAX_CHARS} characters once ${CAPSULE_ID_SLOT} is substituted `
+      ? `must be at most ${FIELD_MAX_CHARS} characters once the capsule id slot is filled `
         + `(worst case ${resolvedMax}, allowing ${CAPSULE_ID_MAX_CHARS} for the id)`
       : `must be at most ${FIELD_MAX_CHARS} characters`;
   }
@@ -203,7 +208,7 @@ export function loadLifecycleExtension(projectRoot) {
  */
 export function resolveLifecycleAck(template, capsuleId, field = 'field') {
   if (typeof template !== 'string' || template.length === 0) return { line: null, warning: null };
-  if (!template.includes(CAPSULE_ID_SLOT)) return { line: template, warning: null };
+  if (!template.includes(CAPSULE_ID_SLOT)) return { line: foldDeclaredLine(template), warning: null };
   if (typeof capsuleId !== 'string' || capsuleId.trim().length === 0) {
     return {
       line: null,
@@ -223,7 +228,7 @@ export function resolveLifecycleAck(template, capsuleId, field = 'field') {
       warning: `${WARNING_TOKEN} ${field} not rendered: with this capsule id substituted it is ${resolved.length} characters, over the ${FIELD_MAX_CHARS} cap`,
     };
   }
-  return { line: resolved, warning: null };
+  return { line: foldDeclaredLine(resolved), warning: null };
 }
 
 // ── The capsule surface's entry point ────────────────────────────────────────
@@ -251,9 +256,37 @@ export function renderCli(argv, out = process.stdout, err = process.stderr) {
       err.write(`${WARNING_PREFIX} unknown field: ${inert(field ?? '')}\n`);
       return 0;
     }
+    // The arguments are a reader too, and they validate like the file does.
+    // A blind pair scan took a flag name as a value and substituted it into
+    // the body the seat sends byte for byte, and a misspelled or valueless
+    // --root fell through to ENOENT and printed nothing on either stream,
+    // which the capsule skill reads as "no declaration". Every malformed
+    // invocation refuses under the same token, and refuses whole.
     const opts = new Map();
-    for (let i = 2; i < argv.length; i += 2) opts.set(argv[i], argv[i + 1]);
+    for (let i = 2; i < argv.length; i += 2) {
+      const flag = argv[i];
+      const value = argv[i + 1];
+      if (!CLI_FLAGS.has(flag)) {
+        err.write(`${WARNING_PREFIX} unknown argument: ${inert(flag)}\n`);
+        return 0;
+      }
+      if (typeof value !== 'string' || value.startsWith('--')) {
+        err.write(`${WARNING_PREFIX} ${flag} needs a value\n`);
+        return 0;
+      }
+      if (opts.has(flag)) {
+        err.write(`${WARNING_PREFIX} ${flag} given twice\n`);
+        return 0;
+      }
+      opts.set(flag, value);
+    }
     const root = opts.get('--root') || process.cwd();
+    let isDirectory = false;
+    try { isDirectory = statSync(root).isDirectory(); } catch { isDirectory = false; }
+    if (!isDirectory) {
+      err.write(`${WARNING_PREFIX} --root is not a directory: ${inert(root)}\n`);
+      return 0;
+    }
     const capsuleId = opts.get('--capsule-id') || '';
 
     const extension = loadLifecycleExtension(root);
@@ -263,7 +296,7 @@ export function renderCli(argv, out = process.stdout, err = process.stderr) {
     }
     const { line, warning } = resolveLifecycleAck(extension[field], capsuleId, field);
     if (warning) err.write(`${warning}\n`);
-    if (line) out.write(`${foldDeclaredLine(line)}\n`);
+    if (line) out.write(`${line}\n`);
     return 0;
   } catch (error) {
     // Even an unexpected throw degrades to "no extension", loudly.
