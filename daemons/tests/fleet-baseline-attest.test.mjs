@@ -473,6 +473,8 @@ test('an Auto-Refresh kill switch attests NONCOMPLIANT against an enabled baseli
 
 test('a declared memory root that does not resolve attests NONCOMPLIANT', () => {
   withInstall((root) => {
+    // The synthetic install has no marker yet; the declaration is the marker.
+    mkdirSync(path.join(root, '.aigent'), { recursive: true });
     const marker = path.join(root, '.aigent', 'state.json');
     writeFileSync(marker, JSON.stringify({ schemaVersion: 1, status: 'ready', completedAt: null, memory_root: 'gone/memory' }));
 
