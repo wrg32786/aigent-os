@@ -13,6 +13,9 @@ Exits:
 
 import sys, os, json, re, argparse, glob, hashlib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from memory_root import MemoryRootError, die, resolve_memory_root  # noqa: E402
 from datetime import datetime, timezone
 
 from render_boundary import collapse_line_breaking, inert
@@ -178,8 +181,12 @@ def main():
             sys.exit(0)
         session_id = os.path.splitext(os.path.basename(jsonl_path))[0]
 
-    ledger = Path(args.vault) / "memory" / "AGENT_FITNESS.md"
-    err_log = Path(args.vault) / "memory" / ".daemon-errors.log"
+    try:
+        memory = Path(resolve_memory_root(args.vault))
+    except MemoryRootError as error:
+        return die(error)
+    ledger = memory / "AGENT_FITNESS.md"
+    err_log = memory / ".daemon-errors.log"
 
     if not ledger.exists():
         print(f"WARN: ledger missing at {inert(ledger)}; not creating", file=sys.stderr)
@@ -230,7 +237,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except SystemExit:
         # argparse + main() use SystemExit for normal flow control. Don't override.
         raise
@@ -238,7 +245,11 @@ if __name__ == "__main__":
         # Best-effort: never block parent caller. Log and exit clean (0).
         # This is the catch-all for unhandled exceptions, NOT for normal exits.
         try:
-            err_log = Path(os.environ.get("AIGENT_VAULT", os.path.expanduser("~/.aigent"))) / "memory" / ".daemon-errors.log"
+            try:
+                err_log = Path(resolve_memory_root(os.environ.get("AIGENT_VAULT", os.path.expanduser("~/.aigent")))) / ".daemon-errors.log"
+            except MemoryRootError as error:
+                print(str(error), file=sys.stderr)
+                raise
             err_log.parent.mkdir(parents=True, exist_ok=True)
             with err_log.open("a", encoding="utf-8") as f:
                 f.write(

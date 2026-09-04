@@ -228,11 +228,12 @@ test('W4: every malformed, missing or unsafe declaration throws the named error 
   }
 });
 
-test('W4: a declared root through a symlink is refused', { skip: process.platform === 'win32' && 'symlink creation needs privileges on Windows' }, async () => {
+test('W4: a declared root through a symlink is refused', async () => {
   const { symlinkSync } = await import('node:fs');
   const fx = mkRoot({ dirs: ['real-memory'], declare: 'linked/memory' });
   try {
-    symlinkSync(path.join(fx.root, 'real-memory'), path.join(fx.root, 'linked'), 'dir');
+    // A junction on Windows needs no privilege and is a symlink to lstat.
+    symlinkSync(path.join(fx.root, 'real-memory'), path.join(fx.root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
     withEnv(NO_DIVERSION, () => {
       assert.throws(() => memRoot(fx.root), /passes through a symlink/);
     });
@@ -270,7 +271,7 @@ const SCAN_FILES = [
   path.join(REPO, 'install.sh'),
   path.join(REPO, 'launcher', 'install.sh'),
   path.join(REPO, 'launcher', 'install.ps1'),
-].filter((file) => existsSync(file) && !['memory-root.cjs', 'memory-root.sh'].includes(path.basename(file)));
+].filter((file) => existsSync(file) && !['memory-root.cjs', 'memory-root.sh', 'memory_root.py'].includes(path.basename(file)));
 
 // ── the shell door: delegates to the resolver, and its no-node default IS the resolver's ──
 
@@ -373,6 +374,9 @@ const ROOT_LITERALS = [
   /['"]vault['"]\s*,\s*['"]memory['"]/,
   /join\([^)\n]*['"]memory['"]\s*[,)]/,
   /\$[A-Za-z_{}]+\/memory(\/|["'\s]|$)/,
+  // Python: Path(...) / "memory", ... / "vault" / "memory", os.path.join(..., "memory")
+  /\/\s*["']memory["']/,
+  /["']vault["']\s*\/\s*["']memory["']/,
 ];
 
 // The shell consumers keep ONE literal each for the case where node is
@@ -422,7 +426,7 @@ test('W5a: no core reader or writer constructs the memory root by hand', () => {
     acc[file] = (acc[file] || 0) + 1;
     return acc;
   }, {});
-  assert.deepEqual(byFile, { 'install.sh': 3, 'launcher/install.ps1': 1 },
+  assert.deepEqual(byFile, { 'install.sh': 3, 'launcher/install.ps1': 1, 'launcher/install.sh': 1 },
     `the exemption list is fixed, saw ${exemptions.join(', ')}`);
 });
 
@@ -497,5 +501,39 @@ test('CLI: prints the resolved root, honors --relative and --allow-missing, refu
     }
   } finally {
     rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
+// ── the Python daemons go through the same door ──────────────────────────────
+
+const PYTHON = ['python3', 'python'].find((bin) => spawnSync(bin, ['--version'], { encoding: 'utf8' }).status === 0);
+
+test('W5c: the Python state daemon reads and writes the declared tree and leaves the dead default tree alone', { skip: !PYTHON && 'python not available' }, () => {
+  const live = mkRoot({
+    dirs: ['vault/memory/runtime', 'memory/runtime', 'memory/capsules'],
+    declare: 'memory',
+  });
+  const nested = mkRoot({ dirs: ['.nested/vault/memory'], declare: '.nested/vault/memory' });
+  const broken = mkRoot({ dirs: ['vault/memory'], declare: 'gone/memory' });
+  try {
+    writeFileSync(path.join(live.root, 'vault', 'memory', 'BODY_STATE.json'), JSON.stringify({ state: { pressure: 'critical' } }));
+    writeFileSync(path.join(live.root, 'memory', 'BODY_STATE.json'), JSON.stringify({ state: { pressure: 'low' } }));
+    const dead = snapshot(path.join(live.root, 'vault', 'memory'));
+    const daemon = path.join(DAEMONS, 'runtime', 'update-active-state.py');
+    const run = (root) => spawnSync(PYTHON, [daemon], { encoding: 'utf8', env: { ...process.env, AIGENT_ROOT: root, AIGENT_VAULT: root, AIGENT_STATE_HOME_DIR: root } });
+    const r1 = run(live.root);
+    assert.equal(r1.status, 0, r1.stderr);
+    assert.ok(existsSync(path.join(live.root, 'memory', 'runtime', 'ACTIVE_STATE.json')), 'state is written into the declared tree');
+    assert.deepEqual(snapshot(path.join(live.root, 'vault', 'memory')), dead, 'the dead default tree is untouched');
+    const r2 = run(nested.root);
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.ok(existsSync(path.join(nested.root, '.nested', 'vault', 'memory', 'runtime', 'ACTIVE_STATE.json')));
+    assert.ok(!existsSync(path.join(nested.root, 'vault')), 'no default tree is created beside a nested declared root');
+    const r3 = run(broken.root);
+    assert.notEqual(r3.status, 0, 'a broken declaration must stop the daemon');
+    assert.match(r3.stderr, /MEMORY-ROOT: /);
+    assert.ok(!existsSync(path.join(broken.root, 'vault', 'memory', 'runtime')), 'nothing is written around a broken declaration');
+  } finally {
+    for (const fx of [live, nested, broken]) rmSync(fx.base, { recursive: true, force: true });
   }
 });

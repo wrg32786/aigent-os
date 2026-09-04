@@ -10,7 +10,9 @@ STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
 # One resolver for the whole core (daemons/memory-root.cjs): declared in
 # .aigent/state.json, default vault/memory. A broken declaration is a FAIL
 # here, never a silent fallback to a tree that is not this seat's.
-. "$ROOT/daemons/memory-root.sh"
+# The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
+# install that predates it.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/memory-root.sh"
 if ! MEMORY_ROOT="$(aigent_memory_root "$STATE_BASE" 2>&1)"; then
   printf 'FAIL memory root: %s\n' "$MEMORY_ROOT"
   exit 1

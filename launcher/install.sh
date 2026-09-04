@@ -198,10 +198,17 @@ fi
 for folder in vault/daily vault/projects vault/people vault/concepts; do
   mkdir -p "$ROOT/$folder"
 done
-. "$ROOT/daemons/memory-root.sh"
-if ! MEMORY_REL="$(aigent_memory_root "$ROOT" --relative --allow-missing 2>&1)"; then
-  printf '%s\n' "$MEMORY_REL" >&2
+if [ -f "$here/../daemons/memory-root.sh" ]; then
+  . "$here/../daemons/memory-root.sh"
+  if ! MEMORY_REL="$(aigent_memory_root "$ROOT" --relative --allow-missing 2>&1)"; then
+    printf '%s\n' "$MEMORY_REL" >&2
+    exit 1
+  fi
+elif grep -q '"memory_root"' "$ROOT/.aigent/state.json" 2>/dev/null; then
+  printf 'MEMORY-ROOT: %s declares memory_root but this tree has no daemons/memory-root.sh to resolve it\n' "$ROOT/.aigent/state.json" >&2
   exit 1
+else
+  MEMORY_REL="vault/memory" # memory-root: no-node default
 fi
 mkdir -p "$ROOT/$MEMORY_REL"
 echo "  [harness] vault folders ensured"

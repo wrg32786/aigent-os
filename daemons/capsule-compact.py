@@ -14,6 +14,9 @@ Exits:
 
 import sys, os, re, argparse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from memory_root import MemoryRootError, die, resolve_memory_root  # noqa: E402
 from datetime import datetime, timezone
 
 from render_boundary import (
@@ -126,7 +129,10 @@ def main():
                         help="number of oldest capsules to summarize")
     args = parser.parse_args()
 
-    capsules_dir = Path(args.vault) / "memory" / "capsules"
+    try:
+        capsules_dir = Path(resolve_memory_root(args.vault)) / "capsules"
+    except MemoryRootError as error:
+        return die(error)
     if not capsules_dir.exists():
         print(f"ERROR: capsules dir not found: {inert(capsules_dir)}", file=sys.stderr)
         sys.exit(1)
@@ -190,4 +196,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -15,6 +15,9 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from memory_root import MemoryRootError, die, memory_root_from_env  # noqa: E402
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,83 +32,34 @@ def _native_path(value: str) -> Path:
     return Path(value).resolve()
 
 
-def _unique_paths(paths: Iterable[Path]) -> list[Path]:
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        marker = os.path.normcase(str(path))
-        if marker not in seen:
-            seen.add(marker)
-            result.append(path)
-    return result
+
+_MEMORY_ROOT: Path | None = None
 
 
-def _vault_score(path: Path) -> int:
-    """Score how strongly a path resembles the operational Obsidian vault."""
-    score = 0
-    memory = path / "memory"
-    if path.is_dir():
-        score += 1
-    if memory.is_dir():
-        score += 2
-    markers = {
-        "BODY_STATE.json": 8,
-        "SESSION_LOG.md": 6,
-        "ACTIVE_PRIORITIES.md": 6,
-        "DELEGATION_TRACKER.md": 3,
-        "DECISION_LOG.md": 3,
-    }
-    for name, weight in markers.items():
-        if (memory / name).exists():
-            score += weight
-    if (path / "daily").is_dir():
-        score += 2
-    if (path / "concepts").is_dir():
-        score += 1
-    return score
+def memory_path(vault: Path | None = None) -> Path:
+    """The seat's memory root, from the one resolver, cached for the run.
+
+    Before this, the daemon scored candidate directories by which of them
+    "looked like" the operational vault and then appended "memory" itself,
+    which on a seat whose live memory sits beside a dead default tree read
+    the dead tree's BODY_STATE.json and wrote its runtime state there. The
+    vault argument is accepted for the call sites' shape and ignored: the
+    memory root is not derived from the vault, the vault is derived from it.
+    """
+    global _MEMORY_ROOT
+    if _MEMORY_ROOT is None:
+        _MEMORY_ROOT = memory_root_from_env()
+    return _MEMORY_ROOT
 
 
 def resolve_vault_path() -> Path:
-    """Return the operational vault for old and new environment layouts."""
-    explicit_raw = os.environ.get("AIGENT_VAULT")
-    root_raw = os.environ.get("AIGENT_ROOT")
-
-    explicit = _native_path(explicit_raw) if explicit_raw else None
-    root = _native_path(root_raw) if root_raw else None
-    home = _native_path("~/.aigent")
-
-    candidates: list[Path] = []
-    if explicit is not None:
-        candidates.extend([explicit / "vault", explicit])
-    if root is not None:
-        candidates.extend([root / "vault", root])
-    candidates.extend([home / "vault", home])
-    candidates = _unique_paths(candidates)
-
-    scored = [(path, _vault_score(path)) for path in candidates]
-    best_path, best_score = max(scored, key=lambda item: item[1])
-    if best_score > 0:
-        return best_path
-
-    if explicit is not None:
-        return explicit if explicit.name.lower() == "vault" else explicit / "vault"
-    if root is not None:
-        return root / "vault"
-    return home / "vault"
+    """Return the operational vault: the directory that holds the memory root."""
+    return memory_path().parent
 
 
 def resolve_framework_memory(vault: Path) -> Path:
-    """Locate framework-owned indexes separately from operator vault memory."""
-    root_raw = os.environ.get("AIGENT_ROOT")
-    candidates = []
-    if root_raw:
-        candidates.append(_native_path(root_raw) / "memory")
-    candidates.append(vault.parent / "memory")
-    candidates.append(vault / "memory")
-    for candidate in _unique_paths(candidates):
-        if (candidate / "SKILL_GAPS.md").exists() or (candidate / "SKILL_LEDGER.md").exists():
-            return candidate
-    return candidates[0]
+    """Framework-owned indexes live in the same tree as everything else now."""
+    return memory_path(vault)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -160,8 +114,8 @@ def get_blocked_items(path: Path) -> list[str]:
 
 def get_pending_decisions(vault: Path, today: date) -> list[dict[str, Any]]:
     decisions: list[dict[str, Any]] = []
-    log_path = vault / "memory" / "DECISION_LOG.md"
-    outcomes_path = vault / "memory" / "DECISION_OUTCOMES.md"
+    log_path = memory_path(vault) / "DECISION_LOG.md"
+    outcomes_path = memory_path(vault) / "DECISION_OUTCOMES.md"
     try:
         log_content = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         outcomes_content = outcomes_path.read_text(encoding="utf-8") if outcomes_path.exists() else ""
@@ -189,7 +143,7 @@ def get_pending_decisions(vault: Path, today: date) -> list[dict[str, Any]]:
 
 
 def get_open_threads(vault: Path) -> list[str]:
-    path = vault / "memory" / "SESSION_LOG.md"
+    path = memory_path(vault) / "SESSION_LOG.md"
     try:
         content = path.read_text(encoding="utf-8")
     except OSError:
@@ -209,7 +163,7 @@ def get_open_threads(vault: Path) -> list[str]:
 
 
 def get_next_action(vault: Path) -> str | None:
-    path = vault / "memory" / "SESSION_LOG.md"
+    path = memory_path(vault) / "SESSION_LOG.md"
     try:
         content = path.read_text(encoding="utf-8")
     except OSError:
@@ -228,7 +182,7 @@ def get_next_action(vault: Path) -> str | None:
 
 
 def count_memory_candidates(vault: Path) -> int:
-    path = vault / "memory" / "MEMORY_CANDIDATES.md"
+    path = memory_path(vault) / "MEMORY_CANDIDATES.md"
     try:
         content = path.read_text(encoding="utf-8").lower()
     except OSError:
@@ -247,12 +201,12 @@ def _older_than(value: str, today: date, days: int) -> bool:
 def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     now = now or datetime.now(timezone.utc)
     today = now.date()
-    runtime_dir = vault / "memory" / "runtime"
+    runtime_dir = memory_path(vault) / "runtime"
     state_path = runtime_dir / "ACTIVE_STATE.json"
     previous = read_json(state_path)
     previous_mode = previous.get("mode", "idle") if previous else "idle"
 
-    body_state = read_json(vault / "memory" / "BODY_STATE.json") or {}
+    body_state = read_json(memory_path(vault) / "BODY_STATE.json") or {}
     body = body_state.get("state", {}) if isinstance(body_state.get("state", {}), dict) else {}
     backlog = int(body.get("memory_candidate_backlog", 0) or 0)
     pressure = {
@@ -288,7 +242,7 @@ def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, A
     pending_decisions = get_pending_decisions(vault, today)
     framework_memory = resolve_framework_memory(vault)
     skill_gaps = get_open_skill_gaps(framework_memory / "SKILL_GAPS.md")
-    blocked_items = get_blocked_items(vault / "memory" / "DELEGATION_TRACKER.md")
+    blocked_items = get_blocked_items(memory_path(vault) / "DELEGATION_TRACKER.md")
     memory_candidates = count_memory_candidates(vault)
 
     if active_capsule and active_capsule["status"] == "paused":
@@ -347,12 +301,17 @@ def compute_state(vault: Path, now: datetime | None = None) -> tuple[dict[str, A
 
 
 def main() -> int:
-    vault = resolve_vault_path()
+    # A broken memory-root declaration stops the daemon here, by name, before
+    # any tree is read or written.
+    try:
+        vault = resolve_vault_path()
+    except MemoryRootError as error:
+        return die(error)
     if "--print-vault" in sys.argv:
         print(vault)
         return 0
 
-    runtime_dir = vault / "memory" / "runtime"
+    runtime_dir = memory_path(vault) / "runtime"
     state_path = runtime_dir / "ACTIVE_STATE.json"
     events_path = runtime_dir / "STATE_EVENTS.jsonl"
     state, events = compute_state(vault)
