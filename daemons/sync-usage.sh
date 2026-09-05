@@ -8,7 +8,16 @@
 # Designed to NEVER fail its caller — exits 0 on any error so /close is never blocked.
 
 VAULT="${AIGENT_VAULT:-${AIGENT_ROOT:-$(pwd)}}"
-LOG="$VAULT/memory/usage_log.md"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+SELF_DIR=$(dirname "$0")
+SELF_DIR=$(cd "$SELF_DIR" && pwd)
+. "$SELF_DIR/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$VAULT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+LOG="$MEMORY_ROOT/usage_log.md"
 
 PROJECTS_DIR="$HOME/.claude/projects"
 [ -d "$PROJECTS_DIR" ] || exit 0

@@ -7,13 +7,20 @@ export PYTHONIOENCODING=utf-8
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
-if [[ -d "$STATE_BASE/vault/memory" ]]; then
-  MEMORY_ROOT="$STATE_BASE/vault/memory"
-elif [[ -d "$STATE_BASE/memory" ]]; then
-  MEMORY_ROOT="$STATE_BASE/memory"
-else
-  MEMORY_ROOT="$STATE_BASE/vault/memory"
+# One resolver for the whole core (daemons/memory-root.cjs): declared in
+# .aigent/state.json, default vault/memory. A broken declaration is a FAIL
+# here, never a silent fallback to a tree that is not this seat's.
+# The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
+# install that predates it.
+SYSTEM_CHECK_DIR=$(dirname "${BASH_SOURCE[0]}")
+SYSTEM_CHECK_DIR=$(cd "$SYSTEM_CHECK_DIR" && pwd)
+. "$SYSTEM_CHECK_DIR/memory-root.sh"
+if ! MEMORY_ROOTS="$(aigent_memory_root "$STATE_BASE" --with-ledgers 2>&1)"; then
+  printf 'FAIL memory root: %s\n' "$MEMORY_ROOTS"
+  exit 1
 fi
+MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
+LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
 
 SKILLS_ROOT="$ROOT/skills"
 DAEMONS_ROOT="$ROOT/daemons"
@@ -266,8 +273,8 @@ else
   ck "HEAT_INDEX.json schema" FAIL "missing or invalid"
 fi
 
-if [[ -f "$MEMORY_ROOT/CADDY_MUTES.json" ]]; then
-  if CADDY_FILE="$MEMORY_ROOT/CADDY_MUTES.json" python3 -c \
+if [[ -f "$LEDGERS_ROOT/CADDY_MUTES.json" ]]; then
+  if CADDY_FILE="$LEDGERS_ROOT/CADDY_MUTES.json" python3 -c \
     'import json, os; json.load(open(os.environ["CADDY_FILE"], encoding="utf-8"))' 2>/dev/null; then
     ck "CADDY_MUTES.json parses" PASS
   else

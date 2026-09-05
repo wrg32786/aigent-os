@@ -1597,6 +1597,36 @@ const SHELL_COPY_ALLOWLIST = [
     reason: 'remaining enumerated framework trees use the audited no-clobber installation helper',
   },
   {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
+    needle: 'copy_missing_tree "$SRC/vault" "$TARGET/vault" 0',
+    reason: 'the vault tree of an install whose memory root is the default is copied whole by the audited helper',
+  },
+  {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
+    needle: 'copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "memory"',
+    reason: 'the vault tree of an install with a declared memory root is copied without its memory subtree, so no dead default tree is created',
+  },
+  {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
+    needle: 'copy_missing_tree "$SRC/$dir/memory" "$TARGET/$MEMORY_REL" 0 # memory-root: source template, not a memory tree',
+    reason: 'the vault memory seed templates are routed into the declared memory root, missing-only',
+  },
+  {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
+    needle: 'copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0',
+    reason: 'the memory seed tree of an install whose memory root is the default is copied as before',
+  },
+  {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
+    needle: 'copy_missing_tree "$SRC/$dir" "$TARGET/$MEMORY_REL" 0',
+    reason: 'the memory seed templates are routed into the declared memory root instead of a stray memory/ tree',
+  },
+  {
     file: 'launcher/install.sh',
     rule: 'recursive-copy',
     needle: 'cp -r "$source" "$destination"',

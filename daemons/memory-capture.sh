@@ -11,9 +11,16 @@
 
 DAEMON_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${AIGENT_ROOT:-$(cd "$DAEMON_DIR/.." && pwd)}"
-CANDIDATES="$ROOT/memory/MEMORY_CANDIDATES.md"
-DAEMON_ERR_LOG="$ROOT/memory/.daemon-errors.log"
-TIER2_OBS_LOG="$ROOT/memory/.tier2-observations.log"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+. "$DAEMON_DIR/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+CANDIDATES="$MEMORY_ROOT/MEMORY_CANDIDATES.md"
+DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
+TIER2_OBS_LOG="$MEMORY_ROOT/.tier2-observations.log"
 
 INPUT=$(cat 2>/dev/null)
 [ -z "$INPUT" ] && exit 0

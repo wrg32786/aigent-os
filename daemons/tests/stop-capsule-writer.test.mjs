@@ -269,6 +269,7 @@ function writeInstrumentedDaemon(fixture, {
   const daemon = path.join(daemonDir, 'stop-capsule-writer.mjs');
   copyFileSync(DAEMON, daemon);
   copyFileSync(LIFECYCLE_COMMON, path.join(daemonDir, 'lifecycle-common.mjs'));
+  copyFileSync(path.join(path.dirname(LIFECYCLE_COMMON), 'memory-root.cjs'), path.join(daemonDir, 'memory-root.cjs'));
   copyFileSync(FRONTMATTER_READER, path.join(daemonDir, 'frontmatter-reader.cjs'));
   copyFileSync(RAW_ACQUISITIONS, path.join(daemonDir, 'raw-acquisitions.mjs'));
   copyFileSync(RESUME_FRAMING, path.join(hygieneDir, 'resume-framing.mjs'));

@@ -1,13 +1,13 @@
 {
-  "schema": "FleetBaselineManifest/v7",
-  "baseline_id": "aigent-os-2026-09-03-73a968b8",
-  "public_product_commit": "73a968b8a26334c17082f14d090c704e40878e8b",
+  "schema": "FleetBaselineManifest/v8",
+  "baseline_id": "aigent-os-2026-09-04-8ca833af",
+  "public_product_commit": "8ca833afbca63096f7da784cc802799dd9ab0bb8",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
     "scripts/doctor.sh is excluded: it is the measuring instrument, not a member of the measured population.",
     "daemons/semantic-search/namespace-registry.json pins the product-owned namespace policy artifact. v3 does not attest every semantic-search implementation byte; it pins this policy artifact plus the existing load-bearing population.",
-    "FleetBaselineManifest/v6 (aigent-os-2026-08-24-867cb2ea) is the immediate predecessor, superseded by this baseline as the current public baseline, and remains historical evidence in git history. FleetBaselineManifest/v5 (aigent-os-2026-08-24-dde2c681), v4 (aigent-os-2026-08-24-a8319faf), v3 (aigent-os-2026-08-23-3bfe7ea3), v2 (aigent-os-2026-08-22-30598546), and v1 (aigent-os-2026-08-19-41051d9e) remain historical evidence further back.",
+    "FleetBaselineManifest/v7 (aigent-os-2026-09-03-73a968b8) is the immediate predecessor, superseded by this baseline as the current public baseline, and remains historical evidence in git history. FleetBaselineManifest/v6 (aigent-os-2026-08-24-867cb2ea) and FleetBaselineManifest/v5 (aigent-os-2026-08-24-dde2c681), v4 (aigent-os-2026-08-24-a8319faf), v3 (aigent-os-2026-08-23-3bfe7ea3), v2 (aigent-os-2026-08-22-30598546), and v1 (aigent-os-2026-08-19-41051d9e) remain historical evidence further back.",
     "v3 recut reason (program issue #41): daemons/statusline-ctx.sh changed to fix a silent statusline when jq is absent and no delegate is wired (telemetry still wrote, but nothing displayed) — every other hash was recomputed from the same commit and found unchanged.",
     "v4 recut reason (program issue #43): daemons/caddy.sh and daemons/lifecycle-common.mjs changed to add the persisted-text trust-boundary render chokepoint (renderPersisted(), SKILL_CHAINS staleness reporting) -- every other hash was recomputed from the same commit and found unchanged.",
     "v5 recut reason (program issue #43, review R1): daemons/caddy.sh and daemons/lifecycle-common.mjs changed again to fix review findings F1/F2/F4/F5/F7/F8 (quoted trust-tag fields, no fail-open disposition default, canonical render_boundary.py import, future-dated-row handling, max/now validation) -- every other hash was recomputed from the same commit and found unchanged.",
@@ -17,14 +17,15 @@
     ".claude/rules/post-compact-critical.md is excluded: it is operator-owned doctrine (the CLAUDE.md class) -- the installer seeds the starter only into a fresh install and keeps an existing operator file, so its installed bytes are legitimately not the repo bytes.",
     "Operator-owned declarations (program issue #49) change how a required_files hash mismatch is REPORTED, never which paths are pinned or what they hash to. The terminal semantics live in docs/install-security.md, section 'Operator-owned paths'.",
     "v7 recut reason (program issue #49, G1 lifecycle extension seam, review round 1): daemons/resume-verb.mjs changed to render an optional target-owned lifecycle-extension declaration as a step after the core acknowledgement, and again to render it through the seam's non-quoting single-line fold instead of inert(), because the declared text is a protocol body the seat is told to send byte for byte and quoting corrupted it. daemons/lifecycle-extension.mjs is NEWLY ADDED to required_files, on exactly the reasoning v6 used to admit daemons/render_boundary.py: the pinned daemons/resume-verb.mjs imports it, and the capsule skill invokes it as a CLI, so a tampered or drifted copy of that module must also flip the install NONCOMPLIANT. The population rule above describes how paths ENTER the population; it is not a bar on imported modules, and daemons/lifecycle-common.mjs and daemons/render_boundary.py are both pinned while matching neither the settings template nor install.sh. An earlier draft of this note excluded the module on the opposite reading, which was a misreading of the rule. The exposure is created by this delta: before it, no unpinned module could put chosen text into the post-clear procedure. Recomputed from this baseline's commit: 33 pinned, 33 matching, 0 missing.",
-    "v7 recut, round 2 (program issue #49, G1 lifecycle extension seam, review rounds 1 and 2 close-out): three product commits moved two pins. daemons/lifecycle-extension.mjs changed for the remaining SHOULD/NIT findings (trim a field before measuring it against the 500-char cap, rebuild WITNESS C on the numbered-step anchors in skills/context-capsule/SKILL.md rather than on two raw substring positions), again so that a declared field the runtime holds, a {capsule_id} slot with no capsule loaded or a substituted body over the cap, emits one greppable LIFECYCLE-EXTENSION: line instead of nothing, on the procedure and error log for resume and on stderr for the capsule renderer, and a third time so the capsule renderer validates its own invocation the way the loader validates the file (an unknown flag, a flag without a value, a repeated flag, a stray token or a --root that is not a directory refuses whole under the same token), refuses U+2028, U+2029 and U+0085 as line breakers, and returns one folded body to every surface. daemons/resume-verb.mjs changed to carry the held-field warning and to resolve the declared line before the prompt is built so it lands on the result as data. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 33 pinned, 33 matching, 0 missing."
+    "v7 recut, round 2 (program issue #49, G1 lifecycle extension seam, review rounds 1 and 2 close-out): three product commits moved two pins. daemons/lifecycle-extension.mjs changed for the remaining SHOULD/NIT findings (trim a field before measuring it against the 500-char cap, rebuild WITNESS C on the numbered-step anchors in skills/context-capsule/SKILL.md rather than on two raw substring positions), again so that a declared field the runtime holds, a {capsule_id} slot with no capsule loaded or a substituted body over the cap, emits one greppable LIFECYCLE-EXTENSION: line instead of nothing, on the procedure and error log for resume and on stderr for the capsule renderer, and a third time so the capsule renderer validates its own invocation the way the loader validates the file (an unknown flag, a flag without a value, a repeated flag, a stray token or a --root that is not a directory refuses whole under the same token), refuses U+2028, U+2029 and U+0085 as line breakers, and returns one folded body to every surface. daemons/resume-verb.mjs changed to carry the held-field warning and to resolve the declared line before the prompt is built so it lands on the result as data. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 33 pinned, 33 matching, 0 missing.",
+    "v8 recut reason (program issue #49, G4 configurable memory root): every core reader and writer of memory now resolves the memory tree through daemons/memory-root.cjs, declared in .aigent/state.json as memory_root and defaulting to vault/memory. NEWLY ADDED to required_files: daemons/memory_root.py, daemons/memory-root.cjs, daemons/memory-root.sh (the resolver, its shell door, its Python door), on the reasoning v6 used for daemons/render_boundary.py and v7 used for daemons/lifecycle-extension.mjs: the module is imported by the pinned daemons/lifecycle-common.mjs, the shell door is sourced by the pinned daemons/caddy.sh and hooks, and the Python door is imported by the runtime state daemon, so a tampered or drifted copy of any of the three that resolved memory to a different tree must flip the install NONCOMPLIANT. auto_refresh.kill_switch_roots is REMOVED and replaced by auto_refresh.memory_root_resolver: the attest instrument no longer mirrors a resolution rule, it asks the resolver, and an unresolvable memory root is itself NONCOMPLIANT. Pins that moved: daemons/sessionstart-reinject.mjs, daemons/resume-verb.mjs, daemons/caddy.sh, hooks/session-capture-summary.sh, hooks/log-token-usage.sh, daemons/pty-runner.mjs, daemons/lifecycle-common.mjs, launcher/install.sh, launcher/install.ps1. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 36 pinned, 36 matching, 0 missing. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "fa30a56b9eb5a2f385065e8d1737ae0ec70084b23737a1f3e1c43fcea196f468",
-    "daemons/sessionstart-reinject.mjs": "f088db2faba158af4008dc56321d80cb52a7544d37a952d51472d69fa9e39496",
-    "daemons/resume-verb.mjs": "1110973abb2aa7a4b5d10fb3d1020ba32716e1550ba450b21acd62832647aec6",
+    "daemons/sessionstart-reinject.mjs": "af62ac18954e7ec773e3051ac23fb89e8b1731e74dcac9b1e5bbd1320fd3ff52",
+    "daemons/resume-verb.mjs": "f1d1ddc498cc514a13504d4f46d5a6d6d9fc7b7255935fc086d29602042d6297",
     "daemons/lifecycle-extension.mjs": "2819d6600b8c48922bdde7cbe95409a003d574bb2487e3489f7ba02e819840a2",
-    "daemons/caddy.sh": "bb7744ba48916bba539dd3be6761f17d3a565c7b909b47de6f29765a72e81405",
+    "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
     "daemons/precompact-flush.mjs": "eb93bc6bed70e24400229d4930c7ec9b3f806476562f20ea83f6da4cc3b8b07a",
     "daemons/ctx-refresh-sensor.mjs": "0978848f6fac08f66fa7c6842e666c19eed6d05b82836a316b9c3c2be49e6cfb",
@@ -37,21 +38,24 @@
     "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
     "daemons/stop-capsule-writer.mjs": "a9c37843f0b8d9e2bec10c1cd798afae80add202f795bcd0d0326410fca30f55",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
-    "hooks/session-capture-summary.sh": "42c6ce5a62258f65526137aa820f370452f26cd3e2fea129edb6f7aa51fccb4d",
-    "hooks/log-token-usage.sh": "5a009edd29267d54c34827a483b7309370d58f7a9483defe000061ec3804965c",
+    "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
+    "hooks/log-token-usage.sh": "c545e43dd65fa4a1be833cbeaf22223df60db85d9080e31bb79d7c19819b1ec1",
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "2a56f0b438f8c3280653854d75f6efee3c6f90492f788b821ccaf2f0c46782d0",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "384f7a6b6be1e6be7882cd58e3d5b454390c39de31d64fc20e88c0749da79389",
+    "daemons/pty-runner.mjs": "d6094800325794a339cdf30f5de7677419a73cd478d411ea40bf1c31c85080e5",
     "daemons/auto-clear-transport.mjs": "c552f4270158e5b1efe248ffa2580a4b5baa3fe7b00ecf715c3e0b6a69dabe3f",
-    "daemons/lifecycle-common.mjs": "bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3",
+    "daemons/lifecycle-common.mjs": "f391a128ce975b61b84fa0e643c651466d0733c32dadca71d9f2bb697e57c4c1",
+    "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
+    "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
+    "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
     "daemons/render_boundary.py": "ec2ed2b238d46cc964770d86dd3abe37913a611343871d348b8525e289ff1ff3",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
     "launcher/aigent.sh": "5aebacaf419b421f87260ff5aa31c0b7b68a795435031475b92e9c65d8419335",
     "launcher/aigent.ps1": "44e21c52268c77fb64e190b698beeeffc27ab188e315c5f5d3b173af950508b0",
-    "launcher/install.sh": "cdb11fd4a4f0d0f5a39ba044ac2e3a509482ee35d1964b677a32f52f78dd2285",
-    "launcher/install.ps1": "472cb70b6bfba4c1d3ff38cf72855eadde2953ac5063bcdfc89c3fa05ae93574",
+    "launcher/install.sh": "ca3799b4642558556be2b2062b714d33ede481487b526dbed01548536319dfeb",
+    "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060"
   },
   "required_settings": {
@@ -100,11 +104,8 @@
     "expected": "enabled",
     "kill_switch_env": "AUTO_CLEAR_OFF",
     "kill_switch_file": "runtime/auto-clear-off",
-    "kill_switch_roots": [
-      "vault/memory",
-      "memory"
-    ],
-    "note": "kill_switch_file is resolved under the first existing kill_switch_roots entry, mirroring memRoot() in daemons/lifecycle-common.mjs. When expected is enabled, an active kill switch or an unloadable node-pty is NONCOMPLIANT."
+    "memory_root_resolver": "daemons/memory-root.cjs",
+    "note": "kill_switch_file is resolved under the memory root that daemons/memory-root.cjs reports for the install (declared in .aigent/state.json as memory_root, default vault/memory). An install whose memory root does not resolve is NONCOMPLIANT. When expected is enabled, an active kill switch or an unloadable node-pty is NONCOMPLIANT."
   },
   "optional_components": {
     "semantic_search": {

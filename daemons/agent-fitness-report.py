@@ -12,6 +12,9 @@ Output: stdout report. No mutations.
 
 import sys, os, re, argparse, json
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from memory_root import MemoryRootError, die, resolve_memory_root  # noqa: E402
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -93,7 +96,10 @@ def main():
                     help="filter to last N days; default all-time")
     args = ap.parse_args()
 
-    ledger = Path(args.vault) / "memory" / "AGENT_FITNESS.md"
+    try:
+        ledger = Path(resolve_memory_root(args.vault)) / "AGENT_FITNESS.md"
+    except MemoryRootError as error:
+        return die(error)
     rows = parse_ledger(ledger)
 
     if not rows:

@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=4
+TOTAL=5
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -92,9 +92,11 @@ git -C "$REMOTE_WORK" log -1 --format=%s | grep -q '^vault sync: test capsule-cy
 git --git-dir="$REMOTE_BARE" show \
   "$REMOTE_AFTER:vault/memory/capsules/remote-cycle.md" | grep -q 'durable memory' \
   || fail 'capsule did not reach remote'
-git --git-dir="$REMOTE_BARE" show \
-  "$REMOTE_AFTER:memory/SKILL_LEDGER.md" | grep -q 'durable root memory' \
-  || fail 'fallback/root memory did not reach remote'
+# The undeclared install resolves to vault/memory and nothing else: a stray
+# memory/ tree beside it is not this seat's memory and must not be committed.
+if git --git-dir="$REMOTE_BARE" cat-file -e "$REMOTE_AFTER:memory/SKILL_LEDGER.md" 2>/dev/null; then
+  fail 'a second memory tree entered the memory commit of an undeclared install'
+fi
 if git --git-dir="$REMOTE_BARE" ls-tree -r --name-only "$REMOTE_AFTER" \
     | grep -q '/runtime/stop-writer/'; then
   fail 'generated stop-writer state entered the memory commit'
@@ -225,5 +227,29 @@ grep -Eiq 'tag="vault-sync" message=".*refusing to write through symlink' \
   "$GIT_LINK_WORK/vault/memory/.daemon-errors.log" \
   || fail 'git-control symlink refusal was not logged'
 printf '[4/%d] symlink outside root: refused, outside target untouched\n' "$TOTAL"
+
+# ── 5. Declared memory root: the declared tree, and only it, is synced ────────
+DECLARED_WORK="$WORK/declared-root"
+DECLARED_BARE="$WORK/declared-root.git"
+make_vault "$DECLARED_WORK"
+printf '{"schemaVersion":1,"status":"ready","completedAt":null,"memory_root":"memory"}\n' \
+  > "$DECLARED_WORK/.aigent/state.json"
+add_remote "$DECLARED_WORK" "$DECLARED_BARE"
+mkdir -p "$DECLARED_WORK/memory/capsules"
+printf '%s\n' '---' 'id: test-declared-cycle' '---' 'declared memory' \
+  > "$DECLARED_WORK/memory/capsules/declared-cycle.md"
+printf 'dead default tree\n' > "$DECLARED_WORK/vault/memory/capsules/dead.md"
+DECLARED_OUT="$(run_cycle "$DECLARED_WORK" 'declared root' 2>&1)"
+[[ -z "$DECLARED_OUT" ]] || fail "declared-root cycle produced output: $DECLARED_OUT"
+DECLARED_AFTER="$(git --git-dir="$DECLARED_BARE" rev-parse refs/heads/main)"
+git --git-dir="$DECLARED_BARE" show \
+  "$DECLARED_AFTER:memory/capsules/declared-cycle.md" | grep -q 'declared memory' \
+  || fail 'declared memory tree did not reach remote'
+if git --git-dir="$DECLARED_BARE" cat-file -e "$DECLARED_AFTER:vault/memory/capsules/dead.md" 2>/dev/null; then
+  fail 'the dead default tree entered the memory commit of a declared install'
+fi
+[[ -f "$DECLARED_WORK/vault/memory/capsules/dead.md" ]] \
+  || fail 'the dead default tree was touched on disk'
+printf '[5/%d] declared memory root: the declared tree synced, the default tree untouched\n' "$TOTAL"
 
 printf 'vault-sync tests: all %d passed\n' "$TOTAL"

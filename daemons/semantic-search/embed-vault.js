@@ -19,6 +19,7 @@ import {
   requireNamespaceRegistry,
 } from './namespace-registry.mjs';
 import frontmatterReader from '../frontmatter-reader.cjs';
+import { resolveMemoryRoot } from '../memory-root.cjs';
 
 const {
   frontmatterList,
@@ -33,7 +34,12 @@ const __dirname = dirname(__filename);
 
 const AIGENT_ROOT = process.env.AIGENT_ROOT || join(__dirname, '..', '..');
 const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
-const EMBEDDINGS_PATH = join(VAULT_ROOT, 'memory', 'embeddings.json');
+// The index lives in the seat's memory root, resolved by the one resolver the
+// rest of core uses (declared in .aigent/state.json, default vault/memory).
+// A broken declaration throws at startup, which is the fail-closed direction
+// this indexer already takes for a missing registry.
+const MEMORY_ROOT = resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT);
+const EMBEDDINGS_PATH = join(MEMORY_ROOT, 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const MAX_CHUNK_CHARS = 1800; // ~512 tokens at ~3.5 chars/token
 const CHUNK_OVERLAP_CHARS = 200;
@@ -320,7 +326,7 @@ async function main() {
   };
 
   // Ensure memory dir exists
-  const memDir = join(VAULT_ROOT, 'memory');
+  const memDir = MEMORY_ROOT;
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
 
   writeFileSync(EMBEDDINGS_PATH, JSON.stringify(output, null, 0));

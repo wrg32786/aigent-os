@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { describeMemoryRoot } from './memory-root.cjs';
 
 const DAEMON_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(DAEMON_DIR, '..');
@@ -85,20 +86,18 @@ export function resolveNightlyPaths(root = defaultNightlyRoot(), {
     ?? firstEnvironmentValue(env, ['AIGENT_STATE_HOME_DIR'])
     ?? repositoryRoot;
   const stateRoot = path.resolve(normalizeFilesystemPath(selectedStateHome));
-  const vaultMemory = path.join(stateRoot, 'vault', 'memory');
-  const directMemory = path.join(stateRoot, 'memory');
-  const memoryRoot = existsSync(vaultMemory)
-    ? vaultMemory
-    : existsSync(directMemory)
-      ? directMemory
-      : vaultMemory;
+  // One resolver for the whole core: the nightly pass reads and writes the
+  // same tree every hook does, declared or default, or refuses with the same
+  // MemoryRootError when the declaration is broken.
+  const described = describeMemoryRoot(stateRoot);
+  const memoryRoot = described.root;
   return {
     repositoryRoot,
     stateRoot,
     vaultRoot: path.dirname(memoryRoot),
     memoryRoot,
     runtimeRoot: path.join(memoryRoot, 'runtime'),
-    layout: memoryRoot === directMemory ? 'memory' : 'vault/memory',
+    layout: described.relative,
   };
 }
 

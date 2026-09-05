@@ -10,7 +10,18 @@
 # Contract: best-effort. All errors go to DAEMON_ERR_LOG. Never blocks caddy.sh.
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-DAEMON_ERR_LOG="${DAEMON_ERR_LOG:-$ROOT/memory/.daemon-errors.log}"
+if [ -z "${DAEMON_ERR_LOG:-}" ]; then
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+SELF_DIR=$(dirname "$0")
+SELF_DIR=$(cd "$SELF_DIR" && pwd)
+. "$SELF_DIR/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+  DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
+fi
 
 # Prefer the new typed SkillCard index; fall back to repo copy (old flat-array format).
 # The optional global index uses the {_meta, cards:[]} SkillCard structure.

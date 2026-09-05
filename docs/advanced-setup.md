@@ -125,7 +125,7 @@ cat .claude/skill-index.json | python3 -m json.tool | grep '"name"'
 
 ## Memory-heat daemon
 
-The memory-heat daemon ranks vault notes by recency + frequency of access, so a resume knows what to surface. Output lives at `vault/memory/HEAT_INDEX.json`.
+The memory-heat daemon ranks vault notes by recency + frequency of access, so a resume knows what to surface. Output lives at `HEAT_INDEX.json` under the memory root (`vault/memory/` by default; see the configured memory root in `docs/two-verb-lifecycle.md`).
 
 **Run manually:**
 ```bash

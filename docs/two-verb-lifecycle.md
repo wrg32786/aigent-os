@@ -134,6 +134,29 @@ Failure is fail-open and loud. An unreadable, malformed, or invalid declaration 
 
 The declaration is data, never code. Nothing loads a module or spawns a process, and core never learns any particular supervisor's vocabulary. Both surfaces read it through the same loader: resume via `daemons/resume-verb.mjs`, capsule via `node daemons/lifecycle-extension.mjs render capsule_ack`, so a declaration refused on one surface is refused on the other by the same validator. The declared text is a protocol body the seat is told to send verbatim, so it is NOT rendered through `inert()`, which quotes and escapes: it goes through a non-quoting single-line fold shared by both surfaces, and reaches the seat byte for byte with the id substituted. What the fold still guarantees is the property that matters, which is that a declared value can never own a line of its own; the loader independently refuses a multi-line, over-long or control-character field, and the rendered step sits below the core steps where it could not suspend one anyway. Length is measured on the SUBSTITUTED string, charging `{capsule_id}` a fixed id budget, so an accepted declaration can never render truncated.
 
+## Configured memory root
+
+Every core reader and writer of memory resolves the memory tree through one module, `daemons/memory-root.cjs`: capsule selection, the resume verb, the Stop-hook capsule writer, the prompt journal, Auto-Refresh's runner and transport, the nightly pass, vault sync, semantic search, the heat index, the shell daemons under `daemons/`, doctor and the installer. Nothing else decides where that tree is.
+
+A stock install declares nothing and keeps the documented default, `vault/memory`. An install whose memory lives elsewhere declares it once, in the install marker the installer already writes and never rewrites:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "ready",
+  "completedAt": null,
+  "memory_root": "memory"
+}
+```
+
+`memory_root` is a path relative to the install root, forward slashes, no `..`, no absolute form. `"memory"` puts the tree at `<root>/memory`; `".nested/vault/memory"` puts it under a nested directory. The installer creates and seeds the declared tree and does not create the default one, so a seat with its own layout never grows a dead default tree beside its live one. Existing memory is never copied, moved or rewritten by this mechanism: it points core at the tree that is already there.
+
+Failure is loud and never sideways. A declaration that is missing on disk, malformed, absolute, escaping the root, passing through a symlink, or in an unreadable marker throws a `MemoryRootError` whose message starts with `MEMORY-ROOT:`. The resume verb then reads no capsule and names the fault in the injected procedure; the hooks refuse to write and say so on stderr; `scripts/doctor.sh` reports FAIL and `--attest` records a finding; the installer refuses to install. When a root is declared, the default candidates are not consulted at all, so a dead default tree beside the live one can never become active again.
+
+One family of files has a second answer. A stock install ships its skill ledgers (`SKILL_LEDGER.md`, `SKILL_CHAINS.md`, `SKILL_GAPS.md`, and the caddy mute file) in a `memory/` seed tree beside `vault/memory`, and `daemons/caddy.sh`, `/open` and `/close` read them there. That stays exactly as it was: the resolver answers `--ledgers` with that seed tree on an undeclared install when it exists, and with the one declared tree on a seat that declares its root, so a declared seat has one tree and a stock install is unchanged.
+
+Shell consumers ask the same resolver: `node daemons/memory-root.cjs --root <install root>` prints the resolved path (`--relative` for the path relative to the root, `--allow-missing` for the installer, which resolves in order to create, `--ledgers` for the skill-ledger location). Python daemons ask through `daemons/memory_root.py`, which carries no rule of its own. `AIGENT_STATE_HOME_DIR`, the test and probe diversion lever, is honored first and the declaration is read under the diverted base, so a diverted hook never touches the real seat.
+
 ## Context-pressure self-refresh (retired in v0.9.1)
 
 `daemons/ctx-refresh-sensor.mjs` is now a compatibility stub (`process.exit(0)`): the 60%/75% self-refresh reflex, the `CAPSULE_VERB_AUTOFIRE` autofire path, and the request-gated refresh cycle it depended on (`refresh-request.mjs`, `refresh-cycle.mjs`, `refresh-cursor.mjs`) are removed along with the rest of the tower. The file is kept only because an existing `settings.json` may still name it as a `PreToolUse` hook; it does nothing when invoked. `daemons/statusline-ctx.sh` still writes `~/.claude/ctx-refresh/<session-id>.json`; nothing in the box currently reads that file, but a fork is free to re-wire its own sensor against it.
@@ -156,6 +179,7 @@ The v0.9.0 beta's known issue (an automated refresh cycle could try to stamp a f
 | `daemons/curated-close-pointer.mjs` | Compatibility pointer writer (audit/orientation hint only, resume never reads it) |
 | `daemons/resume-verb.mjs` | Resume verb container: SessionStart(clear) hook |
 | `daemons/lifecycle-extension.mjs` | Optional declared lifecycle extension: loader and validator, fail-open |
+| `daemons/memory-root.cjs` | The one memory-root resolver (`.aigent/state.json` `memory_root`, default `vault/memory`), fail-loud |
 | `daemons/lifecycle-extension.example.json` | Template to copy to `<target>/.aigent/lifecycle-extension.json` |
 | `daemons/sessionstart-reinject.mjs` | Warm-start reinject + resume-verb carrier: SessionStart(all sources) hook |
 | `daemons/stop-capsule-writer.mjs` | Every-turn rolling capsule delta writer: Stop hook |

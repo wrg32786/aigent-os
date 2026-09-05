@@ -99,7 +99,7 @@ async function runNightlyBoot(root) {
     process.stdout.write(
       '[NIGHTLY-ALERT: ALERT_SURFACE_FAILED] Nightly alert ledger/watchdog state '
       + 'could not be read; '
-      + 'see vault/memory/.daemon-errors.log.\n',
+      + 'see .daemon-errors.log under the memory root.\n',
     );
   }
 }
@@ -231,5 +231,10 @@ try {
   process.stdout.write(out.join('\n').slice(0, 8000) + '\n');
 } catch (e) {
   logErr(process.env.AIGENT_ROOT || process.env.CLAUDE_PROJECT_DIR || '', `outer: ${e?.stack || e}`);
+  if (e && e.name === 'MemoryRootError') {
+    // The one failure the error log cannot record, because the log lives
+    // under the root that failed. Say it where the seat will read it.
+    process.stdout.write(`${inert(e.message, 600)}\nNo memory tree was read or written at session start. Fix memory_root in .aigent/state.json.\n`);
+  }
 }
 process.exit(0);

@@ -2,7 +2,16 @@
 # reflex-body.sh — Autonomic: surface pressure alerts from BODY_STATE.json
 # UserPromptSubmit hook. Silent when all pressures are nominal.
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
-BODY="$ROOT/memory/BODY_STATE.json"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+SELF_DIR=$(dirname "$0")
+SELF_DIR=$(cd "$SELF_DIR/.." && pwd)
+. "$SELF_DIR/memory-root.sh"
+MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
+BODY="$MEMORY_ROOT/BODY_STATE.json"
 [ -f "$BODY" ] || exit 0
 
 BODY="$BODY" python3 <<'PYEOF' 2>/dev/null

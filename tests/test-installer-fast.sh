@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=20
+TOTAL=21
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -103,6 +103,12 @@ make_fixture() {
   local source="$1"
   mkdir -p "$source"/{system,vault/agents,skills/demo,hooks,daemons/semantic-search,scripts,docs,memory,evals,.claude/rules}
   cp "$ROOT/install.sh" "$source/install.sh"
+  # The installer resolves the memory root through its own door and resolver.
+  cp "$ROOT/daemons/memory-root.sh" "$ROOT/daemons/memory-root.cjs" "$source/daemons/"
+  printf 'seed\n' > "$source/vault/memory-seed-marker.md"
+  mkdir -p "$source/vault/memory" "$source/memory/runtime"
+  printf 'vault seed\n' > "$source/vault/memory/VAULT_SEED.md"
+  printf 'runtime seed\n' > "$source/memory/runtime/RUNTIME_SEED.md"
   printf '# Identity\n' > "$source/system/00_identity.md"
   printf '# Claude source\n' > "$source/CLAUDE.md"
   printf '%s\n' '---' 'name: demo' '---' > "$source/skills/demo/SKILL.md"
@@ -625,5 +631,44 @@ test "$(cat "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.l
 (cd "$FIXTURE" && bash install.sh --target "$LOCAL_REGISTRY_TARGET" --no-deps >/dev/null 2>&1)
 test "$(cat "$LOCAL_REGISTRY_TARGET/daemons/semantic-search/namespace-registry.local.json")" = "$LOCAL_REGISTRY_BEFORE"
 printf '[20/%d] local namespace registry: pre-existing file survives install and reinstall untouched\n' "$TOTAL"
+
+# ── 21. Declared memory root: only the declared tree is created and seeded ──
+# A seat that declares memory_root in its install marker gets ONE memory tree:
+# the installer creates and seeds the declared root (both seed sets,
+# missing-only), does not create vault/memory, does not copy the repo's
+# memory/ seeds to a stray top-level memory/, and ignores nothing else. A
+# stock install (no declaration) is unchanged: vault/memory plus the copied
+# memory/ seed tree, exactly as before. A broken declaration refuses the
+# install by name and creates no tree at all.
+DECLARED_TARGET="$WORK/declared-root-target"
+mkdir -p "$DECLARED_TARGET/.aigent"
+printf '{"schemaVersion":1,"status":"uninitialized","completedAt":null,"memory_root":"seat-memory"}\n' \
+  > "$DECLARED_TARGET/.aigent/state.json"
+(cd "$FIXTURE" && bash install.sh --target "$DECLARED_TARGET" --no-deps >/dev/null 2>&1)
+test -d "$DECLARED_TARGET/seat-memory/runtime"
+test -f "$DECLARED_TARGET/seat-memory/VAULT_SEED.md"
+test -f "$DECLARED_TARGET/seat-memory/runtime/RUNTIME_SEED.md"
+test ! -e "$DECLARED_TARGET/vault/memory"
+test ! -e "$DECLARED_TARGET/memory"
+grep -q '^seat-memory/embeddings.json$' "$DECLARED_TARGET/.gitignore"
+grep -q '"memory_root": *"seat-memory"' "$DECLARED_TARGET/.aigent/state.json"
+# Rerun: still one tree, declaration kept.
+(cd "$FIXTURE" && bash install.sh --target "$DECLARED_TARGET" --no-deps >/dev/null 2>&1)
+test ! -e "$DECLARED_TARGET/vault/memory"
+grep -q '"memory_root": *"seat-memory"' "$DECLARED_TARGET/.aigent/state.json"
+STOCK_ROOT_TARGET="$WORK/stock-root-target"
+mkdir -p "$STOCK_ROOT_TARGET"
+(cd "$FIXTURE" && bash install.sh --target "$STOCK_ROOT_TARGET" --no-deps >/dev/null 2>&1)
+test -f "$STOCK_ROOT_TARGET/vault/memory/VAULT_SEED.md"
+test -f "$STOCK_ROOT_TARGET/memory/runtime/RUNTIME_SEED.md"
+grep -q '^vault/memory/embeddings.json$' "$STOCK_ROOT_TARGET/.gitignore"
+BROKEN_ROOT_TARGET="$WORK/broken-root-target"
+mkdir -p "$BROKEN_ROOT_TARGET/.aigent"
+printf '{"schemaVersion":1,"memory_root":"../escape"}\n' > "$BROKEN_ROOT_TARGET/.aigent/state.json"
+BROKEN_OUT="$(cd "$FIXTURE" && bash install.sh --target "$BROKEN_ROOT_TARGET" --no-deps 2>&1 || true)"
+printf '%s\n' "$BROKEN_OUT" | grep -q 'MEMORY-ROOT: .*must not contain a \.\. segment'
+test ! -e "$BROKEN_ROOT_TARGET/vault"
+test ! -e "$BROKEN_ROOT_TARGET/system"
+printf '[21/%d] declared memory root: one tree created and seeded, default untouched, broken declaration refused\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

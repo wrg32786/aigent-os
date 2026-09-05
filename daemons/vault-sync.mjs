@@ -16,10 +16,9 @@ import {
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { logErr } from './lifecycle-common.mjs';
+import { logErr, describeMemoryRoot } from './lifecycle-common.mjs';
 
 const GIT_TIMEOUT_MS = 10_000;
-const MEMORY_CANDIDATES = ['vault/memory', 'memory'];
 const GIT_WRITE_TREES = ['.git/objects', '.git/refs', '.git/logs'];
 
 function oneLine(value) {
@@ -213,21 +212,23 @@ export function installedRootFrom(start) {
   return { ok: false, root: null, detail: 'no .aigent/state.json install marker found' };
 }
 
+// The one memory tree this seat declares (or the default), through the shared
+// resolver. Before this, both candidate trees were staged whenever they
+// existed, which is how a dead default tree kept receiving commits beside the
+// live one. A broken declaration throws here and is logged by the caller like
+// any other refusal; nothing is staged from a tree that may not be this seat's.
 function memoryScopes(root) {
-  const scopes = [];
-  for (const relative of MEMORY_CANDIDATES) {
-    const absolute = requireSymlinkSafe(root, path.join(root, ...relative.split('/')));
-    let stat;
-    try { stat = lstatSync(absolute); } catch (error) {
-      if (error?.code === 'ENOENT') continue;
-      throw error;
-    }
-    if (stat.isSymbolicLink() || isMsysSymlink(absolute, stat)) {
-      throw new Error(`refusing to write through symlink: ${absolute}`);
-    }
-    scopes.push({ absolute, relative });
+  const described = describeMemoryRoot(root);
+  const absolute = requireSymlinkSafe(root, described.root);
+  let stat;
+  try { stat = lstatSync(absolute); } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
   }
-  return scopes;
+  if (stat.isSymbolicLink() || isMsysSymlink(absolute, stat)) {
+    throw new Error(`refusing to write through symlink: ${absolute}`);
+  }
+  return [{ absolute, relative: described.relative }];
 }
 
 function configuredRemotes(root) {

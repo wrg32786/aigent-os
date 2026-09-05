@@ -46,10 +46,27 @@ if ((Test-Path $tplPath) -and (-not (Test-Path $jsonPath))) {
   Write-Host "  [harness] settings.json rendered ($($Root.Replace('\', '/')))"
 }
 
-# H3. Vault runtime folders
-foreach ($folder in @('vault/daily','vault/projects','vault/people','vault/concepts','vault/memory')) {
+# H3. Vault runtime folders. The memory folder is wherever the seat declares
+# it (daemons/memory-root.cjs, default vault/memory), so a seat with a declared
+# root never grows a dead default tree beside its live one.
+foreach ($folder in @('vault/daily','vault/projects','vault/people','vault/concepts')) {
   New-Item -ItemType Directory -Force (Join-Path $Root $folder) | Out-Null
 }
+$memoryRel = $null
+$stateMarker = Join-Path $Root '.aigent/state.json'
+if (Get-Command node -ErrorAction SilentlyContinue) {
+  $memoryRel = (& node (Join-Path $Root 'daemons/memory-root.cjs') --root $Root --relative --allow-missing 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error $memoryRel
+    exit 1
+  }
+} elseif ((Test-Path $stateMarker) -and (Select-String -Path $stateMarker -Pattern '"memory_root"' -Quiet)) {
+  Write-Error 'MEMORY-ROOT: .aigent/state.json declares memory_root but node is not available to resolve it'
+  exit 1
+} else {
+  $memoryRel = 'vault/memory' # memory-root: no-node default
+}
+New-Item -ItemType Directory -Force (Join-Path $Root $memoryRel) | Out-Null
 Write-Host "  [harness] vault folders ensured"
 # ─────────────────────────────────────────────────────────────────────────────
 

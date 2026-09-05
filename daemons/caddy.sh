@@ -6,20 +6,34 @@
 set -u
 
 ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Memory root: resolved by daemons/memory-root.cjs, the one resolver every core
+# reader and writer shares (declared in .aigent/state.json, default vault/memory).
+# A broken declaration is reported on stderr and this best-effort script exits
+# without writing anywhere.
+CADDY_DIR=$(dirname "${BASH_SOURCE[0]}")
+CADDY_DIR=$(cd "$CADDY_DIR" && pwd)
+. "$CADDY_DIR/memory-root.sh"
+# One spawn answers both: the memory root, and the ledgers root (the same
+# tree on a declared seat, the pre-existing memory/ seed tree on a stock
+# install, where the skill ledgers and the mute file ship).
+MEMORY_ROOTS="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" --with-ledgers 2>&1)" \
+  || { printf '%s\n' "$MEMORY_ROOTS" >&2; exit 0; }
+MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
+LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
 REPO_INDEX="$ROOT/.claude/skill-index.json"
 GLOBAL_INDEX="$HOME/.claude/skills/skill-index.json"
 INDEX="$REPO_INDEX"
 [[ -f "$INDEX" ]] || INDEX="$GLOBAL_INDEX"
 [[ -f "$INDEX" ]] || exit 0
 
-DAEMON_ERR_LOG="$ROOT/memory/.daemon-errors.log"
+DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
 mkdir -p "$(dirname "$DAEMON_ERR_LOG")" "$ROOT/.aigent/cache" 2>/dev/null || true
 
 INPUT="$(cat 2>/dev/null)"
 [[ -n "$INPUT" ]] || exit 0
 INPUT_LOWER="$(printf '%s' "$INPUT" | tr '[:upper:]' '[:lower:]')"
 
-MUTES_FILE="$ROOT/memory/CADDY_MUTES.json"
+MUTES_FILE="$LEDGERS_ROOT/CADDY_MUTES.json"
 class_muted() {
   local class="$1"
   [[ -f "$MUTES_FILE" ]] || return 1
@@ -108,8 +122,8 @@ if printf '%s' "$INPUT_LOWER" | grep -qE \
   class_muted body || printf '%s\n' '[CADDY:body] BODY-CHECK — Compose current context, memory, decision, delegation, and token pressure.'
 fi
 
-LEDGER="$ROOT/memory/SKILL_LEDGER.md"
-CHAINS="$ROOT/memory/SKILL_CHAINS.md"
+LEDGER="$LEDGERS_ROOT/SKILL_LEDGER.md"
+CHAINS="$LEDGERS_ROOT/SKILL_CHAINS.md"
 
 if command -v python3 >/dev/null 2>&1; then
   INPUT="$INPUT" INDEX="$INDEX" LEDGER="$LEDGER" CHAINS="$CHAINS" ROOT="$ROOT" python3 <<'PY' 2>>"$DAEMON_ERR_LOG" || true

@@ -22,6 +22,7 @@ import frontmatterReader from './frontmatter-reader.cjs';
 // ("a throwing content gate is logged but the capsule still lands") and
 // precompact-flush.test caught. Fail-open applies to this consumer too.
 import * as capsuleGate from './capsule-content-gate.mjs';
+import { resolveMemoryRoot, describeMemoryRoot, MemoryRootError } from './memory-root.cjs';
 
 export const {
   bodySection,
@@ -67,21 +68,22 @@ export function seatOf(root) {
   return 'operator';
 }
 
-// Memory root: aigent-OS's documented convention is <AIGENT_ROOT>/vault/memory
-// (see daemons/memory-heat/compute-heat.js). 'memory' at the root is kept as a
-// fallback for forks that skip the vault/ subdirectory.
+// Memory root: resolved by daemons/memory-root.cjs, the ONE place that decides
+// where a seat's memory tree is (the documented default is
+// <AIGENT_ROOT>/vault/memory; a seat may declare another root in
+// .aigent/state.json). Nothing here or in any caller constructs the path by
+// hand. A declared root that is missing, malformed or unsafe throws a
+// MemoryRootError rather than falling back to a tree that is not this seat's.
 // AIGENT_STATE_HOME_DIR is honored before the passed root so tests and probes can
-// divert every hook write into a disposable vault-shaped tree. Diversion keeps
-// the real hook behavior under test while protecting operational memory; callers
-// can pair it with a before/after memory diff to prove the isolation held.
+// divert every hook write into a disposable vault-shaped tree; the declaration
+// is then read under the diverted base, so a diverted hook never touches the
+// real seat. Diversion keeps the real hook behavior under test while protecting
+// operational memory; callers can pair it with a before/after memory diff to
+// prove the isolation held.
 export function memRoot(root) {
-  const base = process.env.AIGENT_STATE_HOME_DIR || root;
-  for (const candidate of ['vault/memory', 'memory']) {
-    const p = path.join(String(base), ...candidate.split('/'));
-    if (existsSync(p)) return p;
-  }
-  return path.join(String(base), 'vault', 'memory');
+  return resolveMemoryRoot(String(process.env.AIGENT_STATE_HOME_DIR || root));
 }
+export { MemoryRootError, describeMemoryRoot };
 
 // A capsule a previous resume already spent. `active` is the only selectable
 // state; every status here marks a capsule kept for the record, not for replay.

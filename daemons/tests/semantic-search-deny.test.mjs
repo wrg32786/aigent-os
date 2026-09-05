@@ -105,7 +105,7 @@ function makeSandbox(name, denyFileText) {
   // search-vault.js now routes chunk rendering through the trust-boundary #43
   // chokepoint (renderPersisted() + FRAMING_LINES) -- its dependency chain
   // grew, so the sandbox must carry it too.
-  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  for (const file of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'memory-root.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, file), path.join(root, 'daemons', file));
   }
   copyFileSync(
