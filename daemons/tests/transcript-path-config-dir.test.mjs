@@ -38,7 +38,7 @@ function makeSeat({ isolated }) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-cfg-'));
   const homeDir = path.join(base, 'home');
   const cwd = path.join(base, 'work', 'seat');
-  const configDir = isolated ? path.join(base, 'ClaudeSeats', 'seat') : path.join(homeDir, '.claude');
+  const configDir = isolated ? path.join(base, 'claude-config', 'one') : path.join(homeDir, '.claude');
   const env = isolated ? { CLAUDE_CONFIG_DIR: configDir } : {};
   const transcriptPath = path.join(configDir, 'projects', slugifyCwd(cwd), `${SESSION_ID}.jsonl`);
   const transcript = '0123456789';
@@ -144,6 +144,35 @@ test('structural: no core reader builds "<home>/.claude/projects" or the statusl
     });
   }
   assert.deepEqual(offenders, [], `readers must honor CLAUDE_CONFIG_DIR:\n${offenders.join('\n')}`);
+});
+
+// The runner passes its environment at every site that can resolve a
+// transcript: the acknowledgement watcher, the acknowledgement scanner and
+// the checkpoint recheck. Dropping the argument at any one of them would
+// scan a phantom transcript for the acknowledgement and hold the clear, the
+// operator-visible symptom this fix removes, while the resolver's own
+// witness stayed green. The file-hash pins cannot tell that apart from a
+// legitimate edit, so this scan asks the call sites directly.
+test('structural: every core call that resolves a transcript passes env', () => {
+  const callers = /\b(transcriptPathFor|evaluateCheckpointFreshness|readCheckpointObservableFn)\(\{/g;
+  const offenders = [];
+  let sites = 0;
+  for (const file of coreFiles()) {
+    if (!/\.(mjs|cjs|js)$/.test(file)) continue;
+    const rel = path.relative(REPO, file).split(path.sep).join('/');
+    const text = fs.readFileSync(file, 'utf8');
+    for (const match of text.matchAll(callers)) {
+      const start = match.index;
+      if (/function\s*$/.test(text.slice(Math.max(0, start - 24), start))) continue; // the definition, not a call
+      const end = text.indexOf('})', start);
+      const call = text.slice(start, end < 0 ? text.length : end);
+      sites += 1;
+      const line = text.slice(0, start).split('\n').length;
+      if (!/\benv\b/.test(call)) offenders.push(`${rel}:${line}: ${match[1]}`);
+    }
+  }
+  assert.ok(sites >= 4, `expected the transport checkpoint and three runner sites, saw ${sites}`);
+  assert.deepEqual(offenders, [], `call sites without env:\n${offenders.join('\n')}`);
 });
 
 test('checkpoint: a transcript that truly is missing is still reported as missing, under the config dir path', () => {

@@ -1513,6 +1513,7 @@ export class ManagedPtyRunner {
         sessionId: this.sessionId,
         cwd: this.cwd,
         homeDir: this.homeDir,
+        env: this.env,
         fsImpl: this.fs,
         // The observed ack settles the transcript-tail race its own
         // announcement (and any operator nudges) create — the evaluator

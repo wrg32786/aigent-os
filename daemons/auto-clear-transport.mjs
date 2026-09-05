@@ -307,7 +307,8 @@ export function readKillSwitch({
 // Where Claude Code keeps its configuration, and therefore its transcripts:
 // CLAUDE_CONFIG_DIR when the session was launched with it (a seat that
 // isolates its Claude state sets it to a directory of its own), otherwise
-// <home>/.claude. A blank value counts as unset, as Claude Code treats it.
+// <home>/.claude. A blank value counts as unset: a directory named by
+// whitespace is never what a launcher meant.
 export function claudeConfigDir({ env = process.env, homeDir = os.homedir() } = {}) {
   const configured = env && typeof env.CLAUDE_CONFIG_DIR === 'string' ? env.CLAUDE_CONFIG_DIR.trim() : '';
   return configured.length > 0 ? configured : path.join(String(homeDir), '.claude');
