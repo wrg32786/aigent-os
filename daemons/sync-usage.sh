@@ -19,7 +19,9 @@ MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$VAULT}" 2>&1)" \
   || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
 LOG="$MEMORY_ROOT/usage_log.md"
 
-PROJECTS_DIR="$HOME/.claude/projects"
+# Claude Code keeps its project logs under CLAUDE_CONFIG_DIR when a seat sets
+# one, otherwise under ~/.claude; read from the same place it writes.
+PROJECTS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
 [ -d "$PROJECTS_DIR" ] || exit 0
 
 # Best-effort: most recent transcript across this machine's Claude Code projects.

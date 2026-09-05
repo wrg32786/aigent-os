@@ -165,7 +165,14 @@ def main():
     parser.add_argument("--vault", default=os.environ.get("AIGENT_VAULT", os.path.expanduser("~/.aigent")))
     parser.add_argument("--session", default=None, help="JSONL session id (basename)")
     parser.add_argument("--jsonl", default=None, help="explicit JSONL path (overrides session)")
-    parser.add_argument("--project-dir", default=os.environ.get("AIGENT_PROJECT_DIR", os.path.expanduser("~/.claude/projects")))
+    parser.add_argument(
+        "--project-dir",
+        # Claude Code's project logs live under CLAUDE_CONFIG_DIR when a seat sets one.
+        default=os.environ.get(
+            "AIGENT_PROJECT_DIR",
+            os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "projects"),
+        ),
+    )
     args = parser.parse_args()
 
     if args.jsonl:
