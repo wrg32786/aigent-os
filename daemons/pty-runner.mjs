@@ -1105,7 +1105,7 @@ export class ManagedPtyRunner {
   // came because the watcher only armed when the runner wrote the request).
   _armCapsuleAckWatch() {
     try {
-      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
       this.capsuleAckSearchFrom = transcript ? fs.statSync(transcript).size : 0;
     } catch { this.capsuleAckSearchFrom = 0; }
   }
@@ -1195,7 +1195,7 @@ export class ManagedPtyRunner {
     if (this.capsuleAckSeen || this.capsuleAckSearchFrom === null) return false;
     let transcript = null;
     try {
-      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir });
+      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
       if (!transcript) return false;
       const size = fs.statSync(transcript).size;
       if (size <= this.capsuleAckSearchFrom) return false;
@@ -1513,6 +1513,7 @@ export class ManagedPtyRunner {
         sessionId: this.sessionId,
         cwd: this.cwd,
         homeDir: this.homeDir,
+        env: this.env,
         fsImpl: this.fs,
         // The observed ack settles the transcript-tail race its own
         // announcement (and any operator nudges) create — the evaluator

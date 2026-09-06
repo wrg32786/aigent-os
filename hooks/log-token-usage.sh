@@ -12,7 +12,9 @@ if ! MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$VAULT}" 2>&1)"
 fi
 mkdir -p "$MEMORY_ROOT"
 USAGE_LOG="$MEMORY_ROOT/usage_log.md"
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$HOME/.claude/projects}"
+# CLAUDE_PROJECT_DIR is the explicit override; otherwise Claude Code's own
+# config dir (CLAUDE_CONFIG_DIR when a seat sets one, else ~/.claude).
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects}"
 TODAY=$(date +%Y-%m-%d)
 TIME=$(date +%H:%M:%S)
 

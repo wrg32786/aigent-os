@@ -24,7 +24,7 @@ INPUT=$(cat)
 
 SENSOR_DIR="$HOME/.claude/ctx-refresh"
 HAS_JQ=0
-DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-$HOME/.claude/statusline-command.sh}"
+DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline-command.sh}"
 
 if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
   HAS_JQ=1

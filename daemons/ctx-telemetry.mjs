@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { claudeConfigDir } from './auto-clear-transport.mjs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -190,7 +191,7 @@ function runCli() {
   if (process.argv.includes('--write-only')) return;
 
   const delegate = process.env.AIGENT_STATUSLINE_DELEGATE
-    || path.join(process.env.HOME || os.homedir(), '.claude', 'statusline-command.sh');
+    || path.join(claudeConfigDir({ env: process.env, homeDir: process.env.HOME || os.homedir() }), 'statusline-command.sh');
   try {
     if (fs.existsSync(delegate)) {
       const result = spawnSync('bash', [delegate], {

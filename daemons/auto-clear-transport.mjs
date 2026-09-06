@@ -304,20 +304,37 @@ export function readKillSwitch({
   return { active: false, code: null, detail: null };
 }
 
+// Where Claude Code keeps its configuration, and therefore its transcripts:
+// CLAUDE_CONFIG_DIR when the session was launched with it (a seat that
+// isolates its Claude state sets it to a directory of its own), otherwise
+// <home>/.claude. A blank value counts as unset: a directory named by
+// whitespace is never what a launcher meant.
+export function claudeConfigDir({ env = process.env, homeDir = os.homedir() } = {}) {
+  const configured = env && typeof env.CLAUDE_CONFIG_DIR === 'string' ? env.CLAUDE_CONFIG_DIR.trim() : '';
+  return configured.length > 0 ? configured : path.join(String(homeDir), '.claude');
+}
+
 export function slugifyCwd(cwd) {
   return String(cwd).replace(/[^A-Za-z0-9]/g, '-');
 }
 
+// The transcript lives where Claude Code put it: <config dir>/projects/
+// <slug>/<session>.jsonl. Before this the path was built from the home
+// directory alone, so a seat launched with CLAUDE_CONFIG_DIR was judged
+// against a phantom under ~/.claude, the checkpoint reported the transcript
+// missing on every automatic clear, and the cycle held until a human cleared
+// by hand. Callers that pass no env keep the process environment, and with
+// the variable unset the path is exactly what it always was.
 export function transcriptPathFor({
   cwd,
   sessionId,
   homeDir = os.homedir(),
+  env = process.env,
 } = {}) {
   if (typeof cwd !== 'string' || cwd.length === 0) return null;
   if (typeof sessionId !== 'string' || !SAFE_SESSION_ID.test(sessionId)) return null;
   return path.join(
-    String(homeDir),
-    '.claude',
+    claudeConfigDir({ env, homeDir }),
     'projects',
     slugifyCwd(cwd),
     `${sessionId}.jsonl`,
@@ -342,6 +359,7 @@ export function evaluateCheckpointFreshness({
   cwd,
   ackFresh = false,
   homeDir = os.homedir(),
+  env = process.env,
   fsImpl = fs,
   selectCapsuleFn = selectCapsule,
 } = {}) {
@@ -450,7 +468,7 @@ export function evaluateCheckpointFreshness({
     }
   }
 
-  const transcriptPath = transcriptPathFor({ cwd, sessionId, homeDir });
+  const transcriptPath = transcriptPathFor({ cwd, sessionId, homeDir, env });
   if (!transcriptPath) {
     return checkpointFailure('checkpoint-transcript-path-invalid', { cwd, session_id: sessionId });
   }
@@ -876,6 +894,9 @@ export class AutoClearTransport {
       cwd: this.cwd,
       ackFresh: this._capsuleAckMs !== null,
       homeDir: this.homeDir,
+      // The runner's environment, so a seat launched with CLAUDE_CONFIG_DIR
+      // is judged against the transcript Claude Code actually writes.
+      env: this.env,
       fsImpl: this.fs,
       selectCapsuleFn: this.selectCapsuleFn,
     });
