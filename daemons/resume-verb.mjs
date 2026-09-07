@@ -37,7 +37,7 @@ import {
   selectCapsule, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
-import { loadLifecycleExtension, resolveLifecycleAck } from './lifecycle-extension.mjs';
+import { loadLifecycleExtension, resolveLifecycleAck, foldDeclaredLine } from './lifecycle-extension.mjs';
 
 // Deterministic session-id authority (principal's order 2026-08-10, replacing
 // the abandoned PATCH-001O content classification): the resumed context gets its
@@ -270,6 +270,26 @@ function extensionLines(extension) {
   return lines;
 }
 
+// v2's two declared PROCEDURE BLOCKS. Each entry is a bare line, never a
+// template (no {capsule_id} slot, so nothing to hold), so unlike the ack there
+// is no rendered/warning split here: an accepted array either has entries or
+// it does not. Every entry runs through foldDeclaredLine, the same
+// non-quoting single-line fold the ack uses, not inert(): these are procedure
+// lines the seat is told to run verbatim, so quoting them would corrupt one
+// carrying a quote or a backslash. The fold still guarantees the one property
+// that matters, which is that a declared line can never own a line of its own.
+function preloadLines(extension) {
+  const arr = extension?.resume_preload;
+  if (!Array.isArray(arr) || !arr.length) return [];
+  return arr.map((line, i) => `0.${i + 1} PRE-LOAD (declared by this install, runs BEFORE step 1): ${foldDeclaredLine(line)}`);
+}
+
+function regroundLines(extension) {
+  const arr = extension?.resume_reground;
+  if (!Array.isArray(arr) || !arr.length) return [];
+  return arr.map((line, i) => `2.${i + 1} RE-GROUND (declared by this install, runs INSIDE step 2, before step 3): ${foldDeclaredLine(line)}`);
+}
+
 function procedurePrompt(
   loaded,
   rejected = null,
@@ -329,8 +349,15 @@ function procedurePrompt(
   }
   lines.push('');
   lines.push('STEPS (tight + terminal):');
+  // A declared PRE-LOAD block (v2 lifecycle extension), if any, runs before the
+  // core steps start. See preloadLines() above.
+  for (const line of preloadLines(extension)) lines.push(line);
   lines.push('1. LOAD — done: the selected values are quoted under CAPSULE DATA below, newest by created_at; there is no pointer to resolve.');
   lines.push('2. RE-GROUND against live memory — re-read the latest session log and active priorities, surface anything that changed since the capsule was written. This folds in what /open would do, in full.');
+  // A declared RE-GROUND block (v2 lifecycle extension), if any, runs inside
+  // step 2, after the core re-ground line and before step 3. See
+  // regroundLines() above.
+  for (const line of regroundLines(extension)) lines.push(line);
   lines.push('3. ACT — take the one next step from waiting_on / next_valid_action resolved against step 2; on any conflict, live memory wins over stale capsule content. The verb ends when that action is TAKEN, not when it is summarized.');
   lines.push('4. ACK (if a supervising process demands one) — reply in exactly the format demanded, emitted ONLY after step 3\'s action is taken, never before.');
   // The optional declared extension, and the ONE place it may run: after the

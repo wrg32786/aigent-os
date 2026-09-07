@@ -683,3 +683,79 @@ test('R3-6: no refusal reason carries the raw slot literal into the procedure', 
     assert.ok(!result.prompt.includes(CAPSULE_ID_SLOT), `${label}: an unsubstituted slot must never reach the seat, warnings included`);
   }
 });
+
+// ── Declared resume procedure blocks (LifecycleExtension/v2) ─────────────────
+//
+// A governed install needs two more declared points than the single-line ack:
+// lines that must run BEFORE step 1 (a standing document to read first), and
+// lines that must run INSIDE step 2, before step 3 (its own re-grounding
+// protocol). v1 stays exactly as it was; v2 adds two optional arrays.
+
+test('W-A1: v2 preload and re-ground lines render in the declared order, in the right slots', () => {
+  const result = promptFor({
+    schema: 'LifecycleExtension/v2',
+    resume_preload: ['read the standing document before step 1'],
+    resume_reground: ['drain the inbox until empty, then peek', 're-read the live work ledger'],
+  });
+  assert.equal(result.extension.warning, null, 'a well-formed v2 declaration must validate clean');
+  assert.deepEqual(result.extension.resume_preload, ['read the standing document before step 1'],
+    'the accepted array must be exposed as data on the result');
+  assert.deepEqual(result.extension.resume_reground,
+    ['drain the inbox until empty, then peek', 're-read the live work ledger'],
+    'the accepted array must be exposed as data on the result');
+
+  const lines = result.prompt.split('\n');
+  const stepsAt = lines.indexOf('STEPS (tight + terminal):');
+  const loadAt = lines.findIndex((l) => l.startsWith('1. LOAD'));
+  const regroundAt = lines.findIndex((l) => l.startsWith('2. RE-GROUND'));
+  const actAt = lines.findIndex((l) => l.startsWith('3. ACT'));
+  assert.notEqual(stepsAt, -1);
+  assert.notEqual(loadAt, -1);
+  assert.notEqual(regroundAt, -1);
+  assert.notEqual(actAt, -1);
+
+  const preloadAt = lines.findIndex((l) => l.includes('read the standing document before step 1'));
+  assert.ok(preloadAt > stepsAt && preloadAt < loadAt,
+    'the preload line must sit between STEPS and 1. LOAD');
+  assert.match(lines[preloadAt], /^0\.1 PRE-LOAD \(declared by this install, runs BEFORE step 1\): /);
+
+  const rg1At = lines.findIndex((l) => l.includes('drain the inbox until empty, then peek'));
+  const rg2At = lines.findIndex((l) => l.includes('re-read the live work ledger'));
+  assert.ok(rg1At > regroundAt && rg1At < actAt, 'the first re-ground line must sit between step 2 and step 3');
+  assert.ok(rg2At > regroundAt && rg2At < actAt, 'the second re-ground line must sit between step 2 and step 3');
+  assert.ok(rg1At < rg2At, 'declared re-ground order must be preserved');
+  assert.match(lines[rg1At], /^2\.1 RE-GROUND \(declared by this install, runs INSIDE step 2, before step 3\): /);
+  assert.match(lines[rg2At], /^2\.2 RE-GROUND \(declared by this install, runs INSIDE step 2, before step 3\): /);
+});
+
+test('W-A2: a multi-line re-ground element is refused whole, naming the key, the index and the reason', () => {
+  const result = promptFor({
+    schema: 'LifecycleExtension/v2',
+    resume_reground: ['first line', 'second line', 'third\nline'],
+  });
+  assert.ok(String(result.extension.warning).startsWith(WARNING_PREFIX));
+  assert.match(String(result.extension.warning), /resume_reground/);
+  assert.match(String(result.extension.warning), /\[3\]/);
+  assert.match(String(result.extension.warning), /single line/);
+  assert.deepEqual(result.extension.resume_reground, [], 'nothing from a refused file renders');
+  assert.doesNotMatch(result.prompt, /first line|second line/);
+});
+
+test('W-A3: a v1 declaration carrying resume_preload is refused with the unsupported-key message', () => {
+  const result = promptFor({
+    schema: 'LifecycleExtension/v1',
+    resume_preload: ['read this first'],
+  });
+  assert.ok(String(result.extension.warning).startsWith(WARNING_PREFIX));
+  assert.match(String(result.extension.warning), /unsupported key/);
+  assert.match(String(result.extension.warning), /resume_preload/);
+});
+
+test('W-A4: more than 24 re-ground lines is refused (bound guard)', () => {
+  const result = promptFor({
+    schema: 'LifecycleExtension/v2',
+    resume_reground: Array.from({ length: 25 }, (_, i) => `line ${i + 1}`),
+  });
+  assert.ok(String(result.extension.warning).startsWith(WARNING_PREFIX));
+  assert.match(String(result.extension.warning), /resume_reground/);
+});

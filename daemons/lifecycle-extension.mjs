@@ -9,9 +9,11 @@
 // seat forever. The seam makes that handshake a DECLARED extension instead.
 //
 // The declaration is DATA, never code: <target>/.aigent/lifecycle-extension.json
-// holds at most two single-line instruction strings. Nothing here loads a
-// module, spawns a process, or learns any particular supervisor's vocabulary --
-// core stays ignorant of the protocol it is carrying, which is the whole point.
+// holds two single-line ack strings (v1) or, on v2, also two arrays of
+// declared procedure lines that run before step 1 and inside step 2 of the
+// resume procedure. Nothing here loads a module, spawns a process, or learns
+// any particular supervisor's vocabulary -- core stays ignorant of the
+// protocol it is carrying, which is the whole point.
 // .aigent/ is outside every installer-managed tree (install.sh MANAGED_PREFIXES
 // / MANAGED_EXACT), so the declaration survives an install and an update with
 // no preservation entry of its own.
@@ -31,9 +33,19 @@ import { fileURLToPath } from 'node:url';
 import { inert } from './lifecycle-common.mjs';
 
 export const LIFECYCLE_EXTENSION_REL = path.join('.aigent', 'lifecycle-extension.json');
-const SCHEMA = 'LifecycleExtension/v1';
+const SCHEMA_V1 = 'LifecycleExtension/v1';
+// v2 adds two optional declared PROCEDURE BLOCKS on top of v1's single-line
+// acks: resume_preload (runs before step 1) and resume_reground (runs inside
+// step 2, before step 3). v1 files keep their exact original semantics --
+// either new key on a v1 file is refused as an unsupported key, same as any
+// other unrecognized field.
+const SCHEMA_V2 = 'LifecycleExtension/v2';
 const FIELDS = Object.freeze(['resume_ack', 'capsule_ack']);
-const ALLOWED_KEYS = new Set(['schema', ...FIELDS]);
+// Each entry is a declared PROCEDURE LINE (not a template): it carries no
+// {capsule_id} slot at all, so there is nothing to substitute and nothing to
+// hold at render time the way an ack can be held.
+const ARRAY_FIELDS = Object.freeze(['resume_preload', 'resume_reground']);
+export const ARRAY_FIELD_MAX_ITEMS = 24;
 const CLI_FLAGS = new Set(['--root', '--capsule-id']);
 export const CAPSULE_ID_SLOT = '{capsule_id}';
 // ONE bound, used by the validator and by the renderer, so the two can never
@@ -94,18 +106,19 @@ function refuse(declarationPath, reason) {
   return {
     resume_ack: null,
     capsule_ack: null,
+    resume_preload: [],
+    resume_reground: [],
     warning: `${WARNING_PREFIX} ${inert(declarationPath)}: ${inert(reason)}`,
   };
 }
 
-function fieldProblem(rawValue) {
-  if (typeof rawValue !== 'string') return 'must be a string';
-  // Trim BEFORE measuring anything below. The loader stores `raw[field].trim()`
-  // (see the FIELDS loop), so validating the untrimmed string checked a
-  // different string than the one that gets accepted and sent: a field padded
-  // with whitespace could sit over the cap, or carry a trailing newline, and be
-  // refused for a property its trimmed form never had.
-  const value = rawValue.trim();
+// Shared by fieldProblem (an ack template) and arrayElementProblem (a declared
+// procedure line): both are one VISIBLE line the seat is told to send or run
+// verbatim, so both refuse the same line-breaking and bidi/control hazards.
+// Kept as one function so the two checks can never drift apart -- a hazard
+// added to one copy and not the other is exactly the kind of gap that goes
+// unnoticed until it is exploited.
+function basicLineProblem(value) {
   if (value.length === 0) return 'must not be empty';
   // One line, always. A multi-line instruction could open a line of its own
   // inside the injected procedure and impersonate a core step or a fence.
@@ -117,6 +130,19 @@ function fieldProblem(rawValue) {
   // operator read back, so what was approved and what is sent stop matching.
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(value)) return 'must not contain control or bidi characters';
+  return null;
+}
+
+function fieldProblem(rawValue) {
+  if (typeof rawValue !== 'string') return 'must be a string';
+  // Trim BEFORE measuring anything below. The loader stores `raw[field].trim()`
+  // (see the FIELDS loop), so validating the untrimmed string checked a
+  // different string than the one that gets accepted and sent: a field padded
+  // with whitespace could sit over the cap, or carry a trailing newline, and be
+  // refused for a property its trimmed form never had.
+  const value = rawValue.trim();
+  const basic = basicLineProblem(value);
+  if (basic) return basic;
   // Reasons are spelled without the slot literal: they land in the injected
   // procedure, and an unsubstituted slot must never appear there.
   if (value.split(CAPSULE_ID_SLOT).length > 2) return 'must carry the capsule id slot at most once';
@@ -135,16 +161,37 @@ function fieldProblem(rawValue) {
   return null;
 }
 
+// An array-field element (resume_preload / resume_reground) is a declared
+// PROCEDURE LINE, never a template: it carries no {capsule_id} slot at all
+// (there is nothing to substitute, so the ack's "at most once" allowance does
+// not apply here -- any occurrence is refused outright), and its length cap is
+// the plain FIELD_MAX_CHARS with no slot-budget arithmetic.
+function arrayElementProblem(rawValue) {
+  if (typeof rawValue !== 'string') return 'must be a string';
+  const value = rawValue.trim();
+  const basic = basicLineProblem(value);
+  if (basic) return basic;
+  if (value.includes(CAPSULE_ID_SLOT)) return 'procedure lines carry no capsule id slot';
+  if (value.length > FIELD_MAX_CHARS) return `must be at most ${FIELD_MAX_CHARS} characters`;
+  return null;
+}
+
 /**
  * Read and validate <projectRoot>/.aigent/lifecycle-extension.json.
  *
- * Always returns {resume_ack, capsule_ack, warning}. Absent file is the stock
- * install: all three null, no warning, nothing to report. Present but unusable:
- * both fields null and one warning line. Never throws.
+ * Always returns {resume_ack, capsule_ack, resume_preload, resume_reground,
+ * warning}. Absent file is the stock install: acks null, arrays empty, no
+ * warning. Present but unusable: acks null, arrays empty, one warning line.
+ * resume_preload/resume_reground are v2-only; on v1, on refusal, or when
+ * absent from an accepted v2 file, they are always [] (never null), so a
+ * caller can iterate the result without checking the schema version first.
+ * Never throws.
  */
 export function loadLifecycleExtension(projectRoot) {
   const declarationPath = path.join(projectRoot, LIFECYCLE_EXTENSION_REL);
-  const none = { resume_ack: null, capsule_ack: null, warning: null };
+  const none = {
+    resume_ack: null, capsule_ack: null, resume_preload: [], resume_reground: [], warning: null,
+  };
 
   let text;
   try {
@@ -169,23 +216,47 @@ export function loadLifecycleExtension(projectRoot) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return refuse(declarationPath, 'root must be an object');
   }
-  if (raw.schema !== SCHEMA) {
-    return refuse(declarationPath, `schema must equal exactly ${SCHEMA}`);
+  if (raw.schema !== SCHEMA_V1 && raw.schema !== SCHEMA_V2) {
+    return refuse(declarationPath, `schema must equal exactly ${SCHEMA_V1} or ${SCHEMA_V2}`);
   }
+  const isV2 = raw.schema === SCHEMA_V2;
+  // v1's key set is unchanged: resume_preload/resume_reground on a v1 file are
+  // simply not in ALLOWED_KEYS, so they refuse under the existing
+  // unsupported-key message below, the same as any other unrecognized field.
+  const allowedKeys = new Set(['schema', ...FIELDS, ...(isV2 ? ARRAY_FIELDS : [])]);
   // An unknown key is refused rather than ignored: the likely cause is a
   // misspelled field name, and silently ignoring it arms nothing while looking
   // exactly like a working declaration.
-  const unknown = Object.keys(raw).filter((key) => !ALLOWED_KEYS.has(key)).sort();
+  const unknown = Object.keys(raw).filter((key) => !allowedKeys.has(key)).sort();
   if (unknown.length > 0) {
     return refuse(declarationPath, `has unsupported key(s): ${unknown.join(', ')}`);
   }
 
-  const accepted = { resume_ack: null, capsule_ack: null, warning: null };
+  const accepted = {
+    resume_ack: null, capsule_ack: null, resume_preload: [], resume_reground: [], warning: null,
+  };
   for (const field of FIELDS) {
     if (!(field in raw)) continue;
     const problem = fieldProblem(raw[field]);
     if (problem) return refuse(declarationPath, `${field} ${problem}`);
     accepted[field] = raw[field].trim();
+  }
+  if (isV2) {
+    for (const field of ARRAY_FIELDS) {
+      if (!(field in raw)) continue;
+      const arr = raw[field];
+      if (!Array.isArray(arr)) return refuse(declarationPath, `${field} must be an array`);
+      if (arr.length < 1 || arr.length > ARRAY_FIELD_MAX_ITEMS) {
+        return refuse(declarationPath, `${field} must have 1 to ${ARRAY_FIELD_MAX_ITEMS} entries`);
+      }
+      // Refuse on the FIRST bad element, naming the key and its 1-based index --
+      // same whole-file-refusal discipline as every other malformed shape here.
+      for (let i = 0; i < arr.length; i += 1) {
+        const problem = arrayElementProblem(arr[i]);
+        if (problem) return refuse(declarationPath, `${field}[${i + 1}] ${problem}`);
+      }
+      accepted[field] = arr.map((v) => v.trim());
+    }
   }
   return accepted;
 }

@@ -115,18 +115,31 @@ Copy `daemons/lifecycle-extension.example.json` to `<target>/.aigent/lifecycle-e
 
 ```json
 {
-  "schema": "LifecycleExtension/v1",
+  "schema": "LifecycleExtension/v2",
   "resume_ack": "As the final action, notify the supervising process with this exact body: EXAMPLE-PROTOCOL resumed {capsule_id}",
-  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}"
+  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}",
+  "resume_preload": [
+    "read <path> before step 1"
+  ],
+  "resume_reground": [
+    "drain the supervising process's inbox until empty, then take one non-consuming peek",
+    "re-read the live work ledger you coordinate against"
+  ]
 }
 ```
 
-Both fields are optional. Each is one line (no line-breaking character of any kind, including U+2028, U+2029 and U+0085), at most 500 characters, free of control and bidi characters, and may use `{capsule_id}` at most once. `.aigent/` sits outside every installer-managed tree, so the declaration survives an install and an update without needing an entry in `.aigent/operator-owned.json`.
+`schema` may equal `LifecycleExtension/v1` (the two ack fields only) or `LifecycleExtension/v2` (the two acks plus the two arrays below). All four fields are optional. `resume_ack` and `capsule_ack` are each one line (no line-breaking character of any kind, including U+2028, U+2029 and U+0085), at most 500 characters, free of control and bidi characters, and may use `{capsule_id}` at most once. `.aigent/` sits outside every installer-managed tree, so the declaration survives an install and an update without needing an entry in `.aigent/operator-owned.json`.
+
+`resume_preload` and `resume_reground` are v2-only: each is an array of 1 to 24 declared procedure lines, not templates. Every element follows the same single-line/control/bidi/length rules as an ack, plus one more: an element carrying `{capsule_id}` is refused outright, naming the array and the 1-based index of the bad element (a procedure line has nowhere to substitute an id). A v1 file that carries either key is refused with the same unsupported-key message as any other unrecognized field, so v1 semantics are unchanged.
 
 What runs where:
 
 - **Resume.** `daemons/lifecycle-extension.mjs` resolves `resume_ack` against the loaded capsule id, and `daemons/resume-verb.mjs` renders it as step 5 of the injected procedure, after the core acknowledgement. A template carrying `{capsule_id}` renders nothing when no capsule was loaded, so a degraded resume can never invite a fabricated id.
+- **Pre-load.** Each declared `resume_preload` line renders immediately after `STEPS (tight + terminal):` and before step 1, as `0.<n> PRE-LOAD (declared by this install, runs BEFORE step 1): <line>`, in declared order starting at `<n>` = 1. This is for a standing document the install needs read before anything else happens.
+- **Re-ground.** Each declared `resume_reground` line renders immediately after the core step 2 (`RE-GROUND against live memory`) and before step 3, as `2.<n> RE-GROUND (declared by this install, runs INSIDE step 2, before step 3): <line>`, in declared order. This is for the install's own re-grounding protocol against whatever live state it coordinates with, layered onto core's re-ground step rather than replacing it.
 - **Capsule.** `capsule_ack` runs as step 6 of the capsule skill, rendered by `node daemons/lifecycle-extension.mjs render capsule_ack --capsule-id <id> --root <target>` which always exits 0, after all core work and immediately before the terminal literal. This one is deliberately not last. The literal is the acknowledgement the supervising machinery watches for, and the clear is gated on that acknowledgement and on nothing after it, so once the literal is observed the clear can be minted straight away, mid-turn. A step placed after the literal runs in a window the core already treats as closed and races the clear it is meant to precede.
+
+Every declared line, ack or array element, renders through `foldDeclaredLine` (in `daemons/lifecycle-extension.mjs`), the same non-quoting single-line fold: the install is told to run or send it verbatim, so it is never quoted the way `inert()` quotes diagnostic values, but every line-breaking and control character is still folded to a space so it can never own a line of its own.
 
 An install that declares nothing runs the unmodified standalone lifecycle, and nothing about either verb changes.
 
