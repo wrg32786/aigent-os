@@ -1,4 +1,4 @@
-// resume-verb.reuse.test.mjs — Law XVI clause 4: a resume off spent state says so.
+// resume-verb.reuse.test.mjs: Law XVI clause 4, a resume off spent state says so.
 //
 // selectCapsule() marks a capsule consumed the moment resume-verb loads it, so
 // a second clear with nothing else on disk used to return the SAME shape as a
