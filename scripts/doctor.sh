@@ -775,41 +775,121 @@ fi
 
 # -- 7b. Hook command path resolution ------------------------------------------
 if [ -f "$SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
-  # Write extractor to a temp file to avoid heredoc+process-substitution issues under set -euo pipefail
+  # Extract every script a hook runs (node/bash/python arg, or inside a bash -c
+  # body) and classify WHERE it resolves. A hook whose script lives in another
+  # seat's vault silently ends this seat's lifecycle when that vault moves or a
+  # daemon is renamed (issue #49 G3). Core hooks must resolve to THIS install's
+  # own daemons/hooks; an operator extension may resolve inside the seat or
+  # inside a declared shared-extension root (.aigent/shared-extension-roots.json),
+  # never an undeclared sibling vault. Containment is pure path math (done in
+  # python); existence is left to bash test -f, which resolves Git Bash paths a
+  # native-Windows python cannot.
   _HOOK_PY=$(mktemp /tmp/doctor_hook_extract.XXXXXX.py)
   cat > "$_HOOK_PY" << 'HOOKPY'
-import json, sys
+import json, os, re, sys
+
+settings_path, root = sys.argv[1], sys.argv[2]
+
+def norm(p):
+    # Canonicalize for prefix comparison: MSYS /c/x -> c:/x, backslashes -> /,
+    # drop trailing slash, lowercase. ponytail: lowercase always (this fleet is
+    # Windows); a case-sensitive Linux install could over-match, acceptable here.
+    p = p.replace("\\", "/")
+    m = re.match(r"^/([A-Za-z])/(.*)$", p)
+    if m:
+        p = m.group(1) + ":/" + m.group(2)
+    return re.sub(r"/+$", "", p).lower()
+
+def under(path_n, base_n):
+    return path_n == base_n or path_n.startswith(base_n + "/")
+
+root_n = norm(root)
+decl_bad = False
+shared_roots = []
+decl_path = os.path.join(root, ".aigent", "shared-extension-roots.json")
+if os.path.isfile(decl_path):
+    try:
+        raw = json.load(open(decl_path))
+        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            shared_roots = [norm(x) for x in raw]
+        else:
+            decl_bad = True
+    except Exception:
+        decl_bad = True
+
+core_basenames = set()
 try:
-    with open(sys.argv[1]) as f:
-        data = json.load(f)
-    def walk(obj):
-        if isinstance(obj, dict):
-            if obj.get("type") == "command" and "command" in obj:
-                parts = obj["command"].strip().split()
-                if len(parts) >= 2 and parts[0] == "bash":
-                    print(parts[1])
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for i in obj:
-                walk(i)
-    walk(data)
+    man = json.load(open(os.path.join(root, "scripts", "fleet-baseline-manifest.json")))
+    for rel in (man.get("required_files") or {}):
+        r = rel.replace("\\", "/")
+        if r.startswith("daemons/") or r.startswith("hooks/"):
+            core_basenames.add(os.path.basename(r).lower())
 except Exception:
     pass
+
+SCRIPT_RE = re.compile(r"""([^\s"']+\.(?:mjs|cjs|js|sh|py))""")
+
+def classify(tok):
+    if "__" in tok:  # unresolved __AIGENT_ROOT__-style placeholder, not a real path
+        return None
+    is_abs = bool(re.match(r"^([A-Za-z]:|/)", tok))
+    tok_abs = tok if is_abs else (root.replace("\\", "/").rstrip("/") + "/" + tok)
+    p_n = norm(tok_abs)
+    if under(p_n, root_n):
+        return ("inside", tok_abs)
+    if os.path.basename(p_n) in core_basenames:
+        return ("core-external", tok_abs)   # a core daemon/hook, but outside this install
+    if any(under(p_n, s) for s in shared_roots):
+        return ("shared", tok_abs)
+    return ("outside", tok_abs)
+
+seen = set()
+def walk(obj):
+    if isinstance(obj, dict):
+        cmd = obj.get("command")
+        if obj.get("type") == "command" and isinstance(cmd, str):
+            for tok in SCRIPT_RE.findall(cmd):
+                c = classify(tok.strip("\"'"))
+                if c and c not in seen:
+                    seen.add(c)
+                    print("%s\t%s" % c)
+        for v in obj.values():
+            walk(v)
+    elif isinstance(obj, list):
+        for i in obj:
+            walk(i)
+
+try:
+    walk(json.load(open(settings_path)))
+except Exception:
+    pass
+if decl_bad:
+    print("decl-error\t%s" % decl_path)
 HOOKPY
   HOOK_FAIL=0
-  # Use bash test -f (not python os.path.isfile) -- python may be native Windows and
-  # can't resolve Git Bash /tmp/ or Unix-style paths on Windows hosts
-  while IFS= read -r script_path; do
-    [ -z "$script_path" ] && continue
-    if ! bash -c "test -f \"$script_path\"" 2>/dev/null; then
-      fail "hook script not found: $script_path"
-      HOOK_FAIL=$((HOOK_FAIL + 1))
-    fi
-  done < <(python3 "$_HOOK_PY" "$SETTINGS" 2>/dev/null)
+  while IFS=$'\t' read -r verdict script_path; do
+    [ -z "$verdict" ] && continue
+    case "$verdict" in
+      inside|shared)
+        # existence left to bash test -f (Git Bash path resolution)
+        if ! bash -c "test -f \"$script_path\"" 2>/dev/null; then
+          fail "hook script not found: $script_path"
+          HOOK_FAIL=$((HOOK_FAIL + 1))
+        fi ;;
+      core-external)
+        fail "core hook resolves outside this install: $script_path (core hooks must run this install's own daemons/hooks)"
+        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
+      outside)
+        fail "hook references a path outside this install and no declared shared extension covers it: $script_path"
+        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
+      decl-error)
+        fail ".aigent/shared-extension-roots.json is present but malformed: $script_path (must be a JSON array of absolute paths)"
+        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
+    esac
+  done < <(python3 "$_HOOK_PY" "$SETTINGS" "$ROOT" 2>/dev/null)
   rm -f "$_HOOK_PY"
   if [ "$HOOK_FAIL" -eq 0 ]; then
-    pass "all hook command paths in settings.json resolve to existing files"
+    pass "all hook command paths resolve inside this install or a declared shared extension"
   fi
 else
   warn "hook path resolution check skipped (settings.json or python3 not available)"

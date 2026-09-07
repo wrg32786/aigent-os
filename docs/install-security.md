@@ -91,6 +91,22 @@ The declaration lives under `.aigent/`, which the installer's managed `.gitignor
 
 `.claude/settings.json.template` is exempt from this treatment for a different reason: it is unconditionally regenerated from the framework's copy on every run (never gated on "already exists"), so it can never silently keep a planted or stale template in the first place.
 
+### Hook command path resolution
+
+`scripts/doctor.sh` reads every hook command in `.claude/settings.json` and checks where the script it runs resolves. A hook that runs a script inside another install's tree silently stops working the moment that other tree moves or a file there is renamed, so the doctor treats such a reference as a failure.
+
+- A hook whose script resolves **inside this install** passes (and the file must exist).
+- A hook whose script is a **core file** (a `daemons/` or `hooks/` path pinned in `scripts/fleet-baseline-manifest.json`) must resolve to this install's own copy. Pointing a core hook at any other tree fails, even a declared one: core runs core.
+- A hook that is an **operator extension** may resolve inside this install or inside a declared shared extension root. Declare those roots in `<target>/.aigent/shared-extension-roots.json` as a JSON array of absolute directory paths:
+
+  ```json
+  ["C:/shared/aigent-extensions"]
+  ```
+
+  A script resolving under a declared root passes. Anything outside this install and outside every declared root fails with `hook references a path outside this install`. A present-but-malformed declaration file is reported, not silently ignored.
+
+The default install declares no shared roots, and every core hook resolves under `__AIGENT_ROOT__`, so a stock install passes with no declaration.
+
 ### Symlinks
 
 Every write inside the target -- creating a directory, copying a framework file, writing `CLAUDE.md`/`settings.json`/`.gitignore`/`.aigent/state.json`, and the `.aigent/backups/`/`.aigent/quarantine/` copies those two make of a pre-existing file before overwriting it -- is checked first: if any path component from the target root down to (and including) the destination is already a symlink, the write is refused rather than followed. Without this, a pre-seeded symlink such as a file named `CLAUDE.md` that actually points at `~/.bashrc` would let a write we believe lands on `$TARGET/CLAUDE.md` land wherever the link points instead, since both `cp` and shell redirection follow symlinks by default. Single critical writes (`CLAUDE.md`, `.gitignore`, `.claude/settings.json`, and their `.aigent/backups/` copies) abort the whole install with an actionable error; copies of many files (framework trees, skills, agents, and their `.aigent/quarantine/` copies) skip just the affected file with a `[skip]` warning and continue.
