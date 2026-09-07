@@ -784,111 +784,111 @@ if [ -f "$SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
   # never an undeclared sibling vault. Containment is pure path math (done in
   # python); existence is left to bash test -f, which resolves Git Bash paths a
   # native-Windows python cannot.
+  # python only PARSES json (hook script tokens, core basenames from the
+  # manifest, declared shared roots); all path containment is done in bash via
+  # canon() below, so a root and a hook that name the same location in different
+  # spellings (a /var vs /private/var symlink, a Git Bash /tmp mount, a trailing
+  # slash, a ..) collapse to one form. The core template renders every core hook
+  # under __AIGENT_ROOT__, which install.sh canonicalizes; comparing raw strings
+  # would false-flag those own-install hooks as external.
   _HOOK_PY=$(mktemp /tmp/doctor_hook_extract.XXXXXX.py)
   cat > "$_HOOK_PY" << 'HOOKPY'
 import json, os, re, sys
 
 settings_path, root = sys.argv[1], sys.argv[2]
 
-def norm(p):
-    # Canonicalize for prefix comparison: MSYS /c/x -> c:/x, backslashes -> /,
-    # drop trailing slash, lowercase. ponytail: lowercase always (this fleet is
-    # Windows); a case-sensitive Linux install could over-match, acceptable here.
-    p = p.replace("\\", "/")
-    m = re.match(r"^/([A-Za-z])/(.*)$", p)
-    if m:
-        p = m.group(1) + ":/" + m.group(2)
-    return re.sub(r"/+$", "", p).lower()
-
-def under(path_n, base_n):
-    return path_n == base_n or path_n.startswith(base_n + "/")
-
-root_n = norm(root)
-decl_bad = False
-shared_roots = []
-decl_path = os.path.join(root, ".aigent", "shared-extension-roots.json")
-if os.path.isfile(decl_path):
-    try:
-        raw = json.load(open(decl_path))
-        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
-            shared_roots = [norm(x) for x in raw]
-        else:
-            decl_bad = True
-    except Exception:
-        decl_bad = True
-
-core_basenames = set()
 try:
     man = json.load(open(os.path.join(root, "scripts", "fleet-baseline-manifest.json")))
     for rel in (man.get("required_files") or {}):
         r = rel.replace("\\", "/")
         if r.startswith("daemons/") or r.startswith("hooks/"):
-            core_basenames.add(os.path.basename(r).lower())
+            print("CORE\t" + os.path.basename(r))
 except Exception:
     pass
 
+decl_path = os.path.join(root, ".aigent", "shared-extension-roots.json")
+if os.path.isfile(decl_path):
+    try:
+        raw = json.load(open(decl_path))
+        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            for x in raw:
+                print("SHARED\t" + x)
+        else:
+            print("DECLERR\t" + decl_path)
+    except Exception:
+        print("DECLERR\t" + decl_path)
+
 SCRIPT_RE = re.compile(r"""([^\s"']+\.(?:mjs|cjs|js|sh|py))""")
-
-def classify(tok):
-    if re.search(r"__[A-Z0-9_]+__", tok):  # unresolved __AIGENT_ROOT__-style placeholder, not a real path
-        return None
-    is_abs = bool(re.match(r"^([A-Za-z]:|/)", tok))
-    tok_abs = tok if is_abs else (root.replace("\\", "/").rstrip("/") + "/" + tok)
-    tok_abs = os.path.normpath(tok_abs).replace("\\", "/")  # collapse .. so a relative escape cannot pass as inside
-    p_n = norm(tok_abs)
-    if under(p_n, root_n):
-        return ("inside", tok_abs)
-    if os.path.basename(p_n) in core_basenames:
-        return ("core-external", tok_abs)   # a core daemon/hook, but outside this install
-    if any(under(p_n, s) for s in shared_roots):
-        return ("shared", tok_abs)
-    return ("outside", tok_abs)
-
 seen = set()
 def walk(obj):
     if isinstance(obj, dict):
         cmd = obj.get("command")
         if obj.get("type") == "command" and isinstance(cmd, str):
             for tok in SCRIPT_RE.findall(cmd):
-                c = classify(tok.strip("\"'"))
-                if c and c not in seen:
-                    seen.add(c)
-                    print("%s\t%s" % c)
+                tok = tok.strip("\"'")
+                if re.search(r"__[A-Z0-9_]+__", tok):  # unresolved __AIGENT_ROOT__-style placeholder
+                    continue
+                if tok not in seen:
+                    seen.add(tok)
+                    print("TOKEN\t" + tok)
         for v in obj.values():
             walk(v)
     elif isinstance(obj, list):
         for i in obj:
             walk(i)
-
 try:
     walk(json.load(open(settings_path)))
 except Exception:
     pass
-if decl_bad:
-    print("decl-error\t%s" % decl_path)
 HOOKPY
+  # Canonical absolute path (symlinks + mount spellings + .. resolved by the
+  # same shell), falling back to the raw path when the parent cannot be entered.
+  canon() { ( b="$(basename "$1")"; d="$(dirname "$1")"; if cd "$d" 2>/dev/null; then printf '%s/%s' "$(pwd -P)" "$b"; else printf '%s' "$1"; fi ); }
+  ROOT_C="$(canon "$ROOT")"
   HOOK_FAIL=0
-  while IFS=$'\t' read -r verdict script_path; do
-    [ -z "$verdict" ] && continue
-    case "$verdict" in
-      inside|shared)
-        # existence left to bash test -f (Git Bash path resolution)
-        if ! bash -c "test -f \"$script_path\"" 2>/dev/null; then
-          fail "hook script not found: $script_path"
-          HOOK_FAIL=$((HOOK_FAIL + 1))
-        fi ;;
-      core-external)
-        fail "core hook resolves outside this install: $script_path (core hooks must run this install's own daemons/hooks)"
+  CORE_BN=" "
+  SHARED_C=""
+  TOKENS=()
+  while IFS=$'\t' read -r kind val; do
+    val="${val%$'\r'}"   # native-Windows python emits CRLF; drop the trailing CR
+    case "$kind" in
+      CORE)   CORE_BN="${CORE_BN}${val} " ;;
+      SHARED) SHARED_C="${SHARED_C}$(canon "$val")"$'\n' ;;
+      DECLERR)
+        fail ".aigent/shared-extension-roots.json is present but malformed: $val (must be a JSON array of absolute paths)"
         HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
-      outside)
-        fail "hook references a path outside this install and no declared shared extension covers it: $script_path"
-        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
-      decl-error)
-        fail ".aigent/shared-extension-roots.json is present but malformed: $script_path (must be a JSON array of absolute paths)"
-        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
+      TOKEN)  TOKENS+=("$val") ;;
     esac
   done < <(python3 "$_HOOK_PY" "$SETTINGS" "$ROOT" 2>/dev/null)
   rm -f "$_HOOK_PY"
+  for tok in ${TOKENS+"${TOKENS[@]}"}; do
+    case "$tok" in
+      /*|[A-Za-z]:*) abstok="$tok" ;;
+      *)             abstok="$ROOT/$tok" ;;
+    esac
+    tokc="$(canon "$abstok")"
+    bn="$(basename "$tokc")"
+    if [ "$tokc" = "$ROOT_C" ] || [ "${tokc#"$ROOT_C"/}" != "$tokc" ]; then
+      # resolves inside this install -- must exist (bash resolves Git Bash paths)
+      if ! bash -c "test -f \"$abstok\"" 2>/dev/null; then
+        fail "hook script not found: $abstok"
+        HOOK_FAIL=$((HOOK_FAIL + 1))
+      fi
+    elif printf '%s' "$CORE_BN" | grep -qF " $bn "; then
+      fail "core hook resolves outside this install: $abstok (core hooks must run this install's own daemons/hooks)"
+      HOOK_FAIL=$((HOOK_FAIL + 1))
+    else
+      inshared=0
+      while IFS= read -r sroot; do
+        [ -z "$sroot" ] && continue
+        if [ "$tokc" = "$sroot" ] || [ "${tokc#"$sroot"/}" != "$tokc" ]; then inshared=1; break; fi
+      done <<< "$SHARED_C"
+      if [ "$inshared" -eq 0 ]; then
+        fail "hook references a path outside this install and no declared shared extension covers it: $abstok"
+        HOOK_FAIL=$((HOOK_FAIL + 1))
+      fi
+    fi
+  done
   if [ "$HOOK_FAIL" -eq 0 ]; then
     pass "all hook command paths resolve inside this install or a declared shared extension"
   fi
