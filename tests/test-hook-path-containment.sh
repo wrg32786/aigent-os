@@ -29,8 +29,8 @@ check() { # name  expect-substring  present|absent  <doctor-output-file>
 }
 
 # A fixture install root with a manifest that pins one core daemon.
-make_root() {
-  local root; root="$(topath "$(mktemp -d)")"
+make_root() { # [raw] -- raw keeps mktemp's own spelling so root and hook share one dialect (the Linux CI shape) on Windows too
+  local root; root="$(mktemp -d)"; [ "${1:-}" = raw ] || root="$(topath "$root")"
   mkdir -p "$root/.claude" "$root/scripts" "$root/daemons" "$root/.aigent"
   printf '{"required_files":{"daemons/stop-capsule-writer.mjs":"0"}}\n' > "$root/scripts/fleet-baseline-manifest.json"
   : > "$root/daemons/own.mjs"                    # an own-seat script that exists
@@ -87,8 +87,9 @@ R="$(make_root)"; printf '{ not an array }\n' > "$R/.aigent/shared-extension-roo
 settings "$R" "node $R/daemons/own.mjs"; run_doctor "$R" "$TMPOUT"
 check "malformed declaration reported"    "shared-extension-roots.json is present but malformed" present "$TMPOUT"
 
-# 9. a relative parent escape cannot pass as inside (.. is collapsed)
-R="$(make_root)"; settings "$R" "node ../escape/daemons/own.mjs"; run_doctor "$R" "$TMPOUT"
+# 9. a relative parent escape cannot pass as inside (.. is collapsed even though ../escape does not exist;
+#    raw root so the fixture reproduces the CI shape where root and hook share one spelling)
+R="$(make_root raw)"; settings "$R" "node ../escape/daemons/own.mjs"; run_doctor "$R" "$TMPOUT"
 check "relative parent escape fails"      "hook references a path outside this install" present "$TMPOUT"
 
 # 10. an external __pycache__/__tests__-style path is still checked (only __AIGENT_ROOT__-style is skipped)
