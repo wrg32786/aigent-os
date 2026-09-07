@@ -87,6 +87,14 @@ R="$(make_root)"; printf '{ not an array }\n' > "$R/.aigent/shared-extension-roo
 settings "$R" "node $R/daemons/own.mjs"; run_doctor "$R" "$TMPOUT"
 check "malformed declaration reported"    "shared-extension-roots.json is present but malformed" present "$TMPOUT"
 
+# 9. a relative parent escape cannot pass as inside (.. is collapsed)
+R="$(make_root)"; settings "$R" "node ../escape/daemons/own.mjs"; run_doctor "$R" "$TMPOUT"
+check "relative parent escape fails"      "hook references a path outside this install" present "$TMPOUT"
+
+# 10. an external __pycache__/__tests__-style path is still checked (only __AIGENT_ROOT__-style is skipped)
+R="$(make_root)"; settings "$R" "node $OTHER/__pycache__/own.mjs"; run_doctor "$R" "$TMPOUT"
+check "external __pycache__ path checked" "hook references a path outside this install" present "$TMPOUT"
+
 echo ""
 echo "  hook-path-containment: ${PASS} pass, ${FAIL} fail"
 [ "$FAIL" -eq 0 ]

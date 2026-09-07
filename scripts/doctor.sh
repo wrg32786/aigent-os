@@ -830,10 +830,11 @@ except Exception:
 SCRIPT_RE = re.compile(r"""([^\s"']+\.(?:mjs|cjs|js|sh|py))""")
 
 def classify(tok):
-    if "__" in tok:  # unresolved __AIGENT_ROOT__-style placeholder, not a real path
+    if re.search(r"__[A-Z0-9_]+__", tok):  # unresolved __AIGENT_ROOT__-style placeholder, not a real path
         return None
     is_abs = bool(re.match(r"^([A-Za-z]:|/)", tok))
     tok_abs = tok if is_abs else (root.replace("\\", "/").rstrip("/") + "/" + tok)
+    tok_abs = os.path.normpath(tok_abs).replace("\\", "/")  # collapse .. so a relative escape cannot pass as inside
     p_n = norm(tok_abs)
     if under(p_n, root_n):
         return ("inside", tok_abs)
