@@ -775,41 +775,127 @@ fi
 
 # -- 7b. Hook command path resolution ------------------------------------------
 if [ -f "$SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
-  # Write extractor to a temp file to avoid heredoc+process-substitution issues under set -euo pipefail
+  # Extract every script a hook runs (node/bash/python arg, or inside a bash -c
+  # body) and classify WHERE it resolves. A hook whose script lives in another
+  # seat's vault silently ends this seat's lifecycle when that vault moves or a
+  # daemon is renamed (issue #49 G3). Core hooks must resolve to THIS install's
+  # own daemons/hooks; an operator extension may resolve inside the seat or
+  # inside a declared shared-extension root (.aigent/shared-extension-roots.json),
+  # never an undeclared sibling vault. Containment is pure path math (done in
+  # python); existence is left to bash test -f, which resolves Git Bash paths a
+  # native-Windows python cannot.
+  # python only PARSES json (hook script tokens, core basenames from the
+  # manifest, declared shared roots); all path containment is done in bash via
+  # canon() below, so a root and a hook that name the same location in different
+  # spellings (a /var vs /private/var symlink, a Git Bash /tmp mount, a trailing
+  # slash, a ..) collapse to one form. The core template renders every core hook
+  # under __AIGENT_ROOT__, which install.sh canonicalizes; comparing raw strings
+  # would false-flag those own-install hooks as external.
   _HOOK_PY=$(mktemp /tmp/doctor_hook_extract.XXXXXX.py)
   cat > "$_HOOK_PY" << 'HOOKPY'
-import json, sys
+import json, os, re, sys
+
+settings_path, root = sys.argv[1], sys.argv[2]
+
 try:
-    with open(sys.argv[1]) as f:
-        data = json.load(f)
-    def walk(obj):
-        if isinstance(obj, dict):
-            if obj.get("type") == "command" and "command" in obj:
-                parts = obj["command"].strip().split()
-                if len(parts) >= 2 and parts[0] == "bash":
-                    print(parts[1])
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for i in obj:
-                walk(i)
-    walk(data)
+    man = json.load(open(os.path.join(root, "scripts", "fleet-baseline-manifest.json")))
+    for rel in (man.get("required_files") or {}):
+        r = rel.replace("\\", "/")
+        if r.startswith("daemons/") or r.startswith("hooks/"):
+            print("CORE\t" + os.path.basename(r))
+except Exception:
+    pass
+
+decl_path = os.path.join(root, ".aigent", "shared-extension-roots.json")
+if os.path.isfile(decl_path):
+    try:
+        raw = json.load(open(decl_path))
+        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            for x in raw:
+                print("SHARED\t" + x)
+        else:
+            print("DECLERR\t" + decl_path)
+    except Exception:
+        print("DECLERR\t" + decl_path)
+
+SCRIPT_RE = re.compile(r"""([^\s"']+\.(?:mjs|cjs|js|sh|py))""")
+seen = set()
+def walk(obj):
+    if isinstance(obj, dict):
+        cmd = obj.get("command")
+        if obj.get("type") == "command" and isinstance(cmd, str):
+            for tok in SCRIPT_RE.findall(cmd):
+                tok = tok.strip("\"'")
+                if re.search(r"__[A-Z0-9_]+__", tok):  # unresolved __AIGENT_ROOT__-style placeholder
+                    continue
+                if tok not in seen:
+                    seen.add(tok)
+                    print("TOKEN\t" + tok)
+        for v in obj.values():
+            walk(v)
+    elif isinstance(obj, list):
+        for i in obj:
+            walk(i)
+try:
+    walk(json.load(open(settings_path)))
 except Exception:
     pass
 HOOKPY
+  # Canonical absolute path (symlinks + mount spellings + .. resolved by the
+  # same shell). Walks up to the nearest EXISTING ancestor before pwd -P, so a
+  # hook under a missing directory (root/../escape/x.mjs) still has its ..
+  # collapsed instead of falling back to a raw string that starts with the
+  # root and reads as inside. Raw only when no ancestor at all can be entered.
+  canon() { ( p="$1"; rest=""
+    while [ ! -d "$p" ]; do np="$(dirname "$p")"; [ "$np" = "$p" ] && break; rest="/$(basename "$p")$rest"; p="$np"; done
+    if cd "$p" 2>/dev/null; then d="$(pwd -P)"; r="${d%/}$rest"; printf '%s' "${r:-/}"; else printf '%s' "$1"; fi ); }
+  ROOT_C="$(canon "$ROOT")"
   HOOK_FAIL=0
-  # Use bash test -f (not python os.path.isfile) -- python may be native Windows and
-  # can't resolve Git Bash /tmp/ or Unix-style paths on Windows hosts
-  while IFS= read -r script_path; do
-    [ -z "$script_path" ] && continue
-    if ! bash -c "test -f \"$script_path\"" 2>/dev/null; then
-      fail "hook script not found: $script_path"
-      HOOK_FAIL=$((HOOK_FAIL + 1))
-    fi
-  done < <(python3 "$_HOOK_PY" "$SETTINGS" 2>/dev/null)
+  CORE_BN=" "
+  SHARED_C=""
+  TOKENS=()
+  while IFS=$'\t' read -r kind val; do
+    val="${val%$'\r'}"   # native-Windows python emits CRLF; drop the trailing CR
+    case "$kind" in
+      CORE)   CORE_BN="${CORE_BN}${val} " ;;
+      SHARED) SHARED_C="${SHARED_C}$(canon "$val")"$'\n' ;;
+      DECLERR)
+        fail ".aigent/shared-extension-roots.json is present but malformed: $val (must be a JSON array of absolute paths)"
+        HOOK_FAIL=$((HOOK_FAIL + 1)) ;;
+      TOKEN)  TOKENS+=("$val") ;;
+    esac
+  done < <(python3 "$_HOOK_PY" "$SETTINGS" "$ROOT" 2>/dev/null)
   rm -f "$_HOOK_PY"
+  for tok in ${TOKENS+"${TOKENS[@]}"}; do
+    case "$tok" in
+      /*|[A-Za-z]:*) abstok="$tok" ;;
+      *)             abstok="$ROOT/$tok" ;;
+    esac
+    tokc="$(canon "$abstok")"
+    bn="$(basename "$tokc")"
+    if [ "$tokc" = "$ROOT_C" ] || [ "${tokc#"$ROOT_C"/}" != "$tokc" ]; then
+      # resolves inside this install -- must exist (bash resolves Git Bash paths)
+      if ! bash -c "test -f \"$abstok\"" 2>/dev/null; then
+        fail "hook script not found: $abstok"
+        HOOK_FAIL=$((HOOK_FAIL + 1))
+      fi
+    elif printf '%s' "$CORE_BN" | grep -qF " $bn "; then
+      fail "core hook resolves outside this install: $abstok (core hooks must run this install's own daemons/hooks)"
+      HOOK_FAIL=$((HOOK_FAIL + 1))
+    else
+      inshared=0
+      while IFS= read -r sroot; do
+        [ -z "$sroot" ] && continue
+        if [ "$tokc" = "$sroot" ] || [ "${tokc#"$sroot"/}" != "$tokc" ]; then inshared=1; break; fi
+      done <<< "$SHARED_C"
+      if [ "$inshared" -eq 0 ]; then
+        fail "hook references a path outside this install and no declared shared extension covers it: $abstok"
+        HOOK_FAIL=$((HOOK_FAIL + 1))
+      fi
+    fi
+  done
   if [ "$HOOK_FAIL" -eq 0 ]; then
-    pass "all hook command paths in settings.json resolve to existing files"
+    pass "all hook command paths resolve inside this install or a declared shared extension"
   fi
 else
   warn "hook path resolution check skipped (settings.json or python3 not available)"

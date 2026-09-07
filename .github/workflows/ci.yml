@@ -107,6 +107,7 @@ jobs:
           bash tests/test-session-capture-summary.sh
           bash tests/test-onboarding-start-over.sh
           bash tests/test-vault-sync.sh
+          bash tests/test-hook-path-containment.sh
           git diff --check
 
   installer:
