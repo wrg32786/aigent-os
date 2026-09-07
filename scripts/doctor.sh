@@ -848,7 +848,7 @@ HOOKPY
   # root and reads as inside. Raw only when no ancestor at all can be entered.
   canon() { ( p="$1"; rest=""
     while [ ! -d "$p" ]; do np="$(dirname "$p")"; [ "$np" = "$p" ] && break; rest="/$(basename "$p")$rest"; p="$np"; done
-    if cd "$p" 2>/dev/null; then printf '%s%s' "$(pwd -P)" "$rest"; else printf '%s' "$1"; fi ); }
+    if cd "$p" 2>/dev/null; then d="$(pwd -P)"; r="${d%/}$rest"; printf '%s' "${r:-/}"; else printf '%s' "$1"; fi ); }
   ROOT_C="$(canon "$ROOT")"
   HOOK_FAIL=0
   CORE_BN=" "
