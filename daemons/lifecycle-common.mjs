@@ -154,6 +154,13 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
 
   let best = null;
   let fallback = null;
+  // Law XVI clause 4: once a capsule is used for resume it is marked so it is
+  // not reused, OR if it is reused on resume that is loudly stated. The
+  // marking half (markCapsuleConsumed, below) has always existed; this tracks
+  // the newest CONSUMED candidate that is otherwise structurally valid --
+  // real content, not junk -- so a re-resume off spent state can be the loud
+  // half instead of looking exactly like a fresh install.
+  let newestConsumed = null;
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
@@ -172,7 +179,17 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
     // tell "nothing to resume from" (a fresh install, correct) from "everything
     // here is already spent" (the ordinary end of a cycle) from "the selector
     // threw away capsules somebody wrote" (a defect).
-    if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
+    if (status && CONSUMED_STATUSES.has(status)) {
+      note(name, 'already-consumed', status);
+      // Same structural bar an active candidate must clear below (id,
+      // finite created_at, non-empty objective/next_valid_action) -- a
+      // consumed capsule that fails it is junk, not a reuse candidate.
+      if (id && id.trim() && Number.isFinite(created) && objective && objective.trim() && nextAction && nextAction.trim()
+        && (!newestConsumed || created > newestConsumed.created)) {
+        newestConsumed = { path: full, id, created, createdRaw };
+      }
+      continue;
+    }
     if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
     if (!id || !id.trim()) { note(name, 'no-id'); continue; }
     if (!Number.isFinite(created)) { note(name, 'bad-created_at', createdRaw || '(absent)'); continue; }
@@ -241,6 +258,12 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
     if (fallback) note(path.basename(fallback.path), 'placeholder-demoted', fallback.why);
     return { capsule: best, rejected };
   }
+  // Spent-but-real outranks active-but-empty. A structurally valid consumed
+  // capsule is real work someone captured; the placeholder fallback tier is
+  // an honest "nothing was captured" report. Between the two, the real one is
+  // the more useful thing to hand back, loudly flagged as a reuse rather than
+  // silently indistinguishable from a fresh install.
+  if (newestConsumed) return { capsule: newestConsumed, rejected, reused: true };
   // Nothing curated survives: the placeholder is better than resuming blind, and
   // resume-verb brands it "*** AUTOSAVE, NOT A CURATED CAPSULE ***" on the way out.
   if (fallback) return { capsule: fallback, rejected, fellBackToPlaceholder: true };
@@ -257,9 +280,14 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
 // never passes options gets a BYTE-IDENTICAL object to pre-2026-08-03 — no
 // existing caller reads .sessionBound or .fellBackToPlaceholder off this
 // wrapper today, and none starts implicitly by this change.
+//
+// A reuse pick is deliberately treated as null here too: this wrapper's
+// narrow contract is "the newest FRESH active capsule, or nothing", and a
+// reused capsule is not fresh. Only resume-verb.mjs (via selectCapsule
+// directly) needs to know a reuse happened and announce it loudly.
 export function newestValidCapsule(memoryRoot, options) {
-  const { capsule, rejected } = selectCapsule(memoryRoot, options);
-  if (!capsule) return null;
+  const { capsule, rejected, reused } = selectCapsule(memoryRoot, options);
+  if (!capsule || reused) return null;
   return { ...capsule, rejected };
 }
 

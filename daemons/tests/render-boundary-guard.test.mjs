@@ -1438,6 +1438,12 @@ const JS_SAFE_READER_ALLOWLIST = [
     reason: 'tags determine an autosave label and are never rendered verbatim',
   },
   {
+    file: 'daemons/resume-verb.mjs',
+    accessor: 'scalar',
+    needle: "scalar(doc, 'status')",
+    reason: 'the loud reuse block renders the on-disk status of a reused capsule through inert',
+  },
+  {
     file: 'daemons/sessionstart-reinject.mjs',
     accessor: 'capsuleValue',
     needle: "capsuleValue(doc, 'objective')",
