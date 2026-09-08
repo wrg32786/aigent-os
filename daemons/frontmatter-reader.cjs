@@ -41,6 +41,43 @@ function rawScalarToken(doc, key) {
   return null;
 }
 
+// A YAML block scalar indicator: `>` (folded) or `|` (literal), optionally
+// followed by one chomping indicator (`+` keep, `-` strip). Both styles fold
+// the same way here, because every render site downstream is single-line by
+// construction: a literal-style newline can no more own a line of its own
+// than a folded-style one can.
+const BLOCK_SCALAR_INDICATOR = /^[>|][+-]?$/;
+
+// Folds a YAML block scalar to one line: the indented block on the physical
+// lines following the `key: >` / `key: |` line, trimmed lines joined by a
+// single space, runs of whitespace collapsed. An empty line stays inside the
+// block (it just contributes no words); the block ends at the first
+// non-indented, non-empty line. Returns undefined when `key` is absent from
+// the frontmatter, or present but its value is not exactly a block
+// indicator -- either way the caller falls back to the plain scalar path.
+// Returns null when the folded result is empty.
+function blockScalarFold(doc, key) {
+  const frontmatter = rawFrontmatter(doc);
+  if (frontmatter === null) return undefined;
+  const lines = frontmatter.split(/\r\n|\n|\r/);
+  const expression = new RegExp(`^${escaped(key)}:[ \\t]*([^\\r\\n]*)$`);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(expression);
+    if (!match) continue;
+    if (!BLOCK_SCALAR_INDICATOR.test(match[1].trim())) return undefined;
+    const collected = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor];
+      if (line === '') continue;
+      if (/^[ \t]/.test(line)) { collected.push(line); continue; }
+      break;
+    }
+    const folded = collapseLineBreaking(collected.join(' ')).replace(/[ \t]+/g, ' ').trim();
+    return folded.length ? folded : null;
+  }
+  return undefined;
+}
+
 function inlineCommentIndex(raw) {
   let quote = null;
   for (let index = 0; index < raw.length; index += 1) {
@@ -94,6 +131,8 @@ function unsafeRawScalar(doc, key, reason) {
 }
 
 function scalar(doc, key) {
+  const folded = blockScalarFold(doc, key);
+  if (folded !== undefined) return folded;
   const value = unsafeRawScalar(
     doc,
     key,

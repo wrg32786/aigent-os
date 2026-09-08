@@ -1,5 +1,12 @@
 {
-  "schema": "LifecycleExtension/v1",
+  "schema": "LifecycleExtension/v2",
   "resume_ack": "As the final action, notify the supervising process with this exact body: EXAMPLE-PROTOCOL resumed {capsule_id}",
-  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}"
+  "capsule_ack": "Before the completion literal, notify the supervising process with this exact body: EXAMPLE-PROTOCOL capsule-written {capsule_id}",
+  "resume_preload": [
+    "read <path> before step 1"
+  ],
+  "resume_reground": [
+    "drain the supervising process's inbox until empty, then take one non-consuming peek",
+    "re-read the live work ledger you coordinate against"
+  ]
 }

@@ -75,8 +75,18 @@ test('newest-by-date capsule loads without a pointer', () => {
 
 // The consume contract, red-first: both assertions fail against a resume verb
 // that never marks what it loads (where the same capsule replays on every clear).
+//
+// EXPECTATION CHANGED (Law XVI clause 4, the loud-reuse fix): the second clear
+// used to take the degraded no-capsule path, because a seat with only one
+// spent, structurally valid capsule read exactly like a fresh install with
+// nothing on disk. That was the defect this test's own name warns against --
+// "does not silently replay it" -- and the old assertion (degraded: true,
+// "re-derive entirely from the live memory") was itself silent about the real
+// capsule sitting on disk. The fixed selector reuses that same capsule,
+// flagged loudly, rather than reporting nothing: see
+// resume-verb.reuse.test.mjs for the dedicated coverage of the reuse tier.
 for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']])
-test(`resume spends the capsule it loads (${eolName}); a second clear does not silently replay it`, () => {
+test(`resume spends the capsule it loads (${eolName}); a second clear reuses it loudly, never silently`, () => {
   const fixture = mkFixture();
   try {
     writeFileSync(fixture.capPath, capsuleDoc().replace(/\n/g, eol));
@@ -85,11 +95,15 @@ test(`resume spends the capsule it loads (${eolName}); a second clear does not s
     // The write half: the consumed capsule is spent ON DISK, at load time.
     assert.match(readFileSync(fixture.capPath, 'utf8'), /^status:[ \t]*resumed[ \t]*$/m);
 
-    // With nothing active left, the next clear takes the documented degraded
-    // path (re-derive from live memory) instead of replaying stale state.
+    // With nothing active left, the only structurally valid capsule on disk
+    // is this same spent one -- the next clear reuses it, loudly, rather than
+    // replaying it silently or reporting a fresh-looking empty install.
     const second = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
-    assert.equal(second.degraded, true);
-    assert.match(second.prompt, /re-derive entirely from the live memory/i);
+    assert.equal(second.degraded, false);
+    assert.equal(second.reused, true);
+    assert.match(second.prompt, /REUSING AN ALREADY-USED CAPSULE/);
+    // The reuse must not re-mark the capsule -- it is already spent.
+    assert.match(readFileSync(fixture.capPath, 'utf8'), /^status:[ \t]*resumed[ \t]*$/m);
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
   }
@@ -359,6 +373,14 @@ test('a selector that rejects EVERY capsule says so instead of looking like an e
   }
 });
 
+// EXPECTATION CHANGED (Law XVI clause 4): `second.degraded` used to be true,
+// because the ledger recording "already-consumed" and the selector actually
+// PICKING that same spent capsule (loudly, as a reuse) were mutually
+// exclusive before this fix -- a candidate rejected as already-consumed could
+// never also be the pick. Now it can be both: rejected-and-reused. The
+// history-vs-defect distinction this test defends still lives entirely in the
+// `rejected` ledger (reason/detail below), unaffected by that; only whether
+// the capsule ALSO becomes the (flagged) pick has changed.
 test('a spent capsule reads as history, not as a defect', () => {
   const fixture = mkFixture();
   try {
@@ -367,11 +389,13 @@ test('a spent capsule reads as history, not as a defect', () => {
     runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-1' });
     const second = runResumeVerb({ projectRoot: fixture.root, source: 'clear', sessionId: 'sid-2' });
 
-    assert.equal(second.degraded, true);
+    assert.equal(second.degraded, false, 'a structurally valid spent capsule is reused, not reported as unavailable');
+    assert.equal(second.reused, true);
     assert.equal(second.rejected.length, 1);
     assert.equal(second.rejected[0].reason, 'already-consumed');
     assert.equal(second.rejected[0].detail, 'resumed');
     assert.match(second.prompt, /1x already-consumed \("resumed"\)/);
+    assert.match(second.prompt, /REUSING AN ALREADY-USED CAPSULE/);
     assert.doesNotMatch(second.prompt, /NOT spent capsules/,
       'an ordinary spent capsule must not be reported as a selector defect');
   } finally {
