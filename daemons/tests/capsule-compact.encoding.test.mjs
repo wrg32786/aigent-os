@@ -60,7 +60,7 @@ function run(headId, base, env) {
 }
 
 test('W-A1: a non-ASCII frontmatter field round-trips byte-identical after a compaction write', { skip: !PYTHON && 'python not available' }, () => {
-  const objective = 'café — résumé'; // café — résumé
+  const objective = 'café — résumé';
   const objectiveLine = `objective: "${objective}"`;
   const { base, capsules } = fixture(objectiveLine);
   const r = run('head', base, legacyEnv());
