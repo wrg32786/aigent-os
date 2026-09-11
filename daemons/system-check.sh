@@ -2,6 +2,8 @@
 # Full-stack read-only smoke test for an aigent-OS installation.
 # Reports PASS, FAIL, and INFO lines. Any FAIL produces exit 1.
 
+echo "VANTAGE: HOME=$HOME python=$(command -v python || echo MISSING) node=$(command -v node || echo MISSING) npx=$(command -v npx || echo MISSING)"
+
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
