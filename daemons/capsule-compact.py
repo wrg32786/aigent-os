@@ -15,6 +15,12 @@ Exits:
 import sys, os, re, argparse
 from pathlib import Path
 
+# A legacy console codepage (cp1252 on stock Windows) cannot encode the
+# status-print characters below; without this, a successful compaction still
+# exits 1 because the final print raises after every write already landed.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from memory_root import MemoryRootError, die, resolve_memory_root  # noqa: E402
 from datetime import datetime, timezone
@@ -46,7 +52,7 @@ def write_frontmatter(path, fm, body):
             if not re.fullmatch(r"[A-Za-z0-9_.-]+", safe_key):
                 continue
             lines.append(f"{safe_key}: {collapse_line_breaking(v)}")
-    path.write_text("---\n" + "\n".join(lines) + "\n---\n" + body)
+    path.write_text("---\n" + "\n".join(lines) + "\n---\n" + body, encoding="utf-8")
 
 
 def walk_chain(capsules_dir, head_id):
@@ -149,7 +155,7 @@ def main():
             break
 
     if len(chain) < args.threshold:
-        print(f"chain_length={len(chain)} threshold={args.threshold} — no-op")
+        print(f"chain_length={len(chain)} threshold={args.threshold}: no-op")
         sys.exit(0)
 
     # Take the oldest summarize-count
@@ -189,7 +195,7 @@ def main():
         write_frontmatter(path, fm, body)
 
     new_chain = walk_chain(capsules_dir, args.head_id)
-    print(f"compacted: {len(chain)} → {len(new_chain)} chain length")
+    print(f"compacted: {len(chain)} -> {len(new_chain)} chain length")
     print(f"summary_capsule: {inert(summary_id, 240)}")
     print(f"compacted_ids: {inert([c[0] for c in to_summarize], 500)}")
     sys.exit(0)
