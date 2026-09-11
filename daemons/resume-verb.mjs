@@ -475,7 +475,9 @@ export function runResumeVerb({ projectRoot, source, sessionId }) {
     // The declared extension is part of the RESULT for the same reason the
     // ledger and the boot session are: a supervisor or a test asserts on data,
     // never by scraping prose.
-    extension: extension || { resume_ack: null, capsule_ack: null, warning: null, rendered: { resume_ack: null, warning: null } },
+    extension: extension || {
+      resume_ack: null, capsule_ack: null, resume_preload: [], resume_reground: [], warning: null, rendered: { resume_ack: null, warning: null },
+    },
     // A broken memory root is part of the RESULT, so a supervisor or a test
     // asserts on it as data.
     memoryRootError,
