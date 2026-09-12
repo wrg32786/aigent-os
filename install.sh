@@ -736,6 +736,14 @@ if [[ "$MODE" == "copy" ]]; then
           "top-level skill trees are reviewed multiline procedures copied into the installed framework"
         ;;
       hooks|daemons) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
+      # scripts/ ships the fleet-baseline-manifest.json doctor.sh --attest
+      # reads, and launcher/ ships the platform installers wire_aigent_front_door
+      # runs -- both are trusted, framework-owned content in the same sensitivity
+      # class as hooks/daemons, not user data. Without this, a pre-existing
+      # differing copy at either path was kept forever (the `*)` catch-all
+      # below is sensitive=0), so an upgrade could leave doctor attesting
+      # against a dead baseline or wiring a stale launcher script.
+      scripts|launcher) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
       vault)
         if [[ "$MEMORY_REL" == "$MEMORY_DEFAULT_REL" ]]; then
           copy_missing_tree "$SRC/vault" "$TARGET/vault" 0
