@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installer drift regression suite (board row 9e66f188). Three scenarios the
+# Regression suite for the installer drift findings. Three scenarios the
 # fast suite does not cover: a pre-existing non-sensitive framework file
 # (scripts/, launcher/) never gets refreshed even when it differs from the
 # framework's copy; the settings.json merge appends a duplicate hook entry
@@ -115,7 +115,7 @@ printf '[1/%d] finding 1: stale scripts/launcher files refreshed; --trust-existi
 # copy appended whenever its rendered command is spelled differently (a stale
 # path prefix from a prior install, backslash vs forward slash, etc.) -- the
 # scratch install this row reports duplicated nearly every hook already in
-# pheme's settings.json this way. An already-identical entry was already
+# a real operator settings.json this way. An already-identical entry was already
 # deduped correctly before this fix; that case is included below as a
 # regression guard, not because it was red.
 #
