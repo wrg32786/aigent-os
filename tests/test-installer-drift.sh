@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=3
+TOTAL=4
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -314,5 +314,109 @@ printf '%s\n' "$SCRATCH_OUT" | grep -qi 'no-launcher' \
 test -f "$SCRATCH_TARGET/.claude/settings.json" \
   || fail "finding 3: scratch-target install did not otherwise complete"
 printf '[3/%d] finding 3: launcher wiring names its target; scratch/temp targets are skipped, not wired\n' "$TOTAL"
+
+# ── 4. Round-1 review fixes: hook_basename edge cases + merger type parity ──
+# R26 review findings C, D, E, F, G on the finding-2 fix above. Reuses the
+# merge-settings.py/.cjs already extracted into $MERGE2 by finding 2.
+#  - C: the quote regex matched ANY quote character as the closer, so a
+#    single quote inside a double-quoted path (an apostrophe in a user's
+#    home directory name) ended the match early and corrupted the basename.
+#  - D: an unquoted command with no quoted token fell back to the WHOLE
+#    command string as the basename, so a trailing flag like `--strict`
+#    never matched the template's quoted equivalent.
+#  - E: a hook with no `command` at all (prompt-type) hashes to an empty
+#    basename; two unrelated commandless hooks must never dedupe against
+#    each other just because both are unidentifiable.
+#  - F: a hook actually dropped by dedupe must print a `[merge] dropped`
+#    notice, not disappear silently.
+#  - G: a genuine type mismatch (old array, new object) at a path outside
+#    "hooks" must fall through to the unchanged old value in BOTH mergers,
+#    not just python's.
+cat > "$MERGE2/base-r1.json" <<'JSON'
+{
+  "permissions": {"allow": ["Read", "Grep"]},
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node \"/Users/Will O'Brien/aigent/daemons/gateguard.mjs\"", "timeout": 3000}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node /opt/aigent/daemons/gateguard2.mjs --strict", "timeout": 2000}]}
+    ],
+    "SessionEnd": [
+      {"matcher": "", "hooks": [{"type": "prompt", "prompt": "an old, unrelated commandless hook"}]}
+    ]
+  }
+}
+JSON
+cat > "$MERGE2/addition-r1.json" <<'JSON'
+{
+  "permissions": {"allow": {"unexpected": "object-not-array"}},
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard.mjs\"", "timeout": 3000}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard2.mjs\"", "timeout": 2000}]}
+    ],
+    "SessionEnd": [
+      {"matcher": "", "hooks": [{"type": "prompt", "prompt": "a different, unrelated commandless hook from the template"}]}
+    ]
+  }
+}
+JSON
+
+check_round1_result() {
+  local label="$1" file="$2"
+  python3 - "$file" "$label" <<'PY'
+import json
+import sys
+
+path, label = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    doc = json.load(fh)
+
+pre = doc["hooks"]["PreToolUse"]
+if len(pre) != 1:
+    sys.exit(f"round1 C ({label}): apostrophe-path hook was not deduped, expected 1 PreToolUse group, got {len(pre)}")
+
+post = doc["hooks"]["PostToolUse"]
+if len(post) != 1:
+    sys.exit(f"round1 D ({label}): unquoted+flag hook was not deduped, expected 1 PostToolUse group, got {len(post)}")
+
+session_end = doc["hooks"]["SessionEnd"]
+if len(session_end) != 2:
+    sys.exit(f"round1 E ({label}): commandless hooks wrongly deduped against each other, expected 2 SessionEnd groups, got {len(session_end)}")
+
+allow = doc["permissions"]["allow"]
+if allow != ["Read", "Grep"]:
+    sys.exit(f"round1 G ({label}): a type mismatch (array vs object) did not fall through to the unchanged old value, got {allow!r}")
+PY
+}
+
+MERGED_R1_PY_OUT="$(python3 "$MERGE2/merge-settings.py" "$MERGE2/base-r1.json" "$MERGE2/addition-r1.json" "$MERGE2/merged-r1.py.json")" \
+  || fail "round1: python merge script exited non-zero"
+check_round1_result python "$MERGE2/merged-r1.py.json"
+printf '%s\n' "$MERGED_R1_PY_OUT" | grep -q '\[merge\] dropped' \
+  || fail "round1 F (python): no [merge] dropped notice printed for a deduped hook"
+
+MERGED_R1_NODE_OUT="$(node "$MERGE2/merge-settings.cjs" "$MERGE2/base-r1.json" "$MERGE2/addition-r1.json" "$MERGE2/merged-r1.cjs.json")" \
+  || fail "round1: node merge script exited non-zero"
+check_round1_result node "$MERGE2/merged-r1.cjs.json"
+printf '%s\n' "$MERGED_R1_NODE_OUT" | grep -q '\[merge\] dropped' \
+  || fail "round1 F (node): no [merge] dropped notice printed for a deduped hook"
+
+python3 - "$MERGE2/merged-r1.py.json" "$MERGE2/merged-r1.cjs.json" <<'PY'
+import json
+import sys
+
+a_path, b_path = sys.argv[1], sys.argv[2]
+with open(a_path, encoding="utf-8") as fh:
+    a = json.load(fh)
+with open(b_path, encoding="utf-8") as fh:
+    b = json.load(fh)
+if a != b:
+    sys.exit("round1 G: python and node mergers produced different results for the type-mismatch case")
+PY
+printf '[4/%d] round 1: hook_basename quote/unquoted/empty-basename fixes verified; drop is announced; mergers stay identical on a type mismatch\n' "$TOTAL"
 
 printf 'installer drift suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

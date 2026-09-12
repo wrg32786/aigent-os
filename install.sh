@@ -1105,9 +1105,27 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 def hook_basename(hook):
+    # Empty string means "cannot identify this hook" (no command at all, a
+    # prompt-type hook, or unparseable): callers must never treat that as a
+    # match, or every commandless hook would collide and dedupe together.
     command = hook.get("command", "") if isinstance(hook, dict) else ""
-    match = re.search(r'["\']([^"\']+)["\']', command)
-    path_text = match.group(1) if match else command
+    if not command:
+        return ""
+    # Match the quote that OPENED the token, not any quote of either kind --
+    # a single quote character inside a double-quoted path (an apostrophe in
+    # a user's home directory name, say) must not end the match early.
+    match = re.search(r'"([^"]+)"', command) or re.search(r"'([^']+)'", command)
+    if match:
+        path_text = match.group(1)
+    else:
+        # No quoted token: the command is unquoted shell words. The script
+        # path is whichever word contains a path separator, not simply
+        # everything after the interpreter (that would swallow trailing
+        # flags like `--strict` into the basename).
+        tokens = command.split()
+        path_text = next((t for t in tokens if "/" in t or "\\" in t), tokens[-1] if tokens else "")
+    if not path_text:
+        return ""
     return re.split(r"[\\/]+", path_text)[-1]
 
 def merge_hook_groups(old_groups, new_groups):
@@ -1116,18 +1134,24 @@ def merge_hook_groups(old_groups, new_groups):
     # ship (identified by script basename, not by matching the whole group
     # byte-for-byte) -- a hook already in the template but spelled with a
     # different path prefix or slash direction is dropped instead of kept
-    # alongside a second, correct copy.
-    template_basenames = {
-        hook_basename(hook)
-        for group in new_groups
-        for hook in group.get("hooks", [])
-    }
+    # alongside a second, correct copy. An empty basename never matches
+    # anything, so commandless (e.g. prompt-type) hooks are never deduped
+    # against each other.
+    template_basenames = set()
+    for group in new_groups:
+        for hook in group.get("hooks", []):
+            basename = hook_basename(hook)
+            if basename:
+                template_basenames.add(basename)
     kept = []
     for group in old_groups:
-        remaining = [
-            hook for hook in group.get("hooks", [])
-            if hook_basename(hook) not in template_basenames
-        ]
+        remaining = []
+        for hook in group.get("hooks", []):
+            basename = hook_basename(hook)
+            if basename and basename in template_basenames:
+                print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
+                continue
+            remaining.append(hook)
         if remaining:
             kept.append({**group, "hooks": remaining})
     return list(new_groups) + kept
@@ -1174,9 +1198,27 @@ const normalize = value => Array.isArray(value)
     : value;
 const canonical = value => JSON.stringify(normalize(value));
 const hookBasename = hook => {
+  // Empty string means "cannot identify this hook" (no command at all, a
+  // prompt-type hook, or unparseable): callers must never treat that as a
+  // match, or every commandless hook would collide and dedupe together.
   const command = hook && typeof hook === 'object' ? (hook.command || '') : '';
-  const match = command.match(/["']([^"']+)["']/);
-  const pathText = match ? match[1] : command;
+  if (!command) return '';
+  // Match the quote that OPENED the token, not any quote of either kind --
+  // a single quote character inside a double-quoted path (an apostrophe in
+  // a user's home directory name, say) must not end the match early.
+  const match = command.match(/"([^"]+)"/) || command.match(/'([^']+)'/);
+  let pathText;
+  if (match) {
+    pathText = match[1];
+  } else {
+    // No quoted token: the command is unquoted shell words. The script path
+    // is whichever word contains a path separator, not simply everything
+    // after the interpreter (that would swallow trailing flags like
+    // `--strict` into the basename).
+    const tokens = command.split(/\s+/).filter(Boolean);
+    pathText = tokens.find(t => t.includes('/') || t.includes('\\')) || tokens[tokens.length - 1] || '';
+  }
+  if (!pathText) return '';
   const parts = pathText.split(/[\\/]+/);
   return parts[parts.length - 1];
 };
@@ -1184,15 +1226,28 @@ const hookBasename = hook => {
 // template's groups always win, and an old group keeps only the hooks the
 // template does not ship (matched by script basename, not by whole-group
 // equality). Ports the same algorithm so both mergers stay behaviorally
-// identical.
+// identical. An empty basename never matches anything, so commandless
+// (e.g. prompt-type) hooks are never deduped against each other.
 const mergeHookGroups = (oldGroups, newGroups) => {
   const templateBasenames = new Set();
   for (const group of newGroups) {
-    for (const hook of group.hooks || []) templateBasenames.add(hookBasename(hook));
+    for (const hook of group.hooks || []) {
+      const basename = hookBasename(hook);
+      if (basename) templateBasenames.add(basename);
+    }
   }
   const kept = [];
   for (const group of oldGroups) {
-    const remaining = (group.hooks || []).filter(hook => !templateBasenames.has(hookBasename(hook)));
+    const remaining = [];
+    for (const hook of group.hooks || []) {
+      const basename = hookBasename(hook);
+      if (basename && templateBasenames.has(basename)) {
+        const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
+        console.log(`  [merge] dropped ${label}`);
+        continue;
+      }
+      remaining.push(hook);
+    }
     if (remaining.length) kept.push({ ...group, hooks: remaining });
   }
   return [...newGroups, ...kept];
@@ -1211,7 +1266,8 @@ function merge(oldValue, newValue, path = []) {
     }
     return result;
   }
-  if (oldValue && newValue && typeof oldValue === 'object' && typeof newValue === 'object') {
+  if (oldValue && newValue && typeof oldValue === 'object' && typeof newValue === 'object'
+      && !Array.isArray(oldValue) && !Array.isArray(newValue)) {
     const result = { ...oldValue };
     for (const [key, value] of Object.entries(newValue)) {
       result[key] = key in oldValue ? merge(oldValue[key], value, [...path, key]) : value;
