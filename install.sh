@@ -1063,6 +1063,7 @@ else
   if command -v python3 >/dev/null 2>&1; then
     cat > "$AIGENT_TMP/merge-settings.py" <<'PY'
 import json
+import re
 import sys
 
 base_path, add_path, out_path = sys.argv[1:4]
@@ -1079,9 +1080,39 @@ MANAGED_SCALARS = {
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
+def hook_basename(hook):
+    command = hook.get("command", "") if isinstance(hook, dict) else ""
+    match = re.search(r'["\']([^"\']+)["\']', command)
+    path_text = match.group(1) if match else command
+    return re.split(r"[\\/]+", path_text)[-1]
+
+def merge_hook_groups(old_groups, new_groups):
+    # new_groups is the freshly rendered template: it always wins for any
+    # hook it ships. old_groups keeps only the hooks the template does NOT
+    # ship (identified by script basename, not by matching the whole group
+    # byte-for-byte) -- a hook already in the template but spelled with a
+    # different path prefix or slash direction is dropped instead of kept
+    # alongside a second, correct copy.
+    template_basenames = {
+        hook_basename(hook)
+        for group in new_groups
+        for hook in group.get("hooks", [])
+    }
+    kept = []
+    for group in old_groups:
+        remaining = [
+            hook for hook in group.get("hooks", [])
+            if hook_basename(hook) not in template_basenames
+        ]
+        if remaining:
+            kept.append({**group, "hooks": remaining})
+    return list(new_groups) + kept
+
 def merge(old, new, path=()):
     if path in MANAGED_SCALARS:
         return new
+    if len(path) == 2 and path[0] == "hooks" and isinstance(old, list) and isinstance(new, list):
+        return merge_hook_groups(old, new)
     if isinstance(old, dict) and isinstance(new, dict):
         result = dict(old)
         for key, value in new.items():
@@ -1118,8 +1149,35 @@ const normalize = value => Array.isArray(value)
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]))
     : value;
 const canonical = value => JSON.stringify(normalize(value));
+const hookBasename = hook => {
+  const command = hook && typeof hook === 'object' ? (hook.command || '') : '';
+  const match = command.match(/["']([^"']+)["']/);
+  const pathText = match ? match[1] : command;
+  const parts = pathText.split(/[\\/]+/);
+  return parts[parts.length - 1];
+};
+// See merge_hook_groups in the python merger above for the rationale: the
+// template's groups always win, and an old group keeps only the hooks the
+// template does not ship (matched by script basename, not by whole-group
+// equality). Ports the same algorithm so both mergers stay behaviorally
+// identical.
+const mergeHookGroups = (oldGroups, newGroups) => {
+  const templateBasenames = new Set();
+  for (const group of newGroups) {
+    for (const hook of group.hooks || []) templateBasenames.add(hookBasename(hook));
+  }
+  const kept = [];
+  for (const group of oldGroups) {
+    const remaining = (group.hooks || []).filter(hook => !templateBasenames.has(hookBasename(hook)));
+    if (remaining.length) kept.push({ ...group, hooks: remaining });
+  }
+  return [...newGroups, ...kept];
+};
 function merge(oldValue, newValue, path = []) {
   if (managed.has(path.join('.'))) return newValue;
+  if (path.length === 2 && path[0] === 'hooks' && Array.isArray(oldValue) && Array.isArray(newValue)) {
+    return mergeHookGroups(oldValue, newValue);
+  }
   if (Array.isArray(oldValue) && Array.isArray(newValue)) {
     const result = [...oldValue];
     const seen = new Set(result.map(canonical));
