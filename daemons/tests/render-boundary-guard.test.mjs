@@ -1599,6 +1599,12 @@ const SHELL_COPY_ALLOWLIST = [
   {
     file: 'install.sh',
     rule: 'copy-tree-call',
+    needle: 'scripts|launcher) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;',
+    reason: 'scripts and launcher trees are reviewed framework implementation files, refreshed like hooks and daemons',
+  },
+  {
+    file: 'install.sh',
+    rule: 'copy-tree-call',
     needle: '*)             copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 ;;',
     reason: 'remaining enumerated framework trees use the audited no-clobber installation helper',
   },
