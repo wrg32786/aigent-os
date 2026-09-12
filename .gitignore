@@ -31,6 +31,13 @@ __pycache__/
 # namespace-registry.local.example.json is tracked.
 **/semantic-search/namespace-registry.local.json
 
+# Repo-local scratch directories the installer test suite creates beside the
+# checkout (not under system temp, since install.sh treats a temp target as
+# an implicit --no-launcher) and cleans up via trap. A killed or crashed run
+# can still leave one behind.
+.launcher-copy-test-scratch-*/
+.aigent-drift-test-scratch-*/
+
 # aigent-os:generated-state:start
 .aigent/
 vault/memory/embeddings.json
