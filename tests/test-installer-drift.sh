@@ -21,18 +21,21 @@ fail() {
   exit 1
 }
 
+# Precondition, stated up front rather than checked per call site: finding 2
+# below extracts install.sh's actual python AND node merger heredocs and runs
+# both (that is the point -- proving they stay behaviorally identical), so
+# this suite needs both runtimes on PATH, unlike install.sh itself, which
+# only ever needs one of the two.
+command -v python3 >/dev/null 2>&1 || fail "tests/test-installer-drift.sh requires python3 on PATH"
+command -v node >/dev/null 2>&1 || fail "tests/test-installer-drift.sh requires node on PATH"
+
 # Where the launcher-wiring stubs (below, finding 3) record their argv.
 # Declared once, up top, because make_fixture bakes this path into the
 # fixture's own launcher/install.sh so every fixture's stub writes here.
 WIRE_LOG="$WORK/wire-log.txt"
 
 json_valid() {
-  local file="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -m json.tool "$file" >/dev/null
-  else
-    node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
-  fi
+  python3 -m json.tool "$1" >/dev/null
 }
 
 # Reused by all three scenarios below. scripts/fleet-baseline-manifest.json
