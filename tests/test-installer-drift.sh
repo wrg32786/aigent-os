@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=4
+TOTAL=5
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -421,5 +421,109 @@ if a != b:
     sys.exit("round1 G: python and node mergers produced different results for the type-mismatch case")
 PY
 printf '[4/%d] round 1: hook_basename quote/unquoted/empty-basename fixes verified; drop is announced; mergers stay identical on a type mismatch\n' "$TOTAL"
+
+# ── 5. Round-2 review fixes: no-separator fallback and quoted decoys ────────
+# R26 review findings J, K on the finding-2 fix (reopened after round 1's own
+# fix): both mergers' unquoted fallback picked the LAST word, so a trailing
+# flag like `--strict` became the basename instead of the real script name,
+# and the FIRST quoted substring was trusted as the path even when it was
+# just a decoy earlier in the command with the real, unquoted path following.
+#  - J-1: `node foo.mjs --strict` vs `node foo.mjs` -- same script, must dedupe.
+#  - J-2: a module invocation vs an unrelated script, both ending in the same
+#    flag -- must NOT collide just because the fallback used to grab that
+#    flag as if it were the basename.
+#  - J-3: a command that is nothing but flags -- basename must stay empty,
+#    never "whatever word came last", so it never wrongly matches anything.
+#  - K: a quoted decoy before the real, unquoted path -- the real path must
+#    still be found and correctly deduped against the template's copy.
+cat > "$MERGE2/base-r2.json" <<'JSON'
+{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node foo.mjs --strict", "timeout": 1000}]}
+    ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "python -m aigent.daemon.gateguard --strict", "timeout": 1000}]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node --strict", "timeout": 1000}]}
+    ],
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"echo 'hi'\" /opt/aigent/daemons/gateguard.mjs", "timeout": 1000}]}
+    ]
+  }
+}
+JSON
+cat > "$MERGE2/addition-r2.json" <<'JSON'
+{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node foo.mjs", "timeout": 1000}]}
+    ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node bar.mjs --strict", "timeout": 1000}]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "python --strict", "timeout": 1000}]}
+    ],
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard.mjs\"", "timeout": 1000}]}
+    ]
+  }
+}
+JSON
+
+check_round2_result() {
+  local label="$1" file="$2"
+  python3 - "$file" "$label" <<'PY'
+import json
+import sys
+
+path, label = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    doc = json.load(fh)
+
+session_start = doc["hooks"]["SessionStart"]
+if len(session_start) != 1:
+    sys.exit(f"round2 J-1 ({label}): 'node foo.mjs --strict' vs 'node foo.mjs' expected 1 SessionStart group, got {len(session_start)}")
+
+stop = doc["hooks"]["Stop"]
+if len(stop) != 2:
+    sys.exit(f"round2 J-2 ({label}): different basenames should both survive, expected 2 Stop groups, got {len(stop)}")
+
+pre_compact = doc["hooks"]["PreCompact"]
+if len(pre_compact) != 2:
+    sys.exit(f"round2 J-3 ({label}): all-flags commands (empty basename) must never dedupe, expected 2 PreCompact groups, got {len(pre_compact)}")
+
+notification = doc["hooks"]["Notification"]
+if len(notification) != 1:
+    sys.exit(f"round2 K ({label}): quoted decoy before the real path, expected 1 Notification group (deduped), got {len(notification)}")
+command = notification[0]["hooks"][0]["command"]
+if "/new/target" not in command:
+    sys.exit(f"round2 K ({label}): the surviving Notification entry is not the template's copy: {command!r}")
+PY
+}
+
+MERGED_R2_PY_OUT="$(python3 "$MERGE2/merge-settings.py" "$MERGE2/base-r2.json" "$MERGE2/addition-r2.json" "$MERGE2/merged-r2.py.json")" \
+  || fail "round2: python merge script exited non-zero"
+check_round2_result python "$MERGE2/merged-r2.py.json"
+
+MERGED_R2_NODE_OUT="$(node "$MERGE2/merge-settings.cjs" "$MERGE2/base-r2.json" "$MERGE2/addition-r2.json" "$MERGE2/merged-r2.cjs.json")" \
+  || fail "round2: node merge script exited non-zero"
+check_round2_result node "$MERGE2/merged-r2.cjs.json"
+
+python3 - "$MERGE2/merged-r2.py.json" "$MERGE2/merged-r2.cjs.json" <<'PY'
+import json
+import sys
+
+a_path, b_path = sys.argv[1], sys.argv[2]
+with open(a_path, encoding="utf-8") as fh:
+    a = json.load(fh)
+with open(b_path, encoding="utf-8") as fh:
+    b = json.load(fh)
+if a != b:
+    sys.exit("round2: python and node mergers produced different results for the no-separator/quoted-decoy fixtures")
+PY
+printf '[5/%d] round 2: no-separator fallback skips flags and the interpreter; a quoted decoy no longer hides the real path\n' "$TOTAL"
 
 printf 'installer drift suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

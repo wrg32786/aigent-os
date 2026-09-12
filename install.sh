@@ -1114,19 +1114,32 @@ def hook_basename(hook):
     command = hook.get("command", "") if isinstance(hook, dict) else ""
     if not command:
         return ""
-    # Match the quote that OPENED the token, not any quote of either kind --
-    # a single quote character inside a double-quoted path (an apostrophe in
-    # a user's home directory name, say) must not end the match early.
-    match = re.search(r'"([^"]+)"', command) or re.search(r"'([^']+)'", command)
-    if match:
-        path_text = match.group(1)
-    else:
-        # No quoted token: the command is unquoted shell words. The script
-        # path is whichever word contains a path separator, not simply
-        # everything after the interpreter (that would swallow trailing
-        # flags like `--strict` into the basename).
-        tokens = command.split()
-        path_text = next((t for t in tokens if "/" in t or "\\" in t), tokens[-1] if tokens else "")
+
+    def first_with_separator(candidates):
+        return next((c for c in candidates if "/" in c or "\\" in c), None)
+
+    # A quoted token is trusted as the path only if it actually looks like
+    # one. Otherwise a quoted decoy earlier in the command (bash -c "echo
+    # 'hi'" /real/path.mjs) would be taken as the script instead of the
+    # real, unquoted path that follows it -- the FIRST quoted substring is
+    # not necessarily the right one. Matching the quote that OPENED the
+    # token (double before single), not any quote of either kind, still
+    # matters too: a single quote character inside a double-quoted path (an
+    # apostrophe in a user's home directory name, say) must not end a match
+    # early.
+    quoted_tokens = re.findall(r'"([^"]+)"', command) + re.findall(r"'([^']+)'", command)
+    tokens = command.split()
+    path_text = (
+        first_with_separator(quoted_tokens)
+        or first_with_separator(tokens)
+        # No token anywhere carries a path separator (a bare filename with
+        # no directory, e.g. `node foo.mjs --strict`). The interpreter
+        # itself (tokens[0]) never identifies the hook; the first following
+        # token that is not itself a flag does (skipping `-m` in `python -m
+        # pkg.mod`, landing on `pkg.mod`). A tail of nothing but flags is
+        # unidentifiable, not "whatever word came last".
+        or next((t for t in tokens[1:] if not t.startswith("-")), "")
+    )
     if not path_text:
         return ""
     return re.split(r"[\\/]+", path_text)[-1]
@@ -1206,21 +1219,32 @@ const hookBasename = hook => {
   // match, or every commandless hook would collide and dedupe together.
   const command = hook && typeof hook === 'object' ? (hook.command || '') : '';
   if (!command) return '';
-  // Match the quote that OPENED the token, not any quote of either kind --
-  // a single quote character inside a double-quoted path (an apostrophe in
-  // a user's home directory name, say) must not end the match early.
-  const match = command.match(/"([^"]+)"/) || command.match(/'([^']+)'/);
-  let pathText;
-  if (match) {
-    pathText = match[1];
-  } else {
-    // No quoted token: the command is unquoted shell words. The script path
-    // is whichever word contains a path separator, not simply everything
-    // after the interpreter (that would swallow trailing flags like
-    // `--strict` into the basename).
-    const tokens = command.split(/\s+/).filter(Boolean);
-    pathText = tokens.find(t => t.includes('/') || t.includes('\\')) || tokens[tokens.length - 1] || '';
-  }
+  const firstWithSeparator = candidates => candidates.find(c => c.includes('/') || c.includes('\\'));
+  // A quoted token is trusted as the path only if it actually looks like
+  // one. Otherwise a quoted decoy earlier in the command (bash -c "echo
+  // 'hi'" /real/path.mjs) would be taken as the script instead of the
+  // real, unquoted path that follows it -- the FIRST quoted substring is
+  // not necessarily the right one. Matching the quote that OPENED the
+  // token (double before single), not any quote of either kind, still
+  // matters too: a single quote character inside a double-quoted path (an
+  // apostrophe in a user's home directory name, say) must not end a match
+  // early.
+  const quotedTokens = [
+    ...[...command.matchAll(/"([^"]+)"/g)].map(m => m[1]),
+    ...[...command.matchAll(/'([^']+)'/g)].map(m => m[1]),
+  ];
+  const tokens = command.split(/\s+/).filter(Boolean);
+  const pathText =
+    firstWithSeparator(quotedTokens) ||
+    firstWithSeparator(tokens) ||
+    // No token anywhere carries a path separator (a bare filename with no
+    // directory, e.g. `node foo.mjs --strict`). The interpreter itself
+    // (tokens[0]) never identifies the hook; the first following token
+    // that is not itself a flag does (skipping `-m` in `python -m
+    // pkg.mod`, landing on `pkg.mod`). A tail of nothing but flags is
+    // unidentifiable, not "whatever word came last".
+    tokens.slice(1).find(t => !t.startsWith('-')) ||
+    '';
   if (!pathText) return '';
   const parts = pathText.split(/[\\/]+/);
   return parts[parts.length - 1];
