@@ -140,6 +140,30 @@ TARGET="$(abspath "$TARGET")"
 MODE="copy"
 [[ "$SRC" == "$TARGET" ]] && MODE="in-place"
 
+# A target that resolves under the system temp directory is a scratch/
+# throwaway install (a smoke test, a one-off eval run, anything built under
+# mktemp) -- wiring it anyway would repoint this machine's real `aigent`
+# command and desktop/Start Menu shortcuts at a tree that is about to be
+# deleted. Evaluated once, here, right after TARGET is canonicalized, so
+# every downstream site (the dry-run plan, the Launch: summary, the closing
+# Next: block, and the actual wiring gate) agrees on what will happen --
+# instead of a second branch only the wiring call site knew about.
+is_scratch_target() {
+  local target="$1" candidate canon
+  for candidate in "${TMPDIR:-}" "${TEMP:-}" "${TMP:-}" /tmp; do
+    [[ -n "$candidate" && -d "$candidate" ]] || continue
+    canon="$(abspath "$candidate")"
+    canon="${canon%/}"
+    [[ "$target" == "$canon" || "$target" == "$canon"/* ]] && return 0
+  done
+  return 1
+}
+LAUNCHER_SKIP_REASON=""
+if [[ "$NO_LAUNCHER" -eq 0 ]] && is_scratch_target "$TARGET"; then
+  NO_LAUNCHER=1
+  LAUNCHER_SKIP_REASON="target resolves under a scratch/temp directory ($TARGET) -- treated as --no-launcher rather than repointing the machine front door at a throwaway install"
+fi
+
 # ── Memory root ───────────────────────────────────────────────────────────────
 # Where this seat's memory tree lives, relative to TARGET. Declared in the
 # install marker (.aigent/state.json, field memory_root) and resolved by
@@ -1396,26 +1420,12 @@ wire_aigent_front_door() {
   printf '  [ok] aigent command and platform launcher wired -- %s\n' "$TARGET"
 }
 
-# $TARGET is already canonicalized (abspath, above) by the time this runs.
-# A target that resolves under the system temp directory is a scratch/throwaway
-# install (a smoke test, a one-off eval run, anything built under mktemp) --
-# wiring it anyway would repoint this machine's real `aigent` command and
-# desktop/Start Menu shortcuts at a tree that is about to be deleted.
-is_scratch_target() {
-  local target="$1" candidate canon
-  for candidate in "${TMPDIR:-}" "${TEMP:-}" "${TMP:-}" /tmp; do
-    [[ -n "$candidate" && -d "$candidate" ]] || continue
-    canon="$(abspath "$candidate")"
-    canon="${canon%/}"
-    [[ "$target" == "$canon" || "$target" == "$canon"/* ]] && return 0
-  done
-  return 1
-}
-
 if [[ "$NO_LAUNCHER" -eq 1 ]]; then
-  printf '  [skip] Launcher wiring (--no-launcher)\n'
-elif is_scratch_target "$TARGET"; then
-  printf '  [skip] Launcher wiring: target resolves under a scratch/temp directory (%s) -- treating this as --no-launcher rather than repointing the machine front door at a throwaway install\n' "$TARGET"
+  if [[ -n "$LAUNCHER_SKIP_REASON" ]]; then
+    printf '  [skip] Launcher wiring: %s\n' "$LAUNCHER_SKIP_REASON"
+  else
+    printf '  [skip] Launcher wiring (--no-launcher)\n'
+  fi
 else
   wire_aigent_front_door
 fi
