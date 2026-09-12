@@ -15,12 +15,15 @@ With no TARGET, the installer activates the current aigent-OS checkout in place.
 Options:
   --target DIR          Install into DIR instead of the current directory
   --no-deps             Skip Node.js dependencies and managed Auto-Refresh
-  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring
+  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring.
+                        A target resolving under the system temp directory
+                        skips launcher wiring the same way automatically.
   --dry-run             Print the planned changes without modifying files
   --trust-existing      Keep pre-existing files under hooks/, daemons/,
-                        .claude/skills/, .claude/agents/, .claude/rules/, and
-                        skill-index.json even when they differ from the
-                        framework version, instead of quarantining them.
+                        scripts/, launcher/, .claude/skills/, .claude/agents/,
+                        .claude/rules/, and skill-index.json even when they
+                        differ from the framework version, instead of
+                        quarantining them.
                         All-or-nothing: it also freezes real core fixes. To
                         keep named paths only, declare them in
                         <target>/.aigent/operator-owned.json instead

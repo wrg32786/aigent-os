@@ -32,7 +32,7 @@ The installer does not:
 - Use `sudo`.
 - Modify shell startup files, `PATH`, global Git configuration, or files outside the target.
 - Fetch and execute an installer script from a remote URL.
-- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below), unless that path is declared operator-owned (see "Operator-owned paths").
+- Replace same-named files inside copied framework trees, with one exception: `hooks/`, `daemons/`, `scripts/`, `launcher/`, `.claude/skills/`, `.claude/agents/`, `.claude/rules/`, and `skill-index.json` quarantine a differing pre-existing file instead of silently keeping it (see below), unless that path is declared operator-owned (see "Operator-owned paths").
 - Replace an invalid existing `.claude/settings.json`.
 - Write through a symlink anywhere inside the target (see "Symlinks" below).
 
@@ -42,9 +42,9 @@ The installer does not:
 
 Files copied from framework directories use no-clobber behavior. Existing destination files remain untouched. This protects user customizations but also means rerunning the installer is not a blind upgrade mechanism for modified framework files.
 
-### Trusted-content trees (hooks, daemons, skills, agents, rules, skill-index)
+### Trusted-content trees (hooks, daemons, scripts, launcher, skills, agents, rules, skill-index)
 
-`hooks/`, `daemons/`, `.claude/skills/<name>/`, `.claude/agents/*.md`, `.claude/rules/`, and `.claude/skill-index.json` are all treated differently from every other framework tree, because their content becomes trusted the next time Claude Code touches it: hooks and daemons run on a lifecycle event, skills and agents are read and dispatched as slash commands/subagents, rules are read as agent instructions every session, and skill-index.json drives which skill gets auto-invoked. If a file already exists at a path the installer would otherwise place trusted content at, and its content differs from the framework's version, the installer quarantines the existing file (moves it to `.aigent/quarantine/<path>.<timestamp>`) and installs the trusted framework copy instead, printing a `[quarantine]` line naming both paths. A pre-existing file whose content is byte-identical to the framework's is left alone (no-op, same as any rerun).
+`hooks/`, `daemons/`, `scripts/`, `launcher/`, `.claude/skills/<name>/`, `.claude/agents/*.md`, `.claude/rules/`, and `.claude/skill-index.json` are all treated differently from every other framework tree, because their content becomes trusted the next time Claude Code touches it: hooks and daemons run on a lifecycle event, scripts carries the baseline manifest `doctor.sh --attest` reads, launcher carries the platform installers the launcher-wiring step runs, skills and agents are read and dispatched as slash commands/subagents, rules are read as agent instructions every session, and skill-index.json drives which skill gets auto-invoked. If a file already exists at a path the installer would otherwise place trusted content at, and its content differs from the framework's version, the installer quarantines the existing file (moves it to `.aigent/quarantine/<path>.<timestamp>`) and installs the trusted framework copy instead, printing a `[quarantine]` line naming both paths. A pre-existing file whose content is byte-identical to the framework's is left alone (no-op, same as any rerun).
 
 This exists so that installing into an existing project directory -- one that might already contain a planted file at, say, `hooks/security-scan.sh` or `.claude/skills/open/SKILL.md` -- cannot silently leave that planted file in place to be wired up as trusted content. If you intentionally maintain your own customizations at any of these paths, pass `--trust-existing` to keep them instead of quarantining:
 
