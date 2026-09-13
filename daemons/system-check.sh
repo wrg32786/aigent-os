@@ -5,37 +5,6 @@
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
-ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
-# One resolver for the whole core (daemons/memory-root.cjs): declared in
-# .aigent/state.json, default vault/memory. A broken declaration is a FAIL
-# here, never a silent fallback to a tree that is not this seat's.
-# The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
-# install that predates it.
-SYSTEM_CHECK_DIR=$(dirname "${BASH_SOURCE[0]}")
-SYSTEM_CHECK_DIR=$(cd "$SYSTEM_CHECK_DIR" && pwd)
-. "$SYSTEM_CHECK_DIR/memory-root.sh"
-if ! MEMORY_ROOTS="$(aigent_memory_root "$STATE_BASE" --with-ledgers 2>&1)"; then
-  printf 'FAIL memory root: %s\n' "$MEMORY_ROOTS"
-  exit 1
-fi
-MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
-LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
-
-SKILLS_ROOT="$ROOT/skills"
-DAEMONS_ROOT="$ROOT/daemons"
-RUNTIME_ROOT="$MEMORY_ROOT/runtime"
-DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
-TIME_ZONE="${AIGENT_NIGHTLY_TIME_ZONE:-America/Los_Angeles}"
-CUTOFF_HOUR="${AIGENT_NIGHTLY_CUTOFF_HOUR:-4}"
-CHECK_NOW="${AIGENT_SYSTEM_CHECK_NOW:-}"
-ROUTE_HOME="${AIGENT_ROUTE_CHECK_HOME:-$ROOT}"
-
-PASS=0
-FAIL=0
-INFO=0
-REPORT=""
-
 render_inert() {
   local value="${1-}"
   local limit="${2:-500}"
@@ -77,6 +46,37 @@ process.stdout.write(JSON.stringify(value));
 # never trusted bytes (a poisoned HOME must not reach the model raw).
 printf 'VANTAGE: HOME=%s python=%s node=%s npx=%s
 '   "$(render_inert "$HOME" 500)"   "$(render_inert "$(command -v python || echo MISSING)" 500)"   "$(render_inert "$(command -v node || echo MISSING)" 500)"   "$(render_inert "$(command -v npx || echo MISSING)" 500)"
+
+ROOT="${AIGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+STATE_BASE="${AIGENT_STATE_HOME_DIR:-$ROOT}"
+# One resolver for the whole core (daemons/memory-root.cjs): declared in
+# .aigent/state.json, default vault/memory. A broken declaration is a FAIL
+# here, never a silent fallback to a tree that is not this seat's.
+# The instrument carries its own door: it may be pointed (AIGENT_ROOT) at an
+# install that predates it.
+SYSTEM_CHECK_DIR=$(dirname "${BASH_SOURCE[0]}")
+SYSTEM_CHECK_DIR=$(cd "$SYSTEM_CHECK_DIR" && pwd)
+. "$SYSTEM_CHECK_DIR/memory-root.sh"
+if ! MEMORY_ROOTS="$(aigent_memory_root "$STATE_BASE" --with-ledgers 2>&1)"; then
+  printf 'FAIL memory root: %s\n' "$MEMORY_ROOTS"
+  exit 1
+fi
+MEMORY_ROOT="${MEMORY_ROOTS%%$'\n'*}"
+LEDGERS_ROOT="${MEMORY_ROOTS#*$'\n'}"
+
+SKILLS_ROOT="$ROOT/skills"
+DAEMONS_ROOT="$ROOT/daemons"
+RUNTIME_ROOT="$MEMORY_ROOT/runtime"
+DAEMON_ERR_LOG="$MEMORY_ROOT/.daemon-errors.log"
+TIME_ZONE="${AIGENT_NIGHTLY_TIME_ZONE:-America/Los_Angeles}"
+CUTOFF_HOUR="${AIGENT_NIGHTLY_CUTOFF_HOUR:-4}"
+CHECK_NOW="${AIGENT_SYSTEM_CHECK_NOW:-}"
+ROUTE_HOME="${AIGENT_ROUTE_CHECK_HOME:-$ROOT}"
+
+PASS=0
+FAIL=0
+INFO=0
+REPORT=""
 
 UNSAFE_RAW_CAPSULE_RESULT=""
 UNSAFE_RAW_CAPSULE_EXIT=1

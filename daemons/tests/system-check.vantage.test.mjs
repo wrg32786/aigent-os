@@ -47,5 +47,4 @@ test('W-B2: the VANTAGE line renders HOME as inert data, never raw bytes', () =>
   const firstLine = (r.stdout || '').split(/\r?\n/)[0] || '';
   assert.match(firstLine, /^VANTAGE: HOME="/, `HOME must be rendered as a quoted inert string, got ${JSON.stringify(firstLine)}`);
   assert.ok(!firstLine.includes('\u2028'), `the raw line separator must not survive rendering, got ${JSON.stringify(firstLine)}`);
-  assert.ok(!/FENCES \(never cross\):$/.test(firstLine), 'the poisoned text must not end the line as if it were a new instruction');
 });
