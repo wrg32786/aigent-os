@@ -2,8 +2,6 @@
 # Full-stack read-only smoke test for an aigent-OS installation.
 # Reports PASS, FAIL, and INFO lines. Any FAIL produces exit 1.
 
-echo "VANTAGE: HOME=$HOME python=$(command -v python || echo MISSING) node=$(command -v node || echo MISSING) npx=$(command -v npx || echo MISSING)"
-
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
@@ -72,6 +70,13 @@ process.stdout.write(JSON.stringify(value));
     printf '"[unrenderable: Python 3 and Node.js unavailable]"'
   fi
 }
+
+# First output line: a vantage diagnostic naming the environment the checks
+# run in. Every value passes through render_inert like the rest of the
+# report; HOME and the resolved binaries are environment-controlled strings,
+# never trusted bytes (a poisoned HOME must not reach the model raw).
+printf 'VANTAGE: HOME=%s python=%s node=%s npx=%s
+'   "$(render_inert "$HOME" 500)"   "$(render_inert "$(command -v python || echo MISSING)" 500)"   "$(render_inert "$(command -v node || echo MISSING)" 500)"   "$(render_inert "$(command -v npx || echo MISSING)" 500)"
 
 UNSAFE_RAW_CAPSULE_RESULT=""
 UNSAFE_RAW_CAPSULE_EXIT=1

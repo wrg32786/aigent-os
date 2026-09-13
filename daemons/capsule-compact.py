@@ -18,8 +18,9 @@ from pathlib import Path
 # A legacy console codepage (cp1252 on stock Windows) cannot encode the
 # status-print characters below; without this, a successful compaction still
 # exits 1 because the final print raises after every write already landed.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from memory_root import MemoryRootError, die, resolve_memory_root  # noqa: E402
