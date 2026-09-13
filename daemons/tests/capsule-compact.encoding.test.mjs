@@ -31,10 +31,27 @@ const PYTHON = ['python3', 'python'].find((bin) => spawnSync(bin, ['--version'],
 // codepage, Path.write_text() with no explicit encoding falls back to
 // locale.getpreferredencoding(), never utf-8.
 function legacyEnv(extra = {}) {
-  const env = { ...process.env, PYTHONUTF8: '0', ...extra };
+  // Clear the inherited setting FIRST, then apply explicit overrides: the
+  // previous order applied `extra` and then deleted PYTHONIOENCODING, so a
+  // caller asking for cp1252 (W-A2) never actually passed it to the child.
+  const env = { ...process.env, PYTHONUTF8: '0' };
   delete env.PYTHONIOENCODING;
+  Object.assign(env, extra);
   return env;
 }
+
+// The child must actually receive what legacyEnv was asked for. Read back
+// from inside python rather than trusting the env object we built.
+function childEncodingEnv(env) {
+  const r = spawnSync(PYTHON, ['-c', "import os; print(os.environ.get('PYTHONIOENCODING', '<unset>'))"], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, `python probe failed: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+test('legacyEnv: the inherited PYTHONIOENCODING is cleared, and an explicit override reaches the child', { skip: !PYTHON && 'python not available' }, () => {
+  assert.equal(childEncodingEnv(legacyEnv()), '<unset>', 'legacy path must run with PYTHONIOENCODING unset');
+  assert.equal(childEncodingEnv(legacyEnv({ PYTHONIOENCODING: 'cp1252' })), 'cp1252', 'an explicit PYTHONIOENCODING override must survive into the child');
+});
 
 function capsule(id, { objectiveLine, parent = 'null' }) {
   return `---\ncapsule_id: ${id}\n${objectiveLine}\nstatus: active\ncreated_at: 2026-09-01T00:00:00Z\nparent_capsule_id: ${parent}\n---\n\nbody\n`;
