@@ -574,10 +574,10 @@ const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 test('v8 manifest identity pins the recut population', () => {
   const manifest = readManifest();
   assert.equal(manifest.schema, 'FleetBaselineManifest/v8');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-09-07-a7233c4d');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-09-11-5de9863a');
   assert.equal(
     manifest.public_product_commit,
-    'a7233c4dd29e471fb1bd63ec5445d33dd223d49a',
+    '5de9863aea57226b9cc8e165456ab9391cf65afc',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
@@ -587,6 +587,17 @@ test('v8 manifest identity pins the recut population', () => {
     manifest.required_files[REGISTRY] ?? '',
     /^[0-9a-f]{64}$/,
     'the product namespace policy artifact is pinned',
+  );
+});
+
+// -- FleetBaselineManifest/v8, fourth cut -------------------------------------
+
+test('W-C1: daemons/frontmatter-reader.cjs is pinned in required_files', () => {
+  const manifest = readManifest();
+  assert.match(
+    manifest.required_files['daemons/frontmatter-reader.cjs'] ?? '',
+    /^[0-9a-f]{64}$/,
+    'daemons/frontmatter-reader.cjs is imported by the pinned daemons/lifecycle-common.mjs and its output enters the resume procedure, so it must be pinned by sha256',
   );
 });
 

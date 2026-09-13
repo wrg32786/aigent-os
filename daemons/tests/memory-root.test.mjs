@@ -611,7 +611,12 @@ test('W5d: the Python door returns the declared root byte for byte through node,
       mkdirSync(path.join(root, '.aigent'), { recursive: true });
       mkdirSync(path.join(root, 'mine'), { recursive: true });
       writeFileSync(path.join(root, '.aigent', 'state.json'), JSON.stringify({ schemaVersion: 1, memory_root: 'mine' }));
-      const r = spawnSync(PYTHON, ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from memory_root import resolve_memory_root; print(resolve_memory_root(sys.argv[2]))', DAEMONS, root], { encoding: 'utf8' });
+      // The assertion is about the door's return value, not the console
+      // codepage: on a Windows legacy console python's print() would encode
+      // the non-ASCII root as cp1252 and node's utf8 read would see U+FFFD.
+      // The door itself already decodes the resolver's output as utf-8
+      // (memory_root.py, _run), so pin the probe's stdout to utf-8 too.
+      const r = spawnSync(PYTHON, ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from memory_root import resolve_memory_root; print(resolve_memory_root(sys.argv[2]))', DAEMONS, root], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
       assert.equal(r.status, 0, r.stderr);
       assert.equal(r.stdout.trim(), path.join(root, 'mine'), `${name}: the door must hand back the declared root, not a re-decoded one`);
       assert.ok(existsSync(r.stdout.trim()), `${name}: the returned path must exist`);
