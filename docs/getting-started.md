@@ -68,7 +68,7 @@ Run `bash install.sh --help` for the complete command reference.
 
 For an external target, the installer:
 
-- Copies missing files from `system/`, `vault/`, `skills/`, `hooks/`, `daemons/`, `scripts/`, `docs/`, `memory/`, and `evals/` without overwriting existing files in those trees.
+- Copies missing files from `system/`, `vault/`, `skills/`, `hooks/`, `daemons/`, `scripts/`, `docs/`, `memory/`, `evals/`, and `launcher/` without overwriting existing files in those trees.
 - Creates or refreshes a marked aigent-OS block in `CLAUDE.md` and backs up the previous file under `.aigent/backups/`.
 - Installs runtime skills under `.claude/skills/` and dispatchable agents under `.claude/agents/` without replacing same-named user definitions.
 - Creates or deep-merges `.claude/settings.json`. Existing scalar settings are preserved except the managed aigent-OS root variables, which are refreshed to the current target path.
@@ -76,7 +76,7 @@ For an external target, the installer:
 - Creates `.aigent/state.json` for machine-readable first-run state.
 - Adds a marked generated-state block to `.gitignore`.
 - Runs `npm ci` or `npm install` for semantic search and the managed PTY transport, rebuilds and load-verifies `node-pty`, unless `--no-deps` was supplied.
-- Wires `aigent` into the user's PATH and creates the platform app/shortcut where supported, unless `--no-launcher` was supplied.
+- Wires `aigent` into the user's PATH and creates the platform app/shortcut where supported, unless `--no-launcher` was supplied or the target resolves under the system temp directory (treated the same as `--no-launcher`, so a scratch install never repoints a machine's real front door).
 
 The npm step can use the network. Launcher wiring writes the user-level PATH/profile or platform shortcut; the remaining installer work stays inside the target directory.
 

@@ -22,7 +22,10 @@ jobs:
           # an inlined copy of its logic — so the installer itself is tested and
           # can't silently drift from what this workflow validates. AIGENT_SRC
           # also avoids the network clone, which fails while the repo is private.
-          INSTALL_TARGET=/tmp/aigent-test
+          # The target must NOT resolve under the system temp directory: install.sh
+          # treats a scratch/temp target as an implicit --no-launcher, and this is
+          # the only job that exercises the real platform launcher installer.
+          INSTALL_TARGET="$HOME/aigent-test"
           mkdir -p "$INSTALL_TARGET"
           AIGENT_SRC="$GITHUB_WORKSPACE" bash install.sh "$INSTALL_TARGET" --no-deps
           echo "INSTALL_TARGET=$INSTALL_TARGET" >> "$GITHUB_ENV"

@@ -15,12 +15,15 @@ With no TARGET, the installer activates the current aigent-OS checkout in place.
 Options:
   --target DIR          Install into DIR instead of the current directory
   --no-deps             Skip Node.js dependencies and managed Auto-Refresh
-  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring
+  --no-launcher         Skip PATH and desktop/Start-menu launcher wiring.
+                        A target resolving under the system temp directory
+                        skips launcher wiring the same way automatically.
   --dry-run             Print the planned changes without modifying files
   --trust-existing      Keep pre-existing files under hooks/, daemons/,
-                        .claude/skills/, .claude/agents/, .claude/rules/, and
-                        skill-index.json even when they differ from the
-                        framework version, instead of quarantining them.
+                        scripts/, launcher/, .claude/skills/, .claude/agents/,
+                        .claude/rules/, and skill-index.json even when they
+                        differ from the framework version, instead of
+                        quarantining them.
                         All-or-nothing: it also freezes real core fixes. To
                         keep named paths only, declare them in
                         <target>/.aigent/operator-owned.json instead
@@ -139,6 +142,30 @@ SRC="$(abspath "$SRC")"
 TARGET="$(abspath "$TARGET")"
 MODE="copy"
 [[ "$SRC" == "$TARGET" ]] && MODE="in-place"
+
+# A target that resolves under the system temp directory is a scratch/
+# throwaway install (a smoke test, a one-off eval run, anything built under
+# mktemp) -- wiring it anyway would repoint this machine's real `aigent`
+# command and desktop/Start Menu shortcuts at a tree that is about to be
+# deleted. Evaluated once, here, right after TARGET is canonicalized, so
+# every downstream site (the dry-run plan, the Launch: summary, the closing
+# Next: block, and the actual wiring gate) agrees on what will happen --
+# instead of a second branch only the wiring call site knew about.
+is_scratch_target() {
+  local target="$1" candidate canon
+  for candidate in "${TMPDIR:-}" "${TEMP:-}" "${TMP:-}" /tmp; do
+    [[ -n "$candidate" && -d "$candidate" ]] || continue
+    canon="$(abspath "$candidate")"
+    canon="${canon%/}"
+    [[ "$target" == "$canon" || "$target" == "$canon"/* ]] && return 0
+  done
+  return 1
+}
+LAUNCHER_SKIP_REASON=""
+if [[ "$NO_LAUNCHER" -eq 0 ]] && is_scratch_target "$TARGET"; then
+  NO_LAUNCHER=1
+  LAUNCHER_SKIP_REASON="target resolves under a scratch/temp directory ($TARGET) -- treated as --no-launcher rather than repointing the machine front door at a throwaway install"
+fi
 
 # ── Memory root ───────────────────────────────────────────────────────────────
 # Where this seat's memory tree lives, relative to TARGET. Declared in the
@@ -736,6 +763,14 @@ if [[ "$MODE" == "copy" ]]; then
           "top-level skill trees are reviewed multiline procedures copied into the installed framework"
         ;;
       hooks|daemons) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
+      # scripts/ ships the fleet-baseline-manifest.json doctor.sh --attest
+      # reads, and launcher/ ships the platform installers wire_aigent_front_door
+      # runs -- both are trusted, framework-owned content in the same sensitivity
+      # class as hooks/daemons, not user data. Without this, a pre-existing
+      # differing copy at either path was kept forever (the `*)` catch-all
+      # below is sensitive=0), so an upgrade could leave doctor attesting
+      # against a dead baseline or wiring a stale launcher script.
+      scripts|launcher) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 1 ;;
       vault)
         if [[ "$MEMORY_REL" == "$MEMORY_DEFAULT_REL" ]]; then
           copy_missing_tree "$SRC/vault" "$TARGET/vault" 0
@@ -1055,6 +1090,8 @@ else
   if command -v python3 >/dev/null 2>&1; then
     cat > "$AIGENT_TMP/merge-settings.py" <<'PY'
 import json
+import re
+import shlex
 import sys
 
 base_path, add_path, out_path = sys.argv[1:4]
@@ -1071,9 +1108,106 @@ MANAGED_SCALARS = {
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
+def tokenize(command):
+    # Quote-aware split with backslash escapes DISABLED: a backslash is a
+    # Windows path separator here, never an escape (shlex.split would turn
+    # an unquoted C:\old\daemons\x.mjs into C:olddaemonsx.mjs and lose the
+    # path), and the node merger below treats backslashes literally too, so
+    # both runtimes must agree on the same tokens.
+    lexer = shlex.shlex(command, posix=True)
+    lexer.escape = ""
+    # No comment syntax either: shlex.shlex defaults commenters to "#"
+    # (shlex.split clears it), which would cut a path like /proj#2/x.mjs
+    # short while the node tokenizer keeps it whole.
+    lexer.commenters = ""
+    # Whitespace is exactly what shlex treats as whitespace (space, tab,
+    # CR, LF); the node tokenizer below splits on the same four characters.
+    lexer.whitespace = " \t\r\n"
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        # Unbalanced quotes or similar: land in "ambiguous" (empty identity)
+        # below rather than raising out of a merge on a malformed command.
+        return command.split()
+
+def is_path_like(token):
+    return "/" in token or "\\" in token
+
+def hook_identity(hook):
+    # Empty string means "cannot identify this hook" (no command at all, a
+    # prompt-type hook, an unparseable command, or a script with no
+    # directory component): callers must never treat that as a match, or
+    # every one of those hooks would collide and dedupe against each other.
+    # Ambiguity never authorizes removal.
+    command = hook.get("command", "") if isinstance(hook, dict) else ""
+    if not command:
+        return ""
+    tokens = tokenize(command)
+    if not tokens:
+        return ""
+
+    # The interpreter (tokens[0]) never identifies the hook: `/usr/bin/node
+    # /old/daemons/x.mjs` must resolve to the script, not to "node" via the
+    # interpreter's own absolute path. The script is the first path-like
+    # token AFTER tokens[0], in original order -- quote-aware tokenize()
+    # already keeps a decoy like `bash -c "echo 'hi'"` as its own token, so
+    # a following unquoted real path is found correctly without needing to
+    # prefer quoted tokens over unquoted ones. Only when NOTHING after
+    # tokens[0] is path-like, and tokens[0] itself carries a separator, does
+    # tokens[0] stand in as the script -- direct execution of an executable
+    # path with no separate interpreter (the command IS the script).
+    script = next((t for t in tokens[1:] if is_path_like(t)), None)
+    if script is None:
+        if is_path_like(tokens[0]):
+            script = tokens[0]
+        else:
+            return ""
+
+    parts = [p for p in re.split(r"[\\/]+", script) if p]
+    # Ownership is the script's last TWO path components (dir/basename), not
+    # the basename alone -- `extensions/gateguard.mjs` must never collide
+    # with `daemons/gateguard.mjs` just because they share a basename. A
+    # bare filename with no directory (one component) can never form that
+    # tail, so it stays ambiguous and kept: the template never ships a bare
+    # filename, so nothing real can duplicate through this path.
+    if len(parts) < 2:
+        return ""
+    return "/".join(parts[-2:])
+
+def merge_hook_groups(old_groups, new_groups):
+    # new_groups is the freshly rendered template: it always wins for any
+    # hook it ships. old_groups keeps only the hooks the template does NOT
+    # ship (identified by resolved dir/basename identity, not by matching
+    # the whole group byte-for-byte) -- a hook already in the template but
+    # spelled with a different path prefix or slash direction is dropped
+    # instead of kept alongside a second, correct copy. An empty identity
+    # never matches anything, so ambiguous (e.g. commandless) hooks are
+    # never deduped against each other.
+    template_identities = set()
+    for group in new_groups:
+        for hook in group.get("hooks", []):
+            identity = hook_identity(hook)
+            if identity:
+                template_identities.add(identity)
+    kept = []
+    for group in old_groups:
+        remaining = []
+        for hook in group.get("hooks", []):
+            identity = hook_identity(hook)
+            if identity and identity in template_identities:
+                print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
+                continue
+            remaining.append(hook)
+        if remaining:
+            kept.append({**group, "hooks": remaining})
+    return list(new_groups) + kept
+
 def merge(old, new, path=()):
     if path in MANAGED_SCALARS:
         return new
+    if len(path) == 2 and path[0] == "hooks" and isinstance(old, list) and isinstance(new, list):
+        return merge_hook_groups(old, new)
     if isinstance(old, dict) and isinstance(new, dict):
         result = dict(old)
         for key, value in new.items():
@@ -1110,8 +1244,120 @@ const normalize = value => Array.isArray(value)
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]))
     : value;
 const canonical = value => JSON.stringify(normalize(value));
+// Quote-aware tokenizer mirroring python's shlex.split: a double- or
+// single-quoted run is one token with its quotes stripped (and, inside a
+// double-quoted run, a single quote is literal text, never a nested quote
+// -- an apostrophe in a user's home directory name must not end the match
+// early). An unterminated quote is unparseable: fall back to a naive
+// whitespace split so it lands in "ambiguous" (empty identity) below
+// rather than throwing on a malformed command.
+const tokenize = command => {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let sawToken = false;
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      sawToken = true;
+    } else if (/[ \t\r\n]/.test(ch)) {
+      // The same four whitespace characters python's shlex splits on; a
+      // broader \s (form feed, no-break space) would split where python
+      // does not and the two mergers would disagree.
+      if (sawToken) {
+        tokens.push(current);
+        current = '';
+        sawToken = false;
+      }
+    } else {
+      current += ch;
+      sawToken = true;
+    }
+  }
+  if (sawToken) tokens.push(current);
+  if (quote) return command.split(/[ \t\r\n]+/).filter(Boolean);
+  return tokens;
+};
+const isPathLike = token => token.includes('/') || token.includes('\\');
+const hookIdentity = hook => {
+  // Empty string means "cannot identify this hook" (no command at all, a
+  // prompt-type hook, an unparseable command, or a script with no
+  // directory component): callers must never treat that as a match, or
+  // every one of those hooks would collide and dedupe against each other.
+  // Ambiguity never authorizes removal.
+  const command = hook && typeof hook === 'object' ? (hook.command || '') : '';
+  if (!command) return '';
+  const tokens = tokenize(command);
+  if (!tokens.length) return '';
+  // The interpreter (tokens[0]) never identifies the hook: `/usr/bin/node
+  // /old/daemons/x.mjs` must resolve to the script, not to "node" via the
+  // interpreter's own absolute path. The script is the first path-like
+  // token AFTER tokens[0], in original order -- quote-aware tokenize()
+  // already keeps a decoy like `bash -c "echo 'hi'"` as its own token, so
+  // a following unquoted real path is found correctly without needing to
+  // prefer quoted tokens over unquoted ones. Only when NOTHING after
+  // tokens[0] is path-like, and tokens[0] itself carries a separator, does
+  // tokens[0] stand in as the script -- direct execution of an executable
+  // path with no separate interpreter (the command IS the script).
+  let script = tokens.slice(1).find(isPathLike);
+  if (script === undefined) {
+    if (isPathLike(tokens[0])) {
+      script = tokens[0];
+    } else {
+      return '';
+    }
+  }
+  const parts = script.split(/[\\/]+/).filter(Boolean);
+  // Ownership is the script's last TWO path components (dir/basename), not
+  // the basename alone -- `extensions/gateguard.mjs` must never collide
+  // with `daemons/gateguard.mjs` just because they share a basename. A
+  // bare filename with no directory (one component) can never form that
+  // tail, so it stays ambiguous and kept: the template never ships a bare
+  // filename, so nothing real can duplicate through this path.
+  if (parts.length < 2) return '';
+  return parts.slice(-2).join('/');
+};
+// See merge_hook_groups in the python merger above for the rationale: the
+// template's groups always win, and an old group keeps only the hooks the
+// template does not ship (matched by resolved dir/basename identity, not
+// by whole-group equality). Ports the same algorithm so both mergers stay
+// behaviorally identical. An empty identity never matches anything, so
+// ambiguous (e.g. commandless) hooks are never deduped against each other.
+const mergeHookGroups = (oldGroups, newGroups) => {
+  const templateIdentities = new Set();
+  for (const group of newGroups) {
+    for (const hook of group.hooks || []) {
+      const identity = hookIdentity(hook);
+      if (identity) templateIdentities.add(identity);
+    }
+  }
+  const kept = [];
+  for (const group of oldGroups) {
+    const remaining = [];
+    for (const hook of group.hooks || []) {
+      const identity = hookIdentity(hook);
+      if (identity && templateIdentities.has(identity)) {
+        const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
+        console.log(`  [merge] dropped ${label}`);
+        continue;
+      }
+      remaining.push(hook);
+    }
+    if (remaining.length) kept.push({ ...group, hooks: remaining });
+  }
+  return [...newGroups, ...kept];
+};
 function merge(oldValue, newValue, path = []) {
   if (managed.has(path.join('.'))) return newValue;
+  if (path.length === 2 && path[0] === 'hooks' && Array.isArray(oldValue) && Array.isArray(newValue)) {
+    return mergeHookGroups(oldValue, newValue);
+  }
   if (Array.isArray(oldValue) && Array.isArray(newValue)) {
     const result = [...oldValue];
     const seen = new Set(result.map(canonical));
@@ -1121,7 +1367,8 @@ function merge(oldValue, newValue, path = []) {
     }
     return result;
   }
-  if (oldValue && newValue && typeof oldValue === 'object' && typeof newValue === 'object') {
+  if (oldValue && newValue && typeof oldValue === 'object' && typeof newValue === 'object'
+      && !Array.isArray(oldValue) && !Array.isArray(newValue)) {
     const result = { ...oldValue };
     for (const [key, value] of Object.entries(newValue)) {
       result[key] = key in oldValue ? merge(oldValue[key], value, [...path, key]) : value;
@@ -1327,11 +1574,15 @@ wire_aigent_front_door() {
       || fail "missing launcher installer: $TARGET/launcher/install.sh"
     bash "$TARGET/launcher/install.sh" "$TARGET"
   fi
-  printf '  [ok] aigent command and platform launcher wired\n'
+  printf '  [ok] aigent command and platform launcher wired -- %s\n' "$TARGET"
 }
 
 if [[ "$NO_LAUNCHER" -eq 1 ]]; then
-  printf '  [skip] Launcher wiring (--no-launcher)\n'
+  if [[ -n "$LAUNCHER_SKIP_REASON" ]]; then
+    printf '  [skip] Launcher wiring: %s\n' "$LAUNCHER_SKIP_REASON"
+  else
+    printf '  [skip] Launcher wiring (--no-launcher)\n'
+  fi
 else
   wire_aigent_front_door
 fi

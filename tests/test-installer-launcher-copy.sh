@@ -6,7 +6,13 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT INT TERM
+# The install target below must NOT resolve under the system temp directory:
+# install.sh now treats a scratch/temp target as an implicit --no-launcher
+# (it will not wire a machine's real front door to a throwaway tree), and
+# this test needs a real wiring run to assert against. $WORK itself is a
+# mktemp dir, so the copy-install target lives beside this repo instead.
+HOST="$ROOT/.launcher-copy-test-scratch-$$"
+trap 'rm -rf "$WORK" "$HOST"' EXIT INT TERM
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -59,7 +65,8 @@ exit 0
 SH
 chmod +x "$FAKE_BIN/node" "$FAKE_BIN/npm"
 
-TARGET="$WORK/copy-target"
+TARGET="$HOST/copy-target"
+mkdir -p "$HOST"
 (
   cd "$FIXTURE"
   PATH="$FAKE_BIN:$PATH" bash install.sh --target "$TARGET" > "$WORK/install.out"
