@@ -542,20 +542,23 @@ printf '[5/%d] round 2: no-separator fallback skips flags and the interpreter; a
 #    tells them apart and keeps both, each with its own matcher/options.
 #  - Case B: a stale core hook invoked via an absolute interpreter path
 #    (`/usr/bin/node /old/daemons/gateguard.mjs`) must still be recognized
-#    as the SAME script as the template's `node "/seat/daemons/gateguard.mjs"`
+#    as the SAME script as the template's `node "/new/target/daemons/gateguard.mjs"`
 #    and dropped -- the old basename lookup mistook the interpreter path
 #    itself ("node") for the identity and never matched.
 cat > "$MERGE2/base-r3.json" <<'JSON'
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node \"/seat/extensions/gateguard.mjs\" --policy local", "timeout": 1000}]}
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node \"/opt/aigent/extensions/gateguard.mjs\" --policy local", "timeout": 1000}]}
     ],
     "PostToolUse": [
       {"matcher": "", "hooks": [{"type": "command", "command": "/usr/bin/node /old/daemons/gateguard.mjs", "timeout": 2000}]}
     ],
     "Stop": [
       {"matcher": "", "hooks": [{"type": "command", "command": "node C:\\old\\daemons\\gateguard.mjs", "timeout": 2000}]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node /opt/proj#2/daemons/gateguard.mjs", "timeout": 2000}]}
     ]
   }
 }
@@ -564,13 +567,16 @@ cat > "$MERGE2/addition-r3.json" <<'JSON'
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": "node \"/seat/daemons/gateguard.mjs\"", "timeout": 1000}]}
+      {"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard.mjs\"", "timeout": 1000}]}
     ],
     "PostToolUse": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/seat/daemons/gateguard.mjs\"", "timeout": 2000}]}
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard.mjs\"", "timeout": 2000}]}
     ],
     "Stop": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "node \"C:/seat/daemons/gateguard.mjs\"", "timeout": 2000}]}
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"C:/new/target/daemons/gateguard.mjs\"", "timeout": 2000}]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/new/target/daemons/gateguard.mjs\"", "timeout": 2000}]}
     ]
   }
 }
@@ -608,7 +614,7 @@ post = doc["hooks"]["PostToolUse"]
 if len(post) != 1:
     sys.exit(f"round3 Case B ({label}): stale absolute-interpreter-path hook was not deduped, expected 1 PostToolUse group, got {len(post)}")
 command = post[0]["hooks"][0]["command"]
-if "/seat/daemons/gateguard.mjs" not in command:
+if "/new/target/daemons/gateguard.mjs" not in command:
     sys.exit(f"round3 Case B ({label}): the surviving PostToolUse entry is not the template's copy: {command!r}")
 if "/old/daemons" in command:
     sys.exit(f"round3 Case B ({label}): the stale entry survived instead of the template's: {command!r}")
@@ -622,8 +628,19 @@ stop = doc["hooks"]["Stop"]
 if len(stop) != 1:
     sys.exit(f"round3 Case C ({label}): stale unquoted backslash-path hook was not deduped, expected 1 Stop group, got {len(stop)}")
 command = stop[0]["hooks"][0]["command"]
-if "C:/seat/daemons/gateguard.mjs" not in command or "old" in command:
+if "C:/new/target/daemons/gateguard.mjs" not in command or "old" in command:
     sys.exit(f"round3 Case C ({label}): the surviving Stop entry is not the template's copy: {command!r}")
+
+# Case D: a "#" inside a directory name is path text, not a comment. A
+# tokenizer with shell comment syntax (python's shlex default) would cut
+# the command at the "#", read the wrong tail, and KEEP the stale hook
+# while the node merger drops it.
+pre_compact = doc["hooks"]["PreCompact"]
+if len(pre_compact) != 1:
+    sys.exit(f"round3 Case D ({label}): stale hook with a '#' in its directory was not deduped, expected 1 PreCompact group, got {len(pre_compact)}")
+command = pre_compact[0]["hooks"][0]["command"]
+if "/new/target/daemons/gateguard.mjs" not in command or "#" in command:
+    sys.exit(f"round3 Case D ({label}): the surviving PreCompact entry is not the template's copy: {command!r}")
 PY
 }
 
@@ -651,6 +668,6 @@ with open(b_path, encoding="utf-8") as fh:
 if a != b:
     sys.exit("round3: python and node mergers produced different results for the dir/basename identity fixtures")
 PY
-printf '[6/%d] round 3: ownership is the last two path components; extension hooks survive, stale interpreter-path and unquoted backslash-path hooks are dropped\n' "$TOTAL"
+printf '[6/%d] round 3: ownership is the last two path components; extension hooks survive, stale interpreter-path, unquoted backslash-path and hash-in-path hooks are dropped\n' "$TOTAL"
 
 printf 'installer drift suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

@@ -1116,6 +1116,13 @@ def tokenize(command):
     # both runtimes must agree on the same tokens.
     lexer = shlex.shlex(command, posix=True)
     lexer.escape = ""
+    # No comment syntax either: shlex.shlex defaults commenters to "#"
+    # (shlex.split clears it), which would cut a path like /proj#2/x.mjs
+    # short while the node tokenizer keeps it whole.
+    lexer.commenters = ""
+    # Whitespace is exactly what shlex treats as whitespace (space, tab,
+    # CR, LF); the node tokenizer below splits on the same four characters.
+    lexer.whitespace = " \t\r\n"
     lexer.whitespace_split = True
     try:
         return list(lexer)
@@ -1259,7 +1266,10 @@ const tokenize = command => {
     } else if (ch === '"' || ch === "'") {
       quote = ch;
       sawToken = true;
-    } else if (/\s/.test(ch)) {
+    } else if (/[ \t\r\n]/.test(ch)) {
+      // The same four whitespace characters python's shlex splits on; a
+      // broader \s (form feed, no-break space) would split where python
+      // does not and the two mergers would disagree.
       if (sawToken) {
         tokens.push(current);
         current = '';
@@ -1271,7 +1281,7 @@ const tokenize = command => {
     }
   }
   if (sawToken) tokens.push(current);
-  if (quote) return command.split(/\s+/).filter(Boolean);
+  if (quote) return command.split(/[ \t\r\n]+/).filter(Boolean);
   return tokens;
 };
 const isPathLike = token => token.includes('/') || token.includes('\\');
