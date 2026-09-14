@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=5
+TOTAL=6
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -428,7 +428,12 @@ printf '[4/%d] round 1: hook_basename quote/unquoted/empty-basename fixes verifi
 # flag like `--strict` became the basename instead of the real script name,
 # and the FIRST quoted substring was trusted as the path even when it was
 # just a decoy earlier in the command with the real, unquoted path following.
-#  - J-1: `node foo.mjs --strict` vs `node foo.mjs` -- same script, must dedupe.
+#  - J-1: `node foo.mjs --strict` vs `node foo.mjs` -- flipped in round 3:
+#    neither command's script carries a directory, so identity is now
+#    ambiguous for both (ownership needs the last TWO path components, not
+#    a bare basename) and the hook is KEPT rather than deduped. The
+#    template never ships a bare filename, so nothing the product installs
+#    can actually duplicate through this path.
 #  - J-2: a module invocation vs an unrelated script, both ending in the same
 #    flag -- must NOT collide just because the fallback used to grab that
 #    flag as if it were the basename.
@@ -484,8 +489,8 @@ with open(path, encoding="utf-8") as fh:
     doc = json.load(fh)
 
 session_start = doc["hooks"]["SessionStart"]
-if len(session_start) != 1:
-    sys.exit(f"round2 J-1 ({label}): 'node foo.mjs --strict' vs 'node foo.mjs' expected 1 SessionStart group, got {len(session_start)}")
+if len(session_start) != 2:
+    sys.exit(f"round2 J-1 ({label}): 'node foo.mjs --strict' vs 'node foo.mjs' (neither has a directory, so identity is ambiguous) expected 2 SessionStart groups (KEPT), got {len(session_start)}")
 
 stop = doc["hooks"]["Stop"]
 if len(stop) != 2:
@@ -525,5 +530,127 @@ if a != b:
     sys.exit("round2: python and node mergers produced different results for the no-separator/quoted-decoy fixtures")
 PY
 printf '[5/%d] round 2: no-separator fallback skips flags and the interpreter; a quoted decoy no longer hides the real path\n' "$TOTAL"
+
+# ── 6. Round-3 fix order 9e66f188: ownership is dir/basename, not basename ──
+# Basename-only ownership (rounds 1-2) collided two DIFFERENT scripts that
+# happen to share a filename, and let a stale hook survive when its
+# interpreter was invoked by an absolute path.
+#  - Case A: an operator's own extension hook (extensions/gateguard.mjs)
+#    must survive a template hook shipping a DIFFERENT script that happens
+#    to share the same basename (daemons/gateguard.mjs) -- basename-only
+#    matching wrongly dropped the extension; last-two-components ownership
+#    tells them apart and keeps both, each with its own matcher/options.
+#  - Case B: a stale core hook invoked via an absolute interpreter path
+#    (`/usr/bin/node /old/daemons/gateguard.mjs`) must still be recognized
+#    as the SAME script as the template's `node "/seat/daemons/gateguard.mjs"`
+#    and dropped -- the old basename lookup mistook the interpreter path
+#    itself ("node") for the identity and never matched.
+cat > "$MERGE2/base-r3.json" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node \"/seat/extensions/gateguard.mjs\" --policy local", "timeout": 1000}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "/usr/bin/node /old/daemons/gateguard.mjs", "timeout": 2000}]}
+    ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node C:\\old\\daemons\\gateguard.mjs", "timeout": 2000}]}
+    ]
+  }
+}
+JSON
+cat > "$MERGE2/addition-r3.json" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": "node \"/seat/daemons/gateguard.mjs\"", "timeout": 1000}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"/seat/daemons/gateguard.mjs\"", "timeout": 2000}]}
+    ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node \"C:/seat/daemons/gateguard.mjs\"", "timeout": 2000}]}
+    ]
+  }
+}
+JSON
+
+check_round3_result() {
+  local label="$1" file="$2"
+  python3 - "$file" "$label" <<'PY'
+import json
+import sys
+
+path, label = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    doc = json.load(fh)
+
+pre = doc["hooks"]["PreToolUse"]
+if len(pre) != 2:
+    sys.exit(f"round3 Case A ({label}): extension hook and template hook must both survive as 2 PreToolUse groups, got {len(pre)}")
+extension_kept = any(
+    group.get("matcher") == "Bash"
+    and any("extensions/gateguard.mjs" in h.get("command", "") for h in group.get("hooks", []))
+    for group in pre
+)
+if not extension_kept:
+    sys.exit(f"round3 Case A ({label}): the operator's extensions/gateguard.mjs hook was dropped (basename collided with daemons/gateguard.mjs)")
+core_installed = any(
+    "daemons/gateguard.mjs" in h.get("command", "")
+    for group in pre
+    for h in group.get("hooks", [])
+)
+if not core_installed:
+    sys.exit(f"round3 Case A ({label}): the template's daemons/gateguard.mjs core hook is missing")
+
+post = doc["hooks"]["PostToolUse"]
+if len(post) != 1:
+    sys.exit(f"round3 Case B ({label}): stale absolute-interpreter-path hook was not deduped, expected 1 PostToolUse group, got {len(post)}")
+command = post[0]["hooks"][0]["command"]
+if "/seat/daemons/gateguard.mjs" not in command:
+    sys.exit(f"round3 Case B ({label}): the surviving PostToolUse entry is not the template's copy: {command!r}")
+if "/old/daemons" in command:
+    sys.exit(f"round3 Case B ({label}): the stale entry survived instead of the template's: {command!r}")
+
+# Case C: an UNQUOTED Windows backslash path must resolve to the same
+# dir/basename identity as the template's forward-slash copy in BOTH
+# runtimes. A tokenizer that treats backslash as an escape (python's
+# shlex.split default) would read C:olddaemonsgateguard.mjs, see no path,
+# and KEEP the stale hook while the node merger drops it.
+stop = doc["hooks"]["Stop"]
+if len(stop) != 1:
+    sys.exit(f"round3 Case C ({label}): stale unquoted backslash-path hook was not deduped, expected 1 Stop group, got {len(stop)}")
+command = stop[0]["hooks"][0]["command"]
+if "C:/seat/daemons/gateguard.mjs" not in command or "old" in command:
+    sys.exit(f"round3 Case C ({label}): the surviving Stop entry is not the template's copy: {command!r}")
+PY
+}
+
+MERGED_R3_PY_OUT="$(python3 "$MERGE2/merge-settings.py" "$MERGE2/base-r3.json" "$MERGE2/addition-r3.json" "$MERGE2/merged-r3.py.json")" \
+  || fail "round3: python merge script exited non-zero"
+check_round3_result python "$MERGE2/merged-r3.py.json"
+printf '%s\n' "$MERGED_R3_PY_OUT" | grep -q '\[merge\] dropped' \
+  || fail "round3 Case B (python): no [merge] dropped notice printed for the stale absolute-interpreter-path hook"
+
+MERGED_R3_NODE_OUT="$(node "$MERGE2/merge-settings.cjs" "$MERGE2/base-r3.json" "$MERGE2/addition-r3.json" "$MERGE2/merged-r3.cjs.json")" \
+  || fail "round3: node merge script exited non-zero"
+check_round3_result node "$MERGE2/merged-r3.cjs.json"
+printf '%s\n' "$MERGED_R3_NODE_OUT" | grep -q '\[merge\] dropped' \
+  || fail "round3 Case B (node): no [merge] dropped notice printed for the stale absolute-interpreter-path hook"
+
+python3 - "$MERGE2/merged-r3.py.json" "$MERGE2/merged-r3.cjs.json" <<'PY'
+import json
+import sys
+
+a_path, b_path = sys.argv[1], sys.argv[2]
+with open(a_path, encoding="utf-8") as fh:
+    a = json.load(fh)
+with open(b_path, encoding="utf-8") as fh:
+    b = json.load(fh)
+if a != b:
+    sys.exit("round3: python and node mergers produced different results for the dir/basename identity fixtures")
+PY
+printf '[6/%d] round 3: ownership is the last two path components; extension hooks survive, stale interpreter-path and unquoted backslash-path hooks are dropped\n' "$TOTAL"
 
 printf 'installer drift suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"

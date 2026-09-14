@@ -1091,6 +1091,7 @@ else
     cat > "$AIGENT_TMP/merge-settings.py" <<'PY'
 import json
 import re
+import shlex
 import sys
 
 base_path, add_path, out_path = sys.argv[1:4]
@@ -1107,64 +1108,87 @@ MANAGED_SCALARS = {
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
-def hook_basename(hook):
+def tokenize(command):
+    # Quote-aware split with backslash escapes DISABLED: a backslash is a
+    # Windows path separator here, never an escape (shlex.split would turn
+    # an unquoted C:\old\daemons\x.mjs into C:olddaemonsx.mjs and lose the
+    # path), and the node merger below treats backslashes literally too, so
+    # both runtimes must agree on the same tokens.
+    lexer = shlex.shlex(command, posix=True)
+    lexer.escape = ""
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        # Unbalanced quotes or similar: land in "ambiguous" (empty identity)
+        # below rather than raising out of a merge on a malformed command.
+        return command.split()
+
+def is_path_like(token):
+    return "/" in token or "\\" in token
+
+def hook_identity(hook):
     # Empty string means "cannot identify this hook" (no command at all, a
-    # prompt-type hook, or unparseable): callers must never treat that as a
-    # match, or every commandless hook would collide and dedupe together.
+    # prompt-type hook, an unparseable command, or a script with no
+    # directory component): callers must never treat that as a match, or
+    # every one of those hooks would collide and dedupe against each other.
+    # Ambiguity never authorizes removal.
     command = hook.get("command", "") if isinstance(hook, dict) else ""
     if not command:
         return ""
-
-    def first_with_separator(candidates):
-        return next((c for c in candidates if "/" in c or "\\" in c), None)
-
-    # A quoted token is trusted as the path only if it actually looks like
-    # one. Otherwise a quoted decoy earlier in the command (bash -c "echo
-    # 'hi'" /real/path.mjs) would be taken as the script instead of the
-    # real, unquoted path that follows it -- the FIRST quoted substring is
-    # not necessarily the right one. Matching the quote that OPENED the
-    # token (double before single), not any quote of either kind, still
-    # matters too: a single quote character inside a double-quoted path (an
-    # apostrophe in a user's home directory name, say) must not end a match
-    # early.
-    quoted_tokens = re.findall(r'"([^"]+)"', command) + re.findall(r"'([^']+)'", command)
-    tokens = command.split()
-    path_text = (
-        first_with_separator(quoted_tokens)
-        or first_with_separator(tokens)
-        # No token anywhere carries a path separator (a bare filename with
-        # no directory, e.g. `node foo.mjs --strict`). The interpreter
-        # itself (tokens[0]) never identifies the hook; the first following
-        # token that is not itself a flag does (skipping `-m` in `python -m
-        # pkg.mod`, landing on `pkg.mod`). A tail of nothing but flags is
-        # unidentifiable, not "whatever word came last".
-        or next((t for t in tokens[1:] if not t.startswith("-")), "")
-    )
-    if not path_text:
+    tokens = tokenize(command)
+    if not tokens:
         return ""
-    return re.split(r"[\\/]+", path_text)[-1]
+
+    # The interpreter (tokens[0]) never identifies the hook: `/usr/bin/node
+    # /old/daemons/x.mjs` must resolve to the script, not to "node" via the
+    # interpreter's own absolute path. The script is the first path-like
+    # token AFTER tokens[0], in original order -- quote-aware tokenize()
+    # already keeps a decoy like `bash -c "echo 'hi'"` as its own token, so
+    # a following unquoted real path is found correctly without needing to
+    # prefer quoted tokens over unquoted ones. Only when NOTHING after
+    # tokens[0] is path-like, and tokens[0] itself carries a separator, does
+    # tokens[0] stand in as the script -- direct execution of an executable
+    # path with no separate interpreter (the command IS the script).
+    script = next((t for t in tokens[1:] if is_path_like(t)), None)
+    if script is None:
+        if is_path_like(tokens[0]):
+            script = tokens[0]
+        else:
+            return ""
+
+    parts = [p for p in re.split(r"[\\/]+", script) if p]
+    # Ownership is the script's last TWO path components (dir/basename), not
+    # the basename alone -- `extensions/gateguard.mjs` must never collide
+    # with `daemons/gateguard.mjs` just because they share a basename. A
+    # bare filename with no directory (one component) can never form that
+    # tail, so it stays ambiguous and kept: the template never ships a bare
+    # filename, so nothing real can duplicate through this path.
+    if len(parts) < 2:
+        return ""
+    return "/".join(parts[-2:])
 
 def merge_hook_groups(old_groups, new_groups):
     # new_groups is the freshly rendered template: it always wins for any
     # hook it ships. old_groups keeps only the hooks the template does NOT
-    # ship (identified by script basename, not by matching the whole group
-    # byte-for-byte) -- a hook already in the template but spelled with a
-    # different path prefix or slash direction is dropped instead of kept
-    # alongside a second, correct copy. An empty basename never matches
-    # anything, so commandless (e.g. prompt-type) hooks are never deduped
-    # against each other.
-    template_basenames = set()
+    # ship (identified by resolved dir/basename identity, not by matching
+    # the whole group byte-for-byte) -- a hook already in the template but
+    # spelled with a different path prefix or slash direction is dropped
+    # instead of kept alongside a second, correct copy. An empty identity
+    # never matches anything, so ambiguous (e.g. commandless) hooks are
+    # never deduped against each other.
+    template_identities = set()
     for group in new_groups:
         for hook in group.get("hooks", []):
-            basename = hook_basename(hook)
-            if basename:
-                template_basenames.add(basename)
+            identity = hook_identity(hook)
+            if identity:
+                template_identities.add(identity)
     kept = []
     for group in old_groups:
         remaining = []
         for hook in group.get("hooks", []):
-            basename = hook_basename(hook)
-            if basename and basename in template_basenames:
+            identity = hook_identity(hook)
+            if identity and identity in template_identities:
                 print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
                 continue
             remaining.append(hook)
@@ -1213,62 +1237,102 @@ const normalize = value => Array.isArray(value)
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]))
     : value;
 const canonical = value => JSON.stringify(normalize(value));
-const hookBasename = hook => {
+// Quote-aware tokenizer mirroring python's shlex.split: a double- or
+// single-quoted run is one token with its quotes stripped (and, inside a
+// double-quoted run, a single quote is literal text, never a nested quote
+// -- an apostrophe in a user's home directory name must not end the match
+// early). An unterminated quote is unparseable: fall back to a naive
+// whitespace split so it lands in "ambiguous" (empty identity) below
+// rather than throwing on a malformed command.
+const tokenize = command => {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let sawToken = false;
+  for (const ch of command) {
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      sawToken = true;
+    } else if (/\s/.test(ch)) {
+      if (sawToken) {
+        tokens.push(current);
+        current = '';
+        sawToken = false;
+      }
+    } else {
+      current += ch;
+      sawToken = true;
+    }
+  }
+  if (sawToken) tokens.push(current);
+  if (quote) return command.split(/\s+/).filter(Boolean);
+  return tokens;
+};
+const isPathLike = token => token.includes('/') || token.includes('\\');
+const hookIdentity = hook => {
   // Empty string means "cannot identify this hook" (no command at all, a
-  // prompt-type hook, or unparseable): callers must never treat that as a
-  // match, or every commandless hook would collide and dedupe together.
+  // prompt-type hook, an unparseable command, or a script with no
+  // directory component): callers must never treat that as a match, or
+  // every one of those hooks would collide and dedupe against each other.
+  // Ambiguity never authorizes removal.
   const command = hook && typeof hook === 'object' ? (hook.command || '') : '';
   if (!command) return '';
-  const firstWithSeparator = candidates => candidates.find(c => c.includes('/') || c.includes('\\'));
-  // A quoted token is trusted as the path only if it actually looks like
-  // one. Otherwise a quoted decoy earlier in the command (bash -c "echo
-  // 'hi'" /real/path.mjs) would be taken as the script instead of the
-  // real, unquoted path that follows it -- the FIRST quoted substring is
-  // not necessarily the right one. Matching the quote that OPENED the
-  // token (double before single), not any quote of either kind, still
-  // matters too: a single quote character inside a double-quoted path (an
-  // apostrophe in a user's home directory name, say) must not end a match
-  // early.
-  const quotedTokens = [
-    ...[...command.matchAll(/"([^"]+)"/g)].map(m => m[1]),
-    ...[...command.matchAll(/'([^']+)'/g)].map(m => m[1]),
-  ];
-  const tokens = command.split(/\s+/).filter(Boolean);
-  const pathText =
-    firstWithSeparator(quotedTokens) ||
-    firstWithSeparator(tokens) ||
-    // No token anywhere carries a path separator (a bare filename with no
-    // directory, e.g. `node foo.mjs --strict`). The interpreter itself
-    // (tokens[0]) never identifies the hook; the first following token
-    // that is not itself a flag does (skipping `-m` in `python -m
-    // pkg.mod`, landing on `pkg.mod`). A tail of nothing but flags is
-    // unidentifiable, not "whatever word came last".
-    tokens.slice(1).find(t => !t.startsWith('-')) ||
-    '';
-  if (!pathText) return '';
-  const parts = pathText.split(/[\\/]+/);
-  return parts[parts.length - 1];
+  const tokens = tokenize(command);
+  if (!tokens.length) return '';
+  // The interpreter (tokens[0]) never identifies the hook: `/usr/bin/node
+  // /old/daemons/x.mjs` must resolve to the script, not to "node" via the
+  // interpreter's own absolute path. The script is the first path-like
+  // token AFTER tokens[0], in original order -- quote-aware tokenize()
+  // already keeps a decoy like `bash -c "echo 'hi'"` as its own token, so
+  // a following unquoted real path is found correctly without needing to
+  // prefer quoted tokens over unquoted ones. Only when NOTHING after
+  // tokens[0] is path-like, and tokens[0] itself carries a separator, does
+  // tokens[0] stand in as the script -- direct execution of an executable
+  // path with no separate interpreter (the command IS the script).
+  let script = tokens.slice(1).find(isPathLike);
+  if (script === undefined) {
+    if (isPathLike(tokens[0])) {
+      script = tokens[0];
+    } else {
+      return '';
+    }
+  }
+  const parts = script.split(/[\\/]+/).filter(Boolean);
+  // Ownership is the script's last TWO path components (dir/basename), not
+  // the basename alone -- `extensions/gateguard.mjs` must never collide
+  // with `daemons/gateguard.mjs` just because they share a basename. A
+  // bare filename with no directory (one component) can never form that
+  // tail, so it stays ambiguous and kept: the template never ships a bare
+  // filename, so nothing real can duplicate through this path.
+  if (parts.length < 2) return '';
+  return parts.slice(-2).join('/');
 };
 // See merge_hook_groups in the python merger above for the rationale: the
 // template's groups always win, and an old group keeps only the hooks the
-// template does not ship (matched by script basename, not by whole-group
-// equality). Ports the same algorithm so both mergers stay behaviorally
-// identical. An empty basename never matches anything, so commandless
-// (e.g. prompt-type) hooks are never deduped against each other.
+// template does not ship (matched by resolved dir/basename identity, not
+// by whole-group equality). Ports the same algorithm so both mergers stay
+// behaviorally identical. An empty identity never matches anything, so
+// ambiguous (e.g. commandless) hooks are never deduped against each other.
 const mergeHookGroups = (oldGroups, newGroups) => {
-  const templateBasenames = new Set();
+  const templateIdentities = new Set();
   for (const group of newGroups) {
     for (const hook of group.hooks || []) {
-      const basename = hookBasename(hook);
-      if (basename) templateBasenames.add(basename);
+      const identity = hookIdentity(hook);
+      if (identity) templateIdentities.add(identity);
     }
   }
   const kept = [];
   for (const group of oldGroups) {
     const remaining = [];
     for (const hook of group.hooks || []) {
-      const basename = hookBasename(hook);
-      if (basename && templateBasenames.has(basename)) {
+      const identity = hookIdentity(hook);
+      if (identity && templateIdentities.has(identity)) {
         const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
         console.log(`  [merge] dropped ${label}`);
         continue;
