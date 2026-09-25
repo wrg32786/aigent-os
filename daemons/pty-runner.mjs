@@ -953,6 +953,10 @@ export class ManagedPtyRunner {
     this.automationEnabled = true;
     this.controlWriteAttempts = 0;
     this.capsuleRequestCycleId = null;
+    // Composer guard: the cycle whose request was deferred behind operator
+    // text (or uncertain input ownership). Diagnostic latch only — it makes
+    // the deferral a once-per-cycle event; the request itself stays pending.
+    this.capsuleRequestDeferredCycleId = null;
     // Ack sentinel: transcript offset to scan from, set when the capsule
     // request is written. The ack literal appearing past it IS the completion
     // signal (the event-driven transport design, 2026-08-04).
@@ -1182,6 +1186,36 @@ export class ManagedPtyRunner {
 
   _writeCapsuleRequest(cycleId) {
     if (this.capsuleRequestCycleId === cycleId) return false;
+    // COMPOSER GUARD (measured live 2026-09-24): the request fired while the
+    // operator had a partially typed prompt in the composer. No hold and no
+    // pending Enter exist at this boundary, so those bytes had already passed
+    // straight through — and '/context-capsule' + Enter were appended to them
+    // and submitted as one mangled prompt. The legacy supervisor refused this
+    // case ("ENTRY-BLOCKED: composer already holds OTHER content"). The only
+    // honest signal the runner has is the input tracker: operator bytes seen
+    // since the last CR mean the composer MAY hold text, and any unfinished or
+    // editing control means the runner cannot say. Either way: DEFER. Never a
+    // kill-line (that destroys the operator's text), never a timing sleep.
+    // The state is persistent, so the tick re-enters here until the composer
+    // is known empty (the operator submits) and the request then fires in
+    // the usual two-phase shape. The cycle_id latch is spent by the FIRE
+    // below, not by the deferral — a deferred cycle still owns its one write.
+    // Once per cycle, not per tick: _event is a state-change log.
+    const composer = this.input.snapshot();
+    if (!composer.knownEmpty) {
+      if (this.capsuleRequestDeferredCycleId !== cycleId) {
+        this.capsuleRequestDeferredCycleId = cycleId;
+        this.lastReason = {
+          code: 'runner-capsule-request-composer-busy',
+          detail: { cycle_id: cycleId, input: composer },
+        };
+        this._event('capsule-request-deferred', this.lastReason);
+      }
+      return false;
+    }
+    if (this.capsuleRequestDeferredCycleId === cycleId) {
+      this._event('capsule-request-resumed', { cycle_id: cycleId });
+    }
     this.capsuleRequestCycleId = cycleId;
     this.capsuleAckSeen = false;
     return this._fireCapsuleRequest();
@@ -2560,10 +2594,17 @@ export class ManagedPtyRunner {
     // across relaunches, the edge does not. Keyed to cycle_id inside
     // _writeCapsuleRequest (one request per pressure cycle, no retry);
     // guarded on !capsuleAckSeen so a relaunch that already found the ack on
-    // disk (the scan above) never re-injects.
+    // disk (the scan above) never re-injects. A request DEFERRED behind
+    // operator text (composer guard in _writeCapsuleRequest) stays owed to
+    // its cycle after the transport walks on to checkpoint-confirmed — the
+    // walk takes one ok tick, and without this the deferred cycle would wedge
+    // at runner-capsule-not-acked. Keyed to the deferred cycle_id only, so a
+    // relaunch into checkpoint-confirmed still injects nothing new.
     if (!this.capsuleAckSeen
       && (coreResult.action === 'request-checkpoint'
-        || coreResult.state.state === 'checkpoint-requested')) {
+        || coreResult.state.state === 'checkpoint-requested'
+        || (coreResult.state.state === 'checkpoint-confirmed'
+          && this.capsuleRequestDeferredCycleId === coreResult.state.cycle_id))) {
       try {
         this._writeCapsuleRequest(coreResult.state.cycle_id);
       } catch (error) {
