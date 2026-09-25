@@ -3892,6 +3892,14 @@ test('C1 partial operator text defers the capsule request; the operator bytes ar
     assert.equal(capsuleTextWriteCount(harness), 0, 'idle ticks never write over operator text');
     assert.deepEqual(harness.pty.writes, [partial]);
     assert.equal(capsuleDeferredEvents(harness).length, 1, 'one deferral event per cycle, not per tick');
+    // The transport has walked on to checkpoint-confirmed meanwhile, where the
+    // ack gate refuses each tick. While the request is still deferred that
+    // refusal must name the composer wait, not a "not acked" for a request
+    // that was never written.
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed');
+    assert.equal(harness.snapshot().lastDecision?.code, 'runner-capsule-request-composer-busy',
+      'a deferred cycle at checkpoint-confirmed refuses as composer-busy, never as not-acked {cycle_id:null}');
+    assert.equal(harness.snapshot().lastDecision?.detail?.cycle_id, harness.core.state.cycle_id);
     assert.equal(
       harness.pty.writes.filter((w) => w.equals(Buffer.from(COMPOSER_KILL_LINE))).length, 0,
       'the operator text is never destroyed to make room for the request',
@@ -3920,8 +3928,12 @@ test('C2 the deferred request proceeds on a later tick once the operator submits
 
     // CR is the unambiguous boundary: the composer is known empty and the
     // next tick fires the request in the proven two-phase shape, AFTER the
-    // operator's own prompt, never merged with it.
+    // operator's own prompt, never merged with it. That tick is ALSO the one
+    // where the real transport walks requested -> confirmed, so the fire goes
+    // through the extended checkpoint-confirmed gate, not the requested one.
     harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed',
+      'the deferred request fires at checkpoint-confirmed via the deferred-cycle gate');
     assert.equal(capsuleTextWriteCount(harness), 1, 'the request fires on the first tick after the submission');
     assert.equal(capsuleEventCount(harness, 'capsule-request-write'), 1);
     assert.equal(capsuleEventCount(harness, 'capsule-request-resumed'), 1, 'the resume is a named event');
@@ -3975,9 +3987,31 @@ test('C4 uncertain input ownership (an unfinished or editing control) defers, an
 
     harness.operator(Buffer.from('\r')); // the operator submits whatever was recalled
     harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed',
+      'the release fires through the deferred-cycle gate at checkpoint-confirmed');
     assert.equal(capsuleTextWriteCount(harness), 1, 'CR is the boundary: the request fires on the next tick');
   } finally {
     harness.cleanup();
+  }
+
+  // The extended gate is keyed to the DEFERRED cycle only. A fresh runner
+  // (null deferred latch) that first ticks into an already-confirmed cycle —
+  // the relaunch shape — must inject nothing there, exactly as before.
+  const fresh = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(fresh.core.tick().state.state, 'pressure');
+    assert.equal(fresh.core.tick().state.state, 'checkpoint-requested');
+    assert.equal(fresh.core.tick().state.state, 'checkpoint-confirmed');
+    fresh.runner.output.observe();
+    fresh.runner.output.observe();
+    fresh.drive();
+    assert.equal(fresh.runner.capsuleRequestDeferredCycleId, null, 'nothing was deferred in this process');
+    assert.equal(capsuleTextWriteCount(fresh), 0, 'a fresh runner ticking into checkpoint-confirmed injects nothing');
+    assert.equal(capsuleDeferredEvents(fresh).length, 0);
+    assert.equal(fresh.snapshot().lastDecision?.code, 'runner-capsule-not-acked',
+      'the un-deferred confirmed cycle keeps its original not-acked refusal');
+  } finally {
+    fresh.cleanup();
   }
 });
 

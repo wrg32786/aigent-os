@@ -1201,6 +1201,16 @@ export class ManagedPtyRunner {
     // the usual two-phase shape. The cycle_id latch is spent by the FIRE
     // below, not by the deferral — a deferred cycle still owns its one write.
     // Once per cycle, not per tick: _event is a state-change log.
+    // FAIL-CLOSED CONSEQUENCE, stated plainly: the runner cannot see the
+    // composer, and CR is the only boundary the tracker trusts. An operator
+    // who typed and then cleared the line with Esc or Ctrl+C leaves the
+    // tracker tainted, so the request stays deferred until their next Enter
+    // — the transport sits at checkpoint-confirmed (not HOLD) with pressure
+    // still climbing, signalled by the one deferred event here plus the
+    // composer-busy refusal _prepareSubmission repeats each tick. Chosen over
+    // guessing: a wrong "empty" verdict is exactly the mangled prompt above.
+    // Known gap, not closed here: a relaunch starts a fresh tracker
+    // (knownEmpty) even if the composer already held text from before.
     const composer = this.input.snapshot();
     if (!composer.knownEmpty) {
       if (this.capsuleRequestDeferredCycleId !== cycleId) {
@@ -2008,10 +2018,22 @@ export class ManagedPtyRunner {
       // path while the turn is still open. This gate keeps ONLY the ack
       // requirement: no ack -> no clear, and the refusal stays visible on
       // every tick until the ack appears.
-      this.lastReason = {
-        code: 'runner-capsule-not-acked',
-        detail: { cycle_id: this.capsuleRequestCycleId },
-      };
+      // A request still DEFERRED behind operator text (composer guard) has not
+      // been written, so "not acked {cycle_id:null}" would misname the wait:
+      // the seat is not owed an ack yet, the runner is waiting on the
+      // composer. Name that instead, same detail shape as the deferral event.
+      const cycleId = coreResult?.state?.cycle_id;
+      const deferred = this.capsuleRequestDeferredCycleId === cycleId
+        && this.capsuleRequestCycleId !== cycleId;
+      this.lastReason = deferred
+        ? {
+          code: 'runner-capsule-request-composer-busy',
+          detail: { cycle_id: cycleId, input: this.input.snapshot() },
+        }
+        : {
+          code: 'runner-capsule-not-acked',
+          detail: { cycle_id: this.capsuleRequestCycleId },
+        };
       this._noteSubmissionRefusal(this.lastReason.code, this.lastReason.detail);
       return { status: 'refused', ...this.lastReason };
     }
