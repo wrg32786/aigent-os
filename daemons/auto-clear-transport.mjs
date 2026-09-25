@@ -1202,6 +1202,63 @@ export class AutoClearTransport {
       return resultFor(next, { transitioned: true, status: 'telemetry-recovered' });
     }
 
+    if (this.state.state.startsWith('HOLD:boot-receipt-')
+      && this.state.cycle_id === null
+      && this._resumeStateFromHold() === 'idle') {
+      // BOOT-RECEIPT HOLD RECOVERY (the headless-probe overwrite, measured
+      // live 2026-09-24): a headless `claude` job launched from the vault ran
+      // the SessionStart hook against the LIVE seat's memory root and
+      // overwrote boot-receipt.json with its own session_id. _startPressure
+      // then held boot-receipt-session-mismatch from idle -- correctly: the
+      // receipt no longer proved the bound session. But nothing re-checked
+      // that evidence afterwards, so restoring the correct receipt did not
+      // un-wedge the seat, and a relaunch into the SAME session cannot reach
+      // the inherited-cycle supersede above. Re-run the exact evidence check
+      // _startPressure makes: the hold lifts ONLY when a valid receipt for
+      // the bound session is back. A receipt that is missing, invalid, or for
+      // any other session keeps the hold -- this never rebinds sessionId (the
+      // telemetry branch owns that, on its own controls) and never weakens
+      // the mismatch check. Only holds raised from idle qualify (cycle_id
+      // null, resume_state idle); confirmClearObserved()'s receipt holds keep
+      // their clear-submitted binding and stay with the generic branch.
+      const boot = this._readBootReceipt();
+      const problem = !boot.ok
+        ? { code: boot.code, detail: boot.detail }
+        : boot.receipt.session_id !== this.sessionId
+          ? {
+            code: 'boot-receipt-session-mismatch',
+            detail: { expected: this.sessionId, observed: boot.receipt.session_id },
+          }
+          : null;
+      if (problem) {
+        if (this.state.hold.code === problem.code) {
+          return resultFor(this.state, {
+            status: 'hold',
+            code: problem.code,
+            detail: clone(this.state.hold.detail),
+          });
+        }
+        return this._holdResult(problem.code, problem.detail, 'idle');
+      }
+      this.log(`${this.state.state} released: receipt for bound session ${this.sessionId} restored at boot ${boot.receipt.boot_sequence}`);
+      const pressure = this._pressureObservable();
+      if (!pressure.ok) return this._holdResult(pressure.code, pressure.detail, 'idle');
+      if (pressure.observation.pct < this.pressureThresholdPct) {
+        const next = this._transition('idle', {
+          cycle_id: null,
+          session_id: this.sessionId,
+          boot_sequence_at_start: null,
+          clear_intent: null,
+        });
+        return resultFor(next, {
+          transitioned: true,
+          status: 'boot-receipt-recovered',
+          observable: clone(pressure.observation),
+        });
+      }
+      return this._startPressure(pressure.observation);
+    }
+
     if (this.state.state === 'pressure') {
       const gate = this._gatePressure('pressure');
       if (!gate.ok) return gate;
