@@ -36,7 +36,9 @@ import {
   DEGRADED_NODE_PTY,
   InputOwnershipTracker,
   ManagedPtyRunner,
+  WAKE_ENTER_RETRY_LIMIT,
   WAKE_MESSAGE,
+  WAKE_SUBMIT_SETTLE_TICKS,
   loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
@@ -4444,6 +4446,237 @@ test('L4 child-visible resume order is wake text, one Enter, then queued input i
     assert.equal(harness.fireEnter(), false, 'the wake Enter is exactly once');
   } finally {
     harness.cleanup();
+  }
+});
+
+// WATCHED WAKE SUBMISSION. Measured live 2026-09-24 and 2026-09-28: the
+// runner rebound on the fresh receipt, wrote the wake text, wrote its Enter
+// 400ms later -- while the fresh session was still running SessionStart hooks
+// (~20s). The keypress was dropped and the text sat unsent until the operator
+// pressed Enter. The scripted PTY never "accepts" anything, so in this
+// harness a lost Enter IS the default: no child output follows it and the
+// rebound session's transcript never gains the wake's user record. A landed
+// Enter is modelled by appending that record (the same evidence class the
+// capsule ack scan reads).
+
+function wakeTranscriptPath(harness) {
+  return transcriptPathFor({
+    cwd: harness.fixture.cwd,
+    sessionId: NEXT_SESSION_ID,
+    homeDir: harness.fixture.homeDir,
+  });
+}
+
+function landWakePrompt(harness) {
+  const target = wakeTranscriptPath(harness);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.appendFileSync(
+    target,
+    `${JSON.stringify({ type: 'user', message: { role: 'user', content: WAKE_MESSAGE } })}\n`,
+  );
+}
+
+function wakeEnterWrites(harness) {
+  const first = harness.pty.writes.findIndex((w) => w.equals(Buffer.from(WAKE_MESSAGE)));
+  assert.ok(first >= 0, 'setup: the wake text was written');
+  return harness.pty.writes.slice(first + 1)
+    .filter((w) => w.equals(Buffer.from(CONTROL_ENTER))).length;
+}
+
+function rebindWithWakeEnterLanded(harness) {
+  // Below the pressure threshold so the rebound core stays idle: these
+  // specimens prove the watch, not the pressure lifecycle.
+  harness.fixture.pressure.pct = 10;
+  const receipt = clearReceiptFor(harness, NEXT_SESSION_ID);
+  writeJson(harness.fixture.bootPath, receipt);
+  assert.equal(harness.runner._rebindAfterClear(receipt), true, 'setup: rebind');
+  assert.equal(harness.fireEnter(), true, 'setup: the wake Enter physically writes');
+  assert.equal(harness.runner.inputHold, false, 'setup: the physical Enter releases the hold (L4 contract)');
+  assert.ok(harness.runner.wakeSubmission !== null, 'the physical Enter arms the watch');
+}
+
+// One tick notices the new output; WAKE_SUBMIT_SETTLE_TICKS still ticks
+// after it make the settle window.
+function settleChildOutput(harness, text = 'composer-repaint\r\n') {
+  harness.childOutput(text);
+  for (let i = 0; i <= WAKE_SUBMIT_SETTLE_TICKS; i += 1) harness.drive();
+}
+
+test('W1 a wake Enter lost to session-start hooks is unsubmitted, re-pressed only on settled output, then committed by the transcript record', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    rebindWithWakeEnterLanded(harness);
+    assert.deepEqual(harness.pty.writes, [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER)]);
+
+    // THE REPRODUCTION: Enter written, nothing accepted it. Detectable as
+    // NOT submitted -- no user record, no child output after the Enter.
+    assert.equal(fs.existsSync(wakeTranscriptPath(harness)), false, 'no wake prompt record exists');
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, 'silence is not a submission');
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'elapsed ticks alone never press Enter (not a bare sleep)');
+    assert.equal(wakeEnterWrites(harness), 1);
+
+    // Hooks still running: the child keeps painting, so nothing settles.
+    for (let i = 0; i < WAKE_SUBMIT_SETTLE_TICKS * 2; i += 1) {
+      harness.childOutput(`hook-spinner-${i}\r\n`);
+      harness.drive();
+    }
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'busy output cannot buy a retry');
+
+    // Hooks finish, the composer repaints, the screen holds still.
+    harness.childOutput('composer-repaint\r\n');
+    for (let i = 0; i < WAKE_SUBMIT_SETTLE_TICKS; i += 1) harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'the settle window is not yet met');
+    harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 1, 'settled post-Enter output buys exactly one retry');
+    assert.equal(wakeEnterWrites(harness), 2, 'the retry is a second physical Enter');
+    assert.equal(wakeWriteCount(harness), 1, 'the wake TEXT is never rewritten');
+    assert.deepEqual(
+      harness.pty.writes,
+      [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER), Buffer.from(CONTROL_ENTER)],
+    );
+
+    // The re-pressed Enter lands: the seat records the prompt.
+    landWakePrompt(harness);
+    harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 1);
+    assert.equal(harness.runner.wakeSubmission, null, 'the watch closes on commitment');
+    const committed = harness.runner.events.find((e) => e.name === 'wake-submission-committed');
+    assert.deepEqual({ enters: committed.detail.enters, retries: committed.detail.retries }, { enters: 2, retries: 1 });
+
+    settleChildOutput(harness);
+    settleChildOutput(harness);
+    assert.equal(wakeEnterWrites(harness), 2, 'a committed wake buys no further Enter');
+    assert.equal(harness.runner.automationEnabled, true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('W2 a wake Enter accepted the first time is committed with no retry and no duplicate Enter', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    rebindWithWakeEnterLanded(harness);
+    harness.childOutput('turn-started\r\n');
+    landWakePrompt(harness);
+    harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 1);
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0);
+
+    for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(wakeEnterWrites(harness), 1, 'exactly one Enter, ever');
+    assert.equal(wakeWriteCount(harness), 1);
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0);
+    assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('W3 operator bytes after the wake end the watch by name: no retry over their composer', async (t) => {
+  for (const kind of ['typed-after-enter', 'queued-behind-enter']) {
+    await t.test(kind, () => {
+      const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+      try {
+        const operatorBytes = Buffer.from(`operator-${kind}`);
+        if (kind === 'queued-behind-enter') {
+          // L4b shape: typed while the wake Enter was pending, released
+          // behind it -- those bytes now share the composer with the text.
+          harness.fixture.pressure.pct = 10;
+          const receipt = clearReceiptFor(harness, NEXT_SESSION_ID);
+          writeJson(harness.fixture.bootPath, receipt);
+          assert.equal(harness.runner._rebindAfterClear(receipt), true);
+          harness.operator(operatorBytes);
+          assert.equal(harness.fireEnter(), true);
+        } else {
+          rebindWithWakeEnterLanded(harness);
+          harness.operator(operatorBytes);
+        }
+        assert.deepEqual(
+          harness.pty.writes,
+          [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER), operatorBytes],
+          'operator bytes pass through untouched after the physical Enter',
+        );
+
+        harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 1);
+        const closed = harness.runner.events.find((e) => e.name === 'wake-submission-unconfirmed');
+        assert.equal(closed.detail.reason, 'operator-input');
+        assert.equal(harness.runner.wakeSubmission, null);
+
+        for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+        assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'no retry may follow operator bytes');
+        assert.equal(wakeEnterWrites(harness), 1);
+        assert.deepEqual(
+          harness.pty.writes,
+          [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER), operatorBytes],
+          'the watch writes nothing over an operator-touched composer',
+        );
+        assert.equal(harness.runner.inputHold, false);
+        assert.equal(harness.runner.automationEnabled, true, 'operator input is sovereignty, not a fault');
+      } finally {
+        harness.cleanup();
+      }
+    });
+  }
+});
+
+test('W4 the retry cap ends the watch by name with the hold released and nothing further written', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    rebindWithWakeEnterLanded(harness);
+    for (let attempt = 1; attempt <= WAKE_ENTER_RETRY_LIMIT; attempt += 1) {
+      settleChildOutput(harness, `repaint-${attempt}\r\n`);
+      assert.equal(wakeEventCount(harness, 'wake-enter-retry'), attempt, `retry ${attempt} on settled output`);
+      assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 0);
+    }
+    assert.equal(wakeEnterWrites(harness), 1 + WAKE_ENTER_RETRY_LIMIT);
+
+    settleChildOutput(harness, 'repaint-after-last-retry\r\n');
+    assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 1);
+    const closed = harness.runner.events.find((e) => e.name === 'wake-submission-unconfirmed');
+    assert.equal(closed.detail.reason, 'retry-cap');
+    assert.equal(closed.detail.retries, WAKE_ENTER_RETRY_LIMIT);
+    assert.equal(harness.runner.wakeSubmission, null);
+    assert.equal(harness.runner.inputHold, false, 'the cap releases nothing it held and holds nothing new');
+    assert.deepEqual(harness.runner.queuedInput, []);
+    assert.equal(harness.runner.automationEnabled, true, 'an unconfirmed wake is loud, not terminal');
+
+    for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+    assert.equal(wakeEnterWrites(harness), 1 + WAKE_ENTER_RETRY_LIMIT, 'the cap is a cap');
+    assert.equal(wakeWriteCount(harness), 1, 'the wake TEXT is never rewritten');
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), WAKE_ENTER_RETRY_LIMIT);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('W5 disable and cancellation close a pending wake watch by name and never retry afterwards', async (t) => {
+  for (const kind of ['kill-switch', 'cancellation']) {
+    await t.test(kind, () => {
+      const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+      try {
+        rebindWithWakeEnterLanded(harness);
+        if (kind === 'kill-switch') {
+          harness.setGuard('killSwitch', true);
+          harness.drive();
+        } else {
+          harness.cancel();
+        }
+        assert.equal(harness.runner.automationEnabled, false);
+        assert.equal(harness.runner.wakeSubmission, null);
+        assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 1);
+        const closed = harness.runner.events.find((e) => e.name === 'wake-submission-unconfirmed');
+        assert.equal(closed.detail.reason, 'automation-disabled');
+
+        for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+        assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0);
+        assert.deepEqual(harness.pty.writes, [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER)]);
+      } finally {
+        harness.cleanup();
+      }
+    });
   }
 });
 
