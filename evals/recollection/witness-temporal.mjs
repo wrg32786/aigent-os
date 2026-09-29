@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * witness-temporal.mjs — red/green witness for temporal supersession.
+ * witness-temporal.mjs: red/green witness for temporal supersession.
  *
  * This is NOT a second benchmark runner (PREREG-001 8 forbids one). It scores
  * no class, applies no gate, computes no fixture hash and writes no result
@@ -27,7 +27,7 @@
  * Requires the real model, exactly as PREREG-001 4.3 items 2 and 3 require of
  * the benchmark, which is why this file lives here and NOT under daemons/tests/
  * (that directory is auto-discovered by CI, which does not install
- * daemons/semantic-search/node_modules — PREREG-001 7.3).
+ * daemons/semantic-search/node_modules, PREREG-001 7.3).
  *
  * Usage:
  *   node evals/recollection/witness-temporal.mjs [--keep]

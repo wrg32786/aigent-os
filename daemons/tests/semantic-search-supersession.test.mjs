@@ -31,7 +31,7 @@ let failed = 0;
 let checked = 0;
 const check = (name, ok, detail = '') => {
   checked++;
-  console.log(`${ok ? 'ok' : 'FAIL'}: ${name}${detail ? ` — ${detail}` : ''}`);
+  console.log(`${ok ? 'ok' : 'FAIL'}: ${name}${detail ? `, ${detail}` : ''}`);
   if (!ok) failed++;
 };
 
