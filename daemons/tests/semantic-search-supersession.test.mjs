@@ -63,7 +63,11 @@ function makeSandbox(name) {
   for (const f of ['deny-list.mjs', 'namespace-registry.mjs', 'search-vault.js']) {
     copyFileSync(path.join(SEM, f), path.join(sem, f));
   }
-  for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  // memory-root.cjs joined the sandbox when the product base moved from 6c2d16f to
+  // 349d181: search-vault.js and embed-vault.js now resolve the memory tree
+  // through it (master fe1349c), and a sandbox without it fails at import, not
+  // at a check. Same copy list precompact-flush.test.mjs uses.
+  for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'memory-root.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, f), path.join(root, 'daemons', f));
   }
   copyFileSync(path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'), path.join(hygiene, 'resume-framing.mjs'));

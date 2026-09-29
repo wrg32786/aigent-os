@@ -65,7 +65,9 @@ function makeSandbox() {
   for (const f of ['deny-list.mjs', 'namespace-registry.mjs', 'embed-vault.js', 'search-vault.js', 'namespace-registry.json']) {
     copyFileSync(path.join(SEM, f), path.join(sem, f));
   }
-  for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  // memory-root.cjs joined the sandbox when the product base moved from 6c2d16f to
+  // 349d181 (master fe1349c): embed-vault.js and search-vault.js import it.
+  for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'memory-root.cjs', 'capsule-content-gate.mjs']) {
     copyFileSync(path.join(DAEMONS, f), path.join(root, 'daemons', f));
   }
   copyFileSync(path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'), path.join(hygiene, 'resume-framing.mjs'));
