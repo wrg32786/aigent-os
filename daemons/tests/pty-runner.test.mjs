@@ -3848,6 +3848,173 @@ test('T3d a null scheduleEnter result is the named schedule failure and stays fa
   }
 });
 
+// Composer guard (measured live 2026-09-24): the pressure request fired while
+// the operator had a partially typed prompt sitting in the composer — no hold,
+// no pending Enter, so the operator's bytes had already passed straight
+// through — and '/context-capsule' + Enter were appended to that text and
+// submitted as one mangled prompt. The retired legacy supervisor refused this
+// case outright ("ENTRY-BLOCKED: composer already holds OTHER content"). The
+// runner's only honest signal is InputOwnershipTracker: bytes seen since the
+// last CR mean the composer MAY hold operator text, and anything unknown
+// (arrows, ESC, controls) means the runner cannot say. Either way the request
+// DEFERS — never a kill-line, never a sleep — and retries on later ticks once
+// the composer is known empty. Deferring must not spend the cycle_id latch.
+function capsuleDeferredEvents(harness) {
+  return harness.runner.events.filter((event) => event.name === 'capsule-request-deferred');
+}
+
+test('C1 partial operator text defers the capsule request; the operator bytes are preserved byte-for-byte', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    // No hold, no pending Enter: the partial prompt passes straight through
+    // to the child composer, exactly as it did live.
+    const partial = Buffer.from('fix the flaky test in');
+    harness.operator(partial);
+    assert.deepEqual(harness.pty.writes, [partial], 'operator sovereignty: the partial text passes through untouched');
+
+    harness.drive(); // pressure -> checkpoint-requested: the request would fire here
+    assert.equal(harness.core.state.state, 'checkpoint-requested');
+    assert.equal(capsuleTextWriteCount(harness), 0,
+      `the request must NOT be appended to the operator's partial text (writes: ${JSON.stringify(harness.pty.writes.map(String))})`);
+    assert.equal(harness.fireEnter(), false, 'no Enter is scheduled for a deferred request');
+    assert.deepEqual(harness.pty.writes, [partial],
+      'the deferral writes nothing: no request, no kill-line, no CR — the operator text is preserved byte-for-byte');
+    assert.equal(capsuleDeferredEvents(harness).length, 1, 'the deferral is a named event');
+    assert.equal(capsuleDeferredEvents(harness)[0].detail?.code, 'runner-capsule-request-composer-busy');
+    assert.equal(harness.runner.capsuleRequestCycleId, null,
+      'deferring must not spend the cycle_id latch');
+
+    // Further ticks in the same cycle with the text still sitting there: still
+    // deferred, still nothing written, and the event is a state change — logged
+    // once per cycle, not per tick.
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'idle ticks never write over operator text');
+    assert.deepEqual(harness.pty.writes, [partial]);
+    assert.equal(capsuleDeferredEvents(harness).length, 1, 'one deferral event per cycle, not per tick');
+    // The transport has walked on to checkpoint-confirmed meanwhile, where the
+    // ack gate refuses each tick. While the request is still deferred that
+    // refusal must name the composer wait, not a "not acked" for a request
+    // that was never written.
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed');
+    assert.equal(harness.snapshot().lastDecision?.code, 'runner-capsule-request-composer-busy',
+      'a deferred cycle at checkpoint-confirmed refuses as composer-busy, never as not-acked {cycle_id:null}');
+    assert.equal(harness.snapshot().lastDecision?.detail?.cycle_id, harness.core.state.cycle_id);
+    assert.equal(
+      harness.pty.writes.filter((w) => w.equals(Buffer.from(COMPOSER_KILL_LINE))).length, 0,
+      'the operator text is never destroyed to make room for the request',
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C2 the deferred request proceeds on a later tick once the operator submits their own prompt', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    const partial = Buffer.from('fix the flaky test in');
+    harness.operator(partial);
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'setup: deferred behind the partial text');
+
+    // The operator finishes and submits their prompt themselves. Sovereignty:
+    // it passes through immediately, untouched — no queueing, no hold.
+    const rest = Buffer.from(' the runner\r');
+    harness.operator(rest);
+    assert.deepEqual(harness.pty.writes, [partial, rest], 'the operator submission passes through unchanged');
+    assert.equal(capsuleTextWriteCount(harness), 0,
+      'the operator submission itself writes no request — the request waits for its own tick');
+
+    // CR is the unambiguous boundary: the composer is known empty and the
+    // next tick fires the request in the proven two-phase shape, AFTER the
+    // operator's own prompt, never merged with it. That tick is ALSO the one
+    // where the real transport walks requested -> confirmed, so the fire goes
+    // through the extended checkpoint-confirmed gate, not the requested one.
+    harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed',
+      'the deferred request fires at checkpoint-confirmed via the deferred-cycle gate');
+    assert.equal(capsuleTextWriteCount(harness), 1, 'the request fires on the first tick after the submission');
+    assert.equal(capsuleEventCount(harness, 'capsule-request-write'), 1);
+    assert.equal(capsuleEventCount(harness, 'capsule-request-resumed'), 1, 'the resume is a named event');
+    assert.equal(harness.runner.capsuleRequestCycleId, harness.core.state.cycle_id, 'the latch is spent by the fire, not the deferral');
+    const writes = harness.pty.writes.map((w) => w.toString('latin1'));
+    assert.deepEqual(writes, [partial.toString(), rest.toString(), CAPSULE_REQUEST_TEXT],
+      'physical order: operator text, operator CR, then the request text as its own chunk');
+    assert.equal(harness.fireEnter(), true, 'the request Enter is its own separate write');
+    assert.equal(capsuleEventCount(harness, 'capsule-request-enter-write'), 1);
+
+    // One request per cycle still holds after a deferral.
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'a deferred-then-fired request never fires twice');
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+    assert.equal(harness.fireEnter(), false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C3 an empty composer fires the request immediately, and a submitted prompt counts as empty', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    // A whole prompt, submitted: bytes were seen, but the CR closed them.
+    harness.operator(Buffer.from('run the suite\r'));
+    harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-requested');
+    assert.equal(capsuleTextWriteCount(harness), 1, 'a submitted prompt leaves the composer empty — the request fires as before');
+    assert.equal(capsuleDeferredEvents(harness).length, 0, 'no deferral on an empty composer');
+    assert.equal(harness.fireEnter(), true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C4 uncertain input ownership (an unfinished or editing control) defers, and the operator CR releases it', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    // Arrow-up recalls history into the composer: the runner cannot see what
+    // is there now. Fail closed — defer, do not guess.
+    const arrowUp = Buffer.from(`${ESC}[A`);
+    harness.operator(arrowUp);
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'unknown composer contents defer the request');
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+    assert.equal(capsuleDeferredEvents(harness)[0].detail?.detail?.input?.unknown, true,
+      'the deferral names the tracker state so the cause is diagnosable from disk');
+    assert.deepEqual(harness.pty.writes, [arrowUp], 'nothing is written over the recalled text');
+
+    harness.operator(Buffer.from('\r')); // the operator submits whatever was recalled
+    harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-confirmed',
+      'the release fires through the deferred-cycle gate at checkpoint-confirmed');
+    assert.equal(capsuleTextWriteCount(harness), 1, 'CR is the boundary: the request fires on the next tick');
+  } finally {
+    harness.cleanup();
+  }
+
+  // The extended gate is keyed to the DEFERRED cycle only. A fresh runner
+  // (null deferred latch) that first ticks into an already-confirmed cycle —
+  // the relaunch shape — must inject nothing there, exactly as before.
+  const fresh = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(fresh.core.tick().state.state, 'pressure');
+    assert.equal(fresh.core.tick().state.state, 'checkpoint-requested');
+    assert.equal(fresh.core.tick().state.state, 'checkpoint-confirmed');
+    fresh.runner.output.observe();
+    fresh.runner.output.observe();
+    fresh.drive();
+    assert.equal(fresh.runner.capsuleRequestDeferredCycleId, null, 'nothing was deferred in this process');
+    assert.equal(capsuleTextWriteCount(fresh), 0, 'a fresh runner ticking into checkpoint-confirmed injects nothing');
+    assert.equal(capsuleDeferredEvents(fresh).length, 0);
+    assert.equal(fresh.snapshot().lastDecision?.code, 'runner-capsule-not-acked',
+      'the un-deferred confirmed cycle keeps its original not-acked refusal');
+  } finally {
+    fresh.cleanup();
+  }
+});
+
 // PATCH-001K: a verified fresh rebound is the complete wake predicate. The
 // existing two-part transport writes the text synchronously at rebind, then
 // submits it with one separately scheduled Enter. No transcript, input,
