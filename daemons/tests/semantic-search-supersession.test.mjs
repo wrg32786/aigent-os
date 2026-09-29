@@ -139,7 +139,7 @@ function search(box, args, env = {}) {
   if (marker !== -1) {
     try { rows = JSON.parse(stdout.slice(marker + '\nJSON:\n'.length).trim()); } catch { rows = null; }
   }
-  // search-vault.js:198 renders the path through inert(), i.e. JSON.stringify
+  // search-vault.js renders each result's path through inert(), i.e. JSON.stringify
   // of the bounded single-line value (lifecycle-common.mjs:283-287).
   const head = marker === -1 ? stdout : stdout.slice(0, marker);
   const humanPaths = [...head.matchAll(/^ {3}Path: (.+)$/gm)].map((m) => {
@@ -219,6 +219,62 @@ writeFileSync(box.embeddings, indexText(NOTES));
   console.log(off.paths[0] === EXPIRED && back.paths[back.paths.length - 1] === EXPIRED
     ? 'WITNESS GREEN: disabling the demotion restores the ended window to rank 1, and the default demotes it to last'
     : 'WITNESS RED: the demotion is not what moved the ended window');
+}
+
+// ── EDGE: the boundary, the clock, the calendar, and per-note expiry ─────────
+// Round-4 review (F1 to F3): three mutations survived the rows above because
+// every fixture date sat years from the boundary and no note had two chunks.
+// AIGENT_SEARCH_NOW pins the clock so these rows assert fixed instants.
+{
+  const EDGE_NOTES = [
+    ['memory/ends-today.md', 0.99, 'Valid from 2026-01-01 to 2026-09-29'],
+    ['memory/long-note.md', 0.94, 'Valid from 2020-01-01 to 2021-12-31'],
+    ['memory/impossible-day.md', 0.90, 'Valid from 2020-01-01 to 2021-02-30'],
+    ['memory/filler-a.md', 0.80, null],
+    ['memory/filler-b.md', 0.70, null],
+    ['memory/filler-c.md', 0.60, null],
+    ['memory/filler-d.md', 0.50, null],
+  ];
+  const edge = makeSandbox('edge');
+  // The long note's second chunk carries no validity line and OUTSCORES the
+  // chunk that does. search-vault keeps one row per path (its best chunk), so
+  // the row that survives is the line-less one: only path-level expiry can
+  // demote it. Per-chunk expiry would leave it at rank 2.
+  const parsed = JSON.parse(indexText(EDGE_NOTES));
+  parsed.notes.splice(1, 0, {
+    path: 'memory/long-note.md', title: 'long-note', tags: [], mtime: 0,
+    chunk: body('long-note (continued)', null).slice(0, 500), embedding: vec(0.95),
+  });
+  parsed.noteCount = parsed.entryCount = parsed.notes.length;
+  writeFileSync(edge.embeddings, JSON.stringify(parsed));
+  const at = (iso, extra = {}) => search(edge, ['what is the rule', '--top', '10'], { AIGENT_SEARCH_NOW: iso, ...extra });
+
+  const early = at('2026-09-29T00:00:00.000Z');
+  check('boundary: at the first instant of the end date the window has NOT ended',
+    early.paths[0] === 'memory/ends-today.md', JSON.stringify(early.paths));
+  const last = at('2026-09-29T23:59:59.999Z');
+  check('boundary: at the last instant of the end date the window has NOT ended',
+    last.paths[0] === 'memory/ends-today.md', JSON.stringify(last.paths));
+  const after = at('2026-09-30T00:00:00.000Z');
+  check('boundary: one millisecond into the next day the window HAS ended',
+    after.paths[0] !== 'memory/ends-today.md' && after.paths.includes('memory/ends-today.md'), JSON.stringify(after.paths));
+  const tz = at('2026-09-29T23:59:59.999Z', { TZ: 'Etc/GMT-14' });
+  check('boundary: the end is anchored to UTC, not the reader\'s timezone (TZ=UTC+14 does not end it early)',
+    tz.paths[0] === 'memory/ends-today.md', JSON.stringify(tz.paths));
+
+  check('per-note expiry: the surviving line-less chunk of the long note is demoted to last (expiry keyed by path, not chunk)',
+    early.paths.filter((p) => p === 'memory/long-note.md').length === 1
+      && early.paths[early.paths.length - 1] === 'memory/long-note.md',
+    JSON.stringify(early.paths));
+
+  check('impossible day: 2021-02-30 is reported as unreadable, not parsed as March 2',
+    /unreadable validity/i.test(early.stderr) && early.stderr.includes('memory/impossible-day.md'), early.stderr.slice(0, 300));
+  check('impossible day: the row keeps its cosine rank',
+    early.paths.indexOf('memory/impossible-day.md') === 1, JSON.stringify(early.paths));
+
+  const bad = search(edge, ['what is the rule'], { AIGENT_SEARCH_NOW: 'yesterday' });
+  check('clock override: an unreadable AIGENT_SEARCH_NOW is refused loudly (exit 1), never ignored',
+    bad.status === 1 && /AIGENT_SEARCH_NOW/.test(bad.stderr), `${bad.status} ${bad.stderr.slice(0, 200)}`);
 }
 
 console.log(`${failed === 0 ? 'All' : `${failed} of`} ${checked} supersession checks ${failed === 0 ? 'passed' : 'FAILED'}`);

@@ -17,11 +17,11 @@
  * Condition 2 is the load-bearing assertion. At the base commit the current
  * note is already rank 1 in six of the eight cases, so a witness that asserted
  * only the current note's rank would read GREEN against the unfixed product in
- * six of eight cases and prove nothing. That is the same vacuity the round-2
- * review of Phase B caught in the F3 inversion clause.
+ * six of eight cases and prove nothing. A witness that cannot go red proves
+ * nothing, which is why the disabled-gate run below must fail.
  *
- * It also asserts that the human render (search-vault.js:190-204) and the JSON
- * block (search-vault.js:172-179) list the same paths in the same order, so a
+ * It also asserts that the human render and the JSON block in search-vault.js
+ * list the same paths in the same order, so a
  * ranking decision applied to one output path and not the other is caught.
  *
  * Requires the real model, exactly as PREREG-001 4.3 items 2 and 3 require of
@@ -49,7 +49,7 @@ const SEM = path.join(DAEMONS, 'semantic-search');
 const CORPUS = path.join(HERE, 'corpus');
 const FIXTURE_REGISTRY = path.join(HERE, 'fixture-registry');
 
-// K = 5, matching DEFAULT_TOP_K at search-vault.js:48 and PREREG-001 3.1.
+// K = 5, matching DEFAULT_TOP_K in search-vault.js and PREREG-001 3.1.
 const K = 5;
 const KEEP = process.argv.includes('--keep');
 
@@ -108,7 +108,7 @@ function search(box, query) {
     try { rows = JSON.parse(r.stdout.slice(marker + '\nJSON:\n'.length).trim()); } catch { rows = null; }
   }
   // The human render's own path list, for the two-output-paths cross-check.
-  // search-vault.js:198 renders the path through inert(), which is
+  // search-vault.js renders each result's path through inert(), which is
   // JSON.stringify of the single-line bounded value (lifecycle-common.mjs:283-287),
   // so the printed token is a JSON string literal and is parsed back here.
   const head = marker === -1 ? r.stdout : r.stdout.slice(0, marker);

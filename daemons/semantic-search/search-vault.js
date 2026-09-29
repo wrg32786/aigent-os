@@ -122,6 +122,26 @@ function cosineSimilarity(a, b) {
 const SUPERSESSION_OFF = process.env.AIGENT_SEARCH_DISABLE_SUPERSESSION === '1';
 const VALIDITY_LINE = /^Valid from (.+?)\s*$/m;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+// AIGENT_SEARCH_NOW=<ISO instant> pins the clock the demotion compares against.
+// Test-only: it lets a suite witness the end-of-day boundary and the UTC
+// anchoring on fixed dates instead of waiting for the calendar. Unset in
+// production, and an unreadable value is refused rather than ignored.
+const NOW_OVERRIDE = process.env.AIGENT_SEARCH_NOW;
+if (NOW_OVERRIDE !== undefined && Number.isNaN(Date.parse(NOW_OVERRIDE))) {
+  console.error(`search-vault: AIGENT_SEARCH_NOW is not an ISO instant: ${inert(NOW_OVERRIDE, 80)}`);
+  process.exit(1);
+}
+const nowMs = () => (NOW_OVERRIDE !== undefined ? Date.parse(NOW_OVERRIDE) : Date.now());
+
+// A calendar day is readable only if it has the ISO shape AND names a day that
+// exists: Date.parse('2026-02-30T...') silently yields March 2, so the shape
+// check alone would let an impossible date change a ranking. Round-tripping
+// through toISOString refuses it.
+function isoDay(s) {
+  if (!ISO_DAY.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
 
 function endedWindowPaths(rows, nowMs) {
   const ended = new Set();
@@ -134,7 +154,7 @@ function endedWindowPaths(rows, nowMs) {
     const to = String(parts[1]).trim();
     // Dates are read as whole UTC days, so a window ends at the last instant of
     // its end date and the comparison does not depend on the reader's timezone.
-    const end = parts.length === 2 && ISO_DAY.test(from) && ISO_DAY.test(to)
+    const end = parts.length === 2 && isoDay(from) && isoDay(to)
       ? Date.parse(`${to}T23:59:59.999Z`)
       : NaN;
     if (Number.isNaN(end)) {
@@ -218,7 +238,7 @@ async function main() {
   // Demote every chunk whose validity window has ended below every chunk whose
   // has not. Placed here, between the sort and the truncation below, so a
   // demoted row leaves the top K instead of being reordered inside it.
-  const ranked = demoteSuperseded(scored, Date.now());
+  const ranked = demoteSuperseded(scored, nowMs());
 
   // Deduplicate by file path — keep best-scoring chunk per file
   const seen = new Set();
