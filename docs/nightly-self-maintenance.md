@@ -184,6 +184,11 @@ human gate.
 aigent-OS does not install an operating-system scheduler. The examples below
 are recipes, not proof that a schedule exists.
 
+A headless job run from a live seat should set `AIGENT_STATE_HOME_DIR` to a
+disposable tree, because its SessionStart hook otherwise overwrites the live
+seat's `runtime/boot-receipt.json` with the job's own session and the managed
+runner holds on `boot-receipt-session-mismatch` at the next pressure cycle.
+
 ### macOS or Linux
 
 ```cron
