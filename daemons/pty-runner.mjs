@@ -120,6 +120,23 @@ export const DEFAULT_INPUT_HOLD_TTL_MS = 15_000;
 // receipt lands. Measured live 2026-08-05: 2m16s on a loaded box. The
 // settle-window TTL above must never govern that window.
 export const DEFAULT_CLEAR_VERIFY_TTL_MS = 300_000;
+// The wake Enter is WATCHED, like the clear's submission. Measured live
+// 2026-09-24 and 2026-09-28: the runner rebound on the fresh boot receipt,
+// wrote the wake text, wrote its Enter 400ms later -- and the fresh session
+// was still running its SessionStart hooks (~20s on that seat). The keypress
+// was dropped; the wake text sat unsent in the composer until the operator
+// pressed Enter (35s later on 09-24, by hand on 09-28). The text is NEVER
+// rewritten (that duplicates it). Only the Enter is pressed again, on
+// evidence, never on elapsed time: the child must have produced output since
+// the last Enter (hooks finished, screen repainted) and that output must then
+// hold still for a settle window. Confirmation is the same evidence class the
+// capsule ack uses -- the seat's own transcript gaining a USER record that
+// carries the wake text (clean JSONL, not the ANSI screen). Retries are
+// capped, the whole watch is tick-budgeted, and operator bytes end it.
+export const WAKE_TRANSCRIPT_LITERAL = JSON.stringify(WAKE_MESSAGE).slice(1, -1);
+export const WAKE_ENTER_RETRY_LIMIT = 3;
+export const WAKE_SUBMIT_SETTLE_TICKS = 10;
+export const WAKE_SUBMIT_WATCH_TICKS = 1200;
 
 function hasOwn(value, field) {
   return value !== null
@@ -964,6 +981,9 @@ export class ManagedPtyRunner {
     this.capsuleAckSeen = false;
     // Exactly-once latch for the synchronous post-clear wake.
     this.wakeSessionId = null;
+    // Watched wake submission: armed when the wake Enter physically lands,
+    // closed by name (committed / unconfirmed). Null outside that window.
+    this.wakeSubmission = null;
     this.currentControlWriteAttempted = false;
     this.started = false;
     this.closed = false;
@@ -1885,6 +1905,7 @@ export class ManagedPtyRunner {
       code = this.lastReason.code;
       detail = this.lastReason.detail;
     }
+    this._closeWakeSubmission('automation-disabled', { code });
     this.token = null;
     this.currentControlWriteAttempted = false;
     this.resumeReceipt = null;
@@ -1947,7 +1968,7 @@ export class ManagedPtyRunner {
       this._disableAutomation(reason, { source: 'cancellation' });
       return true;
     }
-    if (this.wakeEnterHandle !== null) {
+    if (this.wakeEnterHandle !== null || this.wakeSubmission !== null) {
       this._disableAutomation(reason, { source: 'cancellation' });
       return true;
     }
@@ -2438,6 +2459,9 @@ export class ManagedPtyRunner {
       this._event('wake-enter-write', CONTROL_ENTER);
       this.pty.write(CONTROL_ENTER);
       this.wakeEnterHandle = null;
+      // Armed BEFORE the release: the watch must know whether queued operator
+      // bytes are about to follow the Enter into the composer.
+      this._armWakeSubmissionWatch();
       this._releaseInputHold('wake-enter-written');
       this._flushQueuedInput();
     } catch (error) {
@@ -2450,6 +2474,132 @@ export class ManagedPtyRunner {
       };
       this._event('wake-enter-write-failed', this.lastReason);
       this._disableAutomation(this.lastReason.code, this.lastReason.detail);
+    }
+  }
+
+  // Watched wake submission (see WAKE_ENTER_RETRY_LIMIT). Armed at the
+  // physical wake Enter, before queued input releases behind it. The
+  // transcript offset noted here is where the wake's own USER record must
+  // appear -- nothing before the Enter can be that record.
+  _armWakeSubmissionWatch() {
+    let transcriptFrom = 0;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
+      transcriptFrom = transcript ? fs.statSync(transcript).size : 0;
+    } catch { transcriptFrom = 0; }
+    this.wakeSubmission = {
+      enters: 1,
+      retries: 0,
+      ticks: 0,
+      transcriptFrom,
+      inputUnits: this.input.receivedUnits,
+      // Queued operator bytes release right behind this Enter. If the Enter
+      // was dropped they now share the composer with the wake text, and a
+      // retry Enter would submit THEIR blend -- the watch may only observe.
+      operatorBytes: this.queuedInput.length > 0,
+      outputGeneration: this.output.generation,
+      outputSeen: false,
+      settledTicks: 0,
+    };
+  }
+
+  _closeWakeSubmission(reason, detail = null) {
+    const watch = this.wakeSubmission;
+    if (watch === null) return;
+    this.wakeSubmission = null;
+    const counts = { enters: watch.enters, retries: watch.retries, ticks: watch.ticks };
+    if (reason === 'committed') {
+      this._event('wake-submission-committed', counts);
+      return;
+    }
+    this._event('wake-submission-unconfirmed', { reason, ...counts, ...(detail || {}) });
+  }
+
+  // Same scan shape as _checkCapsuleAck: bounded read past the noted offset,
+  // one complete line carrying both the wake text and the USER tag. A user
+  // record is the seat accepting the prompt; the operator's own Enter
+  // producing it counts too -- the wake landed either way.
+  _wakeRecordObserved(watch) {
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
+      if (!transcript) return false;
+      const size = fs.statSync(transcript).size;
+      if (size <= watch.transcriptFrom) return false;
+      const from = Math.max(0, watch.transcriptFrom - WAKE_TRANSCRIPT_LITERAL.length);
+      const length = Math.min(size - from, 262144);
+      const buffer = Buffer.alloc(length);
+      const fd = fs.openSync(transcript, 'r');
+      try { fs.readSync(fd, buffer, 0, length, from); } finally { fs.closeSync(fd); }
+      const landed = buffer.toString('utf8').split('\n').some((line) => (
+        line.includes(WAKE_TRANSCRIPT_LITERAL) && line.includes('"type":"user"')
+      ));
+      if (landed) return true;
+      const lastBreak = buffer.lastIndexOf(0x0a);
+      if (lastBreak >= 0) {
+        watch.transcriptFrom = Math.max(watch.transcriptFrom, from + lastBreak + 1);
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  _tickWakeSubmission() {
+    const watch = this.wakeSubmission;
+    watch.ticks += 1;
+    if (this._wakeRecordObserved(watch)) {
+      this._closeWakeSubmission('committed');
+      return;
+    }
+    // Operator sovereignty: any operator byte that reached the child since
+    // the wake text (queued release at the Enter, or live input since) ends
+    // the watch. Their composer, their Enter. Logged, never retried.
+    if (watch.operatorBytes || this.input.receivedUnits !== watch.inputUnits) {
+      this._closeWakeSubmission('operator-input');
+      return;
+    }
+    // Another automatic transaction owns the composer now; its own kill-line
+    // and Enter discipline govern whatever the wake left there.
+    if (this.inputHold || this.enterHandle !== null
+      || this.composerMayHoldControlText || this.phase !== 'idle') {
+      this._closeWakeSubmission('composer-busy', { phase: this.phase });
+      return;
+    }
+    if (watch.ticks > WAKE_SUBMIT_WATCH_TICKS) {
+      this._closeWakeSubmission('watch-budget', { ticks_budget: WAKE_SUBMIT_WATCH_TICKS });
+      return;
+    }
+    // Evidence gate: output SINCE the last Enter, then stillness. A dropped
+    // keypress leaves the seat busy (hooks) and later repainting; only that
+    // repaint settling says the seat can take a keypress now. Elapsed ticks
+    // alone never press Enter.
+    if (this.output.generation !== watch.outputGeneration) {
+      watch.outputGeneration = this.output.generation;
+      watch.outputSeen = true;
+      watch.settledTicks = 0;
+      return;
+    }
+    if (!watch.outputSeen) return;
+    watch.settledTicks += 1;
+    if (watch.settledTicks < WAKE_SUBMIT_SETTLE_TICKS) return;
+    if (watch.retries >= WAKE_ENTER_RETRY_LIMIT) {
+      this._closeWakeSubmission('retry-cap', { limit: WAKE_ENTER_RETRY_LIMIT });
+      return;
+    }
+    watch.retries += 1;
+    watch.enters += 1;
+    watch.outputSeen = false;
+    watch.settledTicks = 0;
+    try {
+      this._event('wake-enter-retry', { attempt: watch.retries, limit: WAKE_ENTER_RETRY_LIMIT });
+      this.pty.write(CONTROL_ENTER);
+    } catch (error) {
+      // The composer is untouched by anyone else, so nothing is stranded
+      // that was not already. Named, closed; the operator's Enter still works.
+      this.lastReason = {
+        code: 'runner-wake-enter-write-failed',
+        detail: errorText(error),
+      };
+      this._event('wake-enter-write-failed', this.lastReason);
+      this._closeWakeSubmission('enter-write-failed', { attempt: watch.retries });
     }
   }
 
@@ -2523,6 +2673,9 @@ export class ManagedPtyRunner {
         ...(this.lastReason || {}),
       };
     }
+    // The watched wake runs ahead of lifecycle work each tick so a retry
+    // Enter can never follow control text written later in the same tick.
+    if (this.wakeSubmission !== null) this._tickWakeSubmission();
 
     if (this.transport === null) {
       const binding = this._bindCurrentSession();
@@ -2720,6 +2873,7 @@ export class ManagedPtyRunner {
       this.lastReason = wakeCancellation;
       this._event('automation-disabled', this.lastReason);
     }
+    this._closeWakeSubmission('shutdown', { exit_code: normalizedExitCode });
     this.closed = true;
     this.exitCode = normalizedExitCode;
 
