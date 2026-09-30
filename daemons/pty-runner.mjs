@@ -368,6 +368,14 @@ const TERMINAL_REPORT_RESPONSES = [
 // Trailing params may be omitted entirely.
 const WIN32_INPUT_MODE_SHAPE = new RegExp(`^${ESC}\\[([\\d;]*)_$`);
 const VK_RETURN = 13;
+// Cs is KEY_EVENT_RECORD.dwControlKeyState (Windows console API). Only the
+// HELD-modifier bits make an Enter "not a plain submission":
+//   RIGHT_ALT_PRESSED 0x01  LEFT_ALT_PRESSED 0x02
+//   RIGHT_CTRL_PRESSED 0x04 LEFT_CTRL_PRESSED 0x08  SHIFT_PRESSED 0x10
+// The lock states (NUMLOCK_ON 0x20, SCROLLLOCK_ON 0x40, CAPSLOCK_ON 0x80)
+// and ENHANCED_KEY 0x100 (set on the numpad Enter) ride along on ordinary
+// submissions and must never veto one -- the mask deliberately stops at 0x1F.
+const WIN32_CS_MODIFIER_MASK = 0x1f;
 
 // Returns {vk, sc, uc, kd, cs, rc} for a syntactically valid win32-input-
 // mode key event, or null for anything that doesn't match the six-field
@@ -389,9 +397,55 @@ function parseWin32InputModeEvent(sequence) {
 /**
  * Fail-closed model of the operator's current input line.
  *
- * A CR is the only unambiguous submission boundary.  Completed terminal
+ * A PLAIN CR is the only unambiguous submission boundary.  Completed terminal
  * controls remain "unknown" because an arrow, delete, or editor sequence may
  * have changed text the runner cannot see.  Unknown is cleared only by CR.
+ *
+ * NEWLINE, NOT SUBMISSION (PR #59 review, P1): the composer's documented
+ * multiline-input keys arrive on the same wire as a submission and, wherever
+ * the tracker can tell them apart, must not be promoted to one -- a wrong
+ * "submitted" verdict is exactly the mangled prompt the capsule-request
+ * guard exists to prevent, while a wrong "still composing" verdict only
+ * defers until the operator's next plain Enter. So:
+ *   - a CR immediately preceded by a backslash (same chunk or split across
+ *     chunks; `lastByte` remembers) is Claude Code's backslash+Enter newline.
+ *     The backslash itself is composer text; the CR is an edit, not a CR
+ *     boundary. `/terminal-setup` makes Shift+Enter send exactly these bytes.
+ *   - a win32-input-mode VK_RETURN keydown with any HELD modifier bit in Cs
+ *     (Shift/Ctrl/Alt) is NOT proof of submission. Claude Code documents
+ *     Shift+Enter and Option/Alt+Enter as newline keys (interactive-mode,
+ *     "Multiline input"; Windows Terminal Shift+Enter "works without
+ *     setup"), and the legacy-VT encodings of the same chords (LF for
+ *     Ctrl+J, ESC CR for Alt+Enter) already read as non-submitting edits
+ *     here. Ctrl+Enter is the one chord Claude Code documents as a SEND
+ *     (chat:sendNow, v2.1.275+; older builds undocumented, and terminals
+ *     without extended keys deliver it as plain Enter anyway) -- the runner
+ *     cannot see the child's version or key decoding, so it is deliberately
+ *     kept on the non-submission side: the cost of being wrong there is one
+ *     deferral until the next plain Enter, never a mangled prompt. Lock and
+ *     enhanced bits (numpad Enter) do not count as modifiers.
+ *   - a LF (Ctrl+J) and an ESC CR (Alt+Enter) are control bytes and stay on
+ *     the existing taint path: dirty, never submitted.
+ * KNOWN RESIDUALS, stated so nobody "fixes" one into a permanent defer:
+ *   - Keybindings: chat:submit (Enter) and chat:newline (Ctrl+J) are
+ *     rebindable in ~/.claude/keybindings.json. The runner does not read
+ *     that file; an operator who moves submission off Enter defeats the CR
+ *     boundary in both directions.
+ *   - The Ctrl+Enter-only operator: under win32-input-mode every Ctrl+Enter
+ *     is a modified VK_RETURN, so an operator who habitually sends with
+ *     chat:sendNow and never presses a plain Enter is deferred INDEFINITELY
+ *     -- the capsule request AND the auto-clear both wait on a plain Enter
+ *     that never comes. Deliberate: a wrong "submitted" there is the mangled
+ *     prompt; the deferral is visible (composer-busy refusal every tick,
+ *     snapshot `lastNewline:true`) and clears at the next plain Enter.
+ *   - A CR after an intervening UNKNOWN control keeps the pre-existing
+ *     boundary semantics: the cursor context is unknown, `lastByte` is
+ *     null, and the CR submits and clears the taint. So `abc\` + DEL + CR
+ *     and `abc\` + Left + Right + CR both read as submitted even though the
+ *     byte before the cursor is (or may be) a backslash. Pre-existing
+ *     trade-off ("CR is the only thing that clears unknown"), kept: the
+ *     alternative pins the taint until a SECOND Enter for every operator
+ *     who edits a line with arrows or backspace.
  */
 export class InputOwnershipTracker {
   constructor() {
@@ -419,6 +473,14 @@ export class InputOwnershipTracker {
     // Flows into the refusal log's detail JSON via snapshot() -- without
     // this, "unknown:true" on a live seat names no mechanism to check.
     this.lastTaint = null;
+    // The last byte KNOWN to sit before the composer cursor, or null when the
+    // runner cannot say (fresh, just submitted, or after a control that may
+    // have moved the cursor). Only one value is ever consulted: a backslash,
+    // which turns the next CR into a newline instead of a submission.
+    // Snapshotted on ESC arrival like the flags above so a completed inert
+    // sequence (keyup, report) restores it and a decoded printable replaces it.
+    this.lastByte = null;
+    this.preSequenceLastByte = null;
   }
 
   // Records that this observation tainted the tracker and WHY, bounded and
@@ -440,6 +502,15 @@ export class InputOwnershipTracker {
     this.activePaste = false;
     this.activeControl = false;
     this.lastTaint = null;
+    this.lastByte = null;
+  }
+
+  // The CR (raw, or a win32 VK_RETURN keydown) was a composer NEWLINE, not a
+  // submission: the line stays dirty, nothing is cleared, and the byte before
+  // the cursor is now the newline itself -- so a second plain Enter submits.
+  _newline() {
+    this.knownEmpty = false;
+    this.lastByte = '\r';
   }
 
   observe(data) {
@@ -449,8 +520,16 @@ export class InputOwnershipTracker {
     for (const character of text) {
       if (this.mode === 'paste') {
         this.knownEmpty = false;
-        this.pasteEndProbe = `${this.pasteEndProbe}${character}`.slice(-6);
-        if (this.pasteEndProbe === '\u001b[201~') {
+        // Seven bytes, not six: the one before the end marker is the last
+        // PAYLOAD byte, which now sits before the cursor -- a paste ending
+        // in a backslash makes the operator's next Enter a newline too.
+        this.pasteEndProbe = `${this.pasteEndProbe}${character}`.slice(-7);
+        if (this.pasteEndProbe.endsWith('\u001b[201~')) {
+          // An EMPTY paste places nothing: the byte before the cursor is
+          // still whatever preceded the paste-start sequence.
+          this.lastByte = this.pasteEndProbe.length === 7
+            ? this.pasteEndProbe[0]
+            : this.preSequenceLastByte;
           this.mode = 'normal';
           this.pasteEndProbe = '';
           this.activePaste = false;
@@ -460,6 +539,13 @@ export class InputOwnershipTracker {
       }
 
       if (character === '\r' && this.mode === 'normal') {
+        // Backslash + Enter is Claude Code's documented newline: the CR is a
+        // composer edit, not a boundary (PR #59 review, P1). Same chunk or
+        // split across chunks -- lastByte carries across observe() calls.
+        if (this.lastByte === '\\') {
+          this._newline();
+          continue;
+        }
         this._submitted();
         continue;
       }
@@ -523,6 +609,7 @@ export class InputOwnershipTracker {
             this.unknown = this.preSequenceUnknown;
             this.knownEmpty = this.preSequenceKnownEmpty;
             this.lastTaint = this.preSequenceLastTaint;
+            this.lastByte = this.preSequenceLastByte;
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -537,6 +624,7 @@ export class InputOwnershipTracker {
             this.unknown = this.preSequenceUnknown;
             this.knownEmpty = this.preSequenceKnownEmpty;
             this.lastTaint = this.preSequenceLastTaint;
+            this.lastByte = this.preSequenceLastByte;
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -554,13 +642,30 @@ export class InputOwnershipTracker {
               this.unknown = this.preSequenceUnknown;
               this.knownEmpty = this.preSequenceKnownEmpty;
               this.lastTaint = this.preSequenceLastTaint;
+              this.lastByte = this.preSequenceLastByte;
+              this.mode = 'normal';
+              this.sequence = '';
+              this.activeControl = false;
+            } else if (event.kd === 1 && event.vk === VK_RETURN
+              && ((event.cs & WIN32_CS_MODIFIER_MASK) !== 0 || this.preSequenceLastByte === '\\')) {
+              // KEYDOWN Enter with a HELD modifier (Shift/Ctrl/Alt), or
+              // right after a backslash: a composer newline chord (Shift,
+              // Alt, backslash) or at best an unverifiable send (Ctrl, see
+              // the class comment) -- never PROOF of submission (PR #59
+              // review, P1: ESC[13;28;13;1;16;1_ is Shift+Enter,
+              // SHIFT_PRESSED=0x10). Treated like the printable branch
+              // below: dirty, unknown/lastTaint restored, no taint added.
+              // Lock/enhanced bits are masked out by WIN32_CS_MODIFIER_MASK.
+              this.unknown = this.preSequenceUnknown;
+              this.lastTaint = this.preSequenceLastTaint;
+              this._newline();
               this.mode = 'normal';
               this.sequence = '';
               this.activeControl = false;
             } else if (event.kd === 1 && event.vk === VK_RETURN) {
-              // KEYDOWN Enter: identical submission semantics to a raw CR
-              // -- unconditional, same as the raw-CR branch above, even if
-              // the line is currently unknown-tainted from something else.
+              // KEYDOWN plain Enter: identical submission semantics to a raw
+              // CR -- unconditional, same as the raw-CR branch above, even
+              // if the line is currently unknown-tainted from something else.
               this._submitted();
             } else if (event.kd === 1 && event.uc >= 0x20 && event.uc !== 0x7f) {
               // KEYDOWN printable (same 0x20..0x7e boundary the raw-byte
@@ -573,6 +678,7 @@ export class InputOwnershipTracker {
               this.unknown = this.preSequenceUnknown;
               this.knownEmpty = false;
               this.lastTaint = this.preSequenceLastTaint;
+              this.lastByte = String.fromCodePoint(event.uc);
               this.mode = 'normal';
               this.sequence = '';
               this.activeControl = false;
@@ -637,6 +743,11 @@ export class InputOwnershipTracker {
         this.preSequenceUnknown = this.unknown;
         this.preSequenceKnownEmpty = this.knownEmpty;
         this.preSequenceLastTaint = this.lastTaint;
+        // Null until the sequence proves inert (restore) or decodes to a
+        // printable (replace): a tainting control may have moved the cursor,
+        // so a CR after it keeps the pre-existing boundary semantics.
+        this.preSequenceLastByte = this.lastByte;
+        this.lastByte = null;
         this.mode = 'escape';
         this.sequence = character;
         this.activeControl = true;
@@ -650,6 +761,7 @@ export class InputOwnershipTracker {
         this._taint(character);
       }
       this.knownEmpty = false;
+      this.lastByte = character;
     }
     return this.snapshot();
   }
@@ -667,6 +779,15 @@ export class InputOwnershipTracker {
       unknown: this.unknown,
       receivedUnits: this.receivedUnits,
       lastTaint: this.lastTaint,
+      // Diagnosability (PR #59 review of 8d4a8b4): a deferral after a newline
+      // chord read {knownEmpty:false, unknown:false, lastTaint:null} --
+      // indistinguishable from typed text. lastByte is JSON-escaped so the
+      // refusal log stays printable (a CR renders as \r, a backslash as \\);
+      // lastNewline names the mechanism outright: the last composer event
+      // was a newline chord (backslash+Enter or a modified Enter), and the
+      // request waits on a PLAIN Enter.
+      lastByte: this.lastByte === null ? null : JSON.stringify(this.lastByte).slice(1, -1),
+      lastNewline: this.lastByte === '\r',
     };
   }
 }

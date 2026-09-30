@@ -1534,6 +1534,298 @@ test('win32-input-mode: mixed raw and win32-encoded traffic interleave correctly
   assert.equal(tracker.snapshot().knownEmpty, true, 'win32 Enter keydown submits unconditionally, same as raw CR');
 });
 
+// MULTILINE INPUT IS NOT SUBMISSION (PR #59 review 5356605916, P1). Claude
+// Code's documented newline keys arrive on the same wire as a submission:
+// backslash+Enter ("\" then Return -- "works in all terminals"), Ctrl+J
+// (chat:newline, a raw LF), Option/Alt+Enter (ESC CR), and under
+// win32-input-mode a VK_RETURN keydown with SHIFT_PRESSED (0x10) in Cs. On
+// 08a3c62 the raw-CR branch and the win32 Enter branch both promoted these
+// to _submitted(): knownEmpty read true while the operator was still
+// composing, and the capsule-request guard fired into their draft. Every
+// assertion tagged "MUST be red on 08a3c62" fails there; the rest are
+// regression guards that must stay green through the fix.
+test('ML1 multiline: backslash + CR is a composer newline, not a submission -- one chunk and split across chunks', () => {
+  // Reviewer's reproduction: ['first line', '\\', '\r'] as separate chunks.
+  const split = new InputOwnershipTracker();
+  for (const chunk of ['first line', '\\', '\r']) split.observe(chunk);
+  let snapshot = split.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'backslash+CR split across chunks is a newline: the composer still holds the draft -- MUST be red on 08a3c62');
+  assert.equal(snapshot.unknown, false, 'a known newline edit taints nothing');
+  assert.equal(snapshot.lastTaint, null);
+
+  // The same bytes in one chunk.
+  const joined = new InputOwnershipTracker();
+  joined.observe('first line\\\r');
+  assert.equal(joined.snapshot().knownEmpty, false, 'backslash+CR in one chunk is a newline -- MUST be red on 08a3c62');
+
+  // Continuing the draft on the second line, then a PLAIN Enter: that CR is
+  // not preceded by a backslash, so it is the submission boundary.
+  split.observe('second line');
+  assert.equal(split.snapshot().knownEmpty, false);
+  split.observe('\r');
+  snapshot = split.snapshot();
+  assert.equal(snapshot.knownEmpty, true, 'the next plain Enter after a multiline draft submits');
+  assert.equal(snapshot.unknown, false);
+  assert.equal(snapshot.lastTaint, null);
+
+  // A backslash that is NOT immediately before the CR is ordinary text.
+  const notAdjacent = new InputOwnershipTracker();
+  notAdjacent.observe('C:\\dev\\wt\r');
+  assert.equal(notAdjacent.snapshot().knownEmpty, true, 'a backslash elsewhere in the line does not turn the CR into a newline');
+
+  // Two Enters straight after the backslash: the first is the newline, the
+  // second (now preceded by that newline, not the backslash) submits.
+  const doubleEnter = new InputOwnershipTracker();
+  doubleEnter.observe('first line\\');
+  doubleEnter.observe('\r');
+  assert.equal(doubleEnter.snapshot().knownEmpty, false);
+  doubleEnter.observe('\r');
+  assert.equal(doubleEnter.snapshot().knownEmpty, true, 'the second CR is a plain Enter and submits');
+});
+
+test('ML2 multiline: win32-input-mode Shift+Enter keydown is a newline, not a submission; the plain Enter keydown still submits', () => {
+  // Reviewer's reproduction: ESC[13;28;13;1;16;1_ -- VK_RETURN, Kd=1, Cs=SHIFT_PRESSED.
+  const tracker = new InputOwnershipTracker();
+  tracker.observe('first line');
+  tracker.observe(`${ESC}[13;28;13;1;16;1_`);
+  let snapshot = tracker.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'a Shift+Enter keydown must not read as submitted -- MUST be red on 08a3c62');
+  assert.equal(snapshot.unknown, false, 'a decoded Shift+Enter is a known newline, not a taint');
+  assert.equal(snapshot.activeControl, false, 'the sequence is complete');
+  // Its keyup half is inert, as before.
+  tracker.observe(`${ESC}[13;28;13;0;16;1_`);
+  assert.equal(tracker.snapshot().knownEmpty, false, 'the keyup must not erase the dirty draft');
+  // Second line, then the PLAIN Enter keydown submits -- the existing
+  // VK_RETURN contract, now with the modifier check in its path.
+  tracker.observe(`${ESC}[65;30;97;1;0;1_`);
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+  snapshot = tracker.snapshot();
+  assert.equal(snapshot.knownEmpty, true, 'a plain Enter keydown after a multiline draft submits');
+  assert.equal(snapshot.unknown, false);
+  assert.equal(snapshot.lastTaint, null);
+});
+
+test('ML3 multiline: win32 Cs bits -- any held Shift/Ctrl/Alt makes Enter non-submitting; lock and enhanced bits do not veto a plain Enter', () => {
+  // Held modifiers: RIGHT_ALT 0x01, LEFT_ALT 0x02, RIGHT_CTRL 0x04,
+  // LEFT_CTRL 0x08, SHIFT 0x10, and Ctrl+Shift together. Shift and Alt are
+  // Claude Code's documented newline chords; Ctrl+Enter is documented as
+  // chat:sendNow (v2.1.275+) but the runner cannot see the child's version
+  // or key decoding, so it is deliberately not PROOF of submission either --
+  // being wrong there costs one deferral, never a mangled prompt.
+  for (const cs of [0x01, 0x02, 0x04, 0x08, 0x10, 0x18]) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe('draft');
+    tracker.observe(`${ESC}[13;28;13;1;${cs};1_`);
+    assert.equal(tracker.snapshot().knownEmpty, false,
+      `VK_RETURN keydown with Cs=0x${cs.toString(16)} is not proof of submission -- MUST be red on 08a3c62`);
+    tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+    assert.equal(tracker.snapshot().knownEmpty, true, `the following plain Enter submits (after Cs=0x${cs.toString(16)})`);
+  }
+  // Not modifiers: NUMLOCK_ON 0x20, CAPSLOCK_ON 0x80, ENHANCED_KEY 0x100
+  // (the numpad Enter carries this), and NumLock+Enhanced together. A plain
+  // Enter with these set MUST still submit -- guards the mask at 0x1F.
+  for (const cs of [0x20, 0x80, 0x100, 0x120]) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe('draft');
+    tracker.observe(`${ESC}[13;28;13;1;${cs};1_`);
+    assert.equal(tracker.snapshot().knownEmpty, true,
+      `Cs=0x${cs.toString(16)} holds no modifier: a plain Enter, submits (regression guard)`);
+  }
+});
+
+test('ML4 multiline: win32 backslash keydown + plain Enter keydown is a newline, mirroring the raw-byte rule', () => {
+  const tracker = new InputOwnershipTracker();
+  tracker.observe(`${ESC}[220;43;92;1;0;1_`); // VK_OEM_5, Uc=92 '\'
+  assert.equal(tracker.snapshot().knownEmpty, false);
+  tracker.observe(`${ESC}[220;43;92;0;0;1_`); // its keyup: inert, the backslash still sits before the cursor
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(tracker.snapshot().knownEmpty, false,
+    'backslash + Enter under win32-input-mode is the same documented newline -- MUST be red on 08a3c62');
+  assert.equal(tracker.snapshot().unknown, false);
+  tracker.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(tracker.snapshot().knownEmpty, true, 'the next plain Enter submits');
+});
+
+test('ML5 multiline: Ctrl+J (LF) and Alt+Enter (ESC CR) never submit, raw or win32-encoded (regression guards)', () => {
+  // Raw LF: a control byte -- taints, dirty, and only a CR clears it.
+  const lf = new InputOwnershipTracker();
+  lf.observe('first line');
+  lf.observe('\n');
+  assert.equal(lf.snapshot().knownEmpty, false, 'Ctrl+J is chat:newline, never a submission');
+  lf.observe('second line\r');
+  assert.equal(lf.snapshot().knownEmpty, true);
+
+  // Raw Alt/Option+Enter: ESC then CR -- the escape branch taints, no submission.
+  const meta = new InputOwnershipTracker();
+  meta.observe('first line');
+  meta.observe(`${ESC}\r`);
+  assert.equal(meta.snapshot().knownEmpty, false, 'Meta+Enter is a newline chord, never a submission');
+  meta.observe('\r');
+  assert.equal(meta.snapshot().knownEmpty, true);
+
+  // win32 Ctrl+J: VK_J=74, Uc=10, Cs=LEFT_CTRL -- a non-printable keydown, fail-closed.
+  const win32 = new InputOwnershipTracker();
+  win32.observe('first line');
+  win32.observe(`${ESC}[74;36;10;1;8;1_`);
+  assert.equal(win32.snapshot().knownEmpty, false, 'win32 Ctrl+J never submits');
+  win32.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(win32.snapshot().knownEmpty, true);
+});
+
+test('ML6 multiline: bracketed paste with embedded newlines stays non-submitting, and a paste ending in a backslash makes the next CR a newline', () => {
+  // Existing behavior, verified: CRs inside the paste are payload.
+  const paste = new InputOwnershipTracker();
+  paste.observe(`${ESC}[200~line one\rline two\r${ESC}[201~`);
+  const snapshot = paste.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'a paste with embedded CRs leaves the composer dirty');
+  assert.equal(snapshot.activePaste, false);
+  paste.observe('\r');
+  assert.equal(paste.snapshot().knownEmpty, true, 'the operator Enter after the paste submits');
+
+  // The paste's last payload byte now sits before the cursor: a trailing
+  // backslash turns the operator's next Enter into a newline.
+  const trailing = new InputOwnershipTracker();
+  trailing.observe(`${ESC}[200~echo \\${ESC}[201~`);
+  trailing.observe('\r');
+  assert.equal(trailing.snapshot().knownEmpty, false, 'a paste ending in a backslash + Enter is a newline -- MUST be red on 08a3c62');
+  trailing.observe('\r');
+  assert.equal(trailing.snapshot().knownEmpty, true);
+
+  // The end marker torn at every byte across chunks: the seven-byte probe
+  // must still recover the payload byte before it.
+  const torn = new InputOwnershipTracker();
+  for (const chunk of [`${ESC}[200~`, 'a', '\\', ESC, '[', '2', '0', '1', '~']) torn.observe(chunk);
+  assert.equal(torn.snapshot().activePaste, false);
+  torn.observe('\r');
+  assert.equal(torn.snapshot().knownEmpty, false, 'torn end marker: the byte before it is still the last payload byte');
+});
+
+test('ML7 multiline: an unknown control between backslash and CR keeps the pre-existing CR boundary; inert reports do not launder it', () => {
+  // An arrow between them may have moved the cursor: the tracker cannot say
+  // where the backslash is, so the CR keeps its existing role as the one
+  // boundary that clears an unknown line.
+  const arrow = new InputOwnershipTracker();
+  arrow.observe('first line\\');
+  arrow.observe(`${ESC}[D`);
+  assert.equal(arrow.snapshot().unknown, true);
+  arrow.observe('\r');
+  assert.equal(arrow.snapshot().knownEmpty, true, 'CR after an unknown control clears the taint exactly as before');
+
+  // A focus report, a CPR, or a modifier keyup places nothing and moves
+  // nothing: the backslash is still before the cursor, so the CR is a newline.
+  for (const [label, inert] of [
+    ['focus-in', `${ESC}[I`],
+    ['CPR', `${ESC}[24;80R`],
+    ['win32 Shift keyup', `${ESC}[16;42;0;0;0;1_`],
+  ]) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe('first line\\');
+    tracker.observe(inert);
+    tracker.observe('\r');
+    assert.equal(tracker.snapshot().knownEmpty, false,
+      `${label} between backslash and CR must not launder the newline into a submission -- MUST be red on 08a3c62`);
+  }
+});
+
+test('ML8 multiline: snapshot names the newline mechanism, and the Ctrl+Enter-only operator stays deferred until a plain Enter (fail-closed, stated)', () => {
+  // Review of 8d4a8b4 (MEDIUM): after a newline chord the snapshot read
+  // {knownEmpty:false, unknown:false, lastTaint:null} -- the same as typed
+  // text -- so a composer-busy refusal named no mechanism. lastByte (JSON-
+  // escaped, printable) and lastNewline now do.
+  const fresh = new InputOwnershipTracker();
+  assert.equal(fresh.snapshot().lastByte, null);
+  assert.equal(fresh.snapshot().lastNewline, false);
+  fresh.observe('abc\\');
+  assert.equal(fresh.snapshot().lastByte, '\\\\', 'a backslash renders JSON-escaped, never raw');
+  assert.equal(fresh.snapshot().lastNewline, false);
+  fresh.observe('\r');
+  assert.equal(fresh.snapshot().lastByte, '\\r', 'a newline CR renders as \\r, printable');
+  assert.equal(fresh.snapshot().lastNewline, true, 'the mechanism is named: the last composer event was a newline chord');
+  fresh.observe('x');
+  assert.equal(fresh.snapshot().lastNewline, false, 'typed text after the newline clears the flag');
+  fresh.observe('\r');
+  assert.equal(fresh.snapshot().lastByte, null, 'submission resets it');
+  assert.equal(fresh.snapshot().lastNewline, false);
+
+  // The Ctrl+Enter-only operator under win32-input-mode: two consecutive
+  // modified Enters (LEFT_CTRL 0x08) with no plain Enter. Claude Code
+  // documents Ctrl+Enter as chat:sendNow (v2.1.275+), so this operator MAY
+  // have submitted twice -- but the runner cannot verify the child's version
+  // or its decoding of the win32 event, and a wrong "submitted" is the
+  // mangled prompt. Deliberately fail-closed: deferred until a plain Enter,
+  // INDEFINITELY if none comes, with the snapshot naming why. Do NOT flip
+  // this to submission without evidence the child treats it as one.
+  const ctrlOnly = new InputOwnershipTracker();
+  ctrlOnly.observe('first send');
+  ctrlOnly.observe(`${ESC}[13;28;13;1;8;1_`);
+  ctrlOnly.observe(`${ESC}[13;28;13;0;8;1_`);
+  ctrlOnly.observe('second send');
+  ctrlOnly.observe(`${ESC}[13;28;13;1;8;1_`);
+  ctrlOnly.observe(`${ESC}[13;28;13;0;8;1_`);
+  let snapshot = ctrlOnly.snapshot();
+  assert.equal(snapshot.knownEmpty, false, 'two consecutive Ctrl+Enters and no plain Enter: still deferred (fail-closed)');
+  assert.equal(snapshot.unknown, false, 'not a taint -- a decoded, known event');
+  assert.equal(snapshot.lastTaint, null);
+  assert.equal(snapshot.lastNewline, true, 'the snapshot names the mechanism: waiting on a plain Enter after a modified one');
+  assert.equal(snapshot.lastByte, '\\r');
+  // The only release is a plain Enter.
+  ctrlOnly.observe(`${ESC}[13;28;13;1;0;1_`);
+  snapshot = ctrlOnly.snapshot();
+  assert.equal(snapshot.knownEmpty, true);
+  assert.equal(snapshot.lastNewline, false);
+});
+
+test('ML9 multiline: REGRESSION GUARD for the known residual -- a tainting control between backslash and CR restores the CR as the boundary', () => {
+  // Review of 8d4a8b4 (LOW, residual): after any tainting control (DEL,
+  // backspace, arrows, CSI-u, unfinished ESC) lastByte is null, so the next
+  // CR submits even if the byte before the cursor is (or may be) a
+  // backslash. This is the pre-existing "CR is the only thing that clears
+  // unknown" trade-off, documented in the class comment. The assertions
+  // below pin the CURRENT behaviour so nobody turns it into a permanent
+  // defer: the alternative pins the taint until a SECOND Enter for every
+  // operator who edits a line with arrows or backspace.
+  const cases = [
+    ['DEL after two backslashes', ['abc\\\\', '\u007f', '\r']],
+    ['backspace (0x08) after a backslash', ['abc\\', '\u0008', '\r']],
+    ['Left then Right around a backslash', ['abc\\', `${ESC}[D`, `${ESC}[C`, '\r']],
+    ['CSI-u Shift+Enter then CR', ['abc\\', `${ESC}[13;2u`, '\r']],
+    ['unfinished ESC completed by a letter', ['abc\\', ESC, 'x', '\r']],
+  ];
+  for (const [label, chunks] of cases) {
+    const tracker = new InputOwnershipTracker();
+    for (const chunk of chunks.slice(0, -1)) tracker.observe(chunk);
+    assert.equal(tracker.snapshot().unknown, true, `${label}: setup, the control taints`);
+    assert.equal(tracker.snapshot().lastByte === '\\\\', false, `${label}: the taint nulls or replaces lastByte`);
+    tracker.observe(chunks[chunks.length - 1]);
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.knownEmpty, true, `${label}: the CR after a tainting control submits and clears the taint (known residual, kept)`);
+    assert.equal(snapshot.unknown, false, `${label}: CR is the only thing that clears unknown`);
+  }
+});
+
+test('ML10 multiline: an EMPTY bracketed paste places nothing, so a backslash before it still makes the next CR a newline', () => {
+  // Review of 8d4a8b4 (LOW): the paste-end branch nulled lastByte for a
+  // payload shorter than one byte, dropping the pre-paste backslash and
+  // promoting the following CR to a submission.
+  const empty = new InputOwnershipTracker();
+  empty.observe('first line\\');
+  empty.observe(`${ESC}[200~${ESC}[201~`);
+  assert.equal(empty.snapshot().activePaste, false);
+  empty.observe('\r');
+  assert.equal(empty.snapshot().knownEmpty, false, 'backslash, empty paste, CR: still the newline chord -- MUST be red on 8d4a8b4');
+  assert.equal(empty.snapshot().lastNewline, true);
+  empty.observe('\r');
+  assert.equal(empty.snapshot().knownEmpty, true, 'the next plain Enter submits');
+
+  // A non-empty paste still replaces the pre-paste byte with its own last
+  // payload byte.
+  const nonEmpty = new InputOwnershipTracker();
+  nonEmpty.observe('first line\\');
+  nonEmpty.observe(`${ESC}[200~x${ESC}[201~`);
+  nonEmpty.observe('\r');
+  assert.equal(nonEmpty.snapshot().knownEmpty, true, 'a one-byte paste ending in x: the CR is a plain Enter');
+});
+
 test('post-submit kill and cancellation retain queued input when they cancel the wake Enter', async (t) => {
   for (const kind of ['kill-switch', 'cancellation']) {
     await t.test(kind, () => {
@@ -2017,7 +2309,7 @@ test('T2 arbitrary printable operator input before the ACK does not veto its cle
     harness.operator('zebra-42?');
     const tracked = harness.runner.snapshot().input;
     assert.equal(tracked.knownEmpty, false, 'setup: arbitrary printable bytes remain observable');
-    for (const field of ['knownEmpty', 'activePaste', 'activeControl', 'unknown', 'receivedUnits']) {
+    for (const field of ['knownEmpty', 'activePaste', 'activeControl', 'unknown', 'receivedUnits', 'lastTaint', 'lastByte', 'lastNewline']) {
       assert.equal(Object.hasOwn(tracked, field), true, `status snapshot must retain ${field}`);
     }
 
@@ -4014,6 +4306,119 @@ test('C4 uncertain input ownership (an unfinished or editing control) defers, an
       'the un-deferred confirmed cycle keeps its original not-acked refusal');
   } finally {
     fresh.cleanup();
+  }
+});
+
+// PR #59 review 5356605916, P1 -- the reviewer's two failing cases, end to
+// end through the runner: a multiline draft must keep the request DEFERRED
+// (the operator is still composing), and the operator's next PLAIN Enter
+// must release it exactly once. On 08a3c62 the tracker promoted both
+// newline events to submissions and the request fired into the draft.
+test('C5 a backslash+Enter multiline draft keeps the capsule request deferred; the next plain Enter releases it once', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    // Reviewer's reproduction: 'first line', '\\', '\r' as separate chunks.
+    const chunks = ['first line', '\\', '\r'].map((chunk) => Buffer.from(chunk));
+    for (const chunk of chunks) harness.operator(chunk);
+    assert.deepEqual(harness.pty.writes, chunks,
+      'operator sovereignty: every byte, the backslash and its CR included, passes through untouched');
+
+    harness.drive(); // pressure -> checkpoint-requested: the request would fire here
+    assert.equal(harness.core.state.state, 'checkpoint-requested');
+    assert.equal(capsuleTextWriteCount(harness), 0,
+      `backslash+Enter is a newline, not a submission: the request must stay deferred -- MUST be red on 08a3c62 (writes: ${JSON.stringify(harness.pty.writes.map(String))})`);
+    assert.equal(harness.fireEnter(), false, 'no Enter is scheduled for a deferred request');
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+    assert.equal(capsuleDeferredEvents(harness)[0].detail?.detail?.input?.knownEmpty, false);
+    assert.equal(capsuleDeferredEvents(harness)[0].detail?.detail?.input?.lastNewline, true,
+      'the deferral names its mechanism: the last composer event was a newline chord, not typed text');
+    assert.equal(harness.runner.capsuleRequestCycleId, null, 'deferring must not spend the cycle_id latch');
+
+    // The second line of the draft, more ticks: still deferred, nothing written.
+    const second = Buffer.from('second line');
+    harness.operator(second);
+    for (let i = 0; i < 10; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0);
+    assert.deepEqual(harness.pty.writes, [...chunks, second], 'no kill-line, no request, no CR over the draft');
+
+    // The operator submits with a PLAIN Enter: the boundary. The next tick
+    // fires the request once, after the operator's own prompt.
+    const enter = Buffer.from('\r');
+    harness.operator(enter);
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1,
+      'the plain Enter after the multiline draft submits, and the request fires on the next tick');
+    assert.equal(capsuleEventCount(harness, 'capsule-request-resumed'), 1);
+    assert.deepEqual(
+      harness.pty.writes.map((w) => w.toString('latin1')),
+      [...chunks.map(String), second.toString(), enter.toString(), CAPSULE_REQUEST_TEXT],
+      'physical order: the whole draft, its submission, then the request as its own chunk',
+    );
+    assert.equal(harness.fireEnter(), true, 'the request Enter is its own separate write');
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'exactly once');
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C6 a win32-input-mode Shift+Enter multiline draft keeps the capsule request deferred; the plain Enter keydown releases it once', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    // Reviewer's reproduction: 'first line', then ESC[13;28;13;1;16;1_
+    // (VK_RETURN keydown, Cs=SHIFT_PRESSED).
+    const chunks = ['first line', `${ESC}[13;28;13;1;16;1_`].map((chunk) => Buffer.from(chunk));
+    for (const chunk of chunks) harness.operator(chunk);
+    assert.deepEqual(harness.pty.writes, chunks, 'the win32 key event passes through byte-for-byte');
+
+    harness.drive();
+    assert.equal(harness.core.state.state, 'checkpoint-requested');
+    assert.equal(capsuleTextWriteCount(harness), 0,
+      'Shift+Enter is a newline, not a submission: the request must stay deferred -- MUST be red on 08a3c62');
+    assert.equal(harness.fireEnter(), false);
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+    assert.equal(capsuleDeferredEvents(harness)[0].detail?.detail?.input?.lastNewline, true,
+      'the deferral names the Shift+Enter newline as its cause');
+    assert.equal(harness.runner.capsuleRequestCycleId, null);
+
+    // The keyup half of that Shift+Enter releases nothing; the plain Enter
+    // keydown that follows is the boundary.
+    harness.operator(Buffer.from(`${ESC}[13;28;13;0;16;1_`));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'the keyup places nothing and releases nothing');
+    harness.operator(Buffer.from(`${ESC}[13;28;13;1;0;1_`));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1,
+      'the plain Enter keydown submits; the request fires once on the next tick');
+    assert.equal(capsuleEventCount(harness, 'capsule-request-resumed'), 1);
+    assert.equal(harness.fireEnter(), true);
+    for (let i = 0; i < 40; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'exactly once');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C7 a bracketed paste with embedded newlines defers the capsule request; the operator Enter releases it', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    const paste = Buffer.from(`${ESC}[200~line one\rline two\r${ESC}[201~`);
+    harness.operator(paste);
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0,
+      'CRs inside a bracketed paste are payload, not submissions (existing behavior, verified)');
+    assert.equal(capsuleDeferredEvents(harness).length, 1);
+    assert.deepEqual(harness.pty.writes, [paste], 'the paste passes through untouched');
+    harness.operator(Buffer.from('\r'));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'the operator Enter after the paste is the boundary');
+    assert.equal(harness.fireEnter(), true);
+  } finally {
+    harness.cleanup();
   }
 });
 
