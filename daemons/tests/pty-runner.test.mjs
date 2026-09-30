@@ -39,6 +39,7 @@ import {
   WAKE_ENTER_RETRY_LIMIT,
   WAKE_MESSAGE,
   WAKE_SUBMIT_SETTLE_TICKS,
+  WAKE_TRANSCRIPT_LITERAL,
   loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
@@ -5249,6 +5250,336 @@ test('W5 disable and cancellation close a pending wake watch by name and never r
         harness.cleanup();
       }
     });
+  }
+});
+
+// EVIDENCE DISCIPLINE FOR THE WATCH (W6-W10). The commit signal is a record
+// in the REBOUND session's transcript past the offset noted at the Enter.
+// Anything that is not that -- no transcript, a transcript that cannot be
+// read, the old session's transcript, a record from before the Enter, the
+// wake text quoted back inside a tool result or an assistant turn -- must
+// never be reported as wake-submission-committed. And no path, including a
+// failing retry write or a rebind while the watch is pending, may leave a
+// watch that keeps pressing Enter.
+
+const SECOND_CLEAR_SESSION_ID = 'session-after-second-clear';
+
+function transcriptPathForSession(harness, sessionId) {
+  return transcriptPathFor({
+    cwd: harness.fixture.cwd,
+    sessionId,
+    homeDir: harness.fixture.homeDir,
+  });
+}
+
+function appendTranscriptRecord(target, record) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.appendFileSync(target, `${JSON.stringify(record)}\n`);
+}
+
+function wakeUserRecord() {
+  return { type: 'user', message: { role: 'user', content: WAKE_MESSAGE } };
+}
+
+function lastUnconfirmed(harness) {
+  const events = harness.runner.events.filter((e) => e.name === 'wake-submission-unconfirmed');
+  return events[events.length - 1] || null;
+}
+
+function controlEnterWrites(harness) {
+  return harness.pty.writes.filter((w) => w.equals(Buffer.from(CONTROL_ENTER))).length;
+}
+
+test('W6 a transcript that is missing, unreadable, or unresolvable never commits the wake, and the Enter count stays bounded', async (t) => {
+  for (const kind of ['missing', 'unreadable', 'unresolvable']) {
+    await t.test(kind, () => {
+      const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+      try {
+        if (kind === 'unresolvable') {
+          // A receipt that passes the receipt shape check (non-empty string)
+          // but no transcript path can be built for it: the watch has no
+          // evidence class at all, so it must not press Enter blind.
+          const badSessionId = 'bad session id!';
+          assert.equal(
+            transcriptPathFor({ cwd: harness.fixture.cwd, sessionId: badSessionId, homeDir: harness.fixture.homeDir }),
+            null,
+            'setup: the session id resolves to no transcript path',
+          );
+          harness.fixture.pressure.pct = 10;
+          const receipt = clearReceiptFor(harness, badSessionId);
+          writeJson(harness.fixture.bootPath, receipt);
+          assert.equal(harness.runner._rebindAfterClear(receipt), true, 'setup: rebind');
+          assert.equal(harness.fireEnter(), true, 'setup: the wake Enter physically writes');
+          assert.equal(harness.runner.inputHold, false, 'the physical Enter still releases the hold');
+
+          assert.equal(harness.runner.wakeSubmission, null, 'no watch stays armed without an evidence source');
+          const closed = lastUnconfirmed(harness);
+          assert.ok(closed, 'the watch closes by name');
+          assert.equal(closed.detail.reason, 'transcript-unresolvable');
+          assert.deepEqual({ enters: closed.detail.enters, retries: closed.detail.retries }, { enters: 1, retries: 0 });
+
+          for (let round = 0; round <= WAKE_ENTER_RETRY_LIMIT; round += 1) settleChildOutput(harness);
+          assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'no evidence source means no retry Enter, ever');
+          assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0);
+          assert.deepEqual(harness.pty.writes, [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER)]);
+          assert.equal(harness.runner.automationEnabled, true, 'unconfirmed is loud, not terminal');
+          return;
+        }
+
+        if (kind === 'unreadable') {
+          // The path resolves but is a directory: stat succeeds, open fails
+          // (or reports no growth). Either way it is not evidence.
+          fs.mkdirSync(wakeTranscriptPath(harness), { recursive: true });
+        }
+        rebindWithWakeEnterLanded(harness);
+        assert.ok(wakeTranscriptPath(harness), 'setup: the rebound session resolves a transcript path');
+        if (kind === 'missing') {
+          assert.equal(fs.existsSync(wakeTranscriptPath(harness)), false, 'setup: no transcript exists');
+        }
+
+        for (let i = 0; i < 40; i += 1) harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, 'absence is not a submission');
+        assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 0, 'absence buys no retry either');
+
+        for (let attempt = 1; attempt <= WAKE_ENTER_RETRY_LIMIT; attempt += 1) {
+          settleChildOutput(harness, `repaint-${attempt}\r\n`);
+          assert.equal(wakeEventCount(harness, 'wake-enter-retry'), attempt);
+          assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, 'a retry is not a commit');
+        }
+        settleChildOutput(harness, 'repaint-after-last-retry\r\n');
+        const closed = lastUnconfirmed(harness);
+        assert.ok(closed, 'the watch closes by name');
+        assert.equal(closed.detail.reason, 'retry-cap');
+        assert.equal(closed.detail.retries, WAKE_ENTER_RETRY_LIMIT);
+        assert.equal(harness.runner.wakeSubmission, null);
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, 'never committed without the record');
+        assert.equal(wakeEnterWrites(harness), 1 + WAKE_ENTER_RETRY_LIMIT, 'the Enter count is the first press plus the cap');
+
+        for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+        assert.equal(wakeEnterWrites(harness), 1 + WAKE_ENTER_RETRY_LIMIT, 'closed is closed');
+        assert.equal(wakeWriteCount(harness), 1, 'the wake TEXT is never rewritten');
+        assert.equal(harness.runner.automationEnabled, true);
+        assert.equal(harness.runner.inputHold, false);
+      } finally {
+        harness.cleanup();
+      }
+    });
+  }
+});
+
+test('W7 the wake text inside a non-prompt record is a mention, not the wake landing', async (t) => {
+  const specimens = {
+    // The seat quoting the wake back in its own turn.
+    'assistant-echo': {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: `You asked: ${WAKE_MESSAGE}` }] },
+    },
+    // Tool results are stored as type:"user" records in the transcript; a
+    // tool reading a file that carries the wake text returns it verbatim.
+    'tool-result-quote': {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: `export const WAKE_MESSAGE = '${WAKE_MESSAGE}';` }],
+      },
+    },
+    // Injected context (hook output, local command output) is a user-typed
+    // record only in shape; the transcript marks it meta.
+    'meta-record': {
+      type: 'user',
+      isMeta: true,
+      message: { role: 'user', content: `<local-command-stdout>${WAKE_MESSAGE}</local-command-stdout>` },
+    },
+  };
+  for (const [kind, record] of Object.entries(specimens)) {
+    await t.test(kind, () => {
+      const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+      try {
+        rebindWithWakeEnterLanded(harness);
+        const line = JSON.stringify(record);
+        assert.ok(line.includes(WAKE_TRANSCRIPT_LITERAL), 'setup: the specimen carries the transcript literal');
+        appendTranscriptRecord(wakeTranscriptPath(harness), record);
+
+        for (let i = 0; i < 5; i += 1) harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, `${kind} must not read as the wake landing`);
+        assert.ok(harness.runner.wakeSubmission !== null, 'the watch stays open for real evidence');
+
+        // The scan is not broken, merely strict: the real record still commits.
+        landWakePrompt(harness);
+        harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 1);
+        assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 0);
+      } finally {
+        harness.cleanup();
+      }
+    });
+  }
+});
+
+test('W8 only the rebound session transcript past the Enter offset is evidence: old-session, pre-offset, and rotated records do not commit', async (t) => {
+  for (const kind of ['old-session-transcript', 'record-before-arm-offset', 'rotated-shorter']) {
+    await t.test(kind, () => {
+      const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+      try {
+        const target = wakeTranscriptPath(harness);
+        let sizeAtArm = 0;
+        if (kind === 'record-before-arm-offset') {
+          // A wake record already on disk BEFORE this Enter (a previous
+          // session-start artefact, a replay) is older than the Enter, so it
+          // cannot be this Enter's landing.
+          appendTranscriptRecord(target, wakeUserRecord());
+          sizeAtArm = fs.statSync(target).size;
+        } else if (kind === 'rotated-shorter') {
+          for (let i = 0; i < 64; i += 1) {
+            appendTranscriptRecord(target, { type: 'system', text: `filler-${i}-${'x'.repeat(48)}` });
+          }
+          sizeAtArm = fs.statSync(target).size;
+        }
+        rebindWithWakeEnterLanded(harness);
+        assert.equal(harness.runner.sessionId, NEXT_SESSION_ID, 'the rebind happened before the Enter');
+        assert.equal(
+          harness.runner.wakeSubmission.transcriptFrom,
+          sizeAtArm,
+          'the arm offset is the REBOUND session transcript size at the Enter',
+        );
+
+        if (kind === 'old-session-transcript') {
+          // The record lands in the previous session's file. The path is
+          // resolved from the rebound session id, so this is never read.
+          appendTranscriptRecord(harness.fixture.transcriptPath, wakeUserRecord());
+          assert.notEqual(harness.fixture.transcriptPath, target);
+        } else if (kind === 'rotated-shorter') {
+          // The file is replaced by a shorter one that carries the record
+          // below the noted offset. Not growth past the Enter: not evidence.
+          fs.writeFileSync(target, `${JSON.stringify(wakeUserRecord())}\n`);
+          assert.ok(fs.statSync(target).size < sizeAtArm, 'setup: the rotated file is shorter than the offset');
+        }
+
+        for (let i = 0; i < 5; i += 1) harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, `${kind} must not commit`);
+        assert.ok(harness.runner.wakeSubmission !== null, 'the watch stays open');
+
+        // A record appended to the rebound transcript past the offset does.
+        if (kind === 'rotated-shorter') {
+          fs.appendFileSync(target, `${'y'.repeat(sizeAtArm)}\n`);
+        }
+        landWakePrompt(harness);
+        harness.drive();
+        assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 1);
+      } finally {
+        harness.cleanup();
+      }
+    });
+  }
+});
+
+test('W9 a failing retry Enter closes the watch by name, stays non-terminal, and cannot poison a later disable into a wake fault', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    rebindWithWakeEnterLanded(harness);
+    harness.pty.failNextWriteChunk = Buffer.from(CONTROL_ENTER);
+    settleChildOutput(harness, 'repaint-1\r\n');
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 1, 'one retry was attempted');
+    assert.equal(harness.pty.failNextWriteChunk, null, 'the retry write was the failing write');
+    assert.deepEqual(
+      harness.pty.writes,
+      [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER)],
+      'the failed retry records no child-visible byte',
+    );
+    const closed = lastUnconfirmed(harness);
+    assert.ok(closed, 'the watch closes by name');
+    assert.equal(closed.detail.reason, 'enter-write-failed');
+    assert.equal(closed.detail.attempt, 1);
+    assert.equal(harness.runner.wakeSubmission, null);
+    assert.equal(wakeEventCount(harness, 'wake-enter-write-failed'), 1);
+
+    // Non-terminal: the hold was already released at the first Enter and the
+    // composer is untouched by anyone else, so nothing new is stranded.
+    assert.equal(harness.runner.automationEnabled, true);
+    assert.equal(harness.runner.inputHold, false);
+    assert.deepEqual(harness.runner.queuedInput, []);
+    assert.notEqual(
+      harness.runner.lastReason?.code,
+      'runner-wake-enter-write-failed',
+      'a retry write failure is not the terminal first-Enter fault',
+    );
+
+    // Bounded: closed means no further Enter, on any amount of settled output.
+    for (let round = 0; round < WAKE_ENTER_RETRY_LIMIT + 1; round += 1) settleChildOutput(harness);
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 1, 'no retry after the failed one');
+    assert.deepEqual(harness.pty.writes, [Buffer.from(WAKE_MESSAGE), Buffer.from(CONTROL_ENTER)]);
+
+    // The operator's own Enter still works: live bytes pass straight through.
+    const operatorEnter = Buffer.from('\r');
+    harness.operator(operatorEnter);
+    assert.deepEqual(harness.pty.writes.slice(-1), [operatorEnter], 'operator bytes are not queued behind a fault');
+
+    // A later unrelated disable must report ITS OWN code and must not inherit
+    // the wake-terminal handling (which retains the input hold forever).
+    harness.setGuard('killSwitch', true);
+    harness.drive();
+    assert.equal(harness.runner.automationEnabled, false);
+    assert.equal(harness.runner.lastReason?.code, 'kill-switch-test', 'the disable names its own cause');
+    assert.equal(harness.runner.inputHold, false, 'no hold is retained for a wake that was never stranded by this runner');
+    const operatorAfterDisable = Buffer.from('typed-after-disable');
+    harness.operator(operatorAfterDisable);
+    assert.deepEqual(harness.pty.writes.slice(-1), [operatorAfterDisable], 'operator input still flows after the disable');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('W10 a rebind while the watch is pending closes the old watch by name; the new wake gets its own watch and no retry leaks across sessions', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    rebindWithWakeEnterLanded(harness);
+    settleChildOutput(harness, 'repaint-1\r\n');
+    assert.equal(wakeEventCount(harness, 'wake-enter-retry'), 1, 'setup: the first watch has spent one retry');
+    assert.equal(harness.runner.wakeSubmission.retries, 1);
+
+    // A second fresh receipt arrives while the first wake is still unconfirmed.
+    const second = clearReceiptFor(harness, SECOND_CLEAR_SESSION_ID, 12);
+    writeJson(harness.fixture.bootPath, second);
+    assert.equal(harness.runner._rebindAfterClear(second), true, 'setup: second rebind');
+    assert.equal(harness.runner.sessionId, SECOND_CLEAR_SESSION_ID);
+    assert.equal(wakeWriteCount(harness), 2, 'the second fresh session gets its own wake text');
+
+    const closed = lastUnconfirmed(harness);
+    assert.ok(closed, 'the first watch is closed by name at the rebind');
+    assert.equal(closed.detail.reason, 'session-rebound');
+    assert.deepEqual({ enters: closed.detail.enters, retries: closed.detail.retries }, { enters: 2, retries: 1 });
+    assert.equal(harness.runner.wakeSubmission, null, 'no watch survives the rebind');
+
+    // While the second wake Enter is pending nothing ticks the old watch.
+    assert.deepEqual(harness.drive(), { status: 'wake-enter-pending' });
+    assert.equal(controlEnterWrites(harness), 2, 'no Enter is written while the second wake Enter is pending');
+
+    assert.equal(harness.fireEnter(), true, 'the second wake Enter physically writes');
+    assert.ok(harness.runner.wakeSubmission !== null, 'the second Enter arms a new watch');
+    assert.deepEqual(
+      { enters: harness.runner.wakeSubmission.enters, retries: harness.runner.wakeSubmission.retries },
+      { enters: 1, retries: 0 },
+      'the new watch starts its own count',
+    );
+    assert.equal(controlEnterWrites(harness), 3);
+
+    // The FIRST session's record is no longer evidence for anything.
+    landWakePrompt(harness);
+    for (let i = 0; i < 5; i += 1) harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 0, 'the old session transcript cannot commit the new wake');
+
+    appendTranscriptRecord(transcriptPathForSession(harness, SECOND_CLEAR_SESSION_ID), wakeUserRecord());
+    harness.drive();
+    assert.equal(wakeEventCount(harness, 'wake-submission-committed'), 1);
+    const committed = harness.runner.events.find((e) => e.name === 'wake-submission-committed');
+    assert.deepEqual({ enters: committed.detail.enters, retries: committed.detail.retries }, { enters: 1, retries: 0 });
+    assert.equal(harness.runner.wakeSubmission, null);
+
+    for (let round = 0; round < 3; round += 1) settleChildOutput(harness);
+    assert.equal(controlEnterWrites(harness), 3, 'nothing retries after the rebound wake commits');
+    assert.equal(wakeEventCount(harness, 'wake-submission-unconfirmed'), 1, 'exactly one close: the rebind');
+  } finally {
+    harness.cleanup();
   }
 });
 

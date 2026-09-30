@@ -2518,6 +2518,13 @@ export class ManagedPtyRunner {
       );
       return false;
     }
+    // A watch still pending for the previous wake is evidence-bound to the
+    // previous session's transcript; from here that file is never read again.
+    // Close it by name so no counter survives into the next wake's watch.
+    this._closeWakeSubmission('session-rebound', {
+      from_session_id: this.sessionId,
+      session_id: receipt.session_id,
+    });
     this.transport = next;
     this.sessionId = receipt.session_id;
     this.baselineBootSequence = receipt.boot_sequence;
@@ -2603,9 +2610,10 @@ export class ManagedPtyRunner {
   // transcript offset noted here is where the wake's own USER record must
   // appear -- nothing before the Enter can be that record.
   _armWakeSubmissionWatch() {
+    let transcript = null;
     let transcriptFrom = 0;
     try {
-      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
+      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
       transcriptFrom = transcript ? fs.statSync(transcript).size : 0;
     } catch { transcriptFrom = 0; }
     this.wakeSubmission = {
@@ -2622,6 +2630,15 @@ export class ManagedPtyRunner {
       outputSeen: false,
       settledTicks: 0,
     };
+    // No transcript path for this session means no evidence class at all:
+    // nothing could ever commit the watch, so every settled repaint would buy
+    // a blind Enter up to the cap. A retry without a way to observe its
+    // landing is a bare retry; the watch closes by name instead. (A path that
+    // resolves but has no file yet is the ordinary pre-submission state and
+    // stays armed -- the record appears when the seat accepts the prompt.)
+    if (transcript === null) {
+      this._closeWakeSubmission('transcript-unresolvable', { session_id: this.sessionId });
+    }
   }
 
   _closeWakeSubmission(reason, detail = null) {
@@ -2640,6 +2657,31 @@ export class ManagedPtyRunner {
   // one complete line carrying both the wake text and the USER tag. A user
   // record is the seat accepting the prompt; the operator's own Enter
   // producing it counts too -- the wake landed either way.
+  //
+  // The line is PARSED, not substring-matched, because "type":"user" is not
+  // only the typed prompt: the transcript stores tool results as type:"user"
+  // records too (content blocks of type "tool_result" -- a tool reading a
+  // file that carries the wake text returns it verbatim), and injected
+  // context (hook and local-command output) as isMeta user records. Only
+  // typed text -- a string content, or a "text" block -- is the seat
+  // accepting the prompt. Same record model stop-capsule-writer reads.
+  _wakeUserRecordLanded(line) {
+    if (!line.includes(WAKE_TRANSCRIPT_LITERAL) || !line.includes('"type":"user"')) return false;
+    let record;
+    try { record = JSON.parse(line); } catch { return false; }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+    if (record.type !== 'user' || record.isMeta === true) return false;
+    const message = record.message;
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+    if (message.role !== undefined && message.role !== 'user') return false;
+    const content = message.content;
+    if (typeof content === 'string') return content.includes(WAKE_MESSAGE);
+    if (!Array.isArray(content)) return false;
+    return content.some((block) => block && typeof block === 'object' && !Array.isArray(block)
+      && block.type === 'text' && typeof block.text === 'string'
+      && block.text.includes(WAKE_MESSAGE));
+  }
+
   _wakeRecordObserved(watch) {
     try {
       const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
@@ -2651,9 +2693,8 @@ export class ManagedPtyRunner {
       const buffer = Buffer.alloc(length);
       const fd = fs.openSync(transcript, 'r');
       try { fs.readSync(fd, buffer, 0, length, from); } finally { fs.closeSync(fd); }
-      const landed = buffer.toString('utf8').split('\n').some((line) => (
-        line.includes(WAKE_TRANSCRIPT_LITERAL) && line.includes('"type":"user"')
-      ));
+      const landed = buffer.toString('utf8').split('\n')
+        .some((line) => this._wakeUserRecordLanded(line));
       if (landed) return true;
       const lastBreak = buffer.lastIndexOf(0x0a);
       if (lastBreak >= 0) {
@@ -2715,9 +2756,14 @@ export class ManagedPtyRunner {
     } catch (error) {
       // The composer is untouched by anyone else, so nothing is stranded
       // that was not already. Named, closed; the operator's Enter still works.
+      // A DISTINCT code from the first Enter's runner-wake-enter-write-failed:
+      // that one is terminal and _disableAutomation treats a lastReason
+      // carrying it as a stranded wake (retains the input hold, renames a
+      // later unrelated disable after it). The hold here was released at the
+      // first Enter and nothing is stranded, so this must never read as that.
       this.lastReason = {
-        code: 'runner-wake-enter-write-failed',
-        detail: errorText(error),
+        code: 'runner-wake-enter-retry-write-failed',
+        detail: { attempt: watch.retries, limit: WAKE_ENTER_RETRY_LIMIT, error: errorText(error) },
       };
       this._event('wake-enter-write-failed', this.lastReason);
       this._closeWakeSubmission('enter-write-failed', { attempt: watch.retries });
