@@ -385,11 +385,11 @@ function parseWin32InputModeEvent(sequence) {
  * have changed text the runner cannot see.  Unknown is cleared only by CR.
  *
  * NEWLINE, NOT SUBMISSION (PR #59 review, P1): the composer's documented
- * multiline-input keys arrive on the same wire as a submission and must
- * never be promoted to one -- a wrong "submitted" verdict is exactly the
- * mangled prompt the capsule-request guard exists to prevent, while a wrong
- * "still composing" verdict only defers until the operator's next plain
- * Enter. So:
+ * multiline-input keys arrive on the same wire as a submission and, wherever
+ * the tracker can tell them apart, must not be promoted to one -- a wrong
+ * "submitted" verdict is exactly the mangled prompt the capsule-request
+ * guard exists to prevent, while a wrong "still composing" verdict only
+ * defers until the operator's next plain Enter. So:
  *   - a CR immediately preceded by a backslash (same chunk or split across
  *     chunks; `lastByte` remembers) is Claude Code's backslash+Enter newline.
  *     The backslash itself is composer text; the CR is an edit, not a CR
@@ -409,9 +409,26 @@ function parseWin32InputModeEvent(sequence) {
  *     enhanced bits (numpad Enter) do not count as modifiers.
  *   - a LF (Ctrl+J) and an ESC CR (Alt+Enter) are control bytes and stay on
  *     the existing taint path: dirty, never submitted.
- * A CR after an intervening UNKNOWN control (arrow, editor sequence) keeps
- * the pre-existing boundary semantics: the cursor context is unknown, so
- * `lastByte` is null and the CR submits and clears the taint.
+ * KNOWN RESIDUALS, stated so nobody "fixes" one into a permanent defer:
+ *   - Keybindings: chat:submit (Enter) and chat:newline (Ctrl+J) are
+ *     rebindable in ~/.claude/keybindings.json. The runner does not read
+ *     that file; an operator who moves submission off Enter defeats the CR
+ *     boundary in both directions.
+ *   - The Ctrl+Enter-only operator: under win32-input-mode every Ctrl+Enter
+ *     is a modified VK_RETURN, so an operator who habitually sends with
+ *     chat:sendNow and never presses a plain Enter is deferred INDEFINITELY
+ *     -- the capsule request AND the auto-clear both wait on a plain Enter
+ *     that never comes. Deliberate: a wrong "submitted" there is the mangled
+ *     prompt; the deferral is visible (composer-busy refusal every tick,
+ *     snapshot `lastNewline:true`) and clears at the next plain Enter.
+ *   - A CR after an intervening UNKNOWN control keeps the pre-existing
+ *     boundary semantics: the cursor context is unknown, `lastByte` is
+ *     null, and the CR submits and clears the taint. So `abc\` + DEL + CR
+ *     and `abc\` + Left + Right + CR both read as submitted even though the
+ *     byte before the cursor is (or may be) a backslash. Pre-existing
+ *     trade-off ("CR is the only thing that clears unknown"), kept: the
+ *     alternative pins the taint until a SECOND Enter for every operator
+ *     who edits a line with arrows or backspace.
  */
 export class InputOwnershipTracker {
   constructor() {
@@ -491,7 +508,11 @@ export class InputOwnershipTracker {
         // in a backslash makes the operator's next Enter a newline too.
         this.pasteEndProbe = `${this.pasteEndProbe}${character}`.slice(-7);
         if (this.pasteEndProbe.endsWith('\u001b[201~')) {
-          this.lastByte = this.pasteEndProbe.length === 7 ? this.pasteEndProbe[0] : null;
+          // An EMPTY paste places nothing: the byte before the cursor is
+          // still whatever preceded the paste-start sequence.
+          this.lastByte = this.pasteEndProbe.length === 7
+            ? this.pasteEndProbe[0]
+            : this.preSequenceLastByte;
           this.mode = 'normal';
           this.pasteEndProbe = '';
           this.activePaste = false;
@@ -741,6 +762,15 @@ export class InputOwnershipTracker {
       unknown: this.unknown,
       receivedUnits: this.receivedUnits,
       lastTaint: this.lastTaint,
+      // Diagnosability (PR #59 review of 8d4a8b4): a deferral after a newline
+      // chord read {knownEmpty:false, unknown:false, lastTaint:null} --
+      // indistinguishable from typed text. lastByte is JSON-escaped so the
+      // refusal log stays printable (a CR renders as \r, a backslash as \\);
+      // lastNewline names the mechanism outright: the last composer event
+      // was a newline chord (backslash+Enter or a modified Enter), and the
+      // request waits on a PLAIN Enter.
+      lastByte: this.lastByte === null ? null : JSON.stringify(this.lastByte).slice(1, -1),
+      lastNewline: this.lastByte === '\r',
     };
   }
 }
