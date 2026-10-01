@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // run-recollection.mjs -- the ONE runner for the recollection benchmark
-// preregistered at recollection-44/PREREG-001.
+// preregistered at recollection-44/PREREG-001 and re-pinned, for the C2 temporal
+// and abstention slices, at recollection-44/PREREG-002 (frozen packet_sha256
+// a4d23198...; section 7 lists the instrument requirements implemented here).
 //
 // THREE OUTCOMES, NOT TWO, exactly as evals/run-evals.mjs established: pass /
 // fail / unrunnable, plus harness-error for a defect in the benchmark itself.
@@ -26,23 +28,48 @@
 //   node evals/recollection/run-recollection.mjs --scenario F1   # falsifier
 //   node evals/recollection/run-recollection.mjs --json
 //   node evals/recollection/run-recollection.mjs --freeze        # print hashes only
+//   node evals/recollection/run-recollection.mjs --self-check    # no product run
+//
+// PREREG-002 options:
+//   --product-tree <path>   checkout whose files are copied into the sandbox and
+//                           whose HEAD is observed (default: this repo root)
+//   --candidates <path>     PREREG-002-CANDIDATES.md (absent = baseline only)
+//   --only <ids>            development subset; the packet says it is not a
+//                           scored-run candidate
+// Scenarios: BASELINE, F1..F9 (F7 needs an abstention gate no baseline carries).
 
 import {
   copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync,
   readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const EVALS = path.resolve(HERE, '..');
-const ROOT = path.resolve(EVALS, '..');
-const DAEMONS = path.join(ROOT, 'daemons');
+const ROOT = path.resolve(HERE, '..', '..');
+
+// ── args ─────────────────────────────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const JSON_OUT = argv.includes('--json');
+const FREEZE_ONLY = argv.includes('--freeze');
+const KEEP = argv.includes('--keep');
+const optValue = (name) => { const i = argv.indexOf(name); return i !== -1 ? argv[i + 1] : null; };
+const scenarioIdx = argv.indexOf('--scenario');
+const SCENARIO = scenarioIdx !== -1 ? String(argv[scenarioIdx + 1] || '').toUpperCase() : 'BASELINE';
+// PREREG-002 1.3: the instrument may live on a different commit than the product
+// identity it measures, so the product tree is a named input, never inferred.
+const PRODUCT_TREE = path.resolve(optValue('--product-tree') || ROOT);
+const CANDIDATES_FILE = optValue('--candidates');
+const ONLY = optValue('--only') ? new Set(optValue('--only').split(',').map((x) => x.trim().toUpperCase())) : null;
+const want = (id) => !ONLY || ONLY.has(String(id).toUpperCase());
+
+const DAEMONS = path.join(PRODUCT_TREE, 'daemons');
 const SEM = path.join(DAEMONS, 'semantic-search');
-const DOCTOR = path.join(ROOT, 'scripts', 'doctor.sh');
+const DOCTOR = path.join(PRODUCT_TREE, 'scripts', 'doctor.sh');
+const PRODUCT_RUN_EVALS = path.join(PRODUCT_TREE, 'evals', 'run-evals.mjs');
 
 const CORPUS = path.join(HERE, 'corpus');
 const OVERLAY = path.join(HERE, 'overlays', 'undeclared-namespace');
@@ -62,28 +89,44 @@ const CHUNK_CHARS_MAX = 500;
 const RUN_WALL_MAX_MS = 30 * 60 * 1000;
 const FALSIFIER_WALL_MAX_MS = 10 * 60 * 1000;
 
-// PREREG-001 1.3. A sandbox copy that does not hash to these is UNRUNNABLE,
-// not a result.
-const RUNTIME_HASHES = {
+// ── PREREG-002 identity (frozen packet_sha256 below) ─────────────────────────
+const PREREG = 'recollection-44/PREREG-002';
+const PACKET_SHA256 = 'a4d23198bdaed689d75d3198e8fdb6b2eec890b3a9b7f2d0990a07df9c310c2f';
+const BASELINE_COMMIT = 'd3dd339612f9254af87ec3afffb546cd36063741';
+
+// PREREG-002 1.6: one evaluation instant for every run under this packet.
+const FROZEN_NOW = '2026-09-30T00:00:00Z';
+
+// PREREG-002 1.3: ten pins, `git show <commit>:<path> | sha256sum`, computed
+// against BASELINE_COMMIT. A sandbox copy that does not hash to the pins of the
+// identity being run is UNRUNNABLE, naming the mismatch, never a result. A
+// registered candidate (1.7) brings its own ten.
+const PINNED_PATHS = [
+  'daemons/semantic-search/namespace-registry.json',
+  'daemons/semantic-search/namespace-registry.local.example.json',
+  'daemons/semantic-search/namespace-registry.mjs',
+  'daemons/semantic-search/search-vault.js',
+  'daemons/semantic-search/embed-vault.js',
+  'daemons/semantic-search/deny-list.mjs',
+  'daemons/lifecycle-common.mjs',
+  'evals/run-evals.mjs',
+  'daemons/memory-root.cjs',
+  'daemons/memory-root.sh',
+];
+const BASELINE_PINS = {
   'daemons/semantic-search/namespace-registry.json': '5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060',
   'daemons/semantic-search/namespace-registry.local.example.json': '8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212',
   'daemons/semantic-search/namespace-registry.mjs': '2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8',
-  'daemons/semantic-search/search-vault.js': '202ba3929c5e6e15de6d3e2761e3278dc64f28e24792a084a8959e536df4b8f5',
-  'daemons/semantic-search/embed-vault.js': '51ff0ca5180d8a7f03501bddf4f94bc22ba80027f89588dd2bca34793a2bb0f3',
+  'daemons/semantic-search/search-vault.js': 'ef9896fcf89421397dbd197171b14ff8186807f8090469167a781965aee5f4cf',
+  'daemons/semantic-search/embed-vault.js': 'c011e4709c1704eaec9346bc3f47c0bb83d0dd514556a182de516bdcf2eb38ae',
   'daemons/semantic-search/deny-list.mjs': '5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c',
-  'daemons/lifecycle-common.mjs': 'bc6ee45666f4537c41a6de9b2f4f12afa504549ef258191d26698f0fdbbe1ba3',
+  'daemons/lifecycle-common.mjs': 'a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12',
   'evals/run-evals.mjs': '11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d',
+  'daemons/memory-root.cjs': '082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c',
+  'daemons/memory-root.sh': '8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad',
 };
 
 const PROVENANCE_RE = /^\["persisted-data":"vault-chunk" "(?<path>[^"]+)" sha (?<sha>[0-9a-f]{12}) @ (?<at>\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\] "/;
-
-// ── args ─────────────────────────────────────────────────────────────────────
-const argv = process.argv.slice(2);
-const JSON_OUT = argv.includes('--json');
-const FREEZE_ONLY = argv.includes('--freeze');
-const KEEP = argv.includes('--keep');
-const scenarioIdx = argv.indexOf('--scenario');
-const SCENARIO = scenarioIdx !== -1 ? String(argv[scenarioIdx + 1] || '').toUpperCase() : 'BASELINE';
 
 // ── results ──────────────────────────────────────────────────────────────────
 const results = [];
@@ -174,6 +217,10 @@ function environmentGaps() {
 //    .test.mjs:133-190, with the transformers STUB replaced by a link to the
 //    real installed package (PREREG-001 7.2: the benchmark runs the real
 //    model, so a constant-vector stub is exactly what it must not use) ────────
+const SANDBOX_DAEMON_FILES = [
+  'frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs', 'memory-root.cjs', 'memory-root.sh',
+];
+
 function makeSandbox(name) {
   const root = mkdtempSync(path.join(os.tmpdir(), `recollection-${name}-`));
   sandboxes.push(root);
@@ -184,9 +231,16 @@ function makeSandbox(name) {
   for (const f of ['deny-list.mjs', 'namespace-registry.mjs', 'embed-vault.js', 'search-vault.js', 'namespace-registry.json', 'namespace-registry.local.example.json']) {
     copyFileSync(path.join(SEM, f), path.join(sem, f));
   }
-  for (const f of ['frontmatter-reader.cjs', 'lifecycle-common.mjs', 'capsule-content-gate.mjs']) {
+  // memory-root.cjs / memory-root.sh: embed-vault.js and search-vault.js import
+  // the resolver, so a sandbox without them fails at import before any case runs
+  // (PREREG-002 1.2, BUILD-LEDGER 18.2).
+  for (const f of SANDBOX_DAEMON_FILES) {
     copyFileSync(path.join(DAEMONS, f), path.join(root, 'daemons', f));
   }
+  // evals/run-evals.mjs is a pinned file (PREREG-002 1.3); the sandbox carries
+  // its own copy so the hash gate reads the file this run actually uses.
+  mkdirSync(path.join(root, 'evals'), { recursive: true });
+  copyFileSync(PRODUCT_RUN_EVALS, path.join(root, 'evals', 'run-evals.mjs'));
   copyFileSync(path.join(DAEMONS, 'memory-hygiene', 'resume-framing.mjs'), path.join(hygiene, 'resume-framing.mjs'));
 
   // The real dependency, not a stub. A junction rather than a copy so the
@@ -227,54 +281,53 @@ function makeSandbox(name) {
   return { root, sem, vault, embeddings: path.join(vault, 'memory', 'embeddings.json') };
 }
 
-function runtimeHashGaps(box) {
-  const map = {
-    'daemons/semantic-search/namespace-registry.json': path.join(box.sem, 'namespace-registry.json'),
-    'daemons/semantic-search/namespace-registry.local.example.json': path.join(box.sem, 'namespace-registry.local.example.json'),
-    'daemons/semantic-search/namespace-registry.mjs': path.join(box.sem, 'namespace-registry.mjs'),
-    'daemons/semantic-search/search-vault.js': path.join(box.sem, 'search-vault.js'),
-    'daemons/semantic-search/embed-vault.js': path.join(box.sem, 'embed-vault.js'),
-    'daemons/semantic-search/deny-list.mjs': path.join(box.sem, 'deny-list.mjs'),
-    'daemons/lifecycle-common.mjs': path.join(box.root, 'daemons', 'lifecycle-common.mjs'),
-    'evals/run-evals.mjs': path.join(EVALS, 'run-evals.mjs'),
-  };
-  const bad = [];
-  for (const [label, file] of Object.entries(map)) {
-    const got = existsSync(file) ? fileHash(file) : 'ABSENT';
-    if (got !== RUNTIME_HASHES[label]) bad.push({ file: label, expected: RUNTIME_HASHES[label], observed: got });
-  }
-  return bad;
-}
-
-// PREREG-001 1.3 requires the RUN to record the eight hashes, and it means the
+// PREREG-001 1.3 requires the RUN to record the pinned hashes, and it means the
 // sandbox copies the run actually executed. Writing the pinned constant instead
 // made a mutation invisible: the F5 packet at head a72f68b reported the pin for
 // namespace-registry.json even though F5's whole mutation is editing that file.
-// The four unpinned copies the sandbox also carries are recorded, not gated.
+// The unpinned copies the sandbox also carries are recorded, not gated.
 function sandboxFileMap(box) {
+  const sem = (f) => path.join(box.sem, f);
+  const dm = (f) => path.join(box.root, 'daemons', f);
   return {
-    'daemons/semantic-search/namespace-registry.json': path.join(box.sem, 'namespace-registry.json'),
-    'daemons/semantic-search/namespace-registry.local.example.json': path.join(box.sem, 'namespace-registry.local.example.json'),
-    'daemons/semantic-search/namespace-registry.mjs': path.join(box.sem, 'namespace-registry.mjs'),
-    'daemons/semantic-search/search-vault.js': path.join(box.sem, 'search-vault.js'),
-    'daemons/semantic-search/embed-vault.js': path.join(box.sem, 'embed-vault.js'),
-    'daemons/semantic-search/deny-list.mjs': path.join(box.sem, 'deny-list.mjs'),
-    'daemons/lifecycle-common.mjs': path.join(box.root, 'daemons', 'lifecycle-common.mjs'),
-    'evals/run-evals.mjs': path.join(EVALS, 'run-evals.mjs'),
+    'daemons/semantic-search/namespace-registry.json': sem('namespace-registry.json'),
+    'daemons/semantic-search/namespace-registry.local.example.json': sem('namespace-registry.local.example.json'),
+    'daemons/semantic-search/namespace-registry.mjs': sem('namespace-registry.mjs'),
+    'daemons/semantic-search/search-vault.js': sem('search-vault.js'),
+    'daemons/semantic-search/embed-vault.js': sem('embed-vault.js'),
+    'daemons/semantic-search/deny-list.mjs': sem('deny-list.mjs'),
+    'daemons/lifecycle-common.mjs': dm('lifecycle-common.mjs'),
+    'evals/run-evals.mjs': path.join(box.root, 'evals', 'run-evals.mjs'),
+    'daemons/memory-root.cjs': dm('memory-root.cjs'),
+    'daemons/memory-root.sh': dm('memory-root.sh'),
     // recorded, never gated: the packet pins no value for these
     'scripts/doctor.sh': path.join(box.root, 'scripts', 'doctor.sh'),
-    'daemons/frontmatter-reader.cjs': path.join(box.root, 'daemons', 'frontmatter-reader.cjs'),
-    'daemons/capsule-content-gate.mjs': path.join(box.root, 'daemons', 'capsule-content-gate.mjs'),
+    'daemons/frontmatter-reader.cjs': dm('frontmatter-reader.cjs'),
+    'daemons/capsule-content-gate.mjs': dm('capsule-content-gate.mjs'),
     'daemons/memory-hygiene/resume-framing.mjs': path.join(box.root, 'daemons', 'memory-hygiene', 'resume-framing.mjs'),
   };
 }
 
-function observedRuntimeHashes(box) {
+// Every pinned path, compared on the file as it sits in the sandbox. Pure over
+// (label -> file) so the self-check can feed it synthetic files.
+function verifyPins(fileMap, pins) {
+  const bad = [];
+  for (const label of Object.keys(pins)) {
+    const file = fileMap[label];
+    const got = file && existsSync(file) ? fileHash(file) : 'ABSENT';
+    if (got !== pins[label]) bad.push({ file: label, expected: pins[label], observed: got });
+  }
+  return bad;
+}
+
+const runtimeHashGaps = (box, pins) => verifyPins(sandboxFileMap(box), pins);
+
+function observedRuntimeHashes(box, pins) {
   if (!box) return null;
   const out = {};
   for (const [label, file] of Object.entries(sandboxFileMap(box))) {
     const observed = existsSync(file) ? fileHash(file) : 'ABSENT';
-    const pinned = RUNTIME_HASHES[label] || null;
+    const pinned = pins[label] || null;
     out[label] = pinned
       ? { observed, pinned, matchesPin: observed === pinned }
       : { observed, pinned: null, matchesPin: null };
@@ -282,10 +335,105 @@ function observedRuntimeHashes(box) {
   return out;
 }
 
-function runNode(box, script, args = []) {
+// ── product identity, PREREG-002 1.3 / 1.7 ───────────────────────────────────
+// product_commit is an OBSERVATION: `git rev-parse HEAD` in the tree the run
+// executes against. BUILD-LEDGER 13 names the defect this closes: a constant
+// labels a fixed-tree packet with a commit whose product it is NOT running.
+function observeProductCommit(tree) {
+  const r = spawnSync('git', ['-C', tree, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  const sha = (r.stdout || '').trim();
+  return r.status === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+// PREREG-002-CANDIDATES.md is append-only; one record per `candidate_id: C-nnn`
+// line, with `key: value` lines and `<64 hex>  <path>` pin lines under it:
+//   candidate_id: C-001        product_commit: <40 hex>
+//   instrument_sha256: <64 hex>   withdraws: C-000   (optional)
+//   <64 hex>  daemons/semantic-search/search-vault.js   (x10)
+function parseCandidates(text) {
+  const parts = String(text || '').split(/^(?=\s*(?:[-*]\s*)?candidate_id\s*:)/m).filter((b) => /candidate_id\s*:/.test(b));
+  return parts.map((block) => {
+    const grab = (key, re) => (block.match(new RegExp(`^\\s*(?:[-*]\\s*)?${key}\\s*:\\s*\`?(${re})\`?`, 'im')) || [])[1] || null;
+    const pins = {};
+    for (const m of block.matchAll(/^\s*(?:[-*]\s*)?`?([0-9a-f]{64})`?\s+`?(\S+?)`?\s*$/gm)) pins[m[2]] = m[1];
+    return {
+      candidate_id: grab('candidate_id', 'C-\\d+'),
+      product_commit: grab('product_commit', '[0-9a-f]{40}'),
+      instrument_sha256: grab('instrument_sha256', '[0-9a-f]{64}'),
+      withdraws: [...block.matchAll(/^\s*(?:[-*]\s*)?withdraws\s*:\s*`?(C-\d+)`?/gim)].map((m) => m[1]),
+      pins,
+    };
+  });
+}
+
+// PREREG-002 1.1 / 1.7 / 5.4 / section 7 item 9: the only identities that can
+// produce a result are the baseline and a registered candidate whose record
+// carries all ten pins and THIS instrument's sha256. Anything else is refused,
+// naming why. Pure: the caller supplies the observation.
+function resolveIdentity({ observed, candidatesText, candidatesSource, instrumentSha }) {
+  if (!observed) {
+    return { ok: false, why: 'git rev-parse HEAD failed in the product tree: product_commit cannot be observed', requires: 'PREREG-002 1.3 — product_commit must be observed in a git checkout' };
+  }
+  if (observed === BASELINE_COMMIT) return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS };
+  const records = parseCandidates(candidatesText);
+  const withdrawn = new Set(records.flatMap((r) => r.withdraws));
+  const hit = records.find((r) => r.product_commit === observed && !withdrawn.has(r.candidate_id));
+  const requires = 'PREREG-002 1.7 — identity is neither the baseline nor a registered candidate';
+  if (!hit) {
+    const wd = records.find((r) => r.product_commit === observed && withdrawn.has(r.candidate_id));
+    return { ok: false, requires, why: wd
+      ? `product ${observed} matches ${wd.candidate_id}, which a later record withdrew`
+      : `product ${observed} is neither the baseline ${BASELINE_COMMIT} nor registered in ${candidatesSource || 'a candidates file (none given; absent file = baseline only)'}` };
+  }
+  const missing = PINNED_PATHS.filter((f) => !hit.pins[f]);
+  if (missing.length) return { ok: false, requires, why: `${hit.candidate_id} does not carry pin(s) for: ${missing.join(', ')}` };
+  if (hit.instrument_sha256 !== instrumentSha) {
+    return { ok: false, requires, why: `${hit.candidate_id} registers instrument_sha256 ${hit.instrument_sha256 || 'NONE'} but this instrument is ${instrumentSha}` };
+  }
+  return { ok: true, kind: 'candidate', candidate_id: hit.candidate_id, pins: Object.fromEntries(PINNED_PATHS.map((f) => [f, hit.pins[f]])) };
+}
+
+// ── invocation environment, PREREG-002 3.2 / 1.6 ─────────────────────────────
+// A fresh opaque token per search invocation, unique within the run. The
+// inherited environment is scrubbed of every variable that moves the index, the
+// clock, the supersession switch or the token, so only the runner sets them.
+const usedTokens = new Set();
+function freshToken() {
+  for (;;) {
+    const t = `rec-${randomBytes(8).toString('hex')}`;
+    if (!usedTokens.has(t)) { usedTokens.add(t); return t; }
+  }
+}
+const TOKEN_RE = /^[A-Za-z0-9-]{8,64}$/;
+const SCRUBBED_ENV = ['AIGENT_STATE_HOME_DIR', 'AIGENT_SEARCH_NOW', 'AIGENT_SEARCH_INVOCATION', 'AIGENT_SEARCH_DISABLE_SUPERSESSION'];
+function invocationEnv(box, extra = {}) {
+  const base = { ...process.env };
+  for (const k of SCRUBBED_ENV) delete base[k];
+  return { ...base, AIGENT_ROOT: box.root, AIGENT_VAULT_ROOT: box.vault, ...extra };
+}
+
+// F8's pre-window instant: one day before the earliest closing date in the
+// corpus, so no window has ended (PREREG-002 F8).
+function preWindowInstant(corpusRoot) {
+  let earliest = null;
+  (function walk(dir) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(full); continue; }
+      if (!e.isFile() || !e.name.endsWith('.md')) continue;
+      for (const m of readFileSync(full, 'utf8').matchAll(/^Valid from \d{4}-\d{2}-\d{2} to (\d{4}-\d{2}-\d{2})\s*$/gm)) {
+        if (earliest === null || m[1] < earliest) earliest = m[1];
+      }
+    }
+  })(corpusRoot);
+  if (earliest === null) return null;
+  return `${new Date(Date.parse(`${earliest}T00:00:00Z`) - 86400000).toISOString().slice(0, 10)}T00:00:00Z`;
+}
+
+function runNode(box, script, args = [], extraEnv = {}) {
   const r = spawnSync(process.execPath, [path.join(box.sem, script), ...args], {
     encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, AIGENT_ROOT: box.root, AIGENT_VAULT_ROOT: box.vault },
+    env: invocationEnv(box, extraEnv),
   });
   const stdout = r.stdout || '';
   const stderr = r.stderr || '';
@@ -310,7 +458,7 @@ function buildIndex(box) {
 function embedOne(box, text) {
   const r = spawnSync(process.execPath, [path.join(box.sem, 'embed-one.mjs'), text], {
     encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, AIGENT_ROOT: box.root, AIGENT_VAULT_ROOT: box.vault },
+    env: invocationEnv(box),
   });
   if (r.status !== 0) throw new Error(`embed helper failed: ${(r.stderr || '').slice(0, 300)}`);
   return JSON.parse(r.stdout);
@@ -319,9 +467,10 @@ function embedOne(box, text) {
 // Human mode, not --json: search-vault.js returns at :181-184 BEFORE the
 // timing line, so --json gives no timings (PREREG-001 4.1). Both the timing
 // line and the trailing JSON block are parsed out of the human output.
-function search(box, query) {
-  const r = runNode(box, 'search-vault.js', [query]);
-  const out = { ...r, query, rows: null, timings: null, jsonBytes: null, parseError: null };
+function search(box, query, { now = FROZEN_NOW } = {}) {
+  const invocation = freshToken();
+  const r = runNode(box, 'search-vault.js', [query], { AIGENT_SEARCH_NOW: now, AIGENT_SEARCH_INVOCATION: invocation });
+  const out = { ...r, query, invocation, now, rows: null, timings: null, jsonBytes: null, parseError: null };
   const timing = r.stdout.match(/^Embed: (\d+)ms \| Search: (\d+)ms \| Total: (\d+)ms$/m);
   if (timing) out.timings = { embed: +timing[1], search: +timing[2], total: +timing[3] };
   const marker = r.stdout.lastIndexOf('\nJSON:\n');
@@ -642,6 +791,93 @@ function scoreLoudness(box, c) {
   }
 }
 
+// ── self-check: identity, pins, copy list, clock (PREREG-002 section 7 items
+//    1, 2, 3, 7, 9). Synthetic inputs only; no model, no product run. ─────────
+function selfCheckIdentity(check) {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'recollection-selfcheck-'));
+  sandboxes.push(tmp);
+  try {
+    // 1. product_commit is observed, never a literal.
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const repo = path.join(tmp, 'repo');
+    mkdirSync(repo);
+    const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8', env: gitEnv });
+    git('init', '-q');
+    writeFileSync(path.join(repo, 'f.txt'), 'x');
+    git('add', 'f.txt');
+    git('commit', '-q', '--no-verify', '-m', 'x');
+    const truth = git('rev-parse', 'HEAD').stdout.trim();
+    const seen = observeProductCommit(repo);
+    check('1 product_commit observed from the tree', seen === truth && /^[0-9a-f]{40}$/.test(seen) && seen !== BASELINE_COMMIT, `${seen} vs ${truth}`);
+    const notRepo = path.join(tmp, 'plain');
+    mkdirSync(notRepo);
+    check('1 no checkout -> null, never a constant', observeProductCommit(notRepo) === null);
+
+    // 2. all ten sandbox copies verified against the pins.
+    check('2 baseline pins are the ten frozen paths', PINNED_PATHS.length === 10
+      && Object.keys(BASELINE_PINS).sort().join() === [...PINNED_PATHS].sort().join()
+      && Object.values(BASELINE_PINS).every((h) => /^[0-9a-f]{64}$/.test(h)));
+    const files = {};
+    const pins = {};
+    PINNED_PATHS.forEach((label, i) => {
+      files[label] = path.join(tmp, `pin-${i}`);
+      writeFileSync(files[label], `content ${i}`);
+      pins[label] = fileHash(files[label]);
+    });
+    check('2 ten matching copies -> no mismatch', verifyPins(files, pins).length === 0);
+    writeFileSync(files['daemons/memory-root.sh'], 'edited');
+    const drift = verifyPins(files, pins);
+    check('2 one edited copy -> that file named', drift.length === 1 && drift[0].file === 'daemons/memory-root.sh', JSON.stringify(drift.map((d) => d.file)));
+    rmSync(files['daemons/memory-root.cjs']);
+    const gone = verifyPins(files, pins);
+    check('2 one absent copy -> ABSENT named', gone.some((d) => d.file === 'daemons/memory-root.cjs' && d.observed === 'ABSENT'));
+    check('2 a pin with no file in the map is a mismatch, not a skip', verifyPins({}, { 'daemons/memory-root.cjs': 'a'.repeat(64) }).length === 1);
+
+    // 3. both memory-root files in the sandbox copy list; the real sandbox has them.
+    check('3 copy list carries memory-root.cjs and .sh', SANDBOX_DAEMON_FILES.includes('memory-root.cjs') && SANDBOX_DAEMON_FILES.includes('memory-root.sh'));
+    const box0 = makeSandbox('selfcheck');
+    const map = sandboxFileMap(box0);
+    check('3 every pinned file exists in a built sandbox', PINNED_PATHS.every((l) => existsSync(map[l])), PINNED_PATHS.filter((l) => !existsSync(map[l])).join());
+    if (observeProductCommit(PRODUCT_TREE) === BASELINE_COMMIT) {
+      const bad = runtimeHashGaps(box0, BASELINE_PINS);
+      check('2 baseline tree: sandbox copies hash to the ten pins', bad.length === 0, JSON.stringify(bad.map((b) => b.file)));
+    }
+
+    // 7. the clock and token are the runner's, whatever the caller inherited.
+    const keep = Object.fromEntries(SCRUBBED_ENV.map((k) => [k, process.env[k]]));
+    process.env.AIGENT_SEARCH_NOW = '1999-01-01T00:00:00Z';
+    process.env.AIGENT_STATE_HOME_DIR = '/elsewhere';
+    process.env.AIGENT_SEARCH_DISABLE_SUPERSESSION = '1';
+    const env = invocationEnv(box0, { AIGENT_SEARCH_NOW: FROZEN_NOW, AIGENT_SEARCH_INVOCATION: 'tok-12345678' });
+    for (const k of SCRUBBED_ENV) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; }
+    check('7 search env pins AIGENT_SEARCH_NOW over an inherited value', env.AIGENT_SEARCH_NOW === FROZEN_NOW && FROZEN_NOW === '2026-09-30T00:00:00Z');
+    check('7 inherited state-home and supersession switch are scrubbed', env.AIGENT_STATE_HOME_DIR === undefined && env.AIGENT_SEARCH_DISABLE_SUPERSESSION === undefined);
+    const toks = Array.from({ length: 300 }, freshToken);
+    check('4 invocation tokens: unique, 8-64 chars of [A-Za-z0-9-]', new Set(toks).size === 300 && toks.every((t) => TOKEN_RE.test(t)));
+    const pre = preWindowInstant(CORPUS);
+    check('7 F8 instant: Z form, one day before the earliest window end, earlier than the frozen instant',
+      /^\d{4}-\d{2}-\d{2}T00:00:00Z$/.test(pre || '') && Date.parse(pre) < Date.parse(FROZEN_NOW), String(pre));
+
+    // 9. identity gate.
+    const SHA = 'a'.repeat(64);
+    const CAND = 'b'.repeat(40);
+    const pinLines = PINNED_PATHS.map((f, i) => `${String(i).repeat(64).slice(0, 64)}  ${f}`).join('\n');
+    const rec = (id, commit, extra = '') => `candidate_id: ${id}\nproduct_commit: ${commit}\ninstrument_sha256: ${SHA}\n${pinLines}\n${extra}\n`;
+    const gate = (observed, text, sha = SHA) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'CANDS.md', instrumentSha: sha });
+    check('9 baseline commit -> baseline identity', gate(BASELINE_COMMIT, '').kind === 'baseline');
+    const unknown = gate(CAND, '');
+    check('9 unknown commit, no file -> refused, names the identity', !unknown.ok && unknown.why.includes(CAND) && !!unknown.requires, unknown.why);
+    const reg = gate(CAND, rec('C-001', CAND));
+    check('9 registered candidate -> its own pins', reg.ok && reg.kind === 'candidate' && reg.candidate_id === 'C-001' && Object.keys(reg.pins).length === 10);
+    check('9 candidate registered for another instrument -> refused', !gate(CAND, rec('C-001', CAND), 'c'.repeat(64)).ok);
+    check('9 candidate record missing a pin -> refused naming it', (() => { const r = gate(CAND, rec('C-001', CAND).replace(/^.*memory-root\.sh.*$/m, '')); return !r.ok && r.why.includes('memory-root.sh'); })());
+    check('9 withdrawn candidate -> refused', !gate(CAND, rec('C-001', CAND) + rec('C-002', 'c'.repeat(40), 'withdraws: C-001')).ok);
+    check('9 unobservable commit -> refused, never a guess', !gate(null, '').ok);
+  } finally {
+    // sandboxes are removed by the exit hook
+  }
+}
+
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
 // One source of truth for what each run mutates and what it must turn red. A
 // scenario name this table does not contain is a harness error: before this
@@ -734,7 +970,9 @@ if (FREEZE_ONLY) {
   console.log(JSON.stringify({
     corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash,
     model, environment: env,
-    runtime_hashes_observed: Object.fromEntries(Object.keys(RUNTIME_HASHES).map((k) => [k, fileHash(path.join(ROOT, ...k.split('/')))])),
+    instrument_sha256: fileHash(fileURLToPath(import.meta.url)),
+    product_commit: observeProductCommit(PRODUCT_TREE),
+    runtime_hashes_observed: Object.fromEntries(PINNED_PATHS.map((k) => [k, fileHash(path.join(PRODUCT_TREE, ...k.split('/')))])),
   }, null, 2));
   process.exit(0);
 }
@@ -792,19 +1030,23 @@ export function integrityErrors(caseList, staleList, gates) {
 // rot: mutate an in-memory COPY of the frozen cases and assert it is caught.
 // Never touches the committed fixture. Run: --self-check
 if (argv.includes('--self-check')) {
+  const checks = [];
+  const check = (name, ok, detail = '') => checks.push({ name, ok: !!ok, detail });
   const staleSelf = JSON.parse(readFileSync(path.join(HERE, 'cases', 'stale-index.json'), 'utf8')).rows;
   const clean = integrityErrors(cases, staleSelf, GATES);
   const renamed = cases.map((c) => (c.id === 'P-07' ? { ...c, id: 'P-99' } : c));
   const mutated = integrityErrors(renamed, staleSelf, GATES);
   const dropped = integrityErrors(cases.filter((c) => c.id !== 'N-01'), staleSelf, GATES);
   const xDrift = integrityErrors(cases, staleSelf.slice(1), GATES);
-  const ok = clean.length === 0 && mutated.length > 0 && dropped.length > 0 && xDrift.length > 0;
-  console.log(`clean fixture      : ${clean.length} error(s) ${clean.length === 0 ? 'OK' : `FAIL ${clean}`}`);
-  console.log(`renamed P-07->P-99 : ${mutated.length} error(s) ${mutated.length ? `OK — ${mutated[0]}` : 'FAIL (not caught)'}`);
-  console.log(`dropped N-01       : ${dropped.length} error(s) ${dropped.length ? `OK — ${dropped[0]}` : 'FAIL (not caught)'}`);
-  console.log(`stale-index drift  : ${xDrift.length} error(s) ${xDrift.length ? `OK — ${xDrift[0]}` : 'FAIL (not caught)'}`);
-  console.log(ok ? 'SELF-CHECK PASS' : 'SELF-CHECK FAIL');
-  process.exit(ok ? 0 : 1);
+  check('clean fixture', clean.length === 0, `${clean.length} error(s) ${clean}`);
+  check('renamed P-07->P-99 caught', mutated.length > 0, mutated[0]);
+  check('dropped N-01 caught', dropped.length > 0, dropped[0]);
+  check('stale-index drift caught', xDrift.length > 0, xDrift[0]);
+  selfCheckIdentity(check);
+  const failed = checks.filter((c) => !c.ok);
+  for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
+  console.log(failed.length === 0 ? 'SELF-CHECK PASS' : `SELF-CHECK FAIL (${failed.length})`);
+  process.exit(failed.length === 0 ? 0 : 1);
 }
 
 if (!Object.hasOwn(SCENARIOS, SCENARIO)) {
@@ -841,6 +1083,19 @@ const staleRowsForIntegrity = JSON.parse(readFileSync(path.join(HERE, 'cases', '
 harnessErrors.push(...integrityErrors(cases, staleRowsForIntegrity, GATES));
 
 const gaps = environmentGaps();
+
+// PREREG-002 section 7 items 1, 2, 9: observe the product identity, then refuse
+// to score anything that is neither the baseline nor a registered candidate.
+const INSTRUMENT_SHA = fileHash(fileURLToPath(import.meta.url));
+const observedCommit = observeProductCommit(PRODUCT_TREE);
+const candidatesPresent = !!CANDIDATES_FILE && existsSync(CANDIDATES_FILE);
+const identity = resolveIdentity({
+  observed: observedCommit,
+  candidatesText: candidatesPresent ? readFileSync(CANDIDATES_FILE, 'utf8') : '',
+  candidatesSource: CANDIDATES_FILE ? `${CANDIDATES_FILE}${candidatesPresent ? '' : ' (file absent)'}` : null,
+  instrumentSha: INSTRUMENT_SHA,
+});
+const ACTIVE_PINS = identity.ok ? identity.pins : BASELINE_PINS;
 const ALL_QUALITY = cases
   .filter((c) => ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'].includes(c.class))
   .map((c) => c.id);
@@ -854,18 +1109,23 @@ function declareUnrunnable(ids, why, requires) {
   for (const id of ids) record(id, byId.get(id).class, 'unrunnable', why, { requires });
 }
 
-if (harnessErrors.length === 0 && gaps.length > 0) {
+if (harnessErrors.length === 0 && !identity.ok) {
+  declareUnrunnable(cases.map((c) => c.id), `PREREG-002 refuses to score: ${identity.why}`, identity.requires);
+} else if (harnessErrors.length === 0 && gaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
     gaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
     `PREREG-001 4.3 (${gaps.map((g) => `item ${g.item}`).join(', ')})`);
 }
 
-if (harnessErrors.length === 0 && gaps.length === 0) {
+let hashMismatch = [];
+if (harnessErrors.length === 0 && identity.ok && gaps.length === 0) {
   box = makeSandbox(SCENARIO.toLowerCase());
-  const badHashes = runtimeHashGaps(box);
-  if (badHashes.length) {
-    for (const b of badHashes) harnessErrors.push(`runtime hash mismatch ${b.file}: expected ${b.expected} observed ${b.observed}`);
-    declareUnrunnable(cases.map((c) => c.id), 'sandbox runtime hashes do not match PREREG-001 1.3', 'PREREG-001 1.3');
+  hashMismatch = runtimeHashGaps(box, ACTIVE_PINS);
+  if (hashMismatch.length) {
+    // PREREG-002 1.3: UNRUNNABLE, naming the mismatch. Not a harness error.
+    declareUnrunnable(cases.map((c) => c.id),
+      `sandbox copies disagree with the ${identity.kind} pins: ${hashMismatch.map((b) => `${b.file} (expected ${b.expected.slice(0, 12)}, observed ${b.observed.slice(0, 12)})`).join('; ')}`,
+      'PREREG-002 1.3 — sandbox pin mismatch');
   } else {
     // ── scenario mutations, applied to the SANDBOX only. The committed
     //    corpus, the committed fixture registry and the product tree are
@@ -1080,7 +1340,7 @@ const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
 // observed hashes are sampled again here and a pinned file that drifted feeds
 // the terminal instead of sitting inert in the packet. Unpinned entries carry
 // pinned: null and never trip this.
-const observedHashes = observedRuntimeHashes(box);
+const observedHashes = observedRuntimeHashes(box, ACTIVE_PINS);
 const pinDrift = Object.entries(observedHashes || {})
   .filter(([, v]) => v.pinned !== null && v.matchesPin === false)
   .map(([file, v]) => ({ file, expected: v.pinned, observed: v.observed }));
@@ -1102,16 +1362,23 @@ else if (pinDrift.length || anyUnrunnable) terminal = 'UNRUNNABLE';
 else terminal = 'PASS';
 
 const packet = {
-  preregistration: 'recollection-44/PREREG-001',
-  packet_sha256: '6a45b8992492bf947e5abc6fcd079d63530c1ab4015a28eee29dcc8c0be252c4',
+  preregistration: PREREG,
+  packet_sha256: PACKET_SHA256,
   scenario: SCENARIO,
-  product_commit: 'cdb7022e5a08ef78f9923944fb4aff51bfea48a1',
+  // Named mutation runs are never identity runs (PREREG-002 section 6).
+  identity_run: SCENARIO === 'BASELINE',
+  development_subset: ONLY ? [...ONLY] : null,
+  product_commit: observedCommit,
+  product_tree: PRODUCT_TREE,
+  identity: { kind: identity.ok ? identity.kind : 'REFUSED', candidate_id: identity.candidate_id || null, refused: identity.ok ? null : identity.why },
+  search_now: { frozen: FROZEN_NOW },
+  runtime_hash_mismatch: hashMismatch,
   terminal,
   ran_at: new Date().toISOString(),
   wall_ms: wall,
   hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash, frozen },
-  instrument_sha256: fileHash(fileURLToPath(import.meta.url)),
-  runtime_hashes_pinned: RUNTIME_HASHES,
+  instrument_sha256: INSTRUMENT_SHA,
+  runtime_hashes_pinned: ACTIVE_PINS,
   runtime_hashes_observed: observedHashes,
   runtime_hash_pin_drift: pinDrift,
   model,
@@ -1149,7 +1416,8 @@ if (JSON_OUT) {
   console.log(JSON.stringify(packet, null, 2));
 } else {
   const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE' };
-  console.log(`\nrecollection-44/PREREG-001 — scenario ${SCENARIO} — product cdb7022e`);
+  console.log(`\n${PREREG} — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
+  console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)`);
   console.log(`corpus           ${corpusHash}`);
   console.log(`overlay          ${overlayHash}`);
   console.log(`fixture-registry ${fixtureHash}\n`);
