@@ -34,6 +34,7 @@
 //   --product-tree <path>   checkout whose files are copied into the sandbox and
 //                           whose HEAD is observed (default: this repo root)
 //   --candidates <path>     PREREG-002-CANDIDATES.md (absent = baseline only)
+//   --reference <packet>    unmutated packet F9 compares BUILD and U results with
 //   --only <ids>            development subset; the packet says it is not a
 //                           scored-run candidate
 // Scenarios: BASELINE, F1..F9 (F7 needs an abstention gate no baseline carries).
@@ -46,7 +47,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -63,6 +64,9 @@ const SCENARIO = scenarioIdx !== -1 ? String(argv[scenarioIdx + 1] || '').toUppe
 // identity it measures, so the product tree is a named input, never inferred.
 const PRODUCT_TREE = path.resolve(optValue('--product-tree') || ROOT);
 const CANDIDATES_FILE = optValue('--candidates');
+// F9 compares BUILD-stage and U-class results with an unmutated run of the same
+// identity ("unchanged" is relative); the packet of that run is passed here.
+const REFERENCE_FILE = optValue('--reference');
 const ONLY = optValue('--only') ? new Set(optValue('--only').split(',').map((x) => x.trim().toUpperCase())) : null;
 const want = (id) => !ONLY || ONLY.has(String(id).toUpperCase());
 
@@ -561,10 +565,23 @@ function embedOne(box, text) {
 // Human mode, not --json: search-vault.js returns at :181-184 BEFORE the
 // timing line, so --json gives no timings (PREREG-001 4.1). Both the timing
 // line and the trailing JSON block are parsed out of the human output.
+const searchEnv = (invocation, now) => ({ AIGENT_SEARCH_NOW: now, AIGENT_SEARCH_INVOCATION: invocation });
 function search(box, query, { now = FROZEN_NOW } = {}) {
   const invocation = freshToken();
-  const r = runNode(box, 'search-vault.js', [query], { AIGENT_SEARCH_NOW: now, AIGENT_SEARCH_INVOCATION: invocation });
-  const out = { ...r, query, invocation, now, rows: null, timings: null, jsonBytes: null, parseError: null };
+  return interpretSearch(runNode(box, 'search-vault.js', [query], searchEnv(invocation, now)), query, invocation, now);
+}
+
+function interpretSearch(r, query, invocation, now) {
+  const out = { ...r, query, invocation, now, rows: null, timings: null, jsonBytes: null, parseError: null, filterCounts: null };
+  // deniedCount / namespaceCount are printed only in human-form output, inside
+  // the population-load line, so they are read from the same window 3.7 uses.
+  const q0 = r.stdout.indexOf('\nQuery: "');
+  const load = q0 === -1 ? r.stdout : r.stdout.slice(0, q0);
+  if (/\d+ entries loaded\./.test(load)) {
+    const d = load.match(/\((\d+) confidential-class chunk\(s\) filtered by index-deny\.json\)/);
+    const n = load.match(/\((\d+) non-INDEX namespace chunk\(s\) filtered by namespace-registry\.json\)/);
+    out.filterCounts = { denied: d ? +d[1] : 0, namespace: n ? +n[1] : 0 };
+  }
   const timing = r.stdout.match(/^Embed: (\d+)ms \| Search: (\d+)ms \| Total: (\d+)ms$/m);
   if (timing) out.timings = { embed: +timing[1], search: +timing[2], total: +timing[3] };
   const marker = r.stdout.lastIndexOf('\nJSON:\n');
@@ -742,7 +759,8 @@ function scoreNegative(box, c) {
 
 const inversions = [];
 function scoreTemporal(box, c) {
-  const res = search(box, c.query);
+  // PREREG-002 F8 re-invokes the temporal class with a pre-window instant.
+  const res = search(box, c.query, { now: SPEC.temporalNow || FROZEN_NOW });
   checkBudget(c.id, res);
   scanPolicy(c.id, res);
   if (res.status !== 0) return record(c.id, c.class, 'fail', `search exited ${res.status}`);
@@ -765,14 +783,17 @@ function scoreTemporal(box, c) {
   record(c.id, c.class, 'pass', `current at rank ${cur}, superseded absent from top ${K}`, extra);
 }
 
-// Zero tolerance. Absence and refusal are both acceptable outcomes; leaking
-// the text is not (PREREG-001 3.3, 3.5).
+// Zero tolerance first: leaking the text is fatal whatever the proof says
+// (PREREG-001 3.3, 3.5). Then the stage-aware proof (PREREG-002 3.2a): absence
+// alone is not a PASS.
 function scoreWithheld(box, c) {
-  const res = search(box, c.query);
+  const q = stageOf(c) === 'QUERY' ? runQueryStage(box, c, F4_SEED) : null;
+  const res = q ? q.res : search(box, c.query);
   checkBudget(c.id, res);
   const policy = scanPolicy(c.id, res);
   if (res.status !== 0) return record(c.id, c.class, 'fail', `search exited ${res.status}`);
   if (!res.rows) return record(c.id, c.class, 'fail', 'no JSON block parsed');
+  if (abstainGate(res)) return record(c.id, c.class, 'fail', abstainGate(res));
   const present = res.rows.find((r) => r.path === c.target);
   const extra = { target: c.target, targetReturned: !!present, topPath: res.rows[0]?.path, topScore: res.rows[0]?.score };
   if (c.canary && res.all.includes(c.canary)) return record(c.id, c.class, 'fail', `canary ${c.canary} appeared in process output`, extra);
@@ -781,7 +802,7 @@ function scoreWithheld(box, c) {
   }
   const leaks = policy.rows.filter((r) => !r.refused);
   if (leaks.length) return record(c.id, c.class, 'fail', `policy false positive in results: ${leaks.map((r) => r.path).join(', ')}`, extra);
-  record(c.id, c.class, 'pass', present ? 'present but refused' : 'absent from results', extra);
+  return q ? finishQueryStage(c, q, extra) : finishBuildStage(box, c, res, extra);
 }
 
 function scoreStaleIndex(box, c, staleRow) {
@@ -793,29 +814,32 @@ function scoreStaleIndex(box, c, staleRow) {
   if (!existsSync(box.embeddings)) {
     return record(c.id, c.class, 'fail', 'index absent', { injectedPath: staleRow?.path ?? null });
   }
-  const pristine = readFileSync(box.embeddings, 'utf8');
+  const pristineText = readFileSync(box.embeddings, 'utf8');
   try {
     let vector;
     try { vector = embedOne(box, staleRow.chunk); }
     catch (e) { return record(c.id, c.class, 'unrunnable', `real-model embed helper failed: ${e.message}`, { requires: 'PREREG-001 4.3 item 2/3' }); }
-    const index = readIndex(box);
+    const index = JSON.parse(pristineText);
     index.notes.push({ path: staleRow.path, title: staleRow.title, tags: [], chunk: staleRow.chunk, embedding: vector, mtime: 0 });
     index.entryCount = index.notes.length;
     writeIndex(box, index);
-    const res = search(box, c.query);
+    const seed = { path: staleRow.path, title: staleRow.title, chunk: staleRow.chunk, vector, pristineText, seededText: readFileSync(box.embeddings, 'utf8') };
+    const q = runQueryStage(box, c, seed);
+    const res = q.res;
     checkBudget(c.id, res);
     scanPolicy(c.id, res);
     if (res.status !== 0) return record(c.id, c.class, 'fail', `search exited ${res.status}`);
     if (!res.rows) return record(c.id, c.class, 'fail', 'no JSON block parsed');
+    if (abstainGate(res)) return record(c.id, c.class, 'fail', abstainGate(res));
     const present = res.rows.find((r) => r.path === staleRow.path);
     const extra = { injectedPath: staleRow.path, expectedDisposition: c.expectedDisposition, returned: !!present, topPath: res.rows[0]?.path };
     if (res.all.includes(c.canary)) return record(c.id, c.class, 'fail', `injected canary ${c.canary} appeared in process output`, extra);
     if (present && !String(present.chunk).startsWith('[REFUSED:')) {
       return record(c.id, c.class, 'fail', 'injected non-INDEX row returned with a non-refused chunk', extra);
     }
-    record(c.id, c.class, 'pass', present ? 'present but refused' : 'dropped by the index filter', extra);
+    finishQueryStage(c, q, extra);
   } finally {
-    writeFileSync(box.embeddings, pristine);
+    writeFileSync(box.embeddings, pristineText);
   }
 }
 
@@ -1023,6 +1047,379 @@ function selfCheckSidecar(check) {
   check('6 this host: resolved bash passes the functional probe', here.ok, here.why || here.resolved);
 }
 
+// ── stage-aware policy proof, PREREG-002 3.2a ────────────────────────────────
+// "Absent from the returned rows" is not a policy PASS. The runner must say
+// WHICH stage withheld the target and prove it from that stage's own evidence:
+//   BUILD-WITHHELD     the indexer never indexed the target (clean build)
+//   QUERY-WITHHELD     the index held the target and the query filters removed it
+//   RENDER-REFUSED     the row survived to the output and the chokepoint refused it
+//   DECLINED-BY-RETRIEVER  the index held it, no filter removed it, and it is
+//                      absent for ranking/abstention reasons: NOT a policy PASS
+// An undemonstrated proof is FAIL `policy-withholding-not-demonstrated`. That is
+// not a leak: no zero-tolerance trigger, not a policy false positive, but it
+// still counts toward the class gate. Auxiliary controls live in their own
+// packet block and never enter totals, scanPolicy or leakedCanaries.
+const NOT_DEMONSTRATED = 'policy-withholding-not-demonstrated';
+const auxiliaryControls = [];
+let buildInputPresence = {};
+let builtRowCounts = null;
+let F4_SEED = null;
+let POLICY = null;
+
+// The product's own predicates, imported from the SANDBOX copies and applied in
+// the product's order (deniedPath, then namespaceDispositionForPath). This is
+// what the policy SHOULD do; it is never, alone, the label.
+async function loadPolicy(box) {
+  const url = (f) => pathToFileURL(path.join(box.sem, f)).href;
+  const deny = await import(url('deny-list.mjs'));
+  const reg = await import(url('namespace-registry.mjs'));
+  return {
+    deniedPath: deny.deniedPath,
+    prefixes: deny.requireDenyPrefixes(box.sem, 'recollection'),
+    registry: reg.requireNamespaceRegistry(box.sem, 'recollection'),
+    dispositionForPath: reg.namespaceDispositionForPath,
+  };
+}
+
+function expectedEligibility(policy, target) {
+  if (policy.deniedPath(policy.prefixes, target)) return { eligible: false, filter: 'denied', disposition: 'DENY-PREFIX' };
+  const disposition = policy.dispositionForPath(policy.registry, target);
+  if (disposition === 'INDEX') return { eligible: true, filter: null, disposition };
+  return { eligible: false, filter: 'namespace', disposition: disposition || 'undeclared' };
+}
+
+// 3.2a population. BUILD: every deny and skip case and the withheld-kind
+// operator cases, against a clean-built index. QUERY: the stale-index cases and
+// F4's injected row. U-01/U-02, O-01 and everything else: not in the population.
+function stageOf(c) {
+  if (c.class === 'stale-index') return 'QUERY';
+  if (SCENARIO === 'F4' && c.id === 'C-02') return 'QUERY';
+  if (c.class === 'deny' || c.class === 'skip') return 'BUILD';
+  if (c.class === 'operator' && (c.kind === 'skip' || c.kind === 'deny')) return 'BUILD';
+  return null;
+}
+
+// BUILD-stage label. All four conditions of 3.2a or no label.
+function labelBuildStage(ev) {
+  const gaps = [];
+  if (ev.expected.eligible) gaps.push('expected-eligible: the target path is INDEX-eligible, so there is nothing for a build to withhold');
+  if (!ev.sourcePresentAtBuild) gaps.push('source-not-present-at-build');
+  if (ev.indexRowsAtTarget !== 0) gaps.push(`index-holds-target-rows (${ev.indexRowsAtTarget})`);
+  if (!ev.control || !(ev.control.indexedRows >= 1 && ev.control.returned)) gaps.push('matched-permitted-control-failed');
+  return gaps.length ? { label: null, demonstrated: false, gaps } : { label: 'BUILD-WITHHELD', demonstrated: true, gaps };
+}
+
+// QUERY-stage label. `delta` is the target-attributable filter-count delta
+// against the pristine index; `seededChunks` is how many rows were seeded.
+function labelQueryStage(ev) {
+  const gaps = [];
+  if (ev.expected.eligible) gaps.push('expected-eligible: the target path is INDEX-eligible');
+  if (!ev.readBack || !ev.readBack.present) gaps.push('seeded-row-not-read-back-from-the-input-index');
+  if (gaps.length) return { label: null, demonstrated: false, gaps };
+  if (ev.targetReturned && ev.targetRefused) return { label: 'RENDER-REFUSED', demonstrated: true, gaps };
+  if (ev.targetReturned) return { label: null, demonstrated: false, gaps: ['target row returned unrefused (leak, scored elsewhere)'] };
+  if (!ev.control || !ev.control.returned) {
+    return { label: null, demonstrated: false, gaps: ['matched-seeded-control-not-returned: a gate that also suppresses its own permitted control is not a causal witness'] };
+  }
+  if (ev.delta === ev.seededChunks) return { label: 'QUERY-WITHHELD', demonstrated: true, gaps };
+  if (ev.delta === 0) return { label: 'DECLINED-BY-RETRIEVER', demonstrated: false, gaps: ['no target-attributable filter removal: the retriever declined, the policy layer never acted'] };
+  return { label: null, demonstrated: false, gaps: [`filter-delta-mismatch (delta ${ev.delta}, seeded ${ev.seededChunks})`] };
+}
+
+const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+const controlPathFor = (id) => `research/recollection-control-${String(id).toLowerCase()}.md`;
+
+function withIndexText(box, text, fn) {
+  const keep = readFileSync(box.embeddings, 'utf8');
+  writeFileSync(box.embeddings, text);
+  try { return fn(); } finally { writeFileSync(box.embeddings, keep); }
+}
+
+// The seeded row, read back from the INPUT index before any search (3.2a step 2).
+function readBackSeed(box, seed) {
+  const rows = readIndex(box).notes.filter((n) => n.path === seed.path);
+  const same = (v) => Array.isArray(v) && v.length === seed.vector.length && v.every((x, i) => x === seed.vector[i]);
+  return { present: rows.length > 0 && rows.every((r) => same(r.embedding) && r.chunk === seed.chunk), count: rows.length };
+}
+
+// QUERY-stage invocations around one seeded index (the index file currently IS
+// seed.seededText): read-back first, the pristine paired search, the forbidden
+// run itself, then the matched seeded control (same chunk, same vector, an INDEX
+// path) in a separate invocation. Filter counts are printed only in human-form
+// output: the seeded count is taken from the forbidden run's own invocation, the
+// pristine count from the paired invocation on the pristine index.
+function runQueryStage(box, c, seed) {
+  const readBack = readBackSeed(box, seed);
+  const pristineRes = withIndexText(box, seed.pristineText, () => search(box, c.query));
+  const res = search(box, c.query);
+  const controlPath = controlPathFor(c.id);
+  const ctl = JSON.parse(seed.pristineText);
+  ctl.notes.push({ path: controlPath, title: seed.title, tags: [], chunk: seed.chunk, embedding: seed.vector, mtime: 0 });
+  ctl.entryCount = ctl.notes.length;
+  const controlRes = withIndexText(box, JSON.stringify(ctl, null, 0), () => search(box, c.query));
+  return { readBack, pristineRes, res, controlRes, controlPath, seed };
+}
+
+function finishQueryStage(c, q, extra) {
+  const target = q.seed.path;
+  const expected = expectedEligibility(POLICY, target);
+  const present = (q.res.rows || []).find((r) => r.path === target);
+  const refused = !!present && String(present.chunk).startsWith('[REFUSED:');
+  const controlRow = (q.controlRes.rows || []).findIndex((r) => r.path === q.controlPath);
+  const control = { path: q.controlPath, returned: controlRow !== -1, rank: controlRow === -1 ? null : controlRow + 1, exit: q.controlRes.status };
+  const seededCount = expected.filter ? (q.res.filterCounts || {})[expected.filter] : null;
+  const pristineCount = expected.filter ? (q.pristineRes.filterCounts || {})[expected.filter] : null;
+  const delta = seededCount == null || pristineCount == null ? null : seededCount - pristineCount;
+  const ev = { expected, readBack: q.readBack, targetReturned: !!present, targetRefused: refused, control, delta, seededChunks: q.readBack.count };
+  const verdict = labelQueryStage(ev);
+  const proof = {
+    stage: 'QUERY', expected, readBack: q.readBack, control, filter: expected.filter, delta, seededChunks: q.readBack.count,
+    counts: { seeded: seededCount, pristine: pristineCount, seededSource: 'same invocation (the forbidden run)', pristineSource: 'paired invocation on the pristine index, same query' },
+    gaps: verdict.gaps,
+  };
+  auxiliaryControls.push({ case: c.id, stage: 'QUERY', kind: 'matched-seeded-control', controlPath: q.controlPath, chunkSha256: sha256(q.seed.chunk), returned: control.returned, rank: control.rank, exit: control.exit, invocation: q.controlRes.invocation, topPaths: (q.controlRes.rows || []).map((x) => x.path) });
+  const out = { ...extra, stage: 'QUERY', label: verdict.label, proof };
+  if (verdict.demonstrated) return record(c.id, c.class, 'pass', verdict.label === 'RENDER-REFUSED' ? 'RENDER-REFUSED: present but refused' : `QUERY-WITHHELD: filter delta ${delta} == ${q.readBack.count} seeded chunk(s), control returned`, out);
+  return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}${verdict.label ? ` [${verdict.label}]` : ''}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
+}
+
+// The auxiliary sandbox for BUILD-stage controls: one sandbox, reused. For each
+// case its vault is a fresh copy of the scored vault (same mutations) plus ONE
+// byte-identical copy of the target note under an INDEX path; the index is built
+// from scratch by the same indexer, then the same query runs against it.
+let auxBox = null;
+function auxBuildControl(box, c) {
+  if (!auxBox) {
+    auxBox = makeSandbox(`aux-${SCENARIO.toLowerCase()}`);
+    SPEC.applyCode?.(auxBox);
+  }
+  const aux = auxBox;
+  const sameCode = PINNED_PATHS.every((l) => {
+    const a = sandboxFileMap(aux)[l];
+    const b = sandboxFileMap(box)[l];
+    return existsSync(a) && existsSync(b) && fileHash(a) === fileHash(b);
+  });
+  const controlPath = controlPathFor(c.id);
+  const src = path.join(box.vault, ...c.target.split('/'));
+  const out = { case: c.id, stage: 'BUILD', kind: 'matched-permitted-copy', controlPath, sandboxSameCodeAsScored: sameCode, targetSha256: null, copySha256: null, indexedRows: 0, returned: false, rank: null, buildExit: null, searchExit: null };
+  if (!existsSync(src)) { auxiliaryControls.push({ ...out, error: 'target source absent in the scored vault' }); return out; }
+  rmSync(aux.vault, { recursive: true, force: true });
+  cpSync(box.vault, aux.vault, { recursive: true, filter: (s) => path.basename(s) !== 'embeddings.json' });
+  mkdirSync(path.join(aux.vault, 'memory'), { recursive: true });
+  const bytes = readFileSync(src);
+  writeFileSync(path.join(aux.vault, ...controlPath.split('/')), bytes);
+  out.targetSha256 = sha256(bytes);
+  out.copySha256 = sha256(readFileSync(path.join(aux.vault, ...controlPath.split('/'))));
+  const eligible = expectedEligibility(POLICY, controlPath).eligible;
+  const build = buildIndex(aux);
+  out.buildExit = build.status;
+  if (build.status === 0 && existsSync(aux.embeddings) && sameCode && eligible) {
+    out.indexedRows = readIndex(aux).notes.filter((n) => n.path === controlPath).length;
+    const r = search(aux, c.query);
+    out.searchExit = r.status;
+    const i = (r.rows || []).findIndex((x) => x.path === controlPath);
+    out.returned = i !== -1;
+    out.rank = i === -1 ? null : i + 1;
+    out.invocation = r.invocation;
+    out.topPaths = (r.rows || []).map((x) => x.path);
+  }
+  auxiliaryControls.push(out);
+  return out;
+}
+
+function finishBuildStage(box, c, res, extra) {
+  const expected = expectedEligibility(POLICY, c.target);
+  const control = auxBuildControl(box, c);
+  const ev = {
+    expected, sourcePresentAtBuild: buildInputPresence[c.target] === true,
+    indexRowsAtTarget: builtRowCounts ? (builtRowCounts.get(c.target) || 0) : null, control,
+  };
+  const verdict = labelBuildStage(ev);
+  const proof = {
+    stage: 'BUILD', expected, sourcePresentAtBuild: ev.sourcePresentAtBuild, indexRowsAtTarget: ev.indexRowsAtTarget,
+    // corroboration only: an aggregate count that unrelated files can supply is never the evidence
+    indexerDenyLine: (indexBuild?.all.match(/\[deny\] \d+ file\(s\) excluded by index-deny\.json/) || [null])[0],
+    queryStageCounts: res.filterCounts, control: { path: control.controlPath, indexedRows: control.indexedRows, returned: control.returned, rank: control.rank, targetSha256: control.targetSha256, copySha256: control.copySha256 },
+    gaps: verdict.gaps,
+  };
+  const out = { ...extra, stage: 'BUILD', label: verdict.label, proof };
+  if (verdict.demonstrated) return record(c.id, c.class, 'pass', `BUILD-WITHHELD: source present, 0 index rows at the target, matched copy indexed and returned (rank ${control.rank})`, out);
+  return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
+}
+
+// ── named mutations (PREREG-002 section 6 F7, F9), applied to the SANDBOX copy ──
+const F9_FILTERS = [
+  'index.notes = index.notes.filter((n) => !deniedPath(DENY_PREFIXES, n.path));',
+  "index.notes = index.notes.filter((note) => namespaceDispositionForPath(NAMESPACE_REGISTRY, note.path) === 'INDEX');",
+];
+// F9: delete ONLY the two query-stage filter calls. The render chokepoint, the
+// physical-directory guard, deny-list.mjs, namespace-registry.mjs and the
+// indexer stay as they are. An anchor that is not found exactly once throws:
+// a mutation that cannot land must never run as an unmutated baseline.
+function f9Mutate(source) {
+  let out = source;
+  for (const stmt of F9_FILTERS) {
+    const n = out.split(stmt).length - 1;
+    if (n !== 1) throw new Error(`F9 anchor found ${n} time(s), expected exactly 1: ${stmt.slice(0, 70)}`);
+    out = out.replace(stmt, () => '');
+  }
+  return out;
+}
+
+// F7: abstain on everything, with a VALID bound sidecar, after index validation
+// and both filters. No abstention gate exists at the baseline, and a candidate's
+// own gate needs its own anchor, so the hook anchors on the point where the
+// results are final and refuses a source that already emits the sidecar.
+const F7_ANCHOR = 'const searchTime = Date.now() - t1;';
+function f7Mutate(source) {
+  if (source.includes(ABSTAIN_PREFIX)) throw new Error('F7: the source already emits AIGENT_ABSTAIN; the hook has no anchor for that gate (owed to the candidate that carries it)');
+  if (source.split(F7_ANCHOR).length - 1 !== 1) throw new Error('F7 anchor not found exactly once');
+  return source.replace(F7_ANCHOR, () => `${F7_ANCHOR}\n  results.length = 0;\n  console.error(\`${ABSTAIN_PREFIX} \${JSON.stringify({ schema: 'abstain/1', invocation: process.env.AIGENT_SEARCH_INVOCATION, outcome: 'abstain', reason: 'below-tau' })}\`);`);
+}
+
+function mutateSandboxSearch(box, fn) {
+  const file = path.join(box.sem, 'search-vault.js');
+  writeFileSync(file, fn(readFileSync(file, 'utf8')));
+}
+
+// Assert per-case labels and control outcomes, not a printed count (7 item 8).
+// Under F9: no QUERY-stage case may read QUERY-WITHHELD; RENDER-REFUSED or a
+// DECLINED-BY-RETRIEVER FAIL may stand; each QUERY case must have exercised the
+// matched control and shown a zero removal delta; BUILD-stage and U-class
+// results must be UNCHANGED, which is relative to an unmutated run of the same
+// identity (reference rows). Without a reference the check is narrower and says
+// so: the build-side evidence must be intact and any BUILD-stage FAIL must be
+// explained by its matched control alone (a control never touches the filters).
+function f9Assertions(rows, reference = null) {
+  const queryRows = rows.filter((r) => r.stage === 'QUERY');
+  const buildRows = rows.filter((r) => r.stage === 'BUILD');
+  const a = [];
+  const add = (name, ok, detail) => a.push({ name, ok: !!ok, detail: detail || '' });
+  add('F9: QUERY-stage population present', queryRows.length >= 3, `${queryRows.length} case(s)`);
+  add('F9: no QUERY-stage case reads QUERY-WITHHELD', queryRows.every((r) => r.label !== 'QUERY-WITHHELD'), queryRows.map((r) => `${r.id}=${r.label}`).join(', '));
+  add('F9: every QUERY-stage case exercised the seeded read-back and a returned matched control',
+    queryRows.every((r) => r.proof && r.proof.readBack && r.proof.readBack.present && r.proof.control && r.proof.control.returned),
+    queryRows.map((r) => `${r.id}: readBack=${r.proof?.readBack?.present} control=${r.proof?.control?.returned}`).join('; '));
+  add('F9: every QUERY-stage case shows a zero target-attributable removal delta', queryRows.every((r) => r.proof && r.proof.delta === 0), queryRows.map((r) => `${r.id}: delta=${r.proof?.delta}`).join('; '));
+  add('F9: QUERY-stage labels are RENDER-REFUSED or DECLINED-BY-RETRIEVER only', queryRows.every((r) => r.label === 'RENDER-REFUSED' || r.label === 'DECLINED-BY-RETRIEVER'));
+  const u = rows.filter((r) => r.class === 'undeclared');
+  if (reference) {
+    const ref = new Map(reference.map((r) => [r.id, r]));
+    const same = (r) => ref.has(r.id) && ref.get(r.id).status === r.status && (ref.get(r.id).label ?? null) === (r.label ?? null);
+    const moved = [...buildRows, ...u].filter((r) => !same(r));
+    add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0,
+      moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${buildRows.length} BUILD + ${u.length} U compared`);
+  } else {
+    const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : r.proof.control && r.proof.control.returned === false);
+    add('F9: BUILD-stage build-side evidence intact, every FAIL explained by its control alone (no --reference given: narrower check)',
+      buildRows.length > 0 && buildRows.every(intact), `${buildRows.filter(intact).length}/${buildRows.length}`);
+    add('F9: U-01/U-02 PASS (no --reference given)', u.length === 2 && u.every((r) => r.status === 'pass'), u.map((r) => `${r.id}=${r.status}`).join(', '));
+  }
+  return a;
+}
+
+// ── self-check: stage-aware proof, mutations, F9 assertions, and a real child
+//    process standing in for search-vault.js (PREREG-002 section 7 items 4, 5, 7, 8) ──
+async function selfCheckPolicy(check) {
+  const box = makeSandbox('selfcheck-policy');
+
+  // The real child-process path: env scrub, clock, token, stderr capture, parse.
+  writeFileSync(path.join(box.sem, 'env-probe.mjs'), [
+    "const t = process.env.AIGENT_SEARCH_INVOCATION;",
+    "console.log('Loading index... 5 entries loaded. (1 confidential-class chunk(s) filtered by index-deny.json) (2 non-INDEX namespace chunk(s) filtered by namespace-registry.json)');",
+    "console.log('\\nQuery: \"q\"\\n');",
+    "console.log(JSON.stringify({ now: process.env.AIGENT_SEARCH_NOW, state: process.env.AIGENT_STATE_HOME_DIR ?? null, sup: process.env.AIGENT_SEARCH_DISABLE_SUPERSESSION ?? null }));",
+    "console.log('\\nJSON:');",
+    "console.log('[]');",
+    "console.error('AIGENT_ABSTAIN ' + JSON.stringify({ schema: 'abstain/1', invocation: t, outcome: 'abstain', reason: 'below-tau' }));",
+  ].join('\n'));
+  const keep = Object.fromEntries(SCRUBBED_ENV.map((k) => [k, process.env[k]]));
+  process.env.AIGENT_SEARCH_NOW = '1999-01-01T00:00:00Z';
+  process.env.AIGENT_STATE_HOME_DIR = '/elsewhere';
+  process.env.AIGENT_SEARCH_DISABLE_SUPERSESSION = '1';
+  const tok = freshToken();
+  const probed = interpretSearch(runNode(box, 'env-probe.mjs', [], searchEnv(tok, FROZEN_NOW)), 'q', tok, FROZEN_NOW);
+  for (const k of SCRUBBED_ENV) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; }
+  const seenEnv = (probed.stdout.match(/^\{"now".*$/m) || ['{}'])[0];
+  check('7 a real child sees the frozen clock and no inherited state-home / supersession switch',
+    seenEnv === JSON.stringify({ now: FROZEN_NOW, state: null, sup: null }), seenEnv);
+  check('4 a real child: stderr sidecar bound to the token the runner issued -> honest abstention', probed.abstain.state === 'honest' && Array.isArray(probed.rows) && probed.rows.length === 0, JSON.stringify(probed.abstain));
+  check('5 filter counts parsed from the population-load line (denied 1, namespace 2)', probed.filterCounts && probed.filterCounts.denied === 1 && probed.filterCounts.namespace === 2, JSON.stringify(probed.filterCounts));
+  check('5 no "entries loaded" line -> counts unknown, not zero', interpretSearch({ status: 1, stdout: '', stderr: 'boom' }, 'q', tok, FROZEN_NOW).filterCounts === null);
+
+  // expected eligibility: the product's own predicates, in the product's order.
+  const policy = await loadPolicy(box);
+  const el = (p) => expectedEligibility(policy, p);
+  check('5 eligibility: ops-deny/ is namespace DENY', (() => { const e = el('ops-deny/x.md'); return !e.eligible && e.filter === 'namespace' && e.disposition === 'DENY'; })());
+  check('5 eligibility: projects/confidential-client/ is prefix-denied', (() => { const e = el('projects/confidential-client/x.md'); return !e.eligible && e.filter === 'denied'; })());
+  check('5 eligibility: templates/ is SKIP, scratch/ is undeclared, research/ is eligible', !el('templates/x.md').eligible && el('scratch/x.md').disposition === 'undeclared' && el('research/x.md').eligible);
+
+  // stage population
+  const pop = (id) => stageOf(byId.get(id));
+  check('5 population: C, S, O-02, O-03 BUILD; X QUERY; O-01, U, P not in it',
+    ['C-01', 'C-06', 'S-01', 'S-04', 'O-02', 'O-03'].every((i) => pop(i) === 'BUILD')
+    && ['X-01', 'X-02', 'X-03'].every((i) => pop(i) === 'QUERY')
+    && ['O-01', 'U-01', 'U-02', 'P-01', 'N-01'].every((i) => pop(i) === null));
+
+  // BUILD-stage label
+  const bExp = { eligible: false, filter: 'namespace', disposition: 'DENY' };
+  const bOk = { expected: bExp, sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { indexedRows: 1, returned: true } };
+  check('5 BUILD-WITHHELD needs all four conditions', labelBuildStage(bOk).label === 'BUILD-WITHHELD');
+  for (const [name, patch] of Object.entries({
+    'source absent at build': { sourcePresentAtBuild: false }, 'index holds target rows': { indexRowsAtTarget: 2 },
+    'control not indexed': { control: { indexedRows: 0, returned: true } }, 'control not returned': { control: { indexedRows: 1, returned: false } },
+    'target eligible': { expected: { eligible: true } },
+  })) check(`5 BUILD: ${name} -> no label, not demonstrated`, (() => { const v = labelBuildStage({ ...bOk, ...patch }); return v.label === null && !v.demonstrated; })());
+
+  // QUERY-stage label, including the freeze review's counterexample.
+  const qOk = { expected: bExp, readBack: { present: true, count: 1 }, targetReturned: false, targetRefused: false, control: { returned: true }, delta: 1, seededChunks: 1 };
+  check('5 QUERY-WITHHELD: seeded, control returned, absent, delta == seeded', labelQueryStage(qOk).label === 'QUERY-WITHHELD');
+  check('5 QUERY: row returned and refused -> RENDER-REFUSED (demonstrated)', (() => { const v = labelQueryStage({ ...qOk, targetReturned: true, targetRefused: true, delta: 0 }); return v.label === 'RENDER-REFUSED' && v.demonstrated; })());
+  check('5 QUERY: absent, control returned, delta 0 -> DECLINED-BY-RETRIEVER, not demonstrated', (() => { const v = labelQueryStage({ ...qOk, delta: 0 }); return v.label === 'DECLINED-BY-RETRIEVER' && !v.demonstrated; })());
+  check('5 QUERY: an abstention arm that also suppresses its control is not a witness', (() => { const v = labelQueryStage({ ...qOk, delta: 0, control: { returned: false } }); return v.label === null && !v.demonstrated; })());
+  check('5 QUERY: seeded row not read back from the input index -> no label', labelQueryStage({ ...qOk, readBack: { present: false, count: 0 } }).label === null);
+  check('5 QUERY: delta that is not the seeded count -> no label', labelQueryStage({ ...qOk, delta: 3 }).label === null);
+
+  // mutations
+  const baselineSrc = observeProductCommit(PRODUCT_TREE) === BASELINE_COMMIT ? readFileSync(path.join(PRODUCT_TREE, 'daemons', 'semantic-search', 'search-vault.js'), 'utf8') : null;
+  if (baselineSrc) {
+    const m = f9Mutate(baselineSrc);
+    check('8 F9 removes exactly the two query-stage filter calls', F9_FILTERS.every((f) => baselineSrc.includes(f) && !m.includes(f)) && baselineSrc.length - m.length === F9_FILTERS.reduce((n, f) => n + f.length, 0));
+    check('8 F9 leaves the render chokepoint and the directory guard in place', m.includes('namespaceDispositionForPath(NAMESPACE_REGISTRY, r.path)') && m.includes('requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT'));
+    check('8 F9 is not an identity run: the mutated file no longer hashes to the pin', sha256(m) !== BASELINE_PINS['daemons/semantic-search/search-vault.js']);
+    check('8 F9 on a source without the anchor throws', (() => { try { f9Mutate(baselineSrc.replace(F9_FILTERS[0], '')); return false; } catch (e) { return /anchor/.test(e.message); } })());
+    const f7 = f7Mutate(baselineSrc);
+    check('8 F7 hook: unconditional zero rows plus a bound sidecar, after the results are final', f7.includes('results.length = 0') && f7.includes("invocation: process.env.AIGENT_SEARCH_INVOCATION") && f7.indexOf('results.length = 0') > f7.indexOf(F7_ANCHOR));
+    check('8 F7 hook refuses a source that already carries a gate', (() => { try { f7Mutate(f7); return false; } catch (e) { return /already emits/.test(e.message); } })());
+  }
+
+  // F7 expected observations, scored on synthetic process output: every positive
+  // fails (no rows), every negative is an honest abstention PASS, PC-01 fails.
+  const T = 'rec-0123456789abcdef';
+  const sidecar = `${ABSTAIN_PREFIX} ${JSON.stringify({ schema: 'abstain/1', invocation: T, outcome: 'abstain', reason: 'below-tau' })}`;
+  const absRes = { status: 0, rows: [], abstain: classifyAbstention({ status: 0, rows: [], stderr: sidecar, token: T }) };
+  check('8 F7 on synthetic output: negatives PASS as honest abstentions', negativeVerdict({ ...absRes, indexPresent: true }).status === 'pass');
+  check('8 F7 on synthetic output: a positive finds no target in zero rows', rankOf({ rows: absRes.rows }, 'x.md') === null);
+
+  // F9 assertions: red on an unmutated-looking run, green on a mutated-looking one.
+  const q = (id, label, extra = {}) => ({ id, class: 'stale-index', stage: 'QUERY', status: label === 'DECLINED-BY-RETRIEVER' ? 'fail' : 'pass', label, proof: { readBack: { present: true }, control: { returned: true }, delta: label === 'QUERY-WITHHELD' ? 1 : 0, ...extra } });
+  const b = (id, extra = {}) => ({ id, class: 'deny', stage: 'BUILD', status: 'pass', label: 'BUILD-WITHHELD', ...extra });
+  const u = [{ id: 'U-01', class: 'undeclared', status: 'pass' }, { id: 'U-02', class: 'undeclared', status: 'pass' }];
+  const bp = (id, extra = {}) => b(id, { proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: true } }, ...extra });
+  const mutatedRun = [q('X-01', 'RENDER-REFUSED'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u];
+  const allOk = (rows, ref) => f9Assertions(rows, ref).every((x) => x.ok);
+  check('8 F9 assertions: QUERY-WITHHELD present (unmutated) -> RED', !allOk([q('X-01', 'QUERY-WITHHELD'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u]));
+  check('8 F9 assertions: QUERY-WITHHELD absent, RENDER-REFUSED stands, BUILD and U unchanged -> GREEN', allOk(mutatedRun));
+  check('8 F9 assertions: abstention arm (DECLINED-BY-RETRIEVER with control returned) -> GREEN', allOk([q('X-01', 'DECLINED-BY-RETRIEVER'), q('X-02', 'DECLINED-BY-RETRIEVER'), q('X-03', 'DECLINED-BY-RETRIEVER'), bp('C-01'), ...u]));
+  check('8 F9 assertions: a QUERY case whose control was suppressed is not a witness -> RED', !allOk([q('X-01', 'RENDER-REFUSED', { control: { returned: false } }), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u]));
+  check('8 F9 assertions: a BUILD case forced red with its control fine -> RED', !allOk([...mutatedRun.slice(0, 3), bp('C-01', { status: 'fail', label: null }), ...u]));
+  check('8 F9 assertions: a BUILD case already red unmutated because its control never returned -> GREEN', allOk([...mutatedRun.slice(0, 3), bp('S-01', { status: 'fail', label: null, proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: false } } }), ...u]));
+  check('8 F9 assertions: U-class forced red -> RED', !allOk([...mutatedRun.slice(0, 4), { ...u[0], status: 'fail' }, u[1]]));
+  const refRows = [bp('C-01'), ...u];
+  check('8 F9 assertions with a reference: identical BUILD/U -> GREEN, any change -> RED',
+    allOk(mutatedRun, refRows) && !allOk([...mutatedRun.slice(0, 3), bp('C-01', { label: null, status: 'fail' }), ...u], refRows) && !allOk([...mutatedRun.slice(0, 4), { ...u[0], status: 'fail' }, u[1]], refRows));
+}
+
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
 // One source of truth for what each run mutates and what it must turn red. A
 // scenario name this table does not contain is a harness error: before this
@@ -1032,6 +1429,8 @@ function selfCheckSidecar(check) {
 // `expectedRed` / `expectedRedClasses` are checked at packet time and written
 // into every packet, so a falsifier that stops falsifying is visible in the
 // artifact rather than only in prose.
+const SEARCH_FILE = 'daemons/semantic-search/search-vault.js';
+const PRE_WINDOW_NOW = preWindowInstant(CORPUS);
 const SCENARIOS = {
   BASELINE: {
     mutation: 'none (unmutated corpus)',
@@ -1079,12 +1478,34 @@ const SCENARIOS = {
     mutation: 'copy the undeclared overlay in as scratch/ AND delete the feedback row from the sandbox core registry',
     expectedRed: [], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
     unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'],
-    runU: true,
+    runU: true, mutates: ['daemons/semantic-search/namespace-registry.json'],
   },
   F6: {
     mutation: 'delete <sandbox vault>/memory/embeddings.json and run without rebuilding',
     expectedRed: ['PC-01'], expectedRedClasses: ['positive', 'temporal', 'operator'], expectPass: [],
     unrunnableClasses: ['negative'], runU: false,
+  },
+  // F7, F8, F9 are named MUTATION RUNS (PREREG-002 section 6): reported under
+  // their falsifier name, never as an identity run, a new baseline or a candidate.
+  F7: {
+    mutation: 'replace the abstention gate with one that returns zero rows unconditionally and still emits a valid bound sidecar (after index validation and both filters)',
+    expectedRed: ['PC-01'], expectedRedClasses: ['positive'], expectPass: [], expectPassClasses: ['negative'],
+    unrunnableClasses: [], runU: false, needsGate: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f7Mutate),
+    caveat: 'F7 mutates an abstention gate, and no gate exists at the baseline: this run is UNRUNNABLE there, naming that. '
+      + 'The hook (f7Mutate) and the observations it predicts are exercised only on synthetic process output by --self-check; '
+      + 'it cannot run end-to-end until a candidate with a gate exists and the hook is anchored to that gate.',
+  },
+  F8: {
+    mutation: `run the temporal class with AIGENT_SEARCH_NOW set to ${PRE_WINDOW_NOW}, one day before the earliest corpus window end`,
+    expectedRed: [], expectedRedClasses: ['temporal'], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false, temporalNow: PRE_WINDOW_NOW,
+    expectInversionIds: ['T-02', 'T-04'], expectInversionCount: 2,
+  },
+  F9: {
+    mutation: 'delete the two query-stage filter calls from the sandbox search-vault.js (the render chokepoint, the directory guard, the helper modules and the indexer stay)',
+    expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f9Mutate), assert: f9Assertions,
+    note: 'asserted per case: no QUERY-stage case may read QUERY-WITHHELD; BUILD-stage and U-class results must stand',
   },
 };
 
@@ -1189,6 +1610,7 @@ if (argv.includes('--self-check')) {
   check('stale-index drift caught', xDrift.length > 0, xDrift[0]);
   selfCheckIdentity(check);
   selfCheckSidecar(check);
+  await selfCheckPolicy(check);
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
   console.log(failed.length === 0 ? 'SELF-CHECK PASS' : `SELF-CHECK FAIL (${failed.length})`);
@@ -1199,6 +1621,7 @@ if (!Object.hasOwn(SCENARIOS, SCENARIO)) {
   harnessErrors.push(`unknown scenario "${SCENARIO}": expected one of ${Object.keys(SCENARIOS).join(', ')}. `
     + 'Refusing to run an unmutated baseline under an unrecognised label.');
 }
+if (SCENARIO === 'F8' && !PRE_WINDOW_NOW) harnessErrors.push('F8: no corpus window end date found to derive the pre-window instant');
 const SPEC = SCENARIOS[SCENARIO] || { mutation: null, expectedRed: [], expectedRedClasses: [], expectPass: [], unrunnableClasses: [], runU: false };
 
 // Lexical copy limit, enforced mechanically over the corpus and the query
@@ -1264,6 +1687,10 @@ function declareUnrunnable(ids, why, requires) {
 
 if (harnessErrors.length === 0 && !identity.ok) {
   declareUnrunnable(cases.map((c) => c.id), `PREREG-002 refuses to score: ${identity.why}`, identity.requires);
+} else if (harnessErrors.length === 0 && SPEC.needsGate && !readFileSync(path.join(SEM, 'search-vault.js'), 'utf8').includes(ABSTAIN_PREFIX)) {
+  declareUnrunnable(cases.map((c) => c.id),
+    `${SCENARIO} mutates an abstention gate and this product's search-vault.js has no ${ABSTAIN_PREFIX} emission site, so there is no gate to replace`,
+    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity (cannot run end-to-end until a candidate exists)`);
 } else if (harnessErrors.length === 0 && blockingGaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
     blockingGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
@@ -1271,7 +1698,8 @@ if (harnessErrors.length === 0 && !identity.ok) {
 }
 
 let hashMismatch = [];
-if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0) {
+const gateBlocked = !!SPEC.needsGate && !readFileSync(path.join(SEM, 'search-vault.js'), 'utf8').includes(ABSTAIN_PREFIX);
+if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !gateBlocked) {
   box = makeSandbox(SCENARIO.toLowerCase());
   hashMismatch = runtimeHashGaps(box, ACTIVE_PINS);
   if (hashMismatch.length) {
@@ -1318,7 +1746,22 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0) {
       scenarioNotes.push('F5 mutation: copied the undeclared overlay into the sandbox vault as scratch/ AND deleted the feedback row from the sandbox core registry, so feedback/ is undeclared too');
     }
 
+    if (SPEC.applyCode) {
+      try {
+        SPEC.applyCode(box);
+        const drifted = fileHash(sandboxFileMap(box)[SEARCH_FILE]) !== ACTIVE_PINS[SEARCH_FILE];
+        if (!drifted) harnessErrors.push(`${SCENARIO}: the mutation did not land (the sandbox search-vault.js still hashes to its pin)`);
+        else scenarioNotes.push(`${SCENARIO} mutation applied to the sandbox search-vault.js: ${SPEC.mutation}`);
+      } catch (e) { harnessErrors.push(`${SCENARIO}: ${e.message}`); }
+    }
+
+    // 3.2a BUILD proof, conditions 2 and 3: what the build was handed, and what
+    // it wrote. Snapshotted around the build, before any scenario touches the index.
+    buildInputPresence = Object.fromEntries(cases.filter((c) => c.target).map((c) => [c.target, existsSync(path.join(box.vault, ...c.target.split('/')))]));
     indexBuild = buildIndex(box);
+    builtRowCounts = existsSync(box.embeddings)
+      ? readIndex(box).notes.reduce((m, n) => m.set(n.path, (m.get(n.path) || 0) + 1), new Map())
+      : null;
     if (SCENARIO === 'F5') scenarioNotes.push(`F5: embed-vault.js exited ${indexBuild.status}`);
     if (SCENARIO === 'F4') {
       // Build cleanly, run C-02's query once to capture the rank-1 row's
@@ -1336,9 +1779,12 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0) {
         const raw = readFileSync(path.join(CORPUS, ...c2.target.split('/')), 'utf8');
         const fm = raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
         const chunk = (fm ? raw.slice(fm[0].length) : raw).trim().slice(0, 500);
+        const pristineText = readFileSync(box.embeddings, 'utf8');
         index.notes.push({ path: c2.target, title: 'vault-door-service-log', tags: [], chunk, embedding: donor.embedding, mtime: 0 });
         index.entryCount = index.notes.length;
         writeIndex(box, index);
+        // F4's injected row is a QUERY-stage case (3.2a): keep what the proof needs.
+        F4_SEED = { path: c2.target, title: 'vault-door-service-log', chunk, vector: donor.embedding, pristineText, seededText: readFileSync(box.embeddings, 'utf8') };
         scenarioNotes.push(`F4 mutation: captured the rank-1 embedding vector for C-02 from ${top.path} (score ${top.score}) and appended a row at ${c2.target} carrying the DENY canary text with that exact vector`);
       }
     }
@@ -1363,6 +1809,8 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0) {
         'F5: both runtimes refuse while a namespace is undeclared',
         { requires: 'PREREG-001 6 F5 — coverage red' });
     } else if (harnessErrors.length === 0) {
+      POLICY = await loadPolicy(box);
+
       // ── PC-01 first, as the harness's proof that it can see a hit at all.
       const pc = byId.get('PC-01');
       const pcRes = search(box, pc.query);
@@ -1463,7 +1911,14 @@ const expectedRedIds = [
   ...cases.filter((c) => (SPEC.expectedRedClasses || []).includes(c.class)).map((c) => c.id),
 ];
 const expectedRedObserved = expectedRedIds.map((id) => ({ id, expected: 'fail', observed: statusOf(id) }));
-const expectedPassObserved = (SPEC.expectPass || []).map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
+const expectedPassIds = [
+  ...(SPEC.expectPass || []),
+  ...cases.filter((c) => (SPEC.expectPassClasses || []).includes(c.class)).map((c) => c.id),
+];
+const expectedPassObserved = expectedPassIds.map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
+// Per-case labels and control outcomes are asserted, not printed as a count.
+const referenceRows = REFERENCE_FILE && existsSync(REFERENCE_FILE) ? JSON.parse(readFileSync(REFERENCE_FILE, 'utf8')).cases : null;
+const scenarioAssertions = SPEC.assert && box ? SPEC.assert(results, referenceRows) : [];
 const expectedUnrunnableObserved = (SPEC.unrunnableClasses || []).map((klass) => {
   const rows = results.filter((r) => r.class === klass);
   return { class: klass, expected: 'unrunnable', n: rows.length, unrunnable: rows.filter((r) => r.status === 'unrunnable').length };
@@ -1480,7 +1935,9 @@ const expectedRedHolds = harnessErrors.length === 0
   && expectedPassObserved.every((r) => r.observed === 'pass')
   && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
   && !inversionShortfall
-  && missingInversionIds.length === 0;
+  && missingInversionIds.length === 0
+  && (SPEC.expectInversionCount == null || inversions.length === SPEC.expectInversionCount)
+  && scenarioAssertions.every((a) => a.ok);
 
 const pc01 = results.find((r) => r.id === 'PC-01') || null;
 const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
@@ -1495,7 +1952,8 @@ const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
 // pinned: null and never trip this.
 const observedHashes = observedRuntimeHashes(box, ACTIVE_PINS);
 const pinDrift = Object.entries(observedHashes || {})
-  .filter(([, v]) => v.pinned !== null && v.matchesPin === false)
+  // a file the scenario declares it mutates is expected to differ from its pin
+  .filter(([file, v]) => v.pinned !== null && v.matchesPin === false && !(SPEC.mutates || []).includes(file))
   .map(([file, v]) => ({ file, expected: v.pinned, observed: v.observed }));
 
 // R2-5 asked for the pin-drift clause in the FAIL branch. PREREG-001 1.3 says
@@ -1513,6 +1971,8 @@ if (harnessErrors.length) terminal = 'HARNESS-ERROR';
 else if (anyFail || policyFalsePositives.length || budgetBreaches.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
 else if (pinDrift.length || anyUnrunnable) terminal = 'UNRUNNABLE';
 else terminal = 'PASS';
+// A development subset scores some cases; its gates cannot be met and it is not a result.
+if (ONLY) terminal = `${terminal} (development subset, not a result)`;
 
 const packet = {
   preregistration: PREREG,
@@ -1524,7 +1984,7 @@ const packet = {
   product_commit: observedCommit,
   product_tree: PRODUCT_TREE,
   identity: { kind: identity.ok ? identity.kind : 'REFUSED', candidate_id: identity.candidate_id || null, refused: identity.ok ? null : identity.why },
-  search_now: { frozen: FROZEN_NOW },
+  search_now: { frozen: FROZEN_NOW, temporal_class: SPEC.temporalNow || FROZEN_NOW },
   runtime_hash_mismatch: hashMismatch,
   terminal,
   ran_at: new Date().toISOString(),
@@ -1542,7 +2002,9 @@ const packet = {
     note: SPEC.note || null,
     caveat: SPEC.caveat || null,
     expected_red_ids: expectedRedIds,
-    expected_pass_ids: SPEC.expectPass || [],
+    expected_pass_ids: expectedPassIds,
+    expected_inversion_count: SPEC.expectInversionCount ?? null,
+    mutates: SPEC.mutates || [],
     expected_unrunnable_classes: SPEC.unrunnableClasses || [],
     expected_inversion_ids: SPEC.expectInversionIds || [],
     expected_inversions_at_least: SPEC.expectInversionsAtLeast ?? null,
@@ -1553,6 +2015,12 @@ const packet = {
   expected_unrunnable: expectedUnrunnableObserved,
   expected_red_observed: expectedRedHolds,
   scenario_notes: scenarioNotes,
+  scenario_assertions: scenarioAssertions,
+  reference_packet: REFERENCE_FILE ? { file: REFERENCE_FILE, sha256: existsSync(REFERENCE_FILE) ? fileHash(REFERENCE_FILE) : 'ABSENT' } : null,
+  // 3.2a: one row per policy case, by stage and label. The auxiliary controls
+  // are their own block and never enter scored totals, scanPolicy or leaks.
+  policy_proof: results.filter((r) => r.stage).map((r) => ({ id: r.id, stage: r.stage, label: r.label, status: r.status, undemonstrated: !!r.undemonstrated })),
+  auxiliary_controls: auxiliaryControls,
   index_build: indexBuild ? { exit: indexBuild.status, ms: indexBuild.ms, tail: indexBuild.all.slice(-800) } : null,
   doctor_namespace_records: doctor ? doctor.failedRecords : null,
   classes: classReport,
@@ -1575,6 +2043,7 @@ if (JSON_OUT) {
   console.log(`overlay          ${overlayHash}`);
   console.log(`fixture-registry ${fixtureHash}\n`);
   for (const r of results) console.log(`  ${String(MARK[r.status] || r.status).padEnd(11)} ${r.id.padEnd(6)} ${r.detail}`);
+  for (const a of scenarioAssertions) console.log(`    assert ${a.ok ? 'OK  ' : 'FAIL'} ${a.name}${a.detail ? ` -- ${a.detail}` : ''}`);
   console.log('');
   for (const c of classReport) {
     console.log(`  ${c.status.padEnd(11)} ${c.label.padEnd(22)} ${c.pass}/${c.n} pass · ${c.fail} fail · ${c.unrunnable} unrunnable   [gate: ${c.gate}]`);
