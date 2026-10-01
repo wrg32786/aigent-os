@@ -366,6 +366,7 @@ function parseCandidates(text) {
       candidate_id: grab('candidate_id', 'C-\\d+'),
       product_commit: grab('product_commit', '[0-9a-f]{40}'),
       instrument_sha256: grab('instrument_sha256', '[0-9a-f]{64}'),
+      packet_sha256: grab('packet_sha256', '[0-9a-f]{64}'),
       withdraws: [...block.matchAll(/^\s*(?:[-*]\s*)?withdraws\s*:\s*`?(C-\d+)`?/gim)].map((m) => m[1]),
       pins,
     };
@@ -380,7 +381,11 @@ function resolveIdentity({ observed, candidatesText, candidatesSource, instrumen
   if (!observed) {
     return { ok: false, why: 'git rev-parse HEAD failed in the product tree: product_commit cannot be observed', requires: 'PREREG-002 1.3 — product_commit must be observed in a git checkout' };
   }
-  if (observed === BASELINE_COMMIT) return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS };
+  if (observed === BASELINE_COMMIT) {
+    // MED-5: an identity run needs the instrument registered, baseline included.
+    const registered = new RegExp(`^\\s*(?:[-*]\\s*)?baseline_instrument_sha256\\s*:\\s*\`?${instrumentSha}\`?\\s*$`, 'im').test(candidatesText || '');
+    return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS, instrumentRegistered: registered };
+  }
   const records = parseCandidates(candidatesText);
   const withdrawn = new Set(records.flatMap((r) => r.withdraws));
   const hit = records.find((r) => r.product_commit === observed && !withdrawn.has(r.candidate_id));
@@ -393,10 +398,49 @@ function resolveIdentity({ observed, candidatesText, candidatesSource, instrumen
   }
   const missing = PINNED_PATHS.filter((f) => !hit.pins[f]);
   if (missing.length) return { ok: false, requires, why: `${hit.candidate_id} does not carry pin(s) for: ${missing.join(', ')}` };
+  if (hit.packet_sha256 !== PACKET_SHA256) {
+    return { ok: false, requires, why: `${hit.candidate_id} carries packet_sha256 ${hit.packet_sha256 || 'NONE'}, expected ${PACKET_SHA256}` };
+  }
   if (hit.instrument_sha256 !== instrumentSha) {
     return { ok: false, requires, why: `${hit.candidate_id} registers instrument_sha256 ${hit.instrument_sha256 || 'NONE'} but this instrument is ${instrumentSha}` };
   }
-  return { ok: true, kind: 'candidate', candidate_id: hit.candidate_id, pins: Object.fromEntries(PINNED_PATHS.map((f) => [f, hit.pins[f]])) };
+  return { ok: true, kind: 'candidate', candidate_id: hit.candidate_id, instrumentRegistered: true, pins: Object.fromEntries(PINNED_PATHS.map((f) => [f, hit.pins[f]])) };
+}
+
+// MED-1: the product tree must BE the identity commit. The sandbox is copied from
+// working files, so (a) the COMMITTED content of every pinned path must hash to
+// the pins, and (b) nothing under daemons/, evals/run-evals.mjs or
+// scripts/doctor.sh may be modified or untracked: an unpinned import the runtime
+// loads (frontmatter-reader, resume-framing, ...) is code too.
+function gitShowText(tree, sha, rel) {
+  const r = spawnSync('git', ['-C', tree, 'show', `${sha}:${rel}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return r.status === 0 ? r.stdout : null;
+}
+function treeIdentityProblems(tree, sha, pins) {
+  const problems = [];
+  for (const [label, pin] of Object.entries(pins)) {
+    const r = spawnSync('git', ['-C', tree, 'show', `${sha}:${label}`], { maxBuffer: 64 * 1024 * 1024 });
+    const got = r.status === 0 ? createHash('sha256').update(r.stdout).digest('hex') : 'ABSENT-IN-COMMIT';
+    if (got !== pin) problems.push(`committed ${label} hashes ${got.slice(0, 12)}, pin ${pin.slice(0, 12)}`);
+  }
+  const st = spawnSync('git', ['-C', tree, 'status', '--porcelain', '--', 'daemons', 'evals/run-evals.mjs', 'scripts/doctor.sh'], { encoding: 'utf8' });
+  if (st.status !== 0) problems.push('git status failed in the product tree');
+  const dirty = (st.stdout || '').split('\n').filter(Boolean);
+  if (dirty.length) problems.push(`dirty tree: ${dirty.slice(0, 5).join('; ')}`);
+  return problems;
+}
+
+// MED-2: F9's "unchanged" is relative to an unmutated, full run of THIS identity
+// by THIS instrument. Anything else is refused, never compared against.
+function validateReference(ref, want) {
+  if (!ref || typeof ref !== 'object') return 'reference packet unreadable';
+  if (ref.scenario !== 'BASELINE') return `reference is scenario ${ref.scenario}, not an unmutated BASELINE run`;
+  if (ref.development_subset != null) return 'reference is a development subset';
+  if (!Array.isArray(ref.cases) || ref.cases.length === 0) return 'reference has no cases';
+  if (ref.product_commit !== want.commit) return `reference product_commit ${ref.product_commit} is not ${want.commit}`;
+  if ((ref.identity || {}).kind !== want.kind) return `reference identity kind ${(ref.identity || {}).kind} is not ${want.kind}`;
+  if (ref.instrument_sha256 !== want.instrumentSha) return `reference was produced by instrument ${ref.instrument_sha256}, not ${want.instrumentSha}`;
+  return null;
 }
 
 // ── invocation environment, PREREG-002 3.2 / 1.6 ─────────────────────────────
@@ -443,6 +487,9 @@ function classifyAbstention({ status, rows, stderr, token }) {
   let obj = null;
   if (lines[0].startsWith(`${ABSTAIN_PREFIX} `)) {
     try { obj = JSON.parse(lines[0].slice(ABSTAIN_PREFIX.length + 1)); } catch { obj = null; }
+    // Exact framing: re-serialising must reproduce the line, which refuses extra
+    // whitespace and duplicate keys (JSON.parse keeps the last one silently).
+    if (obj && lines[0] !== `${ABSTAIN_PREFIX} ${JSON.stringify(obj)}`) obj = null;
   }
   const wellFormed = obj && typeof obj === 'object' && !Array.isArray(obj)
     && Object.keys(obj).sort().join() === ABSTAIN_KEYS.join()
@@ -540,7 +587,7 @@ function runNode(box, script, args = [], extraEnv = {}) {
 
 function runDoctor(box) {
   const r = spawnSync('bash', [path.join(box.root, 'scripts', 'doctor.sh'), box.root], {
-    encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: invocationEnv(box),
   });
   const stdout = r.stdout || '';
   const stderr = r.stderr || '';
@@ -588,7 +635,11 @@ function interpretSearch(r, query, invocation, now) {
   if (marker !== -1) {
     const block = r.stdout.slice(marker + '\nJSON:\n'.length).trim();
     out.jsonBytes = Buffer.byteLength(block, 'utf8');
-    try { out.rows = JSON.parse(block); } catch (e) { out.parseError = e.message; }
+    try {
+      const v = JSON.parse(block);
+      if (Array.isArray(v)) out.rows = v;
+      else out.parseError = 'results block is not an array';
+    } catch (e) { out.parseError = e.message; }
   }
   out.abstain = classifyAbstention({ status: r.status, rows: out.rows, stderr: r.stderr, token: invocation });
   return out;
@@ -818,7 +869,7 @@ function scoreStaleIndex(box, c, staleRow) {
   try {
     let vector;
     try { vector = embedOne(box, staleRow.chunk); }
-    catch (e) { return record(c.id, c.class, 'unrunnable', `real-model embed helper failed: ${e.message}`, { requires: 'PREREG-001 4.3 item 2/3' }); }
+    catch (e) { harnessErrors.push(`${c.id}: the runner's own embed helper failed: ${e.message}`); return; }
     const index = JSON.parse(pristineText);
     index.notes.push({ path: staleRow.path, title: staleRow.title, tags: [], chunk: staleRow.chunk, embedding: vector, mtime: 0 });
     index.entryCount = index.notes.length;
@@ -886,7 +937,7 @@ function scoreLoudness(box, c) {
   try {
     let vector;
     try { vector = embedOne(box, c.chunk); }
-    catch (e) { return record(c.id, c.class, 'unrunnable', `real-model embed helper failed: ${e.message}`, { requires: 'PREREG-001 4.3 item 2/3' }); }
+    catch (e) { harnessErrors.push(`${c.id}: the runner's own embed helper failed: ${e.message}`); return; }
     const index = readIndex(box);
     index.notes.push({ path: c.injectedPath, title: 'never-existed-phantom', tags: [], chunk: c.chunk, embedding: vector, mtime: 0 });
     index.entryCount = index.notes.length;
@@ -950,10 +1001,6 @@ function selfCheckIdentity(check) {
     const box0 = makeSandbox('selfcheck');
     const map = sandboxFileMap(box0);
     check('3 every pinned file exists in a built sandbox', PINNED_PATHS.every((l) => existsSync(map[l])), PINNED_PATHS.filter((l) => !existsSync(map[l])).join());
-    if (observeProductCommit(PRODUCT_TREE) === BASELINE_COMMIT) {
-      const bad = runtimeHashGaps(box0, BASELINE_PINS);
-      check('2 baseline tree: sandbox copies hash to the ten pins', bad.length === 0, JSON.stringify(bad.map((b) => b.file)));
-    }
 
     // 7. the clock and token are the runner's, whatever the caller inherited.
     const keep = Object.fromEntries(SCRUBBED_ENV.map((k) => [k, process.env[k]]));
@@ -974,7 +1021,7 @@ function selfCheckIdentity(check) {
     const SHA = 'a'.repeat(64);
     const CAND = 'b'.repeat(40);
     const pinLines = PINNED_PATHS.map((f, i) => `${String(i).repeat(64).slice(0, 64)}  ${f}`).join('\n');
-    const rec = (id, commit, extra = '') => `candidate_id: ${id}\nproduct_commit: ${commit}\ninstrument_sha256: ${SHA}\n${pinLines}\n${extra}\n`;
+    const rec = (id, commit, extra = '') => `candidate_id: ${id}\nproduct_commit: ${commit}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${pinLines}\n${extra}\n`;
     const gate = (observed, text, sha = SHA) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'CANDS.md', instrumentSha: sha });
     check('9 baseline commit -> baseline identity', gate(BASELINE_COMMIT, '').kind === 'baseline');
     const unknown = gate(CAND, '');
@@ -1177,7 +1224,7 @@ function finishQueryStage(c, q, extra) {
     counts: { seeded: seededCount, pristine: pristineCount, seededSource: 'same invocation (the forbidden run)', pristineSource: 'paired invocation on the pristine index, same query' },
     gaps: verdict.gaps,
   };
-  auxiliaryControls.push({ case: c.id, stage: 'QUERY', kind: 'matched-seeded-control', controlPath: q.controlPath, chunkSha256: sha256(q.seed.chunk), returned: control.returned, rank: control.rank, exit: control.exit, invocation: q.controlRes.invocation, topPaths: (q.controlRes.rows || []).map((x) => x.path) });
+  auxiliaryControls.push({ case: c.id, stage: 'QUERY', kind: 'matched-seeded-control', controlPath: q.controlPath, chunkSha256: sha256(q.seed.chunk), vectorSha256: sha256(JSON.stringify(q.seed.vector)), returned: control.returned, rank: control.rank, exit: control.exit, invocation: q.controlRes.invocation, topPaths: (q.controlRes.rows || []).map((x) => x.path) });
   const out = { ...extra, stage: 'QUERY', label: verdict.label, proof };
   if (verdict.demonstrated) return record(c.id, c.class, 'pass', verdict.label === 'RENDER-REFUSED' ? 'RENDER-REFUSED: present but refused' : `QUERY-WITHHELD: filter delta ${delta} == ${q.readBack.count} seeded chunk(s), control returned`, out);
   return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}${verdict.label ? ` [${verdict.label}]` : ''}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
@@ -1320,6 +1367,14 @@ function f9Assertions(rows, reference = null) {
 
 // ── self-check: stage-aware proof, mutations, F9 assertions, and a real child
 //    process standing in for search-vault.js (PREREG-002 section 7 items 4, 5, 7, 8) ──
+const MUTATION_CHECK_NAMES = [
+  '8 F9 removes exactly the two query-stage filter calls',
+  '8 F9 leaves the render chokepoint and the directory guard in place',
+  '8 F9 is not an identity run: the mutated file no longer hashes to the pin',
+  '8 F9 on a source without the anchor throws',
+  '8 F7 hook: unconditional zero rows plus a bound sidecar, after the results are final',
+  '8 F7 hook refuses a source that already carries a gate',
+];
 async function selfCheckPolicy(check) {
   const box = makeSandbox('selfcheck-policy');
 
@@ -1381,8 +1436,12 @@ async function selfCheckPolicy(check) {
   check('5 QUERY: delta that is not the seeded count -> no label', labelQueryStage({ ...qOk, delta: 3 }).label === null);
 
   // mutations
-  const baselineSrc = observeProductCommit(PRODUCT_TREE) === BASELINE_COMMIT ? readFileSync(path.join(PRODUCT_TREE, 'daemons', 'semantic-search', 'search-vault.js'), 'utf8') : null;
-  if (baselineSrc) {
+  // MED-3: from git, so the same checks run wherever the self-check is started; if the
+  // baseline objects are unavailable the SAME checks fail by name, never vanish.
+  const baselineSrc = gitShowText(PRODUCT_TREE, BASELINE_COMMIT, SEARCH_FILE);
+  if (baselineSrc === null) {
+    for (const n of MUTATION_CHECK_NAMES) check(n, false, 'baseline search-vault.js unavailable: check could not run');
+  } else {
     const m = f9Mutate(baselineSrc);
     check('8 F9 removes exactly the two query-stage filter calls', F9_FILTERS.every((f) => baselineSrc.includes(f) && !m.includes(f)) && baselineSrc.length - m.length === F9_FILTERS.reduce((n, f) => n + f.length, 0));
     check('8 F9 leaves the render chokepoint and the directory guard in place', m.includes('namespaceDispositionForPath(NAMESPACE_REGISTRY, r.path)') && m.includes('requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT'));
@@ -1418,6 +1477,171 @@ async function selfCheckPolicy(check) {
   const refRows = [bp('C-01'), ...u];
   check('8 F9 assertions with a reference: identical BUILD/U -> GREEN, any change -> RED',
     allOk(mutatedRun, refRows) && !allOk([...mutatedRun.slice(0, 3), bp('C-01', { label: null, status: 'fail' }), ...u], refRows) && !allOk([...mutatedRun.slice(0, 4), { ...u[0], status: 'fail' }, u[1]], refRows));
+}
+
+// ── self-check: review fixes (MED-1, 2, 4, 5, 6 and LOW-2, 4) ─────────────────
+const gitIdentityEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+
+function selfCheckReview(check) {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'recollection-selfcheck-tree-'));
+  sandboxes.push(tmp);
+  // MED-1: the product tree must BE the identity commit: clean, and its committed
+  // files hash to the pins, not just the working copies.
+  const repo = path.join(tmp, 'repo');
+  mkdirSync(repo);
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8', env: gitIdentityEnv });
+  git('init', '-q');
+  const pins = {};
+  const labels = [...PINNED_PATHS, 'daemons/memory-hygiene/resume-framing.mjs'];
+  for (const l of labels) {
+    mkdirSync(path.dirname(path.join(repo, l)), { recursive: true });
+    writeFileSync(path.join(repo, l), `content of ${l}\n`);
+    if (PINNED_PATHS.includes(l)) pins[l] = fileHash(path.join(repo, l));
+  }
+  git('add', '-A');
+  git('commit', '-q', '--no-verify', '-m', 'x');
+  const sha = git('rev-parse', 'HEAD').stdout.trim();
+  check('1b clean tree whose committed files hash to the pins -> no problem', treeIdentityProblems(repo, sha, pins).length === 0, treeIdentityProblems(repo, sha, pins).join('; '));
+  writeFileSync(path.join(repo, 'daemons', 'memory-hygiene', 'resume-framing.mjs'), 'edited\n');
+  check('1b a dirty UNPINNED import the runtime loads -> refused as dirty', treeIdentityProblems(repo, sha, pins).some((p) => p.includes('dirty')));
+  git('checkout', '--', 'daemons/memory-hygiene/resume-framing.mjs');
+  writeFileSync(path.join(repo, 'daemons', 'memory-root.sh'), 'edited\n');
+  check('1b a dirty PINNED file -> refused as dirty', treeIdentityProblems(repo, sha, pins).some((p) => p.includes('dirty')));
+  git('checkout', '--', 'daemons/memory-root.sh');
+  check('1b registered pins that the commit does not hold -> refused naming the file',
+    treeIdentityProblems(repo, sha, { ...pins, 'daemons/memory-root.cjs': 'f'.repeat(64) }).some((p) => p.includes('committed daemons/memory-root.cjs')));
+  check('1b a commit the tree does not have -> refused, never skipped', treeIdentityProblems(repo, 'c'.repeat(40), pins).length > 0);
+
+  // MED-3: the baseline objects come from git, wherever the self-check is run.
+  const base = gitShowText(PRODUCT_TREE, BASELINE_COMMIT, SEARCH_FILE);
+  check('0 baseline commit objects are available to the self-check (else the F7/F9/pin checks cannot run)', base !== null, `not in ${PRODUCT_TREE}`);
+  check('2 committed baseline files hash to the ten pins', treeIdentityProblems(PRODUCT_TREE, BASELINE_COMMIT, BASELINE_PINS).filter((p) => !p.startsWith('dirty')).length === 0,
+    treeIdentityProblems(PRODUCT_TREE, BASELINE_COMMIT, BASELINE_PINS).join('; '));
+
+  // MED-2: a reference is an unmutated, full run of THIS identity by THIS instrument.
+  const want = { commit: 'a'.repeat(40), kind: 'baseline', instrumentSha: 'b'.repeat(64) };
+  const good = { scenario: 'BASELINE', development_subset: null, product_commit: want.commit, identity: { kind: 'baseline' }, instrument_sha256: want.instrumentSha, cases: [{ id: 'P-01' }] };
+  check('2b a full unmutated same-identity same-instrument reference is accepted', validateReference(good, want) === null);
+  for (const [name, patch] of Object.entries({
+    'an F-scenario packet': { scenario: 'F9' }, 'a development subset': { development_subset: ['P-01'] },
+    'another product commit': { product_commit: 'c'.repeat(40) }, 'another identity kind': { identity: { kind: 'candidate' } },
+    'another instrument': { instrument_sha256: 'd'.repeat(64) }, 'no cases': { cases: undefined },
+  })) check(`2b reference refused: ${name}`, validateReference({ ...good, ...patch }, want) !== null);
+  check('2b an unreadable reference is refused', validateReference(null, want) !== null);
+
+  // MED-5 / LOW-4: registration of the instrument and of the protocol packet.
+  const SHA = 'a'.repeat(64);
+  const pinLines = PINNED_PATHS.map((f, i) => `${String(i).repeat(64).slice(0, 64)}  ${f}`).join('\n');
+  const CAND = 'b'.repeat(40);
+  const rec = `candidate_id: C-001\nproduct_commit: ${CAND}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${pinLines}\n`;
+  const gate = (observed, text) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'C.md', instrumentSha: SHA });
+  check('5b baseline with this instrument unregistered -> not an identity run', gate(BASELINE_COMMIT, '').instrumentRegistered === false);
+  check('5b baseline with this instrument registered -> identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${SHA}\n`).instrumentRegistered === true);
+  check('5b baseline registered for ANOTHER instrument -> still not an identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${'c'.repeat(64)}\n`).instrumentRegistered === false);
+  check('4b candidate record carrying this packet_sha256 is accepted', gate(CAND, rec).ok);
+  check('4b candidate record with another packet_sha256 is refused', !gate(CAND, rec.replace(PACKET_SHA256, 'e'.repeat(64))).ok);
+  check('4b candidate record with no packet_sha256 is refused', !gate(CAND, rec.replace(/^packet_sha256:.*\n/m, '')).ok);
+
+  // MED-6: a results block that parses but is not an array is a FAIL, not a crash.
+  const nonArray = interpretSearch({ status: 0, stdout: 'Loading index... 1 entries loaded.\n\nQuery: "q"\n\nJSON:\n{}\n', stderr: '' }, 'q', 'rec-0123456789abcdef', FROZEN_NOW);
+  check('6 non-array results block -> rows null with a parse error', nonArray.rows === null && /not an array/.test(nonArray.parseError || ''));
+  check('6 ... and the negative verdict FAILs instead of throwing', (() => { try { return negativeVerdict({ status: 0, rows: nonArray.rows, abstain: nonArray.abstain, indexPresent: true }).status === 'fail'; } catch { return false; } })());
+
+  // LOW-2: the sidecar framing is exact.
+  const T = 'rec-0123456789abcdef';
+  const ok = { schema: 'abstain/1', invocation: T, outcome: 'abstain', reason: 'below-tau' };
+  const framed = (text) => classifyAbstention({ status: 0, rows: [], stderr: text, token: T }).state;
+  check('4c exact compact framing is honest', framed(`${ABSTAIN_PREFIX} ${JSON.stringify(ok)}`) === 'honest');
+  check('4c a double space after the prefix is malformed', framed(`${ABSTAIN_PREFIX}  ${JSON.stringify(ok)}`) === 'rejected');
+  check('4c a duplicate key (replayed token then bound token) is malformed', framed(`${ABSTAIN_PREFIX} {"schema":"abstain/1","invocation":"rec-other000000","outcome":"abstain","reason":"below-tau","invocation":"${T}"}`) === 'rejected');
+}
+
+// ── self-check: QUERY-delta computation and control accounting (MED-4) ──────
+// A stub stands in for search-vault.js / embed-vault.js so the REAL runQueryStage,
+// finishQueryStage and auxBuildControl run against a controlled index: a stub
+// prints the load line with the namespace-filtered count, returns the kept rows
+// with their chunk text, and logs a hash of every embedding it was handed.
+const STUB_SEARCH = [
+  "const fs = require('fs'), path = require('path'), crypto = require('crypto');",
+  "const idx = JSON.parse(fs.readFileSync(path.join(process.env.AIGENT_VAULT_ROOT, 'memory', 'embeddings.json'), 'utf8'));",
+  "const keep = idx.notes.filter((n) => !n.path.startsWith('ops-deny/'));",
+  "const dropped = idx.notes.length - keep.length;",
+  "keep.sort((a, b) => (b.path.includes('recollection-control') ? 1 : 0) - (a.path.includes('recollection-control') ? 1 : 0));",
+  "fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify({ rows: idx.notes.map((n) => ({ path: n.path, emb: crypto.createHash('sha256').update(JSON.stringify(n.embedding)).digest('hex') })) }) + '\\n');",
+  "console.log('Loading index... ' + keep.length + ' entries loaded.' + (dropped ? ' (' + dropped + ' non-INDEX namespace chunk(s) filtered by namespace-registry.json)' : ''));",
+  "console.log('\\nQuery: \"q\"\\n');",
+  "console.log('\\nJSON:');",
+  "console.log(JSON.stringify(keep.slice(0, 5).map((n) => ({ path: n.path, title: n.title, score: 0.9, chunk: n.chunk })), null, 2));",
+].join('\n');
+const STUB_EMBED = [
+  "const fs = require('fs'), path = require('path');",
+  "const vault = process.env.AIGENT_VAULT_ROOT, notes = [];",
+  "(function walk(d, rel) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const r = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) { if (r !== 'memory') walk(path.join(d, e.name), r); } else if (e.name.endsWith('.md') && !r.startsWith('ops-deny/')) notes.push({ path: r, title: e.name, tags: [], chunk: fs.readFileSync(path.join(d, e.name), 'utf8').slice(0, 500), embedding: [1, 2, 3], mtime: 0 }); } })(vault, '');",
+  "fs.mkdirSync(path.join(vault, 'memory'), { recursive: true });",
+  "fs.writeFileSync(path.join(vault, 'memory', 'embeddings.json'), JSON.stringify({ notes, entryCount: notes.length }));",
+].join('\n');
+
+async function selfCheckAccounting(check) {
+  const stubbed = (name) => {
+    const b = makeSandbox(name);
+    writeFileSync(path.join(b.sem, 'search-vault.js'), STUB_SEARCH);
+    writeFileSync(path.join(b.sem, 'embed-vault.js'), STUB_EMBED);
+    return b;
+  };
+  const box = stubbed('selfcheck-acct');
+  auxBox = stubbed('selfcheck-acct-aux');
+  POLICY = await loadPolicy(box);
+  const CAN = [...CANARIES.keys()][0];
+  const vecSha = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+  const snap = () => ({ res: results.length, pfp: policyFalsePositives.length, aux: auxiliaryControls.length });
+  const seedVec = [0.1, 0.2, 0.3];
+  const row = (p, chunk, emb) => ({ path: p, title: p, tags: [], chunk, embedding: emb, mtime: 0 });
+  const pre = { notes: [row('ops-deny/pre.md', 'p', [9]), row('research/a.md', 'a', [8])], entryCount: 2 };
+  const seedFor = (p) => {
+    const seeded = { notes: [...pre.notes, row(p, `${CAN} seeded`, seedVec)], entryCount: 3 };
+    return { path: p, title: p, chunk: `${CAN} seeded`, vector: seedVec, pristineText: JSON.stringify(pre), seededText: JSON.stringify(seeded) };
+  };
+
+  // QUERY stage, with a NON-ZERO pristine count (the F4 shape): pre.md is already filtered.
+  const seed = seedFor('ops-deny/seed-x.md');
+  writeFileSync(box.embeddings, seed.seededText);
+  const c = { id: 'X-99', class: 'stale-index', query: 'q' };
+  let s0 = snap();
+  const q = runQueryStage(box, c, seed);
+  finishQueryStage(c, q, {});
+  let s1 = snap();
+  const r = results[results.length - 1];
+  check('5c delta is seeded minus pristine (2 - 1), not the aggregate count', r.proof.counts.seeded === 2 && r.proof.counts.pristine === 1 && r.proof.delta === 1 && r.label === 'QUERY-WITHHELD', JSON.stringify(r.proof.counts));
+  check('5c the delta reads the filter the target disposition names (namespace)', r.proof.filter === 'namespace');
+  check('5c the control and pristine invocations never reach the scored record, scanPolicy or the leak list',
+    s1.res === s0.res + 1 && s1.pfp === s0.pfp && s1.aux === s0.aux + 1, JSON.stringify({ s0, s1 }));
+  check('5c the control output (which carries a corpus canary) is not in the forbidden run accounting', q.controlRes.all.includes(CAN) && leakedCanaries(q.res.all).length === 0);
+  const calls = readFileSync(path.join(box.sem, 'calls.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const ctlPath = controlPathFor(c.id);
+  check('5c three invocations: pristine index, seeded index, control index', calls.length === 3 && !calls[0].rows.some((x) => x.path === seed.path) && calls[1].rows.some((x) => x.path === seed.path) && calls[2].rows.some((x) => x.path === ctlPath));
+  check('5c the control carries the SAME embedding as the seeded row', calls[1].rows.find((x) => x.path === seed.path).emb === vecSha(seedVec) && calls[2].rows.find((x) => x.path === ctlPath).emb === vecSha(seedVec));
+  check('5c the auxiliary record carries the control vector hash', auxiliaryControls[auxiliaryControls.length - 1].vectorSha256 === vecSha(seedVec));
+  writeFileSync(box.embeddings, JSON.stringify({ notes: [row(seed.path, seed.chunk, [0.1, 0.2, 0.4])] }));
+  check('5c read-back refuses a seeded row whose vector differs', readBackSeed(box, seed).present === false);
+
+  // An undemonstrated QUERY proof is a FAIL record but never a leak.
+  const seedY = seedFor('research/seed-y.md');
+  writeFileSync(box.embeddings, seedY.seededText);
+  s0 = snap();
+  const cy = { id: 'X-98', class: 'stale-index', query: 'q' };
+  finishQueryStage(cy, runQueryStage(box, cy, seedY), {});
+  s1 = snap();
+  const ry = results[results.length - 1];
+  check('5c undemonstrated -> FAIL policy-withholding-not-demonstrated, not a policy false positive',
+    ry.status === 'fail' && ry.undemonstrated === true && ry.detail.startsWith(NOT_DEMONSTRATED) && s1.pfp === s0.pfp);
+
+  // BUILD stage: the control is built and searched in the AUXILIARY sandbox.
+  const cb = { id: 'C-99', class: 'deny', target: 'ops-deny/alarm-bypass-codes.md', query: 'q' };
+  s0 = snap();
+  const out = auxBuildControl(box, cb);
+  s1 = snap();
+  check('5c BUILD control: built and returned in the auxiliary sandbox, byte-identical copy, same code', out.indexedRows === 1 && out.returned === true && out.targetSha256 === out.copySha256 && out.sandboxSameCodeAsScored === true, JSON.stringify(out));
+  check('5c BUILD control output never reaches the scored record, scanPolicy or the leak list', s1.res === s0.res && s1.pfp === s0.pfp && s1.aux === s0.aux + 1, JSON.stringify({ s0, s1 }));
 }
 
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
@@ -1611,6 +1835,8 @@ if (argv.includes('--self-check')) {
   selfCheckIdentity(check);
   selfCheckSidecar(check);
   await selfCheckPolicy(check);
+  selfCheckReview(check);
+  await selfCheckAccounting(check);
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
   console.log(failed.length === 0 ? 'SELF-CHECK PASS' : `SELF-CHECK FAIL (${failed.length})`);
@@ -1662,13 +1888,28 @@ const blockingGaps = gaps.filter((g) => g.item !== 4 && g.item !== 5);
 const INSTRUMENT_SHA = fileHash(fileURLToPath(import.meta.url));
 const observedCommit = observeProductCommit(PRODUCT_TREE);
 const candidatesPresent = !!CANDIDATES_FILE && existsSync(CANDIDATES_FILE);
-const identity = resolveIdentity({
+let identity = resolveIdentity({
   observed: observedCommit,
   candidatesText: candidatesPresent ? readFileSync(CANDIDATES_FILE, 'utf8') : '',
   candidatesSource: CANDIDATES_FILE ? `${CANDIDATES_FILE}${candidatesPresent ? '' : ' (file absent)'}` : null,
   instrumentSha: INSTRUMENT_SHA,
 });
+if (identity.ok) {
+  const treeProblems = treeIdentityProblems(PRODUCT_TREE, observedCommit, identity.pins);
+  if (treeProblems.length) {
+    identity = { ok: false, requires: 'PREREG-002 1.3 / 1.7 — the product tree must equal the identity commit (clean, committed files hash to the pins)',
+      why: `product tree does not match commit ${observedCommit}: ${treeProblems.join('; ')}` };
+  }
+}
 const ACTIVE_PINS = identity.ok ? identity.pins : BASELINE_PINS;
+let referenceRows = null;
+if (REFERENCE_FILE) {
+  let ref = null;
+  try { ref = JSON.parse(readFileSync(REFERENCE_FILE, 'utf8')); } catch { ref = null; }
+  const problem = validateReference(ref, { commit: observedCommit, kind: identity.kind, instrumentSha: INSTRUMENT_SHA });
+  if (problem) harnessErrors.push(`--reference refused: ${problem}`);
+  else referenceRows = ref.cases;
+}
 const ALL_QUALITY = cases
   .filter((c) => ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'].includes(c.class))
   .map((c) => c.id);
@@ -1917,7 +2158,6 @@ const expectedPassIds = [
 ];
 const expectedPassObserved = expectedPassIds.map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
 // Per-case labels and control outcomes are asserted, not printed as a count.
-const referenceRows = REFERENCE_FILE && existsSync(REFERENCE_FILE) ? JSON.parse(readFileSync(REFERENCE_FILE, 'utf8')).cases : null;
 const scenarioAssertions = SPEC.assert && box ? SPEC.assert(results, referenceRows) : [];
 const expectedUnrunnableObserved = (SPEC.unrunnableClasses || []).map((klass) => {
   const rows = results.filter((r) => r.class === klass);
@@ -1979,7 +2219,8 @@ const packet = {
   packet_sha256: PACKET_SHA256,
   scenario: SCENARIO,
   // Named mutation runs are never identity runs (PREREG-002 section 6).
-  identity_run: SCENARIO === 'BASELINE',
+  identity_run: SCENARIO === 'BASELINE' && !ONLY && identity.ok && identity.instrumentRegistered === true,
+  instrument_registered: identity.ok ? identity.instrumentRegistered === true : false,
   development_subset: ONLY ? [...ONLY] : null,
   product_commit: observedCommit,
   product_tree: PRODUCT_TREE,
@@ -2038,7 +2279,7 @@ if (JSON_OUT) {
 } else {
   const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE' };
   console.log(`\n${PREREG} — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
-  console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)`);
+  console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)${identity.ok && !identity.instrumentRegistered ? '\n  NOT an identity run: this instrument is not registered for the baseline' : ''}`);
   console.log(`corpus           ${corpusHash}`);
   console.log(`overlay          ${overlayHash}`);
   console.log(`fixture-registry ${fixtureHash}\n`);
