@@ -197,6 +197,7 @@ function environmentIdentity() {
 }
 
 // ── declared environmental requirements, PREREG-001 4.3 ──────────────────────
+let BASH = null;
 function environmentGaps() {
   const gaps = [];
   const major = Number(process.version.replace(/^v/, '').split('.')[0]);
@@ -207,7 +208,8 @@ function environmentGaps() {
   const weights = path.join(SEM, 'node_modules', '@xenova', 'transformers', '.cache', 'Xenova', 'all-MiniLM-L6-v2', 'onnx', 'model_quantized.onnx');
   if (!existsSync(weights)) gaps.push({ item: 3, why: 'Xenova/all-MiniLM-L6-v2 quantized weights not resolvable from the local transformers.js cache' });
   if (spawnSync('python3', ['--version'], { encoding: 'utf8' }).status !== 0) gaps.push({ item: 4, why: 'python3 not on PATH (doctor namespace extractor)' });
-  if (spawnSync('bash', ['-c', 'true'], { encoding: 'utf8' }).status !== 0) gaps.push({ item: 5, why: 'bash not available (scripts/doctor.sh)' });
+  BASH = bashProbe();
+  if (!BASH.ok) gaps.push({ item: 5, why: BASH.why });
   try { rmSync(mkdtempSync(path.join(os.tmpdir(), 'recollection-probe-')), { recursive: true, force: true }); }
   catch (e) { gaps.push({ item: 6, why: `no writable temporary directory: ${e.message}` }); }
   return gaps;
@@ -412,6 +414,98 @@ function invocationEnv(box, extra = {}) {
   return { ...base, AIGENT_ROOT: box.root, AIGENT_VAULT_ROOT: box.vault, ...extra };
 }
 
+// ── abstention sidecar, PREREG-002 3.2 ───────────────────────────────────────
+// The wire contract is one stderr line, `AIGENT_ABSTAIN {json}`, four keys,
+// closed reason vocabulary, bound to this invocation's token. The results block
+// stays an array and is parsed elsewhere, unchanged; nothing here reads it
+// except to count rows. Rules apply in the order the packet lists them.
+const ABSTAIN_PREFIX = 'AIGENT_ABSTAIN';
+const ABSTAIN_KEYS = ['invocation', 'outcome', 'reason', 'schema'];
+const ABSTAIN_REASONS = ['below-tau', 'no-eligible-candidates'];
+
+// state: 'n/a'      a non-zero exit is a hard error, never an abstention (section 8)
+//        'none'     no sidecar line; `silentZero` says whether the array was empty
+//        'honest'   exit 0, results [], one well-formed bound line
+//        'rejected' `detail` carries the named rejection
+function classifyAbstention({ status, rows, stderr, token }) {
+  if (status !== 0) return { state: 'n/a', lines: 0, nonEmptyRows: false };
+  const nonEmptyRows = Array.isArray(rows) && rows.length > 0;
+  const lines = String(stderr || '').split(/\r?\n/).filter((l) => l.startsWith(ABSTAIN_PREFIX));
+  const reject = (detail) => ({ state: 'rejected', detail, lines: lines.length, nonEmptyRows });
+  if (lines.length === 0) {
+    return { state: 'none', lines: 0, nonEmptyRows, detail: Array.isArray(rows) && rows.length === 0 ? 'silent-zero-rows' : null };
+  }
+  if (lines.length > 1) return reject('abstention-sidecar-duplicated');
+  let obj = null;
+  if (lines[0].startsWith(`${ABSTAIN_PREFIX} `)) {
+    try { obj = JSON.parse(lines[0].slice(ABSTAIN_PREFIX.length + 1)); } catch { obj = null; }
+  }
+  const wellFormed = obj && typeof obj === 'object' && !Array.isArray(obj)
+    && Object.keys(obj).sort().join() === ABSTAIN_KEYS.join()
+    && obj.schema === 'abstain/1' && obj.outcome === 'abstain'
+    && typeof obj.invocation === 'string' && typeof obj.reason === 'string';
+  if (!wellFormed) return reject('abstention-sidecar-malformed');
+  if (!ABSTAIN_REASONS.includes(obj.reason)) return reject('abstention-reason-unknown');
+  if (obj.invocation !== token) return reject('abstention-sidecar-unbound');
+  if (nonEmptyRows) return reject('abstention-contradicted');
+  // (b)(2): the block must be present and exactly [].
+  if (!Array.isArray(rows)) return reject('abstention-without-results-block');
+  return { state: 'honest', reason: obj.reason, lines: 1, nonEmptyRows: false };
+}
+
+// Any sidecar line beside a non-empty results array is a contradiction on every
+// class, whatever else is wrong with the line (3.2 final rejection rule).
+const abstainGate = (res) => (res.abstain && res.abstain.lines > 0 && res.abstain.nonEmptyRows ? 'abstention-contradicted' : null);
+
+// The negative-class decision, pure over what the invocation produced so the
+// self-check can feed it synthetic process output. PREREG-002 3.2.
+function negativeVerdict({ status, rows, abstain, indexPresent }) {
+  // F6 exception (3.2, section 6): a dead retriever must never certify the
+  // class. Gated on the observable (index absent), not on the scenario label.
+  // Any other non-zero exit is a behavioral FAIL, never an environmental gap.
+  if (status !== 0) {
+    if (!indexPresent) {
+      return { status: 'unrunnable', detail: `search exited ${status}; a non-zero exit can never certify abstention`, requires: 'PREREG-002 3.2 / PREREG-001 6 F6 — index deleted, search process exited non-zero' };
+    }
+    return { status: 'fail', detail: `search exited ${status}` };
+  }
+  if (!rows) return { status: 'fail', detail: abstain.lines > 0 ? 'abstention-without-results-block' : 'no JSON block parsed' };
+  if (rows.length === 0) {
+    if (abstain.state === 'honest') return { status: 'pass', detail: `honest abstention (${abstain.reason}): exit 0, results [], bound sidecar`, extra: { abstained: true, abstainReason: abstain.reason } };
+    return { status: 'fail', detail: abstain.detail || 'silent-zero-rows', extra: { abstained: false } };
+  }
+  if (abstain.lines > 0) return { status: 'fail', detail: 'abstention-contradicted' };
+  const top1 = rows[0].score;
+  const near = top1 != null && Math.abs(top1 - TAU) <= NEAR_THRESHOLD;
+  const extra = { top1, topPath: rows[0].path, nearThreshold: near };
+  if (top1 == null) return { status: 'fail', detail: 'no score on the top row to compare against tau', extra };
+  if (top1 >= TAU) return { status: 'fail', detail: `top-1 ${top1} >= tau ${TAU} (${rows[0].path})`, extra };
+  return { status: 'pass', detail: `top-1 ${top1} < tau ${TAU}${near ? ' [near-threshold]' : ''}`, extra };
+}
+
+// ── bash probe, PREREG-002 4.3 item 5 ────────────────────────────────────────
+// A bare `bash -c true` passes on the WSL shim that then mangles the Windows
+// path handed to scripts/doctor.sh (BUILD-LEDGER 13: doctor exit 127). So the
+// probe runs a real script, named by a Windows path, with a Windows-path
+// argument, exactly the shape runDoctor() uses, and demands it read both.
+// `run` is injectable so the self-check can stand a shim in for it.
+function bashProbe(run = spawnSync) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'recollection-bashprobe-'));
+  try {
+    const script = path.join(dir, 'probe.sh');
+    writeFileSync(script, '#!/usr/bin/env bash\n[ -f "$0" ] && cd "$1" && printf BASH-PROBE-OK\n');
+    const r = run('bash', [script, dir], { encoding: 'utf8' });
+    const ok = r.status === 0 && String(r.stdout || '').includes('BASH-PROBE-OK');
+    const where = run(process.platform === 'win32' ? 'where' : 'which', ['bash'], { encoding: 'utf8' });
+    const resolved = String(where.stdout || '').split(/\r?\n/).find(Boolean) || null;
+    return ok
+      ? { ok: true, resolved }
+      : { ok: false, resolved, why: `resolved bash ${resolved || '(not found)'} cannot run a Windows-path-bearing script the way scripts/doctor.sh is invoked (exit ${r.status}: ${String(r.stderr || '').trim().slice(0, 160)})` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // F8's pre-window instant: one day before the earliest closing date in the
 // corpus, so no window has ended (PREREG-002 F8).
 function preWindowInstant(corpusRoot) {
@@ -479,6 +573,7 @@ function search(box, query, { now = FROZEN_NOW } = {}) {
     out.jsonBytes = Buffer.byteLength(block, 'utf8');
     try { out.rows = JSON.parse(block); } catch (e) { out.parseError = e.message; }
   }
+  out.abstain = classifyAbstention({ status: r.status, rows: out.rows, stderr: r.stderr, token: invocation });
   return out;
 }
 
@@ -623,6 +718,7 @@ function scorePositive(box, c) {
   scanPolicy(c.id, res);
   if (res.status !== 0) return record(c.id, c.class, 'fail', `search exited ${res.status}: ${res.stderr.trim().slice(0, 200)}`);
   if (!res.rows) return record(c.id, c.class, 'fail', `no JSON block parsed${res.parseError ? ` (${res.parseError})` : ''}`);
+  if (abstainGate(res)) return record(c.id, c.class, 'fail', abstainGate(res));
   const rank = rankOf(res, c.target);
   const top = res.rows[0];
   const extra = { rank, topPath: top?.path, topScore: top?.score, target: c.target };
@@ -638,19 +734,10 @@ function scoreNegative(box, c) {
   const res = search(box, c.query);
   checkBudget(c.id, res);
   scanPolicy(c.id, res);
-  // PREREG-001 6/F6: a dead retriever trivially satisfies "returned nothing
-  // above tau" and must never be allowed to certify the negative class.
-  if (res.status !== 0) {
-    return record(c.id, c.class, 'unrunnable', `search exited ${res.status}; a non-zero exit can never certify abstention`,
-      { requires: 'PREREG-001 6 F6 — search process exited non-zero' });
-  }
-  if (!res.rows) return record(c.id, c.class, 'fail', 'no JSON block parsed');
-  const top1 = res.rows[0]?.score;
-  const near = top1 != null && Math.abs(top1 - TAU) <= NEAR_THRESHOLD;
-  const extra = { top1, topPath: res.rows[0]?.path, nearThreshold: near, kind: c.kind };
-  if (top1 == null) return record(c.id, c.class, 'fail', 'no rows returned to score against tau', extra);
-  if (top1 >= TAU) return record(c.id, c.class, 'fail', `top-1 ${top1} >= tau ${TAU} (${res.rows[0].path})`, extra);
-  record(c.id, c.class, 'pass', `top-1 ${top1} < tau ${TAU}${near ? ' [near-threshold]' : ''}`, extra);
+  const v = negativeVerdict({ status: res.status, rows: res.rows, abstain: res.abstain, indexPresent: existsSync(box.embeddings) });
+  const extra = { kind: c.kind, ...(v.extra || {}) };
+  if (v.requires) extra.requires = v.requires;
+  record(c.id, c.class, v.status, v.detail, extra);
 }
 
 const inversions = [];
@@ -660,6 +747,7 @@ function scoreTemporal(box, c) {
   scanPolicy(c.id, res);
   if (res.status !== 0) return record(c.id, c.class, 'fail', `search exited ${res.status}`);
   if (!res.rows) return record(c.id, c.class, 'fail', 'no JSON block parsed');
+  if (abstainGate(res)) return record(c.id, c.class, 'fail', abstainGate(res));
   const cur = rankOf(res, c.current);
   const sup = rankOf(res, c.superseded);
   if (sup !== null && (cur === null || sup < cur)) inversions.push({ id: c.id, currentRank: cur, supersededRank: sup });
@@ -878,6 +966,63 @@ function selfCheckIdentity(check) {
   }
 }
 
+// ── self-check: sidecar rules and bash probe (PREREG-002 section 7 items 4, 6) ──
+function selfCheckSidecar(check) {
+  const T = 'rec-0123456789abcdef';
+  const line = (o) => `${ABSTAIN_PREFIX} ${JSON.stringify(o)}`;
+  const good = { schema: 'abstain/1', invocation: T, outcome: 'abstain', reason: 'below-tau' };
+  const cls = (stderr, rows = [], status = 0) => classifyAbstention({ status, rows, stderr, token: T });
+  const detail = (stderr, rows) => { const r = cls(stderr, rows); return r.state === 'rejected' || r.state === 'none' ? r.detail : r.state; };
+
+  check('4 honest abstention: exit 0, [], bound line, vocabulary reason', cls(line(good)).state === 'honest');
+  check('4 honest abstention, second vocabulary reason', cls(line({ ...good, reason: 'no-eligible-candidates' })).state === 'honest');
+  check('4 honest abstention amid CRLF stderr noise', cls(`warn: x\r\n${line(good)}\r\nmore\r\n`).state === 'honest');
+  check('4 silent-zero-rows: [] and no line', detail('', []) === 'silent-zero-rows');
+  check('4 free text "abstained" without the prefix is not evidence', detail('retriever abstained: below tau\n', []) === 'silent-zero-rows');
+  check('4 duplicated line', detail(`${line(good)}\n${line(good)}`, []) === 'abstention-sidecar-duplicated');
+  const bad = {
+    'not JSON': `${ABSTAIN_PREFIX} {nope`,
+    'missing key': line({ schema: 'abstain/1', invocation: T, outcome: 'abstain' }),
+    'extra key': line({ ...good, extra: 1 }),
+    'wrong schema': line({ ...good, schema: 'abstain/2' }),
+    'wrong outcome': line({ ...good, outcome: 'declined' }),
+    'array payload': `${ABSTAIN_PREFIX} [1]`,
+    'no space after prefix': `${ABSTAIN_PREFIX}${JSON.stringify(good)}`,
+  };
+  for (const [name, text] of Object.entries(bad)) check(`4 malformed: ${name}`, detail(text, []) === 'abstention-sidecar-malformed', detail(text, []));
+  check('4 reason outside the closed vocabulary', detail(line({ ...good, reason: 'because' }), []) === 'abstention-reason-unknown');
+  check('4 invocation replayed from another query', detail(line({ ...good, invocation: 'rec-ffffffffffffffff' }), []) === 'abstention-sidecar-unbound');
+  const row = [{ path: 'a.md', score: 0.1 }];
+  check('4 valid line beside non-empty rows is contradicted', detail(line(good), row) === 'abstention-contradicted');
+  check('4 garbled line beside non-empty rows is a contradiction on every class', abstainGate({ abstain: cls(`${ABSTAIN_PREFIX} {nope`, row) }) === 'abstention-contradicted');
+  check('4 no line and rows -> no gate', abstainGate({ abstain: cls('', row) }) === null);
+  check('4 non-zero exit with a valid line is never an abstention', cls(line(good), [], 1).state === 'n/a');
+  check('4 line with no results block is rejected', cls(line(good), null).state === 'rejected');
+
+  // The negative-class decision on synthetic process output.
+  const verdict = (o) => negativeVerdict({ status: 0, indexPresent: true, rows: [], abstain: cls(''), ...o });
+  check('4 negative: honest abstention is PASS', verdict({ abstain: cls(line(good)) }).status === 'pass');
+  check('4 negative: silence is FAIL silent-zero-rows', (() => { const v = verdict({}); return v.status === 'fail' && v.detail === 'silent-zero-rows'; })());
+  check('4 negative: rejected sidecar is FAIL with its detail', verdict({ abstain: cls(line({ ...good, reason: 'x' })) }).detail === 'abstention-reason-unknown');
+  check('4 negative: rows with top-1 >= tau is FAIL', verdict({ rows: [{ path: 'a.md', score: 0.31 }], abstain: cls('', [{}]) }).status === 'fail');
+  check('4 negative: rows with top-1 < tau is PASS', verdict({ rows: [{ path: 'a.md', score: 0.29 }], abstain: cls('', [{}]) }).status === 'pass');
+  check('4 negative: sidecar beside rows is FAIL abstention-contradicted', verdict({ rows: row, abstain: cls(line(good), row) }).detail === 'abstention-contradicted');
+  check('4 negative: non-zero exit with the index present is a behavioral FAIL', verdict({ status: 1, rows: null }).status === 'fail');
+  const dead = verdict({ status: 1, rows: null, indexPresent: false });
+  check('4 negative: F6 exception, dead retriever is UNRUNNABLE naming the gap', dead.status === 'unrunnable' && !!dead.requires);
+
+  // 6. The bash probe, against synthetic shims.
+  const shim = (probeResult) => (cmd, args) => (cmd === 'bash' && args[0] === '-c' ? { status: 0, stdout: '', stderr: '' } : cmd === 'bash' ? probeResult : { status: 0, stdout: 'C:\\shim\\bash.exe\n', stderr: '' });
+  const wsl = shim({ status: 127, stdout: '', stderr: '/bin/bash: C:UserswillAppDataLocalTemp: No such file or directory' });
+  check('6 the old check ("bash -c true") passes the WSL-style shim', wsl('bash', ['-c', 'true']).status === 0);
+  const g = bashProbe(wsl);
+  check('6 the functional probe rejects it, naming the interpreter', !g.ok && g.why.includes('doctor.sh') && g.why.includes('127'), g.why);
+  check('6 a bash that runs the script but reads no argument is rejected', !bashProbe(shim({ status: 0, stdout: '', stderr: '' })).ok);
+  check('6 a bash that reads the Windows-path script and argument passes', bashProbe(shim({ status: 0, stdout: 'BASH-PROBE-OK', stderr: '' })).ok);
+  const here = bashProbe();
+  check('6 this host: resolved bash passes the functional probe', here.ok, here.why || here.resolved);
+}
+
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
 // One source of truth for what each run mutates and what it must turn red. A
 // scenario name this table does not contain is a harness error: before this
@@ -1043,6 +1188,7 @@ if (argv.includes('--self-check')) {
   check('dropped N-01 caught', dropped.length > 0, dropped[0]);
   check('stale-index drift caught', xDrift.length > 0, xDrift[0]);
   selfCheckIdentity(check);
+  selfCheckSidecar(check);
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
   console.log(failed.length === 0 ? 'SELF-CHECK PASS' : `SELF-CHECK FAIL (${failed.length})`);
@@ -1083,6 +1229,10 @@ const staleRowsForIntegrity = JSON.parse(readFileSync(path.join(HERE, 'cases', '
 harnessErrors.push(...integrityErrors(cases, staleRowsForIntegrity, GATES));
 
 const gaps = environmentGaps();
+// PREREG-001 4.3 table: python3 / bash missing makes the doctor assertions inside
+// U-01 and U-02 UNRUNNABLE, not the whole run.
+const doctorGaps = gaps.filter((g) => g.item === 4 || g.item === 5);
+const blockingGaps = gaps.filter((g) => g.item !== 4 && g.item !== 5);
 
 // PREREG-002 section 7 items 1, 2, 9: observe the product identity, then refuse
 // to score anything that is neither the baseline nor a registered candidate.
@@ -1101,6 +1251,9 @@ const ALL_QUALITY = cases
   .map((c) => c.id);
 
 let box = null;
+const declareDoctorUnrunnable = () => declareUnrunnable(['U-01', 'U-02'],
+  doctorGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
+  `PREREG-002 4.3 (${doctorGaps.map((g) => `item ${g.item}`).join(', ')})`);
 let indexBuild = null;
 let doctor = null;
 const scenarioNotes = [];
@@ -1111,14 +1264,14 @@ function declareUnrunnable(ids, why, requires) {
 
 if (harnessErrors.length === 0 && !identity.ok) {
   declareUnrunnable(cases.map((c) => c.id), `PREREG-002 refuses to score: ${identity.why}`, identity.requires);
-} else if (harnessErrors.length === 0 && gaps.length > 0) {
+} else if (harnessErrors.length === 0 && blockingGaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
-    gaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
-    `PREREG-001 4.3 (${gaps.map((g) => `item ${g.item}`).join(', ')})`);
+    blockingGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
+    `PREREG-001 4.3 (${blockingGaps.map((g) => `item ${g.item}`).join(', ')})`);
 }
 
 let hashMismatch = [];
-if (harnessErrors.length === 0 && identity.ok && gaps.length === 0) {
+if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0) {
   box = makeSandbox(SCENARIO.toLowerCase());
   hashMismatch = runtimeHashGaps(box, ACTIVE_PINS);
   if (hashMismatch.length) {
@@ -1198,8 +1351,11 @@ if (harnessErrors.length === 0 && identity.ok && gaps.length === 0) {
     }
 
     if (SCENARIO === 'F5') {
-      doctor = doctorNamespaceRecords(box);
-      for (const id of ['U-01', 'U-02']) scoreUndeclared(box, byId.get(id), doctor);
+      if (doctorGaps.length) declareDoctorUnrunnable();
+      else {
+        doctor = doctorNamespaceRecords(box);
+        for (const id of ['U-01', 'U-02']) scoreUndeclared(box, byId.get(id), doctor);
+      }
       declareUnrunnable(ALL_QUALITY,
         'F5: namespace coverage is red, so no quality number may be reported from this run',
         'PREREG-001 6 F5 — coverage red, quality must not be reported as a shrunken green');
@@ -1207,15 +1363,15 @@ if (harnessErrors.length === 0 && identity.ok && gaps.length === 0) {
         'F5: both runtimes refuse while a namespace is undeclared',
         { requires: 'PREREG-001 6 F5 — coverage red' });
     } else if (harnessErrors.length === 0) {
-      // ── PC-01 first. If it is not rank-1 green the entire run is
-      //    UNRUNNABLE and no class result is reported (PREREG-001 6 PC-01).
+      // ── PC-01 first, as the harness's proof that it can see a hit at all.
       const pc = byId.get('PC-01');
       const pcRes = search(box, pc.query);
       checkBudget('PC-01', pcRes);
       scanPolicy('PC-01', pcRes);
-      let pcGreen = false;
       if (pcRes.status !== 0) {
         record('PC-01', 'positive-control', 'fail', `search exited ${pcRes.status}: ${pcRes.stderr.trim().slice(0, 200)}`);
+      } else if (abstainGate(pcRes)) {
+        record('PC-01', 'positive-control', 'fail', abstainGate(pcRes));
       } else if (!pcRes.rows || !pcRes.rows.length) {
         record('PC-01', 'positive-control', 'fail', 'no rows returned');
       } else {
@@ -1223,50 +1379,44 @@ if (harnessErrors.length === 0 && identity.ok && gaps.length === 0) {
         const prov = provenanceFailure(r1);
         if (r1.path !== pc.target) record('PC-01', 'positive-control', 'fail', `rank-1 was ${r1.path}, expected ${pc.target}`, { topScore: r1.score });
         else if (prov) record('PC-01', 'positive-control', 'fail', `rank-1 correct but provenance failed: ${prov}`, { topScore: r1.score });
-        else { record('PC-01', 'positive-control', 'pass', `rank 1, score ${r1.score}`, { topScore: r1.score }); pcGreen = true; }
+        else { record('PC-01', 'positive-control', 'pass', `rank 1, score ${r1.score}`, { topScore: r1.score }); }
       }
 
-      // PREREG-001 6 PC-01 makes a non-green control fatal to a run that is
-      // trying to report quality. Under F6 a red PC-01 IS the preregistered
-      // observation ("PC-01 goes red, every positive, temporal and operator
-      // case goes red"), so the gate must not convert those preregistered reds
-      // into unrunnables. The gate stays armed everywhere else.
-      // Gate on the OBSERVABLE, not on the scenario label. Keyed on
-      // SCENARIO !== 'F6' this trusted a name: a silently no-op rmSync would
-      // have left a live index and let full scoring run while the packet still
-      // claimed the index had been killed.
-      if (!pcGreen && existsSync(box.embeddings)) {
-        declareUnrunnable(ALL_QUALITY,
-          'PC-01 is not rank-1 green: the harness has not demonstrated it can see a hit at all',
-          'PREREG-001 6 PC-01 — positive control not green');
-        declareUnrunnable(['U-01', 'U-02'],
-          'PC-01 is not rank-1 green: no class result from this run is reported',
-          'PREREG-001 6 PC-01 — positive control not green');
-      } else {
+      // PREREG-002 section 6 (PC-01 accounting): a RUNNABLE PC-01 whose answer is
+      // wrong is a behavioral FAIL of the run. Every class is still scored in
+      // full (no early stop) and the terminal is FAIL via pc01.status; UNRUNNABLE
+      // needs a named missing 4.3 prerequisite and is decided above, not here.
+      {
         for (const c of cases) {
+          if (!want(c.id)) continue;
           if (c.class === 'positive') scorePositive(box, c);
           else if (c.class === 'negative') scoreNegative(box, c);
           else if (c.class === 'temporal') scoreTemporal(box, c);
           else if (c.class === 'deny' || c.class === 'skip') scoreWithheld(box, c);
           else if (c.class === 'operator') scoreOperator(box, c);
         }
-        for (const c of cases.filter((x) => x.class === 'stale-index')) {
+        for (const c of cases.filter((x) => x.class === 'stale-index' && want(x.id))) {
           scoreStaleIndex(box, c, staleRows.find((s) => s.id === c.id));
         }
         // L-02 injects and restores. L-01 deletes a source and leaves it
         // deleted, so it runs after L-02 and before the coverage cases, which
         // assert only on the undeclared directory.
-        scoreLoudness(box, byId.get('L-02'));
-        scoreLoudness(box, byId.get('L-01'));
+        if (want('L-02')) scoreLoudness(box, byId.get('L-02'));
+        if (want('L-01')) scoreLoudness(box, byId.get('L-01'));
 
         // U-01/U-02: the overlay is copied in ONLY for these cases. A
         // physically present undeclared directory makes every other
         // invocation exit 1 (PREREG-001 1.4).
-        if (SPEC.runU) {
-          cpSync(path.join(OVERLAY, 'scratch'), path.join(box.vault, 'scratch'), { recursive: true });
-          doctor = doctorNamespaceRecords(box);
-          for (const id of ['U-01', 'U-02']) scoreUndeclared(box, byId.get(id), doctor);
-          rmSync(path.join(box.vault, 'scratch'), { recursive: true, force: true });
+        if (!want('U-01') && !want('U-02')) {
+          // development subset: coverage cases not requested
+        } else if (SPEC.runU) {
+          if (doctorGaps.length) declareDoctorUnrunnable();
+          else {
+            cpSync(path.join(OVERLAY, 'scratch'), path.join(box.vault, 'scratch'), { recursive: true });
+            doctor = doctorNamespaceRecords(box);
+            for (const id of ['U-01', 'U-02']) scoreUndeclared(box, byId.get(id), doctor);
+            rmSync(path.join(box.vault, 'scratch'), { recursive: true, force: true });
+          }
         } else {
           declareUnrunnable(['U-01', 'U-02'],
             `${SCENARIO}: the undeclared overlay is not part of this mutation`,
@@ -1290,7 +1440,10 @@ const classReport = GATES.map((g) => {
   let met = passed >= g.min;
   if (g.klass === 'temporal') met = met && inversions.length === 0;
   if (unrunnable > 0) met = false;
-  const status = (unrunnable > 0 && failed === 0) ? 'UNRUNNABLE' : (met ? 'PASS' : 'FAIL');
+  let status = (unrunnable > 0 && failed === 0) ? 'UNRUNNABLE' : (met ? 'PASS' : 'FAIL');
+  // PREREG-002 section 6: with PC-01 red no class can be certified PASS.
+  const pcRed = results.some((r) => r.id === 'PC-01' && r.status === 'fail');
+  if (status === 'PASS' && pcRed) status = 'NOT-CERTIFIED';
   return {
     class: g.klass, label: g.label, gate: g.gate, n: g.n,
     pass: passed, fail: failed, unrunnable,
