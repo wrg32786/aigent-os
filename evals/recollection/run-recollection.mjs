@@ -1567,14 +1567,24 @@ function f9Assertions(rows, reference = null, development = false) {
     const ref = new Map(reference.map((r) => [r.id, r]));
     const same = (r) => ref.has(r.id) && ref.get(r.id).status === r.status && (ref.get(r.id).label ?? null) === (r.label ?? null);
     // A development comparison covers only the ids its reference carries and says so.
-    const pool = [...buildRows, ...u];
-    const compared = development ? pool.filter((r) => ref.has(r.id)) : pool;
-    const moved = compared.filter((r) => !same(r));
-    const shown = moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${compared.length} of ${pool.length} BUILD + U result(s) compared`;
+    const show = (rs) => {
+      const moved = rs.filter((r) => !same(r));
+      return { moved, text: moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${rs.length} result(s) compared` };
+    };
+    // Two expectations (PREREG-002 F9): BUILD-stage unchanged, U-class unchanged. Only the second
+    // reads U, so a BUILD case turning red is judged even when U-01/U-02 could not run.
+    const bc = development ? buildRows.filter((r) => ref.has(r.id)) : buildRows;
+    const uc = development ? u.filter((r) => ref.has(r.id)) : u;
+    const bs = show(bc);
+    const us = show(uc);
     if (development) {
-      add('F9: BUILD-stage and U-class results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', compared.length > 0 && moved.length === 0, shown, 'undeclared');
+      add('F9: BUILD-stage results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', bc.length > 0 && bs.moved.length === 0, bs.text);
+      add('F9: U-class results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', us.moved.length === 0, us.text, 'undeclared');
       notEvaluated('F9: "BUILD-stage and U-class results unchanged" is NOT-EVALUATED: a development comparison is not a full same-method reference', 'the frozen expectation needs the full reference');
-    } else add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0, shown, 'undeclared');
+    } else {
+      add('F9: BUILD-stage results equal the unmutated reference run', buildRows.length > 0 && bs.moved.length === 0, bs.text);
+      add('F9: U-class results equal the unmutated reference run', u.length === 2 && us.moved.length === 0, us.text, 'undeclared');
+    }
   } else {
     const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : r.proof.control && r.proof.control.returned === false);
     add('F9: BUILD-stage build-side evidence intact, every FAIL explained by its control alone (no --reference given: narrower check)',
@@ -1759,6 +1769,7 @@ function selfCheckReview(check) {
     'a TRUNCATED population (the one-case packet the review reproduced)': { cases: [{ id: 'P-01' }] },
     'a population missing one expected id': { cases: good.cases.slice(0, 3) },
     'a DUPLICATE case id (right length, wrong population)': { cases: [...good.cases.slice(0, 3), good.cases[0]] },
+    'every expected id PLUS one repeat (only the duplicate check can refuse it)': { cases: [...good.cases, good.cases[1]] },
     'an id outside the population': { cases: [...good.cases.slice(0, 3), { id: 'Z-99' }] },
     'a wrong frozen clock': { search_now: { frozen: '2026-01-01T00:00:00Z', temporal_class: FROZEN_NOW } },
     'a wrong temporal-class clock': { search_now: { frozen: FROZEN_NOW, temporal_class: '2026-05-01T00:00:00Z' } },
@@ -1913,7 +1924,22 @@ function selfCheckFinalizer(check) {
   check('3f R4-LOW-1 two positive cases missing from the results -> HARNESS-ERROR, never PASS', popTerm(green().filter((r) => !idsOf('positive').slice(0, 2).includes(r.id))) === 'HARNESS-ERROR/1');
   check('3f R4-LOW-1 PC-01 missing from the results -> HARNESS-ERROR', popTerm(green().filter((r) => r.id !== 'PC-01')) === 'HARNESS-ERROR/1');
   check('3f R4-LOW-1 a duplicate pass record padding a class -> HARNESS-ERROR', popTerm([...green().filter((r) => r.id !== idsOf('positive')[0]), { ...green().find((r) => r.id === idsOf('positive')[1]) }]) === 'HARNESS-ERROR/1');
-  check('3f R4-LOW-1 an id outside the frozen list -> HARNESS-ERROR; the exact population -> PASS', popTerm([...green(), { id: 'Z-99', class: 'positive', status: 'pass' }]) === 'HARNESS-ERROR/1' && popTerm(green()) === 'PASS/0');
+  // R5-LOW-1: not-applicable (or any unknown status) only where the scenario spec declares it.
+  const naTerm = (o, mapper) => { const he = []; const f = fin({ results: mapper(green()), harnessErrors: he, ...o }); return `${f.terminal}/${he.length}`; };
+  const mark = (pred, status = 'not-applicable') => (rs) => rs.map((r) => (pred(r) ? { ...r, status } : r));
+  check('3f R5-LOW-1 BASELINE: DENY 6/6 not-applicable -> HARNESS-ERROR, never PASS', naTerm({}, mark((r) => r.class === 'deny')) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 BASELINE: PC-01 not-applicable -> HARNESS-ERROR', naTerm({}, mark((r) => r.id === 'PC-01')) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 BASELINE: U-01/U-02 not-applicable (a baseline or candidate identity run declares none) -> HARNESS-ERROR', naTerm({}, mark((r) => r.class === 'undeclared')) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 BASELINE: positive 22 pass + 2 not-applicable -> HARNESS-ERROR', naTerm({}, mark((r) => idsOf('positive').slice(0, 2).includes(r.id))) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 an unknown status ("skipped") on a class member -> HARNESS-ERROR', naTerm({}, mark((r) => r.id === idsOf('positive')[0], 'skipped')) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 F1 declares U-01/U-02 not-applicable: that is accepted; any other id is not', naTerm({ spec: SCENARIOS.F1, scenario: 'F1' }, (rs) => mark((r) => r.class === 'undeclared')(failOn(rs, ['P-07']))) === 'PASS/0'
+    && naTerm({ spec: SCENARIOS.F1, scenario: 'F1' }, (rs) => mark((r) => r.class === 'deny')(failOn(rs, ['P-07']))) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 F9 declares no not-applicable ids: U-01/U-02 not-applicable -> HARNESS-ERROR', naTerm({ spec: SCENARIOS.F9, scenario: 'F9' }, mark((r) => r.class === 'undeclared')) === 'HARNESS-ERROR/1');
+  check('3f R5-LOW-1 the scenario table declares the not-applicable set for exactly the runU:false scenarios', Object.entries(SCENARIOS).every(([, sp]) => (sp.runU ? !(sp.notApplicable || []).length : (sp.notApplicable || []).join() === 'U-01,U-02')));
+  // R5-LOW-2: BUILD-stage unchanged and U-class unchanged are two expectations.
+  const buildRed = f9(f9rows('RENDER-REFUSED', 0).map((r) => (r.id === 'C-01' ? { ...r, status: 'fail', label: null } : r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)), { referenceRows: fullRef });
+  check('3f R5-LOW-2 F9 with a full reference, U unrunnable and a BUILD case turned red -> the BUILD expectation is judged: invalid', buildRed.falsifierInvalid === true && buildRed.terminalBasis.some((b) => /BUILD-stage results equal/.test(b)), JSON.stringify([buildRed.terminal, buildRed.falsifierInvalid]));
+  check('3f R5-LOW-1 an id outside the frozen list -> HARNESS-ERROR; the exact population -> PASS', popTerm([...green(), { id: 'Z-99', class: 'positive', status: 'pass' }]) === 'HARNESS-ERROR/1' && popTerm(green()) === 'PASS/0');
   check('3f a BASELINE is never a falsifier: its own PC-01 miss is the PC-01 rule, not an expectation failure', fin({ results: failOn(green(), ['PC-01']) }).falsifierInvalid === false);
 }
 
@@ -2013,6 +2039,63 @@ function selfCheckWiring(check) {
   check(names[5], wd.identity_run === false && wd.registration && wd.registration?.state === 'withdrawn', JSON.stringify([wd.registration, wd.parseFailure]));
   check(names[6], dirty._exit === 1 && dirty.terminal === 'UNRUNNABLE' && Array.isArray(dirty.terminal_basis) && Array.isArray(dirty.claims_limits) && dirty.claims_limits.length === CLAIM_LIMITS.length && dirty.claims_limits.some((l) => /F7/.test(l) && /NOT executable/.test(l)), JSON.stringify([dirty._exit, dirty.terminal, dirty.terminal_basis, dirty.claims_limits]));
   check(names[7], (withTrunc.harness_errors || []).some((e) => e.includes('--reference refused') && /population|missing/i.test(e)), JSON.stringify(withTrunc.harness_errors || withTrunc));
+  // The dirty file was only for the refusal check; the stubbed candidate needs a clean tree.
+  rmSync(path.join(clone, 'daemons', 'zz-untracked.txt'), { force: true });
+  selfCheckWiringScored(check, { tmp, clone, instFile, instCommit, run, file });
+}
+
+// R5-LOW-3: the round-4 fixes live in main, which only a spawned runner reaches.
+// A stubbed CANDIDATE product (search/embed stubs, a fake transformers package, a
+// registered record with its own pins) lets the real runner score F1, F5, the
+// BASELINE and F9 end to end with no model. Runs below assert main's own wiring:
+// U not-applicable (never UNRUNNABLE) where a scenario excludes it, F5 running
+// PC-01, and the F9 reference mode.
+function selfCheckWiringScored(check, ctx) {
+  const { tmp, clone, instFile, instCommit, run, file } = ctx;
+  const names = ['wiring: F1 records U-01/U-02 not-applicable (not UNRUNNABLE) and the blind-falsifier verdict can fire',
+    'wiring: F5 RUNS PC-01 (a behavioral FAIL on the observed non-zero exit), quality UNRUNNABLE, U scored',
+    'wiring: F9 reference mode is none / full / development as the flags say'];
+  const sem = path.join(clone, 'daemons', 'semantic-search');
+  const stubHead = [
+    "const fsx = require('fs'), pathx = require('path');",
+    "if (fsx.existsSync(pathx.join(process.env.AIGENT_VAULT_ROOT, 'scratch'))) { console.error('[stub] REFUSING to run: undeclared vault namespace directories: scratch'); process.exit(1); }",
+    "console.log('Embed: 1ms | Search: 1ms | Total: 2ms');",
+    "const deniedPath = () => false, DENY_PREFIXES = [], namespaceDispositionForPath = () => 'INDEX', NAMESPACE_REGISTRY = {};",
+    "const index = { notes: [] };",
+    ...F9_FILTERS,
+  ].join('\n');
+  writeFileSync(path.join(sem, 'search-vault.js'), `${stubHead}\n${STUB_SEARCH}`);
+  writeFileSync(path.join(sem, 'embed-vault.js'), `${stubHead.split('\n').slice(0, 2).join('\n')}\n${STUB_EMBED}`);
+  const pkg = path.join(sem, 'node_modules', '@xenova', 'transformers');
+  mkdirSync(path.join(pkg, '.cache', 'Xenova', 'all-MiniLM-L6-v2', 'onnx'), { recursive: true });
+  writeFileSync(path.join(pkg, '.cache', 'Xenova', 'all-MiniLM-L6-v2', 'onnx', 'model_quantized.onnx'), 'stub');
+  writeFileSync(path.join(pkg, 'package.json'), '{"name":"@xenova/transformers","version":"0.0.0","type":"module","main":"index.js"}');
+  writeFileSync(path.join(pkg, 'index.js'), 'export const pipeline = async () => async () => ({ data: new Float32Array([0.1, 0.2, 0.3]) });\n');
+  const cg = (...a) => spawnSync('git', ['-C', clone, ...a], { encoding: 'utf8', env: gitIdentityEnv });
+  cg('add', '-A');
+  cg('commit', '-q', '--no-verify', '-m', 'stub candidate');
+  const candCommit = cg('rev-parse', 'HEAD').stdout.trim();
+  const pins = Object.fromEntries(PINNED_PATHS.map((f) => [f, fileHash(path.join(clone, ...f.split('/')))]));
+  const env = { os: os.platform(), node: process.version, bash: bashProbe().resolved, model: 'Xenova/all-MiniLM-L6-v2' };
+  const reg = file('cand.md', registrationText({ id: 'C-001', commit: candCommit, pins, instrumentSha: fileHash(instFile), instrumentCommit: instCommit, env }));
+  const go = (args) => run(['--candidates', reg, ...args]);
+  const out = (name) => path.join(tmp, name);
+  const f1 = go(['--scenario', 'F1']);
+  const u = (p, id) => (p.cases || []).find((c) => c.id === id);
+  check(names[0], f1.identity && f1.identity.kind === 'candidate' && !(f1.harness_errors || []).length && u(f1, 'U-01')?.status === 'not-applicable' && u(f1, 'U-02')?.status === 'not-applicable'
+    && !(f1.classes || []).some((c) => c.class === 'undeclared' && c.unrunnable > 0) && !(f1.terminal_basis || []).some((b) => /unrunnable/.test(b)),
+    JSON.stringify([f1.identity, f1.harness_errors, u(f1, 'U-01'), f1.terminal_basis, f1.parseFailure]).slice(0, 400));
+  const f5 = go(['--scenario', 'F5']);
+  const pc = u(f5, 'PC-01');
+  check(names[1], pc?.status === 'fail' && /search exited 1/.test(pc.detail) && u(f5, 'P-01')?.status === 'unrunnable' && ['U-01', 'U-02'].every((id) => u(f5, id)?.status === 'pass') && f5.expected_red_observed === true,
+    JSON.stringify([pc, u(f5, 'P-01')?.status, u(f5, 'U-01')?.status, f5.expected_red_observed, f5.harness_errors, f5.parseFailure]).slice(0, 400));
+  const base = go([]);
+  writeFileSync(out('base.json'), JSON.stringify(base));
+  const none = go(['--scenario', 'F9']);
+  const full = go(['--scenario', 'F9', '--reference', out('base.json')]);
+  const dev = go(['--scenario', 'F9', '--reference', out('base.json'), '--reference-development']);
+  check(names[2], none.f9_reference_mode === 'none' && full.f9_reference_mode === 'full' && dev.f9_reference_mode === 'development' && full.reference_packet?.mode === 'full-same-method-reference',
+    JSON.stringify([none.f9_reference_mode, full.f9_reference_mode, dev.f9_reference_mode, full.harness_errors, base.harness_errors, base.parseFailure]).slice(0, 400));
 }
 
 async function selfCheckAccounting(check) {
@@ -2143,6 +2226,9 @@ async function selfCheckAccounting(check) {
 // into every packet, so a falsifier that stops falsifying is visible in the
 // artifact rather than only in prose.
 const SEARCH_FILE = 'daemons/semantic-search/search-vault.js';
+// The ids a scenario that does not apply the undeclared overlay declares NOT-APPLICABLE (excluded from its
+// population, recorded as such). BASELINE and every identity run declare none. Enforced in finalizeRun.
+const NA_U = ['U-01', 'U-02'];
 const PRE_WINDOW_NOW = preWindowInstant(CORPUS);
 const SCENARIOS = {
   BASELINE: {
@@ -2153,12 +2239,12 @@ const SCENARIOS = {
   F1: {
     mutation: "delete case P-07's target note from the sandbox vault, then a FULL rebuild",
     expectedRed: ['P-07'], expectedRedClasses: [], expectPass: ['PC-01'],
-    unrunnableClasses: [], runU: false,
+    unrunnableClasses: [], runU: false, notApplicable: NA_U,
   },
   F2: {
     mutation: 'add a long research/ note paraphrasing N-04 without answering it, then a full rebuild',
     expectedRed: ['N-04'], expectedRedClasses: [], expectPass: ['PC-01'],
-    unrunnableClasses: [], runU: false,
+    unrunnableClasses: [], runU: false, notApplicable: NA_U,
     caveat: 'N-04 is already FAIL on the unmutated corpus (top-1 0.5771, far above tau 0.30), so this '
       + 'falsifier cannot demonstrate a green-to-red TRANSITION here. What it demonstrates is that the '
       + 'mutation lands and the negative-class instrument responds: top-1 rises and the injected '
@@ -2167,24 +2253,19 @@ const SCENARIOS = {
   F3: {
     mutation: "rewrite T-03's superseded note to duplicate the current note's body and restate the T-03 query",
     expectedRed: ['T-03'], expectedRedClasses: [], expectPass: ['PC-01'],
-    unrunnableClasses: [], runU: false,
+    unrunnableClasses: [], runU: false, notApplicable: NA_U,
     expectInversionsAtLeast: 1,
-    // T-03 is already FAIL on the unmutated corpus, and the unmutated corpus
-    // already carries two inversions (T-02, T-04), so `expectedRed: ['T-03']`
-    // and `expectInversionsAtLeast: 1` are BOTH already true before F3 runs.
-    // The green-to-red transition this falsifier actually produces is T-03
-    // entering the inversion list, so that is what must be asserted by id.
+    // At this baseline (d3dd339, clock pinned) the unmutated corpus has temporal 8/8 and ZERO inversions, so T-03
+    // entering the inversion list is a green-to-red transition. Asserted by id, not by a bare count.
     expectInversionIds: ['T-03'],
-    caveat: 'T-03 is already FAIL on the unmutated corpus (its superseded note sits at rank 2 like every '
-      + 'other pair), and the unmutated corpus already records two inversions, T-02 and T-04. So neither '
-      + 'the expected-red id nor a bare inversion count can witness this mutation. The green-to-red '
-      + 'transition lives in WHICH ids invert: T-03 is absent from the baseline inversion list and present '
-      + 'after the mutation, which is the clause expectInversionIds asserts.',
+    caveat: 'Measured at this baseline (d3dd339, AIGENT_SEARCH_NOW pinned): temporal 8/8 and zero inversions before the mutation, '
+      + 'so T-03 going red and entering the inversion list is a real green-to-red transition. (Under the earlier cdb7022 identity and an '
+      + 'unpinned clock, T-03 was already red with T-02 and T-04 inverted; that history is why the clause names WHICH ids invert.)',
   },
   F4: {
     mutation: "inject a row inside ops-deny/ carrying C-02's DENY canary text with the captured rank-1 embedding vector",
     expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01', 'C-02'],
-    unrunnableClasses: [], runU: false,
+    unrunnableClasses: [], runU: false, notApplicable: NA_U,
     note: 'confirmatory, not destructive: the expected observation is that C-02 stays PASS and the canary never reaches stdout',
   },
   F5: {
@@ -2201,14 +2282,14 @@ const SCENARIOS = {
   F6: {
     mutation: 'delete <sandbox vault>/memory/embeddings.json and run without rebuilding',
     expectedRed: ['PC-01'], expectedRedClasses: ['positive', 'temporal', 'operator'], expectPass: [],
-    unrunnableClasses: ['negative'], runU: false,
+    unrunnableClasses: ['negative'], runU: false, notApplicable: NA_U,
   },
   // F7, F8, F9 are named MUTATION RUNS (PREREG-002 section 6): reported under
   // their falsifier name, never as an identity run, a new baseline or a candidate.
   F7: {
     mutation: 'replace the abstention gate with one that returns zero rows unconditionally and still emits a valid bound sidecar (after index validation and both filters)',
     expectedRed: ['PC-01'], expectedRedClasses: ['positive'], expectPass: [], expectPassClasses: ['negative'],
-    unrunnableClasses: [], runU: false, needsGate: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f7Mutate),
+    unrunnableClasses: [], runU: false, notApplicable: NA_U, needsGate: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f7Mutate),
     caveat: 'F7 is NOT executable at the baseline (no abstention gate exists: UNRUNNABLE, naming that), and it is NOT executable at a candidate '
       + 'either as the hook stands: the entry check requires an AIGENT_ABSTAIN emission in search-vault.js and f7Mutate refuses a source that contains one. '
       + 'The hook and the observations it predicts are exercised only on synthetic process output by --self-check. Candidate-era F7 support is incomplete '
@@ -2217,7 +2298,7 @@ const SCENARIOS = {
   F8: {
     mutation: `run the temporal class with AIGENT_SEARCH_NOW set to ${PRE_WINDOW_NOW}, one day before the earliest corpus window end`,
     expectedRed: [], expectedRedClasses: ['temporal'], expectPass: ['PC-01'],
-    unrunnableClasses: [], runU: false, temporalNow: PRE_WINDOW_NOW,
+    unrunnableClasses: [], runU: false, notApplicable: NA_U, temporalNow: PRE_WINDOW_NOW,
     expectInversionIds: ['T-02', 'T-04'], expectInversionCount: 2,
   },
   F9: {
@@ -2252,6 +2333,18 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
   // The population must equal the frozen case list, each id exactly once (5.4: N =
   // 64 + PC-01). A missing, duplicated or foreign record is a defect in the
   // benchmark, never a PASS. A development subset scores some cases by design.
+  // Statuses are pass / fail / unrunnable / not-applicable, and not-applicable exists
+  // only for ids the scenario spec declares: a BASELINE or candidate identity run
+  // declares none, so a class member or PC-01 recorded as such is an integrity
+  // error, never a PASS. Enforced here, not left to the caller.
+  if (harnessErrors.length === 0) {
+    const naAllowed = new Set(scenario === 'BASELINE' ? [] : (spec.notApplicable || []));
+    const unknown = results.filter((r) => !['pass', 'fail', 'unrunnable', 'not-applicable'].includes(r.status)).map((r) => `${r.id}=${r.status}`);
+    const foreignNA = results.filter((r) => r.status === 'not-applicable' && !naAllowed.has(r.id)).map((r) => r.id);
+    if (unknown.length || foreignNA.length) {
+      harnessErrors.push(`result statuses outside the scenario's declared set: unknown status [${unknown}], not-applicable not declared by ${scenario} [${foreignNA}]`);
+    }
+  }
   if (!only && harnessErrors.length === 0) {
     const want = cases.map((c) => c.id);
     const got = results.map((r) => r.id);
@@ -2730,7 +2823,7 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !g
         } else {
           // NOT PART OF this scenario: excluded from its population and recorded as
           // such. It is not a missing prerequisite, so it can never mask a verdict.
-          for (const id of ['U-01', 'U-02']) {
+          for (const id of SPEC.notApplicable || []) {
             record(id, byId.get(id).class, 'not-applicable', `${SCENARIO}: the undeclared overlay is not part of this mutation; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)`);
           }
         }
