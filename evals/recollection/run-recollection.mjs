@@ -383,7 +383,10 @@ function resolveIdentity({ observed, candidatesText, candidatesSource, instrumen
   }
   if (observed === BASELINE_COMMIT) {
     // MED-5: an identity run needs the instrument registered, baseline included.
-    const registered = new RegExp(`^\\s*(?:[-*]\\s*)?baseline_instrument_sha256\\s*:\\s*\`?${instrumentSha}\`?\\s*$`, 'im').test(candidatesText || '');
+    // Append-only: a registration is a `baseline_instrument_sha256:` line, revoked by a
+    // later `withdraws: <that sha>` line (1.7's rule for candidates).
+    const line = (key) => new RegExp(`^\\s*(?:[-*]\\s*)?${key}\\s*:\\s*\`?${instrumentSha}\`?\\s*$`, 'im').test(candidatesText || '');
+    const registered = line('baseline_instrument_sha256') && !line('withdraws');
     return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS, instrumentRegistered: registered };
   }
   const records = parseCandidates(candidatesText);
@@ -437,6 +440,7 @@ function validateReference(ref, want) {
   if (ref.scenario !== 'BASELINE') return `reference is scenario ${ref.scenario}, not an unmutated BASELINE run`;
   if (ref.development_subset != null) return 'reference is a development subset';
   if (!Array.isArray(ref.cases) || ref.cases.length === 0) return 'reference has no cases';
+  if (Array.isArray(ref.harness_errors) && ref.harness_errors.length) return 'reference packet carries harness errors';
   if (ref.product_commit !== want.commit) return `reference product_commit ${ref.product_commit} is not ${want.commit}`;
   if ((ref.identity || {}).kind !== want.kind) return `reference identity kind ${(ref.identity || {}).kind} is not ${want.kind}`;
   if (ref.instrument_sha256 !== want.instrumentSha) return `reference was produced by instrument ${ref.instrument_sha256}, not ${want.instrumentSha}`;
@@ -486,10 +490,13 @@ function classifyAbstention({ status, rows, stderr, token }) {
   if (lines.length > 1) return reject('abstention-sidecar-duplicated');
   let obj = null;
   if (lines[0].startsWith(`${ABSTAIN_PREFIX} `)) {
-    try { obj = JSON.parse(lines[0].slice(ABSTAIN_PREFIX.length + 1)); } catch { obj = null; }
-    // Exact framing: re-serialising must reproduce the line, which refuses extra
-    // whitespace and duplicate keys (JSON.parse keeps the last one silently).
-    if (obj && lines[0] !== `${ABSTAIN_PREFIX} ${JSON.stringify(obj)}`) obj = null;
+    const payload = lines[0].slice(ABSTAIN_PREFIX.length + 1);
+    try { obj = JSON.parse(payload); } catch { obj = null; }
+    // Single-line JSON of any spacing is fine (3.2 does not require compact form).
+    // A doubled prefix space is not the literal prefix; a duplicated key is not
+    // "exactly four keys" (JSON.parse would silently keep the last one).
+    if (/^\s/.test(payload)) obj = null;
+    if (obj && (payload.match(/"(?:schema|invocation|outcome|reason)"\s*:/g) || []).length !== 4) obj = null;
   }
   const wellFormed = obj && typeof obj === 'object' && !Array.isArray(obj)
     && Object.keys(obj).sort().join() === ABSTAIN_KEYS.join()
@@ -1528,6 +1535,10 @@ function selfCheckReview(check) {
     'another instrument': { instrument_sha256: 'd'.repeat(64) }, 'no cases': { cases: undefined },
   })) check(`2b reference refused: ${name}`, validateReference({ ...good, ...patch }, want) !== null);
   check('2b an unreadable reference is refused', validateReference(null, want) !== null);
+  check('2b a reference packet carrying harness errors is refused', validateReference({ ...good, harness_errors: ['x'] }, want) !== null);
+  writeFileSync(path.join(repo, 'daemons', 'zz-untracked.txt'), 'x\n');
+  check('1b an UNTRACKED file under daemons/ -> refused as dirty', treeIdentityProblems(repo, sha, pins).some((p) => p.includes('dirty') && p.includes('zz-untracked')));
+  rmSync(path.join(repo, 'daemons', 'zz-untracked.txt'));
 
   // MED-5 / LOW-4: registration of the instrument and of the protocol packet.
   const SHA = 'a'.repeat(64);
@@ -1537,6 +1548,7 @@ function selfCheckReview(check) {
   const gate = (observed, text) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'C.md', instrumentSha: SHA });
   check('5b baseline with this instrument unregistered -> not an identity run', gate(BASELINE_COMMIT, '').instrumentRegistered === false);
   check('5b baseline with this instrument registered -> identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${SHA}\n`).instrumentRegistered === true);
+  check('5b a later record withdrawing the baseline registration revokes it', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${SHA}\nwithdraws: ${SHA}\n`).instrumentRegistered === false);
   check('5b baseline registered for ANOTHER instrument -> still not an identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${'c'.repeat(64)}\n`).instrumentRegistered === false);
   check('4b candidate record carrying this packet_sha256 is accepted', gate(CAND, rec).ok);
   check('4b candidate record with another packet_sha256 is refused', !gate(CAND, rec.replace(PACKET_SHA256, 'e'.repeat(64))).ok);
@@ -1552,6 +1564,11 @@ function selfCheckReview(check) {
   const ok = { schema: 'abstain/1', invocation: T, outcome: 'abstain', reason: 'below-tau' };
   const framed = (text) => classifyAbstention({ status: 0, rows: [], stderr: text, token: T }).state;
   check('4c exact compact framing is honest', framed(`${ABSTAIN_PREFIX} ${JSON.stringify(ok)}`) === 'honest');
+  const compact = JSON.stringify(ok);
+  check('4c valid non-compact single-line JSON (spaces after : and ,) is honest', framed(`${ABSTAIN_PREFIX} ${JSON.stringify(ok, null, 1).replace(/\n\s*/g, ' ')}`) === 'honest');
+  check('4c a doubled-key line stays rejected even when non-compact', framed(`${ABSTAIN_PREFIX} {"schema": "abstain/1", "invocation": "x", "outcome": "abstain", "reason": "below-tau", "invocation": "${T}"}`) === 'rejected');
+  check('4c a multi-line JSON object is rejected', framed(`${ABSTAIN_PREFIX} {\n"schema":"abstain/1",\n"invocation":"${T}",\n"outcome":"abstain",\n"reason":"below-tau"}`) === 'rejected');
+  check('4c an extra key is rejected', framed(`${ABSTAIN_PREFIX} ${JSON.stringify({ ...ok, extra: 1 })}`) === 'rejected');
   check('4c a double space after the prefix is malformed', framed(`${ABSTAIN_PREFIX}  ${JSON.stringify(ok)}`) === 'rejected');
   check('4c a duplicate key (replayed token then bound token) is malformed', framed(`${ABSTAIN_PREFIX} {"schema":"abstain/1","invocation":"rec-other000000","outcome":"abstain","reason":"below-tau","invocation":"${T}"}`) === 'rejected');
 }
@@ -1580,6 +1597,41 @@ const STUB_EMBED = [
   "fs.mkdirSync(path.join(vault, 'memory'), { recursive: true });",
   "fs.writeFileSync(path.join(vault, 'memory', 'embeddings.json'), JSON.stringify({ notes, entryCount: notes.length }));",
 ].join('\n');
+
+// R2-LOW-2: the main path calls the functions above; spawn the runner against a
+// local clone of the product at the baseline (no model: every one of these runs
+// stops before a sandbox, on a refusal, a harness error or an environment gap).
+function selfCheckWiring(check) {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'recollection-selfcheck-wire-'));
+  sandboxes.push(tmp);
+  const clone = path.join(tmp, 'clone');
+  const cl = spawnSync('git', ['clone', '-q', '--no-checkout', PRODUCT_TREE, clone], { encoding: 'utf8', env: gitIdentityEnv });
+  const co = spawnSync('git', ['-C', clone, 'checkout', '-q', BASELINE_COMMIT], { encoding: 'utf8', env: gitIdentityEnv });
+  const ready = cl.status === 0 && co.status === 0;
+  check('0 wiring: a local clone at the baseline commit could be made', ready, `${cl.stderr || ''}${co.stderr || ''}`.slice(0, 160));
+  const names = ['wiring: a dirty product tree reaches the identity refusal', 'wiring: an invalid --reference reaches a harness error',
+    'wiring: identity_run is true only with the instrument registered', 'wiring: an unregistered instrument is not an identity run'];
+  if (!ready) { for (const n of names) check(n, false, 'no clone'); return; }
+  const run = (args) => {
+    const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--product-tree', clone, '--json', ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    try { return JSON.parse(r.stdout); } catch { return { parseFailure: (r.stderr || '').slice(0, 200) }; }
+  };
+  const reg = path.join(tmp, 'reg.md');
+  writeFileSync(reg, `baseline_instrument_sha256: ${fileHash(fileURLToPath(import.meta.url))}\n`);
+  const none = path.join(tmp, 'none.md');
+  writeFileSync(none, 'nothing registered\n');
+  const refFile = path.join(tmp, 'ref.json');
+  writeFileSync(refFile, JSON.stringify({ scenario: 'F9', cases: [{ id: 'x' }] }));
+  const clean = run(['--candidates', reg]);
+  const withRef = run(['--candidates', reg, '--reference', refFile]);
+  const unreg = run(['--candidates', none]);
+  writeFileSync(path.join(clone, 'daemons', 'zz-untracked.txt'), 'x\n');
+  const dirty = run(['--candidates', reg]);
+  check(names[0], dirty.identity && dirty.identity.kind === 'REFUSED' && /dirty/.test(dirty.identity.refused || ''), JSON.stringify(dirty.identity || dirty));
+  check(names[1], (withRef.harness_errors || []).some((e) => e.includes('--reference refused')), JSON.stringify(withRef.harness_errors || withRef));
+  check(names[2], clean.identity_run === true && clean.instrument_registered === true, JSON.stringify([clean.identity_run, clean.instrument_registered, clean.parseFailure]));
+  check(names[3], unreg.identity_run === false && unreg.instrument_registered === false, JSON.stringify([unreg.identity_run, unreg.instrument_registered, unreg.parseFailure]));
+}
 
 async function selfCheckAccounting(check) {
   const stubbed = (name) => {
@@ -1836,6 +1888,7 @@ if (argv.includes('--self-check')) {
   selfCheckSidecar(check);
   await selfCheckPolicy(check);
   selfCheckReview(check);
+  selfCheckWiring(check);
   await selfCheckAccounting(check);
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
