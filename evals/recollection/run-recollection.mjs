@@ -446,13 +446,14 @@ function resolveIdentity({ observed, candidatesText, candidatesSource, instrumen
     return { ok: false, why: 'git rev-parse HEAD failed in the product tree: product_commit cannot be observed', requires: 'PREREG-002 1.3 — product_commit must be observed in a git checkout' };
   }
   const records = parseCandidates(candidatesText);
-  const withdrawn = new Set(records.flatMap((r) => r.withdraws));
+  // 1.7: a mistake is corrected by a LATER record naming the earlier one as withdrawn.
+  const isWithdrawn = (rec) => records.some((later, j) => j > records.indexOf(rec) && later.withdraws.includes(rec.candidate_id));
   const ctx = { instrumentSha, environment, verifyInstrumentCommit };
   const reg = (state, rec, problems = []) => ({ state, record_id: rec ? rec.candidate_id : null, problems, record: rec ? { ...rec, withdraws: undefined } : null });
   if (observed === BASELINE_COMMIT) {
     // A record naming ANOTHER instrument is not about this one; one naming none is incomplete.
     const mine = records.filter((r) => /^B-/.test(r.candidate_id || '') && r.product_commit === BASELINE_COMMIT && (!r.instrument_sha256 || r.instrument_sha256 === instrumentSha));
-    const live = mine.filter((r) => !withdrawn.has(r.candidate_id));
+    const live = mine.filter((r) => !isWithdrawn(r));
     let registration = reg('absent', null);
     if (mine.length && !live.length) registration = reg('withdrawn', mine[mine.length - 1]);
     else if (live.length) {
@@ -462,10 +463,10 @@ function resolveIdentity({ observed, candidatesText, candidatesSource, instrumen
     }
     return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS, instrumentRegistered: registration.state === 'registered', registration };
   }
-  const hit = records.find((r) => /^C-/.test(r.candidate_id || '') && r.product_commit === observed && !withdrawn.has(r.candidate_id));
+  const hit = records.find((r) => /^C-/.test(r.candidate_id || '') && r.product_commit === observed && !isWithdrawn(r));
   const requires = 'PREREG-002 1.7 — identity is neither the baseline nor a registered candidate';
   if (!hit) {
-    const wd = records.find((r) => r.product_commit === observed && withdrawn.has(r.candidate_id));
+    const wd = records.find((r) => r.product_commit === observed && isWithdrawn(r));
     return { ok: false, requires, why: wd
       ? `product ${observed} matches ${wd.candidate_id}, which a later record withdrew`
       : `product ${observed} is neither the baseline ${BASELINE_COMMIT} nor registered in ${candidatesSource || 'a candidates file (none given; absent file = baseline only)'}`,
@@ -1033,6 +1034,30 @@ function scoreUndeclared(box, c, doctorResult) {
 
 const scoreOperator = (box, c) => (c.kind === 'index' ? scorePositive(box, c) : scoreWithheld(box, c));
 
+// PC-01, the harness's proof that it can see a hit at all. PREREG-002 section 6:
+// a RUNNABLE PC-01 whose answer is wrong, or that exits non-zero while every 4.3
+// prerequisite is present, is a behavioral FAIL; UNRUNNABLE needs a named 4.3 gap
+// and is decided before any sandbox exists.
+function scorePC01(box) {
+  const pc = byId.get('PC-01');
+  const pcRes = search(box, pc.query);
+  checkBudget('PC-01', pcRes);
+  scanPolicy('PC-01', pcRes);
+  if (pcRes.status !== 0) {
+    record('PC-01', 'positive-control', 'fail', `search exited ${pcRes.status}: ${pcRes.stderr.trim().slice(0, 200)}`);
+  } else if (abstainGate(pcRes)) {
+    record('PC-01', 'positive-control', 'fail', abstainGate(pcRes));
+  } else if (!pcRes.rows || !pcRes.rows.length) {
+    record('PC-01', 'positive-control', 'fail', 'no rows returned');
+  } else {
+    const r1 = pcRes.rows[0];
+    const prov = provenanceFailure(r1);
+    if (r1.path !== pc.target) record('PC-01', 'positive-control', 'fail', `rank-1 was ${r1.path}, expected ${pc.target}`, { topScore: r1.score });
+    else if (prov) record('PC-01', 'positive-control', 'fail', `rank-1 correct but provenance failed: ${prov}`, { topScore: r1.score });
+    else record('PC-01', 'positive-control', 'pass', `rank 1, score ${r1.score}`, { topScore: r1.score });
+  }
+}
+
 // PREREG-001 3.7. The report must appear on the invocation that LOADS the
 // population, naming the offending path. A later audit does not satisfy it.
 function scoreLoudness(box, c) {
@@ -1191,6 +1216,11 @@ function selfCheckIdentity(check) {
     check('9 I4 baseline: the minimal record is incomplete, NOT registered', (() => { const r = bGate(`candidate_id: B-001\nproduct_commit: ${BASELINE_COMMIT}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n`); return r.instrumentRegistered === false && r.registration?.state === 'incomplete'; })());
     check('9 I4 baseline: a record whose pins are not the frozen baseline pins -> incomplete', bGate(brec({ pins: fakePins })).registration?.state === 'incomplete');
     check('9 I4 baseline: a record missing an item -> incomplete, item named', (() => { const r = bGate(brec({ omit: ['environment_bash'] })); return r.instrumentRegistered === false && r.registration?.problems.join(';').includes('environment_bash'); })());
+    // R4-LOW-4: the packet_sha256 binding, and a withdrawal only from a LATER record (1.7).
+    check('9 R4-LOW-4 candidate record carrying another packet_sha256 value -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { packet_sha256: 'e'.repeat(64) } })).ok);
+    check('9 R4-LOW-4 baseline record carrying another packet_sha256 value -> incomplete', bGate(brec({ over: { packet_sha256: 'e'.repeat(64) } })).registration?.state === 'incomplete');
+    check('9 R4-LOW-4 a withdraws: line that PRECEDES the record it names does not withdraw it', bGate(`candidate_id: B-000\nwithdraws: B-001\n${brec()}`).registration?.state === 'registered');
+    check('9 R4-LOW-4 ... nor a candidate', gate(CAND, `candidate_id: C-000\nwithdraws: C-001\n${rec('C-001', CAND)}`).ok);
     // R2: withdrawn is distinguishable from absent.
     check('9 R2 baseline: no record at all -> absent', bGate('').registration?.state === 'absent');
     check('9 R2 baseline: a record for ANOTHER instrument -> absent', bGate(brec({ over: { instrument_sha256: 'c'.repeat(64) } })).registration?.state === 'absent');
@@ -1521,7 +1551,10 @@ function f9Assertions(rows, reference = null, development = false) {
   const queryRows = rows.filter((r) => r.stage === 'QUERY');
   const buildRows = rows.filter((r) => r.stage === 'BUILD');
   const a = [];
-  const add = (name, ok, detail) => a.push({ name, ok: !!ok, detail: detail || '' });
+  // `needs` names a class whose unrunnable cases make THIS assertion unjudgeable (a missing prerequisite,
+  // not a failed expectation); `notEvaluated` marks an expectation that cannot be judged at all here.
+  const add = (name, ok, detail, needs = null) => a.push({ name, ok: !!ok, detail: detail || '', needs });
+  const notEvaluated = (name, detail) => a.push({ name, ok: false, notEvaluated: true, detail, needs: null });
   add('F9: QUERY-stage population present', queryRows.length >= 3, `${queryRows.length} case(s)`);
   add('F9: no QUERY-stage case reads QUERY-WITHHELD', queryRows.every((r) => r.label !== 'QUERY-WITHHELD'), queryRows.map((r) => `${r.id}=${r.label}`).join(', '));
   add('F9: every QUERY-stage case exercised the seeded read-back and a returned matched control',
@@ -1538,13 +1571,16 @@ function f9Assertions(rows, reference = null, development = false) {
     const compared = development ? pool.filter((r) => ref.has(r.id)) : pool;
     const moved = compared.filter((r) => !same(r));
     const shown = moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${compared.length} of ${pool.length} BUILD + U result(s) compared`;
-    if (development) add('F9: BUILD-stage and U-class results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', compared.length > 0 && moved.length === 0, shown);
-    else add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0, shown);
+    if (development) {
+      add('F9: BUILD-stage and U-class results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', compared.length > 0 && moved.length === 0, shown, 'undeclared');
+      notEvaluated('F9: "BUILD-stage and U-class results unchanged" is NOT-EVALUATED: a development comparison is not a full same-method reference', 'the frozen expectation needs the full reference');
+    } else add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0, shown, 'undeclared');
   } else {
     const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : r.proof.control && r.proof.control.returned === false);
     add('F9: BUILD-stage build-side evidence intact, every FAIL explained by its control alone (no --reference given: narrower check)',
       buildRows.length > 0 && buildRows.every(intact), `${buildRows.filter(intact).length}/${buildRows.length}`);
-    add('F9: U-01/U-02 PASS (no --reference given)', u.length === 2 && u.every((r) => r.status === 'pass'), u.map((r) => `${r.id}=${r.status}`).join(', '));
+    add('F9: U-01/U-02 PASS (no --reference given)', u.length === 2 && u.every((r) => r.status === 'pass'), u.map((r) => `${r.id}=${r.status}`).join(', '), 'undeclared');
+    notEvaluated('F9: "BUILD-stage and U-class results unchanged" is NOT-EVALUATED: no full same-method --reference was given', 'the narrower checks above are not the frozen expectation');
   }
   return a;
 }
@@ -1650,7 +1686,7 @@ async function selfCheckPolicy(check) {
   const u = [{ id: 'U-01', class: 'undeclared', status: 'pass' }, { id: 'U-02', class: 'undeclared', status: 'pass' }];
   const bp = (id, extra = {}) => b(id, { proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: true } }, ...extra });
   const mutatedRun = [q('X-01', 'RENDER-REFUSED'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u];
-  const allOk = (rows, ref) => f9Assertions(rows, ref).every((x) => x.ok);
+  const allOk = (rows, ref) => f9Assertions(rows, ref).filter((x) => !x.notEvaluated).every((x) => x.ok);
   check('8 F9 assertions: QUERY-WITHHELD present (unmutated) -> RED', !allOk([q('X-01', 'QUERY-WITHHELD'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u]));
   check('8 F9 assertions: QUERY-WITHHELD absent, RENDER-REFUSED stands, BUILD and U unchanged -> GREEN', allOk(mutatedRun));
   check('8 F9 assertions: abstention arm (DECLINED-BY-RETRIEVER with control returned) -> GREEN', allOk([q('X-01', 'DECLINED-BY-RETRIEVER'), q('X-02', 'DECLINED-BY-RETRIEVER'), q('X-03', 'DECLINED-BY-RETRIEVER'), bp('C-01'), ...u]));
@@ -1822,18 +1858,62 @@ function selfCheckFinalizer(check) {
     return r;
   });
   const f9 = (rows, o = {}) => fin({ results: rows, spec: SCENARIOS.F9, scenario: 'F9', ...o });
-  const survived = f9(f9rows('QUERY-WITHHELD', 1));
+  const fullRef = f9rows('RENDER-REFUSED', 0).filter((r) => r.stage === 'BUILD' || r.class === 'undeclared').map((r) => ({ id: r.id, status: r.status, label: r.label ?? null }));
+  const survived = f9(f9rows('QUERY-WITHHELD', 1), { referenceRows: fullRef });
   check('3f I1b F9 with a surviving QUERY-WITHHELD label (everything else green) -> expectation false, terminal NOT PASS, non-zero exit',
     survived.expectedRedHolds === false && survived.falsifierInvalid === true && survived.terminal !== 'PASS' && exitCodeFor(survived.terminal) === 1 && survived.terminalBasis.some((b) => /falsifier/.test(b)), JSON.stringify([survived.terminal, survived.expectedRedHolds, survived.terminalBasis]));
-  const held = f9(f9rows('RENDER-REFUSED', 0));
-  check('3f I1b F9 with its expected observation (no QUERY-WITHHELD) holds and is not punished -> PASS, exit 0', held.expectedRedHolds === true && held.falsifierInvalid === false && held.terminal === 'PASS', JSON.stringify([held.terminal, held.expectedRedHolds, held.scenarioAssertions.filter((a) => !a.ok)]));
+  const held = f9(f9rows('RENDER-REFUSED', 0), { referenceRows: fullRef });
+  check('3f I1b F9 with its expected observation, judged against a FULL reference, holds and is not punished -> PASS, exit 0', held.expectedRedHolds === true && held.falsifierInvalid === false && held.terminal === 'PASS', JSON.stringify([held.terminal, held.expectedRedHolds, held.scenarioAssertions.filter((a) => !a.ok)]));
+  // R4-LOW-3: without a full same-method reference, "BUILD and U unchanged" is NOT-EVALUATED.
+  for (const [name, o] of [['no reference', {}], ['a development reference', { referenceRows: fullRef, referenceDev: true }]]) {
+    const r = f9(f9rows('RENDER-REFUSED', 0), o);
+    check(`3f R4-LOW-3 F9 with ${name}: the BUILD/U-unchanged expectation is NOT-EVALUATED, the falsifier does not read as passed (terminal not PASS, not held)`,
+      r.expectedRedHolds === false && r.falsifierInvalid === false && r.terminal === 'UNRUNNABLE' && r.scenarioAssertions.some((a) => a.notEvaluated) && r.terminalBasis.some((b) => /not-evaluated/.test(b)), JSON.stringify([r.terminal, r.expectedRedHolds, r.terminalBasis]));
+  }
   // Missing preconditions and unexecuted mutations are accounted separately.
   const unexec = fin({ spec: SCENARIOS.F7, scenario: 'F7', ran: false, results: green().map((r) => ({ ...r, status: 'unrunnable', requires: 'PREREG-002 F7 — abstention gate absent' })) });
   check('3f I1b an UNEXECUTED mutation (F7, no gate) is UNRUNNABLE, never a falsifier-invalid FAIL', unexec.terminal === 'UNRUNNABLE' && unexec.falsifierInvalid === false, JSON.stringify([unexec.terminal, unexec.falsifierInvalid]));
-  const noDoctor = f9(f9rows('RENDER-REFUSED', 0).map((r) => (r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)));
-  check('3f I1b F9 whose U-class could not run (missing prerequisite) is UNRUNNABLE, not a failed expectation', noDoctor.terminal === 'UNRUNNABLE' && noDoctor.falsifierInvalid === false && noDoctor.expectedRedHolds === false, JSON.stringify([noDoctor.terminal, noDoctor.falsifierInvalid]));
-  const f5 = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: green().map((r) => (['undeclared'].includes(r.class) ? r : { ...r, status: 'unrunnable', requires: 'PREREG-001 6 F5' })) });
-  check('3f F5 (quality classes expected UNRUNNABLE, U pass) holds its expectation and is UNRUNNABLE', f5.expectedRedHolds === true && f5.falsifierInvalid === false && f5.terminal === 'UNRUNNABLE', JSON.stringify([f5.terminal, f5.expectedRedHolds, f5.expectedUnrunnableObserved]));
+  const noDoctor = f9(f9rows('RENDER-REFUSED', 0).map((r) => (r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)), { referenceRows: fullRef });
+  check('3f I1b F9 whose U-class could not run (missing prerequisite), its other expectations held -> UNRUNNABLE, not a failed expectation', noDoctor.terminal === 'UNRUNNABLE' && noDoctor.falsifierInvalid === false && noDoctor.expectedRedHolds === false, JSON.stringify([noDoctor.terminal, noDoctor.falsifierInvalid]));
+  const noDoctorBlind = f9(f9rows('QUERY-WITHHELD', 1).map((r) => (r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)), { referenceRows: fullRef });
+  check('3f R4-MED-1 F9 with U unrunnable AND a surviving QUERY-WITHHELD: the missing U does not hide the blind falsifier -> FAIL, invalid', noDoctorBlind.falsifierInvalid === true && noDoctorBlind.terminal === 'FAIL', JSON.stringify([noDoctorBlind.terminal, noDoctorBlind.falsifierInvalid]));
+
+  // R4-MED-1: a case deliberately NOT PART OF a scenario is not-applicable, not UNRUNNABLE.
+  const naU = (rs) => rs.map((r) => (r.class === 'undeclared' ? { ...r, status: 'not-applicable', detail: 'not part of this mutation' } : r));
+  const blindF1 = fin({ spec: SCENARIOS.F1, scenario: 'F1', results: naU(green()) });
+  check('3f R4-MED-1 F1 executed, U not-applicable, P-07 NOT red (blind falsifier) -> benchmark FAIL naming the missing red, never UNRUNNABLE',
+    blindF1.terminal === 'FAIL' && blindF1.falsifierInvalid === true && exitCodeFor(blindF1.terminal) === 1 && blindF1.terminalBasis.some((b) => /falsifier-expectation-failed/.test(b)) && !blindF1.terminalBasis.some((b) => /unrunnable/.test(b)) && blindF1.expectedRedObserved.some((r) => r.id === 'P-07' && r.observed === 'pass'), JSON.stringify([blindF1.terminal, blindF1.terminalBasis]));
+  const goodF1 = fin({ spec: SCENARIOS.F1, scenario: 'F1', results: naU(failOn(green(), ['P-07'])) });
+  check('3f R4-MED-1 F1 with P-07 red: expectation holds, not-applicable U is recorded as such and is neither a gate miss nor unrunnable',
+    goodF1.expectedRedHolds === true && goodF1.falsifierInvalid === false && goodF1.classReport.find((c) => c.class === 'undeclared').status === 'NOT-APPLICABLE' && goodF1.terminal === 'PASS', JSON.stringify([goodF1.terminal, goodF1.classReport.find((c) => c.class === 'undeclared')]));
+  const blindF3 = fin({ spec: SCENARIOS.F3, scenario: 'F3', results: naU(green()) });
+  check('3f R4-MED-1 F3 executed, T-03 not inverted -> invalid', blindF3.falsifierInvalid === true && blindF3.terminal === 'FAIL');
+  const blindF8 = fin({ spec: SCENARIOS.F8, scenario: 'F8', results: naU(green()) });
+  check('3f R4-MED-1 F8 executed, temporal NOT red -> invalid', blindF8.falsifierInvalid === true && blindF8.terminal === 'FAIL');
+  const blindF6 = fin({ spec: SCENARIOS.F6, scenario: 'F6', results: naU(green().map((r) => (r.class === 'negative' ? { ...r, status: 'unrunnable', requires: 'x' } : r))) });
+  check('3f R4-MED-1 F6 executed, PC-01 passing (index not really dead) -> invalid', blindF6.falsifierInvalid === true && blindF6.terminal === 'FAIL');
+  const blindF2 = fin({ spec: SCENARIOS.F2, scenario: 'F2', results: naU(green()) });
+  const blindF4 = fin({ spec: SCENARIOS.F4, scenario: 'F4', results: naU(failOn(green(), ['C-02'])) });
+  check('3f R4-MED-1 F2 blind (N-04 not red) -> invalid; F4 whose C-02 stays NOT pass -> invalid', blindF2.falsifierInvalid === true && blindF4.falsifierInvalid === true);
+
+  // R4-MED-2: F5 runs PC-01 and scores it behaviorally; the quality cases are UNRUNNABLE; U reports its refusal.
+  const f5res = (pc) => green().map((r) => {
+    if (r.id === 'PC-01') return { ...r, ...pc };
+    return r.class === 'undeclared' ? r : { ...r, status: 'unrunnable', requires: 'PREREG-001 6 F5' };
+  });
+  const f5 = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'fail', detail: 'search exited 1' }) });
+  check('3f R4-MED-2 F5: PC-01 executed and a non-zero exit is a behavioral FAIL (terminal FAIL), quality UNRUNNABLE, U pass -> its expectations hold', f5.expectedRedHolds === true && f5.falsifierInvalid === false && f5.terminal === 'FAIL' && !SCENARIOS.F5.unrunnableClasses.includes('positive-control'), JSON.stringify([f5.terminal, f5.expectedRedHolds, f5.expectedRedObserved]));
+  const f5old = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'unrunnable', requires: 'PREREG-001 6 F5 — coverage red' }) });
+  check('3f R4-MED-2 F5: a PC-01 recorded UNRUNNABLE without being run does not satisfy the F5 expectation', f5old.expectedRedHolds === false);
+  const f5ran = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'pass' }) });
+  check('3f R4-MED-2 F5: PC-01 passing under a dirty registry (the mutation did not bite) -> invalid', f5ran.falsifierInvalid === true);
+
+  // R4-LOW-1: the finalizer validates the population against the frozen case list.
+  const popTerm = (rs) => { const he = []; const f = fin({ results: rs, harnessErrors: he }); return `${f.terminal}/${he.length}`; };
+  check('3f R4-LOW-1 two positive cases missing from the results -> HARNESS-ERROR, never PASS', popTerm(green().filter((r) => !idsOf('positive').slice(0, 2).includes(r.id))) === 'HARNESS-ERROR/1');
+  check('3f R4-LOW-1 PC-01 missing from the results -> HARNESS-ERROR', popTerm(green().filter((r) => r.id !== 'PC-01')) === 'HARNESS-ERROR/1');
+  check('3f R4-LOW-1 a duplicate pass record padding a class -> HARNESS-ERROR', popTerm([...green().filter((r) => r.id !== idsOf('positive')[0]), { ...green().find((r) => r.id === idsOf('positive')[1]) }]) === 'HARNESS-ERROR/1');
+  check('3f R4-LOW-1 an id outside the frozen list -> HARNESS-ERROR; the exact population -> PASS', popTerm([...green(), { id: 'Z-99', class: 'positive', status: 'pass' }]) === 'HARNESS-ERROR/1' && popTerm(green()) === 'PASS/0');
   check('3f a BASELINE is never a falsifier: its own PC-01 miss is the PC-01 rule, not an expectation failure', fin({ results: failOn(green(), ['PC-01']) }).falsifierInvalid === false);
 }
 
@@ -2109,8 +2189,13 @@ const SCENARIOS = {
   },
   F5: {
     mutation: 'copy the undeclared overlay in as scratch/ AND delete the feedback row from the sandbox core registry',
-    expectedRed: [], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
-    unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness', 'positive-control'],
+    // Each expectation and the sentence it comes from:
+    //  quality classes UNRUNNABLE   PREREG-001 6 F5: "every quality case in that mutation run reports UNRUNNABLE rather than a shrunken green"
+    //  U-01 / U-02 PASS             PREREG-001 6 F5: "U-01 and U-02 report their expected refusal"
+    //  PC-01 FAIL (executed)        PREREG-001 6 F5: "search-vault.js exit non-zero" (the runtime refuses), scored per PREREG-002 section 6:
+    //                               a non-zero exit with every 4.3 prerequisite verified present is a behavioral FAIL, not UNRUNNABLE
+    expectedRed: ['PC-01'], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
+    unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'],
     runU: true, mutates: ['daemons/semantic-search/namespace-registry.json'],
   },
   F6: {
@@ -2164,9 +2249,23 @@ const GATES = [
 // and, for a mutation run that actually executed, its expected red. A permitted
 // case miss inside a met class gate is not a run FAIL (positive >= 22 of 24).
 function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors, policyFalsePositives, budgetBreaches, pinDrift, referenceRows, referenceDev, ran, only }) {
+  // The population must equal the frozen case list, each id exactly once (5.4: N =
+  // 64 + PC-01). A missing, duplicated or foreign record is a defect in the
+  // benchmark, never a PASS. A development subset scores some cases by design.
+  if (!only && harnessErrors.length === 0) {
+    const want = cases.map((c) => c.id);
+    const got = results.map((r) => r.id);
+    const missing = want.filter((id) => !got.includes(id));
+    const dup = [...new Set(got.filter((id, i) => got.indexOf(id) !== i))];
+    const extra = got.filter((id) => !want.includes(id));
+    if (missing.length || dup.length || extra.length) {
+      harnessErrors.push(`result population does not match the frozen case list: missing [${missing}], duplicate [${dup}], foreign [${extra}]`);
+    }
+  }
   const pcRed = results.some((r) => r.id === 'PC-01' && r.status === 'fail');
   const classReport = GATES.map((g) => {
     const rows = results.filter((r) => r.class === g.klass);
+    const notApplicable = rows.filter((r) => r.status === 'not-applicable').length;
     const passed = rows.filter((r) => r.status === 'pass').length;
     const failed = rows.filter((r) => r.status === 'fail').length;
     const unrunnable = rows.filter((r) => r.status === 'unrunnable').length;
@@ -2174,11 +2273,13 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
     // silent 100 percent; an unrunnable case means the class cannot be certified.
     const gateMet = passed >= g.min && (g.klass !== 'temporal' || inversions.length === 0);
     let status = unrunnable > 0 ? (gateMet || failed === 0 ? 'UNRUNNABLE' : 'FAIL') : (gateMet ? 'PASS' : 'FAIL');
+    // A class every case of which is deliberately not part of this scenario has no gate here.
+    if (rows.length > 0 && notApplicable === rows.length) status = 'NOT-APPLICABLE';
     // PREREG-002 section 6: with PC-01 red no class can be certified PASS.
     if (status === 'PASS' && pcRed) status = 'NOT-CERTIFIED';
     return {
-      class: g.klass, label: g.label, gate: g.gate, n: g.n, gateMet,
-      pass: passed, fail: failed, unrunnable,
+      class: g.klass, label: g.label, gate: g.gate, n: g.n, gateMet: status === 'NOT-APPLICABLE' ? null : gateMet,
+      pass: passed, fail: failed, unrunnable, notApplicable,
       failingIds: rows.filter((r) => r.status === 'fail').map((r) => r.id),
       unrunnableIds: rows.filter((r) => r.status === 'unrunnable').map((r) => r.id),
       status,
@@ -2186,7 +2287,9 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
   });
 
   // Expected-red accounting, PREREG-001 6: "A falsifier that does not produce its
-  // expected red is itself a FAIL of the benchmark, not of the product."
+  // expected red is itself a FAIL of the benchmark, not of the product." Every
+  // expectation is judged separately; one that READS a case that could not run (a
+  // missing prerequisite) is blocked, never failed, and nothing else is excused by it.
   const statusOf = (id) => (results.find((r) => r.id === id) || {}).status || 'not-run';
   const expectedRedIds = [
     ...spec.expectedRed,
@@ -2206,38 +2309,40 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
   const inversionShortfall = spec.expectInversionsAtLeast != null && inversions.length < spec.expectInversionsAtLeast;
   // Assert WHICH ids inverted, not just how many (see the F3 caveat).
   const missingInversionIds = (spec.expectInversionIds || []).filter((id) => !inversions.some((v) => v.id === id));
-  // A harness-errored run has no measurement to hold: .every() over an empty
-  // fallback spec is vacuously true.
-  const expectedRedHolds = harnessErrors.length === 0
-    && expectedRedObserved.every((r) => r.observed === 'fail')
-    && expectedPassObserved.every((r) => r.observed === 'pass')
-    && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
-    && !inversionShortfall
-    && missingInversionIds.length === 0
-    && (spec.expectInversionCount == null || inversions.length === spec.expectInversionCount)
-    && scenarioAssertions.every((a) => a.ok);
+  const unrunnableClass = (klass) => results.some((r) => r.class === klass && r.status === 'unrunnable');
+  const failures = [
+    ...expectedRedObserved.filter((r) => r.observed !== 'fail').map((r) => ({ name: `expect FAIL ${r.id}: ${r.observed}`, blocked: r.observed === 'unrunnable' })),
+    ...expectedPassObserved.filter((r) => r.observed !== 'pass').map((r) => ({ name: `expect PASS ${r.id}: ${r.observed}`, blocked: r.observed === 'unrunnable' })),
+    ...expectedUnrunnableObserved.filter((r) => !(r.n > 0 && r.unrunnable === r.n)).map((r) => ({ name: `expect UNRUNNABLE ${r.class}: ${r.unrunnable}/${r.n}`, blocked: false })),
+    ...(inversionShortfall ? [{ name: 'inversion shortfall', blocked: false }] : []),
+    ...missingInversionIds.map((id) => ({ name: `expected inversion ${id} absent`, blocked: false })),
+    ...(spec.expectInversionCount != null && inversions.length !== spec.expectInversionCount ? [{ name: `inversion count ${inversions.length} != ${spec.expectInversionCount}`, blocked: false }] : []),
+    ...scenarioAssertions.filter((a) => !a.ok).map((a) => ({ name: a.name, blocked: !!a.notEvaluated || (!!a.needs && unrunnableClass(a.needs)), notEvaluated: !!a.notEvaluated })),
+  ];
+  // A harness-errored run has no measurement to hold: an empty fallback spec is vacuously true.
+  const expectedRedHolds = harnessErrors.length === 0 && failures.length === 0;
 
   const pc01 = results.find((r) => r.id === 'PC-01') || null;
-  const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
   const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
-  // A failed expectation in a falsifier that EXECUTED invalidates the benchmark
-  // run (PREREG-001 5.4 / 6: "a benchmark FAIL"). A missing precondition is a
-  // different thing: an unrunnable case the scenario did not itself declare
-  // (no gate to mutate, a broken interpreter, a pin mismatch) means the mutation
-  // was not fully executed, and that stays UNRUNNABLE with the gap named.
-  const unexpectedUnrunnable = results.filter((r) => r.status === 'unrunnable' && !(spec.unrunnableClasses || []).includes(r.class));
-  const falsifierInvalid = scenario !== 'BASELINE' && ran && !expectedRedHolds && unexpectedUnrunnable.length === 0;
+  // A failed expectation in a falsifier that EXECUTED invalidates the benchmark run
+  // (PREREG-001 5.4 / 6: "a benchmark FAIL"), whatever not-applicable cases it has.
+  // A missing precondition is different: an expectation blocked by an unrunnable
+  // case it reads, or one that cannot be evaluated here, is reported and keeps
+  // the run from reading as a passed falsifier, but it is not a failed expectation.
+  const falsifierInvalid = scenario !== 'BASELINE' && ran && failures.some((f) => !f.blocked);
+  const notEvaluated = failures.filter((f) => f.notEvaluated);
 
   const failBasis = [
     ...classReport.filter((c) => c.status === 'FAIL').map((c) => `class-gate-missed: ${c.class} ${c.pass}/${c.n} (${c.gate})`),
     ...(policyFalsePositives.length ? [`policy-false-positives: ${policyFalsePositives.length}`] : []),
     ...(budgetBreaches.length ? [`budget-breaches: ${budgetBreaches.length}`] : []),
     ...(pc01 && pc01.status === 'fail' ? ['pc-01-failed'] : []),
-    ...(falsifierInvalid ? [`falsifier-expectation-failed: ${scenario} executed and did not produce its expected red`] : []),
+    ...(falsifierInvalid ? [`falsifier-expectation-failed: ${scenario} executed and did not produce its expected red: ${failures.filter((f) => !f.blocked).map((f) => f.name).join('; ')}`] : []),
   ];
   const unrunnableBasis = [
     ...(pinDrift.length ? [`pin-drift: ${pinDrift.length} file(s)`] : []),
     ...(anyUnrunnable ? [`unrunnable-cases: ${results.filter((r) => r.status === 'unrunnable').length}`] : []),
+    ...(notEvaluated.length ? [`expectation-not-evaluated: ${notEvaluated.map((f) => f.name).join('; ')}`] : []),
   ];
   // 5.3: a FAIL beside unrunnable cases is a FAIL, with the unrunnable listed in full.
   const terminalBasis = [...failBasis, ...unrunnableBasis];
@@ -2251,7 +2356,7 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
   if (only) terminal = `${terminal} (development subset, not a result)`;
   return {
     classReport, expectedRedIds, expectedPassIds, expectedRedObserved, expectedPassObserved, expectedUnrunnableObserved,
-    missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, undeclaredUnrunnable, terminal, terminalBasis, falsifierInvalid,
+    missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, terminal, terminalBasis, falsifierInvalid,
   };
 }
 const exitCodeFor = (terminal) => (terminal === 'PASS' ? 0 : 1);
@@ -2578,30 +2683,14 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !g
       declareUnrunnable(ALL_QUALITY,
         'F5: namespace coverage is red, so no quality number may be reported from this run',
         'PREREG-001 6 F5 — coverage red, quality must not be reported as a shrunken green');
-      record('PC-01', 'positive-control', 'unrunnable',
-        'F5: both runtimes refuse while a namespace is undeclared',
-        { requires: 'PREREG-001 6 F5 — coverage red' });
+      // PREREG-002 section 6: PC-01 is RUN. Every 4.3 prerequisite is verified present
+      // here, so the expected non-zero exit is a behavioral FAIL, never UNRUNNABLE.
+      scorePC01(box);
     } else if (harnessErrors.length === 0) {
       POLICY = await loadPolicy(box);
 
       // ── PC-01 first, as the harness's proof that it can see a hit at all.
-      const pc = byId.get('PC-01');
-      const pcRes = search(box, pc.query);
-      checkBudget('PC-01', pcRes);
-      scanPolicy('PC-01', pcRes);
-      if (pcRes.status !== 0) {
-        record('PC-01', 'positive-control', 'fail', `search exited ${pcRes.status}: ${pcRes.stderr.trim().slice(0, 200)}`);
-      } else if (abstainGate(pcRes)) {
-        record('PC-01', 'positive-control', 'fail', abstainGate(pcRes));
-      } else if (!pcRes.rows || !pcRes.rows.length) {
-        record('PC-01', 'positive-control', 'fail', 'no rows returned');
-      } else {
-        const r1 = pcRes.rows[0];
-        const prov = provenanceFailure(r1);
-        if (r1.path !== pc.target) record('PC-01', 'positive-control', 'fail', `rank-1 was ${r1.path}, expected ${pc.target}`, { topScore: r1.score });
-        else if (prov) record('PC-01', 'positive-control', 'fail', `rank-1 correct but provenance failed: ${prov}`, { topScore: r1.score });
-        else { record('PC-01', 'positive-control', 'pass', `rank 1, score ${r1.score}`, { topScore: r1.score }); }
-      }
+      scorePC01(box);
 
       // PREREG-002 section 6 (PC-01 accounting): a RUNNABLE PC-01 whose answer is
       // wrong is a behavioral FAIL of the run. Every class is still scored in
@@ -2639,9 +2728,11 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !g
             rmSync(path.join(box.vault, 'scratch'), { recursive: true, force: true });
           }
         } else {
-          declareUnrunnable(['U-01', 'U-02'],
-            `${SCENARIO}: the undeclared overlay is not part of this mutation`,
-            `runner scenario table: ${SCENARIO} does not apply the undeclared overlay; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)`);
+          // NOT PART OF this scenario: excluded from its population and recorded as
+          // such. It is not a missing prerequisite, so it can never mask a verdict.
+          for (const id of ['U-01', 'U-02']) {
+            record(id, byId.get(id).class, 'not-applicable', `${SCENARIO}: the undeclared overlay is not part of this mutation; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)`);
+          }
         }
       }
     }
@@ -2671,7 +2762,7 @@ const pinDrift = Object.entries(observedHashes || {})
 const ran = !!box && harnessErrors.length === 0 && hashMismatch.length === 0;
 const {
   classReport, expectedRedIds, expectedPassIds, expectedRedObserved, expectedPassObserved, expectedUnrunnableObserved,
-  missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, undeclaredUnrunnable, terminal, terminalBasis, falsifierInvalid,
+  missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, terminal, terminalBasis, falsifierInvalid,
 } = finalizeRun({
   results, cases, spec: SPEC, scenario: SCENARIO, inversions, harnessErrors, policyFalsePositives, budgetBreaches,
   pinDrift, referenceRows, referenceDev: REFERENCE_DEV, ran, only: ONLY,
@@ -2743,14 +2834,17 @@ const packet = {
   policy_false_positives: policyFalsePositives,
   budget_breaches: budgetBreaches,
   harness_errors: harnessErrors,
-  undeclared_unrunnable: undeclaredUnrunnable.map((r) => r.id),
+  // No `undeclared_unrunnable`: PREREG-001 5.1 means an UNRUNNABLE not preregistered on its case, but this
+  // runner writes every UNRUNNABLE's reason at run time, so such a field is always empty and says nothing.
+  // Any UNRUNNABLE still blocks PASS (unrunnable_cases in terminal_basis).
+  f9_reference_mode: SCENARIO === 'F9' ? (REFERENCE_FILE ? (referenceRows ? (REFERENCE_DEV ? 'development' : 'full') : 'refused') : 'none') : null,
   cases: results,
 };
 
 if (JSON_OUT) {
   console.log(JSON.stringify(packet, null, 2));
 } else {
-  const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE' };
+  const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE', 'not-applicable': 'N/A' };
   console.log(`\n${PREREG} — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
   console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)${identity.ok && !identity.instrumentRegistered ? `\n  NOT an identity run: this instrument is not registered for the baseline (registration: ${identity.registration.state}${identity.registration.problems.length ? ` -- ${identity.registration.problems.join('; ')}` : ''})` : ''}`);
   console.log(`corpus           ${corpusHash}`);
@@ -2775,7 +2869,6 @@ if (JSON_OUT) {
   if (SPEC.caveat) console.log(`    caveat: ${SPEC.caveat}`);
   console.log(`  harness errors: ${harnessErrors.length}`);
   for (const h of harnessErrors) console.log(`    ${h}`);
-  console.log(`  undeclared unrunnable: ${undeclaredUnrunnable.length}`);
   console.log(`  terminal basis: ${terminalBasis.length ? terminalBasis.join(' | ') : 'every class gate met, no fatal rule tripped'}`);
   for (const l of CLAIM_LIMITS) console.log(`  limit: ${l}`);
   console.log(`\n  RUN TERMINAL: ${terminal}   (${(wall / 1000).toFixed(1)}s)\n`);
