@@ -34,10 +34,14 @@
 //   --product-tree <path>   checkout whose files are copied into the sandbox and
 //                           whose HEAD is observed (default: this repo root)
 //   --candidates <path>     PREREG-002-CANDIDATES.md (absent = baseline only)
-//   --reference <packet>    unmutated packet F9 compares BUILD and U results with
+//   --reference <packet>    unmutated FULL packet of this identity, instrument, protocol and
+//                           clock that F9 compares BUILD and U results with
+//   --reference-development  the reference may be a narrower subset: a labelled
+//                           development comparison, never a full same-method reference
 //   --only <ids>            development subset; the packet says it is not a
 //                           scored-run candidate
-// Scenarios: BASELINE, F1..F9 (F7 needs an abstention gate no baseline carries).
+// Scenarios: BASELINE, F1..F9. F7 and the F9 forced-abstention arm are NOT executable
+// here (see CLAIM_LIMITS): only F9's filter-removal arm and F1-F6, F8 run.
 
 import {
   copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync,
@@ -67,6 +71,7 @@ const CANDIDATES_FILE = optValue('--candidates');
 // F9 compares BUILD-stage and U-class results with an unmutated run of the same
 // identity ("unchanged" is relative); the packet of that run is passed here.
 const REFERENCE_FILE = optValue('--reference');
+const REFERENCE_DEV = argv.includes('--reference-development');
 const ONLY = optValue('--only') ? new Set(optValue('--only').split(',').map((x) => x.trim().toUpperCase())) : null;
 const want = (id) => !ONLY || ONLY.has(String(id).toUpperCase());
 
@@ -351,63 +356,126 @@ function observeProductCommit(tree) {
   return r.status === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
-// PREREG-002-CANDIDATES.md is append-only; one record per `candidate_id: C-nnn`
-// line, with `key: value` lines and `<64 hex>  <path>` pin lines under it:
-//   candidate_id: C-001        product_commit: <40 hex>
-//   instrument_sha256: <64 hex>   withdraws: C-000   (optional)
-//   <64 hex>  daemons/semantic-search/search-vault.js   (x10)
+// PREREG-002-CANDIDATES.md is append-only. One record per `candidate_id:` line,
+// `C-nnn` for a candidate and `B-nnn` for a baseline instrument registration, each
+// carrying ALL of frozen 1.7 items 1-7 as `key: value` lines, then ten
+// `<64 hex>  <path>` pin lines:
+//   candidate_id  product_commit  repository  branch                      (1, 2)
+//   instrument_sha256  instrument_commit                                  (4)
+//   environment_os  environment_node  environment_bash  environment_model (5)
+//   protocol  packet_sha256                                               (6)
+//   registered_at  registered_by                                          (7)
+//   <64 hex>  daemons/semantic-search/search-vault.js   (x10)             (3)
+// A later `withdraws: <id>` line revokes an earlier record (1.7: never edited).
 function parseCandidates(text) {
   const parts = String(text || '').split(/^(?=\s*(?:[-*]\s*)?candidate_id\s*:)/m).filter((b) => /candidate_id\s*:/.test(b));
   return parts.map((block) => {
-    const grab = (key, re) => (block.match(new RegExp(`^\\s*(?:[-*]\\s*)?${key}\\s*:\\s*\`?(${re})\`?`, 'im')) || [])[1] || null;
+    const grab = (key, re) => (block.match(new RegExp(`^\\s*(?:[-*]\\s*)?${key}\\s*:\\s*\`?(${re})\`?\\s*$`, 'im')) || [])[1] || null;
     const pins = {};
     for (const m of block.matchAll(/^\s*(?:[-*]\s*)?`?([0-9a-f]{64})`?\s+`?(\S+?)`?\s*$/gm)) pins[m[2]] = m[1];
+    const free = '\\S.*?';
     return {
-      candidate_id: grab('candidate_id', 'C-\\d+'),
+      candidate_id: grab('candidate_id', '[CB]-\\d+'),
       product_commit: grab('product_commit', '[0-9a-f]{40}'),
+      repository: grab('repository', free),
+      branch: grab('branch', free),
       instrument_sha256: grab('instrument_sha256', '[0-9a-f]{64}'),
+      instrument_commit: grab('instrument_commit', '[0-9a-f]{40}'),
+      environment_os: grab('environment_os', free),
+      environment_node: grab('environment_node', free),
+      environment_bash: grab('environment_bash', free),
+      environment_model: grab('environment_model', free),
+      protocol: grab('protocol', free),
       packet_sha256: grab('packet_sha256', '[0-9a-f]{64}'),
-      withdraws: [...block.matchAll(/^\s*(?:[-*]\s*)?withdraws\s*:\s*`?(C-\d+)`?/gim)].map((m) => m[1]),
+      registered_at: grab('registered_at', free),
+      registered_by: grab('registered_by', free),
+      withdraws: [...block.matchAll(/^\s*(?:[-*]\s*)?withdraws\s*:\s*`?([CB]-\d+)`?/gim)].map((m) => m[1]),
       pins,
     };
   });
 }
 
+// The registered instrument_commit must CONTAIN this exact instrument: the blob
+// git holds at that commit hashes to this run's instrument_sha256. No signature or
+// authorship proof is claimed (registered_by is a stated label, not an identity).
+const INSTRUMENT_REL = path.relative(ROOT, fileURLToPath(import.meta.url)).split(path.sep).join('/');
+function instrumentCommitVerifier(repo, rel, sha) {
+  return (commit) => {
+    const r = spawnSync('git', ['-C', repo, 'show', `${commit}:${rel}`], { maxBuffer: 64 * 1024 * 1024 });
+    return r.status === 0 && createHash('sha256').update(r.stdout).digest('hex') === sha;
+  };
+}
+
+// PREREG-002 1.7: a record missing any of items 1-7, or not bound to the observed
+// instrument, product and environment, is NOT a registration. Returns the list of
+// named problems; empty means registered.
+function registrationProblems(rec, { kind, instrumentSha, environment, verifyInstrumentCommit, now = Date.now() }) {
+  const p = [];
+  const need = (key, ok, why) => { if (!rec[key]) p.push(`${key} missing`); else if (!ok) p.push(`${key} ${why}`); };
+  need('candidate_id', new RegExp(kind === 'baseline' ? '^B-' : '^C-').test(rec.candidate_id || ''), `is not a ${kind === 'baseline' ? 'B' : 'C'}-nnn id`);
+  need('product_commit', true, '');
+  need('repository', true, '');
+  need('branch', true, '');
+  const missingPins = PINNED_PATHS.filter((f) => !rec.pins[f]);
+  if (missingPins.length) p.push(`does not carry pin(s) for: ${missingPins.join(', ')}`);
+  else if (kind === 'baseline') {
+    const off = PINNED_PATHS.filter((f) => rec.pins[f] !== BASELINE_PINS[f]);
+    if (off.length) p.push(`pin(s) differ from the frozen baseline pins: ${off.join(', ')}`);
+  }
+  need('instrument_sha256', rec.instrument_sha256 === instrumentSha, `${rec.instrument_sha256} is not this instrument ${instrumentSha}`);
+  need('instrument_commit', !!verifyInstrumentCommit && verifyInstrumentCommit(rec.instrument_commit), `${rec.instrument_commit} does not contain this instrument (git blob there does not hash to ${instrumentSha})`);
+  for (const [key, field] of [['environment_os', 'os'], ['environment_node', 'node'], ['environment_bash', 'bash'], ['environment_model', 'model']]) {
+    need(key, !!environment && rec[key] === environment[field], `${rec[key]} is not the observed ${environment ? environment[field] : 'environment'}`);
+  }
+  need('protocol', rec.protocol === PREREG, `${rec.protocol} is not ${PREREG}`);
+  need('packet_sha256', rec.packet_sha256 === PACKET_SHA256, `carries packet_sha256 ${rec.packet_sha256}, expected ${PACKET_SHA256}`);
+  need('registered_at', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(rec.registered_at || '') && Date.parse(rec.registered_at) <= now, `${rec.registered_at} is not a UTC Z instant that has already passed`);
+  need('registered_by', true, '');
+  return p;
+}
+
 // PREREG-002 1.1 / 1.7 / 5.4 / section 7 item 9: the only identities that can
 // produce a result are the baseline and a registered candidate whose record
 // carries all ten pins and THIS instrument's sha256. Anything else is refused,
-// naming why. Pure: the caller supplies the observation.
-function resolveIdentity({ observed, candidatesText, candidatesSource, instrumentSha }) {
+// naming why. The baseline's INSTRUMENT registration is a full 1.7 record too
+// (`B-nnn`); `registration.state` keeps registered / incomplete / withdrawn /
+// absent apart, and carries the record's own identity into the packet. Pure: the
+// caller supplies the observation.
+function resolveIdentity({ observed, candidatesText, candidatesSource, instrumentSha, environment, verifyInstrumentCommit }) {
   if (!observed) {
     return { ok: false, why: 'git rev-parse HEAD failed in the product tree: product_commit cannot be observed', requires: 'PREREG-002 1.3 — product_commit must be observed in a git checkout' };
   }
-  if (observed === BASELINE_COMMIT) {
-    // MED-5: an identity run needs the instrument registered, baseline included.
-    // Append-only: a registration is a `baseline_instrument_sha256:` line, revoked by a
-    // later `withdraws: <that sha>` line (1.7's rule for candidates).
-    const line = (key) => new RegExp(`^\\s*(?:[-*]\\s*)?${key}\\s*:\\s*\`?${instrumentSha}\`?\\s*$`, 'im').test(candidatesText || '');
-    const registered = line('baseline_instrument_sha256') && !line('withdraws');
-    return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS, instrumentRegistered: registered };
-  }
   const records = parseCandidates(candidatesText);
   const withdrawn = new Set(records.flatMap((r) => r.withdraws));
-  const hit = records.find((r) => r.product_commit === observed && !withdrawn.has(r.candidate_id));
+  const ctx = { instrumentSha, environment, verifyInstrumentCommit };
+  const reg = (state, rec, problems = []) => ({ state, record_id: rec ? rec.candidate_id : null, problems, record: rec ? { ...rec, withdraws: undefined } : null });
+  if (observed === BASELINE_COMMIT) {
+    // A record naming ANOTHER instrument is not about this one; one naming none is incomplete.
+    const mine = records.filter((r) => /^B-/.test(r.candidate_id || '') && r.product_commit === BASELINE_COMMIT && (!r.instrument_sha256 || r.instrument_sha256 === instrumentSha));
+    const live = mine.filter((r) => !withdrawn.has(r.candidate_id));
+    let registration = reg('absent', null);
+    if (mine.length && !live.length) registration = reg('withdrawn', mine[mine.length - 1]);
+    else if (live.length) {
+      const rec = live[live.length - 1];
+      const problems = registrationProblems(rec, { ...ctx, kind: 'baseline' });
+      registration = reg(problems.length ? 'incomplete' : 'registered', rec, problems);
+    }
+    return { ok: true, kind: 'baseline', candidate_id: null, pins: BASELINE_PINS, instrumentRegistered: registration.state === 'registered', registration };
+  }
+  const hit = records.find((r) => /^C-/.test(r.candidate_id || '') && r.product_commit === observed && !withdrawn.has(r.candidate_id));
   const requires = 'PREREG-002 1.7 — identity is neither the baseline nor a registered candidate';
   if (!hit) {
     const wd = records.find((r) => r.product_commit === observed && withdrawn.has(r.candidate_id));
     return { ok: false, requires, why: wd
       ? `product ${observed} matches ${wd.candidate_id}, which a later record withdrew`
-      : `product ${observed} is neither the baseline ${BASELINE_COMMIT} nor registered in ${candidatesSource || 'a candidates file (none given; absent file = baseline only)'}` };
+      : `product ${observed} is neither the baseline ${BASELINE_COMMIT} nor registered in ${candidatesSource || 'a candidates file (none given; absent file = baseline only)'}`,
+    registration: wd ? reg('withdrawn', wd) : reg('absent', null) };
   }
-  const missing = PINNED_PATHS.filter((f) => !hit.pins[f]);
-  if (missing.length) return { ok: false, requires, why: `${hit.candidate_id} does not carry pin(s) for: ${missing.join(', ')}` };
-  if (hit.packet_sha256 !== PACKET_SHA256) {
-    return { ok: false, requires, why: `${hit.candidate_id} carries packet_sha256 ${hit.packet_sha256 || 'NONE'}, expected ${PACKET_SHA256}` };
+  const problems = registrationProblems(hit, { ...ctx, kind: 'candidate' });
+  if (problems.length) {
+    return { ok: false, requires, why: `${hit.candidate_id} is not a complete registration bound to this instrument, product and environment: ${problems.join('; ')}`, registration: reg('incomplete', hit, problems) };
   }
-  if (hit.instrument_sha256 !== instrumentSha) {
-    return { ok: false, requires, why: `${hit.candidate_id} registers instrument_sha256 ${hit.instrument_sha256 || 'NONE'} but this instrument is ${instrumentSha}` };
-  }
-  return { ok: true, kind: 'candidate', candidate_id: hit.candidate_id, instrumentRegistered: true, pins: Object.fromEntries(PINNED_PATHS.map((f) => [f, hit.pins[f]])) };
+  return { ok: true, kind: 'candidate', candidate_id: hit.candidate_id, instrumentRegistered: true, pins: Object.fromEntries(PINNED_PATHS.map((f) => [f, hit.pins[f]])), registration: reg('registered', hit) };
 }
 
 // MED-1: the product tree must BE the identity commit. The sandbox is copied from
@@ -433,17 +501,43 @@ function treeIdentityProblems(tree, sha, pins) {
   return problems;
 }
 
-// MED-2: F9's "unchanged" is relative to an unmutated, full run of THIS identity
-// by THIS instrument. Anything else is refused, never compared against.
+// MED-2 / I5: F9's "unchanged" is relative to an unmutated, FULL run of THIS
+// identity by THIS instrument: the same protocol and packet, the same frozen
+// clock, the same fixture and runtime identity, and the whole expected case
+// population (every id once, none missing, none extra). A red baseline is fine:
+// admissibility is about WHAT was run, never how it scored. `want.development`
+// selects the distinct, labelled narrower comparison (a subset of the population,
+// everything else still checked); it is never a full same-method reference.
 function validateReference(ref, want) {
   if (!ref || typeof ref !== 'object') return 'reference packet unreadable';
   if (ref.scenario !== 'BASELINE') return `reference is scenario ${ref.scenario}, not an unmutated BASELINE run`;
-  if (ref.development_subset != null) return 'reference is a development subset';
+  if (ref.development_subset != null && !want.development) return 'reference is a development subset (a narrower comparison needs --reference-development and is never a full reference)';
   if (!Array.isArray(ref.cases) || ref.cases.length === 0) return 'reference has no cases';
   if (Array.isArray(ref.harness_errors) && ref.harness_errors.length) return 'reference packet carries harness errors';
+  if (ref.preregistration !== PREREG) return `reference protocol ${ref.preregistration} is not ${PREREG}`;
+  if (ref.packet_sha256 !== PACKET_SHA256) return `reference packet_sha256 ${ref.packet_sha256} is not ${PACKET_SHA256}`;
   if (ref.product_commit !== want.commit) return `reference product_commit ${ref.product_commit} is not ${want.commit}`;
   if ((ref.identity || {}).kind !== want.kind) return `reference identity kind ${(ref.identity || {}).kind} is not ${want.kind}`;
   if (ref.instrument_sha256 !== want.instrumentSha) return `reference was produced by instrument ${ref.instrument_sha256}, not ${want.instrumentSha}`;
+  const clock = ref.search_now || {};
+  if (clock.frozen !== FROZEN_NOW || clock.temporal_class !== FROZEN_NOW) return `reference clock ${clock.frozen}/${clock.temporal_class} is not the frozen instant ${FROZEN_NOW}`;
+  for (const k of ['corpus_sha256', 'overlay_sha256', 'fixture_registry_sha256']) {
+    if ((ref.hashes || {})[k] !== want.hashes[k]) return `reference ${k} ${(ref.hashes || {})[k]} is not this run's ${want.hashes[k]}`;
+  }
+  if (!Array.isArray(ref.runtime_hash_mismatch) || ref.runtime_hash_mismatch.length) return 'reference reports a runtime pin mismatch (or does not report it)';
+  if (!Array.isArray(ref.runtime_hash_pin_drift) || ref.runtime_hash_pin_drift.length) return 'reference reports runtime pin drift (or does not report it)';
+  const refPins = ref.runtime_hashes_pinned || {};
+  const offPins = PINNED_PATHS.filter((f) => refPins[f] !== want.pins[f]);
+  if (offPins.length) return `reference was pinned to other runtime hashes: ${offPins.join(', ')}`;
+  const ids = ref.cases.map((c) => (c && typeof c.id === 'string' ? c.id : null));
+  if (ids.includes(null)) return 'reference population carries a case without an id';
+  const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (dup.length) return `reference population has duplicate case id(s): ${[...new Set(dup)].join(', ')}`;
+  const expected = new Set(want.expectedIds);
+  const extra = ids.filter((id) => !expected.has(id));
+  if (extra.length) return `reference population has id(s) outside the case population: ${extra.join(', ')}`;
+  const missing = want.expectedIds.filter((id) => !ids.includes(id));
+  if (missing.length && !want.development) return `reference population is missing ${missing.length} of ${want.expectedIds.length} expected case id(s): ${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ', ...' : ''}`;
   return null;
 }
 
@@ -494,9 +588,15 @@ function classifyAbstention({ status, rows, stderr, token }) {
     try { obj = JSON.parse(payload); } catch { obj = null; }
     // Single-line JSON of any spacing is fine (3.2 does not require compact form).
     // A doubled prefix space is not the literal prefix; a duplicated key is not
-    // "exactly four keys" (JSON.parse would silently keep the last one).
+    // "exactly four keys" (JSON.parse would silently keep the last one). Every key
+    // token is DECODED before comparing, so an escaped spelling ("\u0069nvocation")
+    // of a name already present is a duplicate too. A string token followed by a
+    // colon is a key; the values here are strings, so none nests.
     if (/^\s/.test(payload)) obj = null;
-    if (obj && (payload.match(/"(?:schema|invocation|outcome|reason)"\s*:/g) || []).length !== 4) obj = null;
+    if (obj) {
+      const names = [...payload.matchAll(/"((?:[^"\\]|\\.)*)"(\s*:)?/g)].filter((m) => m[2]).map((m) => { try { return JSON.parse(`"${m[1]}"`); } catch { return null; } });
+      if (names.length !== 4 || new Set(names).size !== 4) obj = null;
+    }
   }
   const wellFormed = obj && typeof obj === 'object' && !Array.isArray(obj)
     && Object.keys(obj).sort().join() === ABSTAIN_KEYS.join()
@@ -512,8 +612,16 @@ function classifyAbstention({ status, rows, stderr, token }) {
 }
 
 // Any sidecar line beside a non-empty results array is a contradiction on every
-// class, whatever else is wrong with the line (3.2 final rejection rule).
-const abstainGate = (res) => (res.abstain && res.abstain.lines > 0 && res.abstain.nonEmptyRows ? 'abstention-contradicted' : null);
+// class, whatever else is wrong with the line (3.2 final rejection rule). Every
+// other REJECTED sidecar (malformed, duplicated, unknown reason, unbound) is a
+// case FAIL with the classifier's own detail (3.2): the scorers all route here, so
+// an empty-result invocation with a bad line cannot reach a proof. A non-abstaining
+// query (state 'none', no line) is never asked for a sidecar.
+const abstainGate = (res) => {
+  if (!res.abstain) return null;
+  if (res.abstain.lines > 0 && res.abstain.nonEmptyRows) return 'abstention-contradicted';
+  return res.abstain.state === 'rejected' ? res.abstain.detail : null;
+};
 
 // The negative-class decision, pure over what the invocation produced so the
 // self-check can feed it synthetic process output. PREREG-002 3.2.
@@ -961,6 +1069,21 @@ function scoreLoudness(box, c) {
   }
 }
 
+// A complete PREREG-002 1.7 record (items 1-7), baseline (`B-nnn`) or candidate
+// (`C-nnn`). `omit` drops one key to build the incomplete shapes the gate must refuse.
+function registrationText({ id, commit, pins, instrumentSha, instrumentCommit, env, omit = [], over = {}, extra = '' }) {
+  const f = {
+    candidate_id: id, product_commit: commit, repository: 'wrg32786/aigent-os', branch: 'titus/fixture',
+    instrument_sha256: instrumentSha, instrument_commit: instrumentCommit,
+    environment_os: env.os, environment_node: env.node, environment_bash: env.bash, environment_model: env.model,
+    protocol: PREREG, packet_sha256: PACKET_SHA256, registered_at: '2026-10-02T00:00:00Z', registered_by: 'titus',
+    ...over,
+  };
+  const head = Object.entries(f).filter(([k]) => !omit.includes(k)).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const pinLines = Object.entries(pins).map(([f2, h]) => `${h}  ${f2}`).join('\n');
+  return `${head}\n${pinLines}\n${extra}\n`;
+}
+
 // ── self-check: identity, pins, copy list, clock (PREREG-002 section 7 items
 //    1, 2, 3, 7, 9). Synthetic inputs only; no model, no product run. ─────────
 function selfCheckIdentity(check) {
@@ -982,6 +1105,10 @@ function selfCheckIdentity(check) {
     const notRepo = path.join(tmp, 'plain');
     mkdirSync(notRepo);
     check('1 no checkout -> null, never a constant', observeProductCommit(notRepo) === null);
+    const verify = (c, sha) => instrumentCommitVerifier(repo, 'f.txt', sha)(c);
+    const xSha = createHash('sha256').update('x').digest('hex');
+    check('4 I4 instrument_commit verifier: the commit whose blob hashes to the instrument -> true; wrong sha, missing path or unknown commit -> false',
+      verify(truth, xSha) === true && verify(truth, 'f'.repeat(64)) === false && instrumentCommitVerifier(repo, 'nope.txt', xSha)(truth) === false && verify('c'.repeat(40), xSha) === false);
 
     // 2. all ten sandbox copies verified against the pins.
     check('2 baseline pins are the ten frozen paths', PINNED_PATHS.length === 10
@@ -1024,21 +1151,50 @@ function selfCheckIdentity(check) {
     check('7 F8 instant: Z form, one day before the earliest window end, earlier than the frozen instant',
       /^\d{4}-\d{2}-\d{2}T00:00:00Z$/.test(pre || '') && Date.parse(pre) < Date.parse(FROZEN_NOW), String(pre));
 
-    // 9. identity gate.
+    // 9. identity gate. Registration records carry ALL of frozen 1.7 items 1-7.
     const SHA = 'a'.repeat(64);
     const CAND = 'b'.repeat(40);
-    const pinLines = PINNED_PATHS.map((f, i) => `${String(i).repeat(64).slice(0, 64)}  ${f}`).join('\n');
-    const rec = (id, commit, extra = '') => `candidate_id: ${id}\nproduct_commit: ${commit}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${pinLines}\n${extra}\n`;
-    const gate = (observed, text, sha = SHA) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'CANDS.md', instrumentSha: sha });
-    check('9 baseline commit -> baseline identity', gate(BASELINE_COMMIT, '').kind === 'baseline');
+    const IC = 'd'.repeat(40);
+    const ENV = { os: 'testos', node: 'v22.0.0', bash: '/usr/bin/bash', model: 'Xenova/all-MiniLM-L6-v2' };
+    const fakePins = Object.fromEntries(PINNED_PATHS.map((f, i) => [f, String(i).repeat(64).slice(0, 64)]));
+    const gate = (observed, text, sha = SHA, env = ENV) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'CANDS.md', instrumentSha: sha, environment: env, verifyInstrumentCommit: (c) => c === IC });
+    const rec = (id, commit, o = {}) => registrationText({ id, commit, pins: fakePins, instrumentSha: SHA, instrumentCommit: IC, env: ENV, ...o });
+    const baseline = gate(BASELINE_COMMIT, '');
+    check('9 baseline commit -> baseline identity', baseline.kind === 'baseline');
     const unknown = gate(CAND, '');
     check('9 unknown commit, no file -> refused, names the identity', !unknown.ok && unknown.why.includes(CAND) && !!unknown.requires, unknown.why);
     const reg = gate(CAND, rec('C-001', CAND));
-    check('9 registered candidate -> its own pins', reg.ok && reg.kind === 'candidate' && reg.candidate_id === 'C-001' && Object.keys(reg.pins).length === 10);
+    check('9 registered candidate -> its own pins', reg.ok && reg.kind === 'candidate' && reg.candidate_id === 'C-001' && Object.keys(reg.pins).length === 10, reg.why);
     check('9 candidate registered for another instrument -> refused', !gate(CAND, rec('C-001', CAND), 'c'.repeat(64)).ok);
     check('9 candidate record missing a pin -> refused naming it', (() => { const r = gate(CAND, rec('C-001', CAND).replace(/^.*memory-root\.sh.*$/m, '')); return !r.ok && r.why.includes('memory-root.sh'); })());
-    check('9 withdrawn candidate -> refused', !gate(CAND, rec('C-001', CAND) + rec('C-002', 'c'.repeat(40), 'withdraws: C-001')).ok);
+    check('9 withdrawn candidate -> refused', !gate(CAND, rec('C-001', CAND) + rec('C-002', 'c'.repeat(40), { extra: 'withdraws: C-001' })).ok);
     check('9 unobservable commit -> refused, never a guess', !gate(null, '').ok);
+
+    // I4: a record missing any of 1.7 items 1-7 is NOT registered; the record's own
+    // identity is preserved for the packet.
+    check('9 I4 the full record is registered and its identity is preserved', reg.ok && reg.registration && reg.registration?.state === 'registered' && reg.registration?.record?.instrument_commit === IC && reg.registration?.record?.registered_by === 'titus' && reg.registration?.record?.registered_at === '2026-10-02T00:00:00Z', JSON.stringify(reg.registration));
+    const minimal = `candidate_id: C-001\nproduct_commit: ${CAND}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${Object.entries(fakePins).map(([f, h]) => `${h}  ${f}`).join('\n')}\n`;
+    check("9 I4 the review's minimal record (id, commit, instrument hash, packet hash, ten pins) is NOT registered", !gate(CAND, minimal).ok);
+    for (const key of ['repository', 'branch', 'instrument_commit', 'environment_os', 'environment_node', 'environment_bash', 'environment_model', 'protocol', 'packet_sha256', 'registered_at', 'registered_by']) {
+      check(`9 I4 candidate record without ${key} -> NOT registered, ${key} named`, (() => { const r = gate(CAND, rec('C-001', CAND, { omit: [key] })); return !r.ok && r.why.includes(key); })());
+    }
+    check('9 I4 an instrument_commit that does not contain this instrument -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { instrument_commit: 'e'.repeat(40) } })).ok);
+    check('9 I4 a record from another host environment -> NOT registered (node)', !gate(CAND, rec('C-001', CAND), SHA, { ...ENV, node: 'v21.0.0' }).ok);
+    check('9 I4 a record from another host environment -> NOT registered (model)', !gate(CAND, rec('C-001', CAND), SHA, { ...ENV, model: 'other/model' }).ok);
+    check('9 I4 registered_at that is not a Z instant -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { registered_at: 'yesterday' } })).ok);
+    check('9 I4 registered_at in the future -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { registered_at: '2999-01-01T00:00:00Z' } })).ok);
+    check('9 I4 a protocol string other than recollection-44/PREREG-002 -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { protocol: 'recollection-44/PREREG-001' } })).ok);
+    const brec = (o = {}) => rec('B-001', BASELINE_COMMIT, { pins: BASELINE_PINS, ...o });
+    const bGate = (text, o) => gate(BASELINE_COMMIT, text, SHA, o);
+    check('9 I4 baseline: the full record registers the instrument', bGate(brec()).instrumentRegistered === true && bGate(brec()).registration?.state === 'registered', JSON.stringify(bGate(brec()).registration));
+    check('9 I4 baseline: the old one-line baseline_instrument_sha256 registers nothing', bGate(`baseline_instrument_sha256: ${SHA}\n`).instrumentRegistered === false);
+    check('9 I4 baseline: the minimal record is incomplete, NOT registered', (() => { const r = bGate(`candidate_id: B-001\nproduct_commit: ${BASELINE_COMMIT}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n`); return r.instrumentRegistered === false && r.registration?.state === 'incomplete'; })());
+    check('9 I4 baseline: a record whose pins are not the frozen baseline pins -> incomplete', bGate(brec({ pins: fakePins })).registration?.state === 'incomplete');
+    check('9 I4 baseline: a record missing an item -> incomplete, item named', (() => { const r = bGate(brec({ omit: ['environment_bash'] })); return r.instrumentRegistered === false && r.registration?.problems.join(';').includes('environment_bash'); })());
+    // R2: withdrawn is distinguishable from absent.
+    check('9 R2 baseline: no record at all -> absent', bGate('').registration?.state === 'absent');
+    check('9 R2 baseline: a record for ANOTHER instrument -> absent', bGate(brec({ over: { instrument_sha256: 'c'.repeat(64) } })).registration?.state === 'absent');
+    check('9 R2 baseline: a later record withdrawing it -> withdrawn, not registered, not absent', (() => { const r = bGate(`${brec()}candidate_id: B-002\nwithdraws: B-001\n`); return r.instrumentRegistered === false && r.registration?.state === 'withdrawn' && r.registration?.record_id === 'B-001'; })());
   } finally {
     // sandboxes are removed by the exit hook
   }
@@ -1118,6 +1274,7 @@ const auxiliaryControls = [];
 let buildInputPresence = {};
 let builtRowCounts = null;
 let F4_SEED = null;
+let indexBuild = null;
 let POLICY = null;
 
 // The product's own predicates, imported from the SANDBOX copies and applied in
@@ -1153,13 +1310,24 @@ function stageOf(c) {
   return null;
 }
 
+// A permitted control is a witness only if its invocation SUCCEEDED and its
+// evidence is coherent: exit 0, a parsed results block, no rejected sidecar. A
+// control that prints its row and then exits non-zero has not demonstrated that
+// the content is retrievable; "not demonstrated" is accounted, not "returned".
+function controlCoherence(res) {
+  if (res.status !== 0) return `control-invocation-failed (exit ${res.status})`;
+  if (!Array.isArray(res.rows)) return 'control-results-block-unparsed';
+  if (res.abstain && res.abstain.state === 'rejected') return `control-sidecar-rejected (${res.abstain.detail})`;
+  return null;
+}
+
 // BUILD-stage label. All four conditions of 3.2a or no label.
 function labelBuildStage(ev) {
   const gaps = [];
   if (ev.expected.eligible) gaps.push('expected-eligible: the target path is INDEX-eligible, so there is nothing for a build to withhold');
   if (!ev.sourcePresentAtBuild) gaps.push('source-not-present-at-build');
   if (ev.indexRowsAtTarget !== 0) gaps.push(`index-holds-target-rows (${ev.indexRowsAtTarget})`);
-  if (!ev.control || !(ev.control.indexedRows >= 1 && ev.control.returned)) gaps.push('matched-permitted-control-failed');
+  if (!ev.control || !(ev.control.indexedRows >= 1 && ev.control.returned)) gaps.push(`matched-permitted-control-failed${ev.control && ev.control.failure ? ` (${ev.control.failure})` : ''}`);
   return gaps.length ? { label: null, demonstrated: false, gaps } : { label: 'BUILD-WITHHELD', demonstrated: true, gaps };
 }
 
@@ -1173,7 +1341,8 @@ function labelQueryStage(ev) {
   if (ev.targetReturned && ev.targetRefused) return { label: 'RENDER-REFUSED', demonstrated: true, gaps };
   if (ev.targetReturned) return { label: null, demonstrated: false, gaps: ['target row returned unrefused (leak, scored elsewhere)'] };
   if (!ev.control || !ev.control.returned) {
-    return { label: null, demonstrated: false, gaps: ['matched-seeded-control-not-returned: a gate that also suppresses its own permitted control is not a causal witness'] };
+    const why = ev.control && ev.control.failure ? `; ${ev.control.failure}` : '';
+    return { label: null, demonstrated: false, gaps: [`matched-seeded-control-not-returned: a gate that also suppresses its own permitted control is not a causal witness${why}`] };
   }
   if (ev.delta === ev.seededChunks) return { label: 'QUERY-WITHHELD', demonstrated: true, gaps };
   if (ev.delta === 0) return { label: 'DECLINED-BY-RETRIEVER', demonstrated: false, gaps: ['no target-attributable filter removal: the retriever declined, the policy layer never acted'] };
@@ -1220,7 +1389,9 @@ function finishQueryStage(c, q, extra) {
   const present = (q.res.rows || []).find((r) => r.path === target);
   const refused = !!present && String(present.chunk).startsWith('[REFUSED:');
   const controlRow = (q.controlRes.rows || []).findIndex((r) => r.path === q.controlPath);
-  const control = { path: q.controlPath, returned: controlRow !== -1, rank: controlRow === -1 ? null : controlRow + 1, exit: q.controlRes.status };
+  const controlFailure = controlCoherence(q.controlRes);
+  const returned = controlRow !== -1 && controlFailure === null;
+  const control = { path: q.controlPath, returned, rank: returned ? controlRow + 1 : null, exit: q.controlRes.status, failure: controlFailure };
   const seededCount = expected.filter ? (q.res.filterCounts || {})[expected.filter] : null;
   const pristineCount = expected.filter ? (q.pristineRes.filterCounts || {})[expected.filter] : null;
   const delta = seededCount == null || pristineCount == null ? null : seededCount - pristineCount;
@@ -1231,7 +1402,7 @@ function finishQueryStage(c, q, extra) {
     counts: { seeded: seededCount, pristine: pristineCount, seededSource: 'same invocation (the forbidden run)', pristineSource: 'paired invocation on the pristine index, same query' },
     gaps: verdict.gaps,
   };
-  auxiliaryControls.push({ case: c.id, stage: 'QUERY', kind: 'matched-seeded-control', controlPath: q.controlPath, chunkSha256: sha256(q.seed.chunk), vectorSha256: sha256(JSON.stringify(q.seed.vector)), returned: control.returned, rank: control.rank, exit: control.exit, invocation: q.controlRes.invocation, topPaths: (q.controlRes.rows || []).map((x) => x.path) });
+  auxiliaryControls.push({ case: c.id, stage: 'QUERY', kind: 'matched-seeded-control', controlPath: q.controlPath, chunkSha256: sha256(q.seed.chunk), vectorSha256: sha256(JSON.stringify(q.seed.vector)), returned: control.returned, rank: control.rank, exit: control.exit, failure: control.failure, invocation: q.controlRes.invocation, topPaths: (q.controlRes.rows || []).map((x) => x.path) });
   const out = { ...extra, stage: 'QUERY', label: verdict.label, proof };
   if (verdict.demonstrated) return record(c.id, c.class, 'pass', verdict.label === 'RENDER-REFUSED' ? 'RENDER-REFUSED: present but refused' : `QUERY-WITHHELD: filter delta ${delta} == ${q.readBack.count} seeded chunk(s), control returned`, out);
   return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}${verdict.label ? ` [${verdict.label}]` : ''}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
@@ -1255,7 +1426,7 @@ function auxBuildControl(box, c) {
   });
   const controlPath = controlPathFor(c.id);
   const src = path.join(box.vault, ...c.target.split('/'));
-  const out = { case: c.id, stage: 'BUILD', kind: 'matched-permitted-copy', controlPath, sandboxSameCodeAsScored: sameCode, targetSha256: null, copySha256: null, indexedRows: 0, returned: false, rank: null, buildExit: null, searchExit: null };
+  const out = { case: c.id, stage: 'BUILD', kind: 'matched-permitted-copy', controlPath, sandboxSameCodeAsScored: sameCode, targetSha256: null, copySha256: null, indexedRows: 0, returned: false, rank: null, buildExit: null, searchExit: null, failure: null };
   if (!existsSync(src)) { auxiliaryControls.push({ ...out, error: 'target source absent in the scored vault' }); return out; }
   rmSync(aux.vault, { recursive: true, force: true });
   cpSync(box.vault, aux.vault, { recursive: true, filter: (s) => path.basename(s) !== 'embeddings.json' });
@@ -1272,8 +1443,9 @@ function auxBuildControl(box, c) {
     const r = search(aux, c.query);
     out.searchExit = r.status;
     const i = (r.rows || []).findIndex((x) => x.path === controlPath);
-    out.returned = i !== -1;
-    out.rank = i === -1 ? null : i + 1;
+    out.failure = controlCoherence(r);
+    out.returned = i !== -1 && out.failure === null && out.buildExit === 0;
+    out.rank = out.returned ? i + 1 : null;
     out.invocation = r.invocation;
     out.topPaths = (r.rows || []).map((x) => x.path);
   }
@@ -1293,7 +1465,7 @@ function finishBuildStage(box, c, res, extra) {
     stage: 'BUILD', expected, sourcePresentAtBuild: ev.sourcePresentAtBuild, indexRowsAtTarget: ev.indexRowsAtTarget,
     // corroboration only: an aggregate count that unrelated files can supply is never the evidence
     indexerDenyLine: (indexBuild?.all.match(/\[deny\] \d+ file\(s\) excluded by index-deny\.json/) || [null])[0],
-    queryStageCounts: res.filterCounts, control: { path: control.controlPath, indexedRows: control.indexedRows, returned: control.returned, rank: control.rank, targetSha256: control.targetSha256, copySha256: control.copySha256 },
+    queryStageCounts: res.filterCounts, control: { path: control.controlPath, indexedRows: control.indexedRows, returned: control.returned, rank: control.rank, failure: control.failure, searchExit: control.searchExit, buildExit: control.buildExit, targetSha256: control.targetSha256, copySha256: control.copySha256 },
     gaps: verdict.gaps,
   };
   const out = { ...extra, stage: 'BUILD', label: verdict.label, proof };
@@ -1321,9 +1493,10 @@ function f9Mutate(source) {
 }
 
 // F7: abstain on everything, with a VALID bound sidecar, after index validation
-// and both filters. No abstention gate exists at the baseline, and a candidate's
-// own gate needs its own anchor, so the hook anchors on the point where the
-// results are final and refuses a source that already emits the sidecar.
+// and both filters. NOT EXECUTABLE (CLAIM_LIMITS): no gate exists at the baseline,
+// and the hook refuses a source that already emits the sidecar, which is exactly
+// what a candidate's gate source would contain. The hook is exercised only on
+// synthetic output; the candidate-specific hook is owed with that candidate.
 const F7_ANCHOR = 'const searchTime = Date.now() - t1;';
 function f7Mutate(source) {
   if (source.includes(ABSTAIN_PREFIX)) throw new Error('F7: the source already emits AIGENT_ABSTAIN; the hook has no anchor for that gate (owed to the candidate that carries it)');
@@ -1344,7 +1517,7 @@ function mutateSandboxSearch(box, fn) {
 // identity (reference rows). Without a reference the check is narrower and says
 // so: the build-side evidence must be intact and any BUILD-stage FAIL must be
 // explained by its matched control alone (a control never touches the filters).
-function f9Assertions(rows, reference = null) {
+function f9Assertions(rows, reference = null, development = false) {
   const queryRows = rows.filter((r) => r.stage === 'QUERY');
   const buildRows = rows.filter((r) => r.stage === 'BUILD');
   const a = [];
@@ -1360,9 +1533,13 @@ function f9Assertions(rows, reference = null) {
   if (reference) {
     const ref = new Map(reference.map((r) => [r.id, r]));
     const same = (r) => ref.has(r.id) && ref.get(r.id).status === r.status && (ref.get(r.id).label ?? null) === (r.label ?? null);
-    const moved = [...buildRows, ...u].filter((r) => !same(r));
-    add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0,
-      moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${buildRows.length} BUILD + ${u.length} U compared`);
+    // A development comparison covers only the ids its reference carries and says so.
+    const pool = [...buildRows, ...u];
+    const compared = development ? pool.filter((r) => ref.has(r.id)) : pool;
+    const moved = compared.filter((r) => !same(r));
+    const shown = moved.length ? `changed: ${moved.map((r) => `${r.id} ${ref.get(r.id)?.status}/${ref.get(r.id)?.label ?? null} -> ${r.status}/${r.label ?? null}`).join('; ')}` : `${compared.length} of ${pool.length} BUILD + U result(s) compared`;
+    if (development) add('F9: BUILD-stage and U-class results equal the DEVELOPMENT comparison (narrower than a full same-method reference; not certifying)', compared.length > 0 && moved.length === 0, shown);
+    else add('F9: BUILD-stage and U-class results equal the unmutated reference run', buildRows.length > 0 && u.length === 2 && moved.length === 0, shown);
   } else {
     const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : r.proof.control && r.proof.control.returned === false);
     add('F9: BUILD-stage build-side evidence intact, every FAIL explained by its control alone (no --reference given: narrower check)',
@@ -1525,34 +1702,60 @@ function selfCheckReview(check) {
   check('2 committed baseline files hash to the ten pins', treeIdentityProblems(PRODUCT_TREE, BASELINE_COMMIT, BASELINE_PINS).filter((p) => !p.startsWith('dirty')).length === 0,
     treeIdentityProblems(PRODUCT_TREE, BASELINE_COMMIT, BASELINE_PINS).join('; '));
 
-  // MED-2: a reference is an unmutated, full run of THIS identity by THIS instrument.
-  const want = { commit: 'a'.repeat(40), kind: 'baseline', instrumentSha: 'b'.repeat(64) };
-  const good = { scenario: 'BASELINE', development_subset: null, product_commit: want.commit, identity: { kind: 'baseline' }, instrument_sha256: want.instrumentSha, cases: [{ id: 'P-01' }] };
-  check('2b a full unmutated same-identity same-instrument reference is accepted', validateReference(good, want) === null);
+  // MED-2 / I5: a reference is an unmutated, FULL run of THIS identity by THIS instrument,
+  // over the whole expected case population, protocol, clock, fixture and runtime identity.
+  const H = { corpus_sha256: '1'.repeat(64), overlay_sha256: '2'.repeat(64), fixture_registry_sha256: '3'.repeat(64) };
+  const PINS = Object.fromEntries(PINNED_PATHS.map((f, i) => [f, String(i).repeat(64).slice(0, 64)]));
+  const ids = ['PC-01', 'P-01', 'P-02', 'N-01'];
+  const want = { commit: 'a'.repeat(40), kind: 'baseline', instrumentSha: 'b'.repeat(64), expectedIds: ids, hashes: H, pins: PINS, development: false };
+  const good = {
+    preregistration: PREREG, packet_sha256: PACKET_SHA256, scenario: 'BASELINE', development_subset: null,
+    product_commit: want.commit, identity: { kind: 'baseline' }, instrument_sha256: want.instrumentSha,
+    search_now: { frozen: FROZEN_NOW, temporal_class: FROZEN_NOW }, hashes: { ...H },
+    runtime_hashes_pinned: PINS, runtime_hash_mismatch: [], runtime_hash_pin_drift: [], harness_errors: [],
+    cases: ids.map((id) => ({ id, status: 'fail', class: 'x' })),
+  };
+  check('2b a full unmutated same-identity same-instrument reference is accepted, red cases and all', validateReference(good, want) === null, String(validateReference(good, want)));
   for (const [name, patch] of Object.entries({
     'an F-scenario packet': { scenario: 'F9' }, 'a development subset': { development_subset: ['P-01'] },
     'another product commit': { product_commit: 'c'.repeat(40) }, 'another identity kind': { identity: { kind: 'candidate' } },
     'another instrument': { instrument_sha256: 'd'.repeat(64) }, 'no cases': { cases: undefined },
+    'a TRUNCATED population (the one-case packet the review reproduced)': { cases: [{ id: 'P-01' }] },
+    'a population missing one expected id': { cases: good.cases.slice(0, 3) },
+    'a DUPLICATE case id (right length, wrong population)': { cases: [...good.cases.slice(0, 3), good.cases[0]] },
+    'an id outside the population': { cases: [...good.cases.slice(0, 3), { id: 'Z-99' }] },
+    'a wrong frozen clock': { search_now: { frozen: '2026-01-01T00:00:00Z', temporal_class: FROZEN_NOW } },
+    'a wrong temporal-class clock': { search_now: { frozen: FROZEN_NOW, temporal_class: '2026-05-01T00:00:00Z' } },
+    'no clock at all': { search_now: undefined },
+    'a wrong packet_sha256': { packet_sha256: 'e'.repeat(64) },
+    'a wrong protocol': { preregistration: 'recollection-44/PREREG-001' },
+    'another corpus hash': { hashes: { ...H, corpus_sha256: '9'.repeat(64) } },
+    'another fixture-registry hash': { hashes: { ...H, fixture_registry_sha256: '9'.repeat(64) } },
+    'a reported runtime pin mismatch': { runtime_hash_mismatch: [{ file: 'x' }] },
+    'reported pin drift': { runtime_hash_pin_drift: [{ file: 'x' }] },
+    'other pins than this identity': { runtime_hashes_pinned: { ...PINS, 'daemons/memory-root.sh': 'f'.repeat(64) } },
   })) check(`2b reference refused: ${name}`, validateReference({ ...good, ...patch }, want) !== null);
   check('2b an unreadable reference is refused', validateReference(null, want) !== null);
   check('2b a reference packet carrying harness errors is refused', validateReference({ ...good, harness_errors: ['x'] }, want) !== null);
+  // The narrower comparison is its own labelled mode and never a full reference.
+  const dev = { ...want, development: true };
+  const devRef = { ...good, development_subset: ['P-01', 'N-01'], cases: [{ id: 'P-01', status: 'pass' }, { id: 'N-01', status: 'fail' }] };
+  check('2b development comparison: a subset packet is accepted ONLY in the labelled development mode', validateReference(devRef, dev) === null && validateReference(devRef, want) !== null, String(validateReference(devRef, dev)));
+  check('2b development comparison still refuses duplicates, unknown ids, a wrong clock and a wrong packet',
+    validateReference({ ...devRef, cases: [devRef.cases[0], devRef.cases[0]] }, dev) !== null
+    && validateReference({ ...devRef, cases: [{ id: 'Z-99' }] }, dev) !== null
+    && validateReference({ ...devRef, search_now: { frozen: 'x', temporal_class: 'x' } }, dev) !== null
+    && validateReference({ ...devRef, packet_sha256: 'e'.repeat(64) }, dev) !== null);
+  check('2b the development comparison reads as narrower in the F9 assertions, never as a full reference', (() => {
+    const named = f9Assertions([{ id: 'C-01', class: 'deny', stage: 'BUILD', status: 'pass', label: 'BUILD-WITHHELD' }], [{ id: 'C-01', status: 'pass', label: 'BUILD-WITHHELD' }], true);
+    return named.some((x) => /development comparison/i.test(x.name) && /narrower/i.test(x.name)) && !named.some((x) => /equal the unmutated reference run/.test(x.name));
+  })());
   writeFileSync(path.join(repo, 'daemons', 'zz-untracked.txt'), 'x\n');
   check('1b an UNTRACKED file under daemons/ -> refused as dirty', treeIdentityProblems(repo, sha, pins).some((p) => p.includes('dirty') && p.includes('zz-untracked')));
   rmSync(path.join(repo, 'daemons', 'zz-untracked.txt'));
 
-  // MED-5 / LOW-4: registration of the instrument and of the protocol packet.
-  const SHA = 'a'.repeat(64);
-  const pinLines = PINNED_PATHS.map((f, i) => `${String(i).repeat(64).slice(0, 64)}  ${f}`).join('\n');
-  const CAND = 'b'.repeat(40);
-  const rec = `candidate_id: C-001\nproduct_commit: ${CAND}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${pinLines}\n`;
-  const gate = (observed, text) => resolveIdentity({ observed, candidatesText: text, candidatesSource: 'C.md', instrumentSha: SHA });
-  check('5b baseline with this instrument unregistered -> not an identity run', gate(BASELINE_COMMIT, '').instrumentRegistered === false);
-  check('5b baseline with this instrument registered -> identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${SHA}\n`).instrumentRegistered === true);
-  check('5b a later record withdrawing the baseline registration revokes it', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${SHA}\nwithdraws: ${SHA}\n`).instrumentRegistered === false);
-  check('5b baseline registered for ANOTHER instrument -> still not an identity run', gate(BASELINE_COMMIT, `baseline_instrument_sha256: ${'c'.repeat(64)}\n`).instrumentRegistered === false);
-  check('4b candidate record carrying this packet_sha256 is accepted', gate(CAND, rec).ok);
-  check('4b candidate record with another packet_sha256 is refused', !gate(CAND, rec.replace(PACKET_SHA256, 'e'.repeat(64))).ok);
-  check('4b candidate record with no packet_sha256 is refused', !gate(CAND, rec.replace(/^packet_sha256:.*\n/m, '')).ok);
+  // MED-5 / LOW-4 / I4 / R2: registration of the instrument and of the protocol
+  // packet is exercised in selfCheckIdentity (full 1.7 record, withdrawn vs absent).
 
   // MED-6: a results block that parses but is not an array is a FAIL, not a crash.
   const nonArray = interpretSearch({ status: 0, stdout: 'Loading index... 1 entries loaded.\n\nQuery: "q"\n\nJSON:\n{}\n', stderr: '' }, 'q', 'rec-0123456789abcdef', FROZEN_NOW);
@@ -1570,7 +1773,68 @@ function selfCheckReview(check) {
   check('4c a multi-line JSON object is rejected', framed(`${ABSTAIN_PREFIX} {\n"schema":"abstain/1",\n"invocation":"${T}",\n"outcome":"abstain",\n"reason":"below-tau"}`) === 'rejected');
   check('4c an extra key is rejected', framed(`${ABSTAIN_PREFIX} ${JSON.stringify({ ...ok, extra: 1 })}`) === 'rejected');
   check('4c a double space after the prefix is malformed', framed(`${ABSTAIN_PREFIX}  ${JSON.stringify(ok)}`) === 'rejected');
+  // R1: an ESCAPED duplicate key decodes to a name already present.
+  const escDup = `${ABSTAIN_PREFIX} {"schema":"abstain/1","invocation":"rec-other000000","outcome":"abstain","reason":"below-tau","\\u0069nvocation":"${T}"}`;
+  check('4c R1 an escaped duplicate key ("\\u0069nvocation" carrying the bound token) is malformed, not honest', framed(escDup) === 'rejected' && classifyAbstention({ status: 0, rows: [], stderr: escDup, token: T }).detail === 'abstention-sidecar-malformed', framed(escDup));
+  check('4c R1 an escaped duplicate of another key (schema) is malformed too', framed(`${ABSTAIN_PREFIX} {"schema":"abstain/1","invocation":"${T}","outcome":"abstain","reason":"below-tau","\\u0073chema":"abstain/1"}`) === 'rejected');
+  check('4c R1 four distinct keys written with escapes are still honest', framed(`${ABSTAIN_PREFIX} {"\\u0073chema":"abstain/1","invocation":"${T}","outcome":"abstain","reason":"below-tau"}`) === 'honest');
   check('4c a duplicate key (replayed token then bound token) is malformed', framed(`${ABSTAIN_PREFIX} {"schema":"abstain/1","invocation":"rec-other000000","outcome":"abstain","reason":"below-tau","invocation":"${T}"}`) === 'rejected');
+}
+
+// ── self-check: the REAL finalization (I1), driven with synthetic case records ─
+// finalizeRun() is what main calls; exitCodeFor() is what main exits with.
+function selfCheckFinalizer(check) {
+  const green = () => cases.map((c) => ({ id: c.id, class: c.class, status: 'pass', detail: '' }));
+  const set = (rs, id, patch) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r));
+  const failOn = (rs, ids) => ids.reduce((acc, id) => set(acc, id, { status: 'fail' }), rs);
+  const idsOf = (klass) => cases.filter((c) => c.class === klass).map((c) => c.id);
+  const fin = (o = {}) => finalizeRun({
+    results: green(), cases, spec: SCENARIOS.BASELINE, scenario: 'BASELINE', inversions: [], harnessErrors: [],
+    policyFalsePositives: [], budgetBreaches: [], pinDrift: [], referenceRows: null, referenceDev: false, ran: true, only: null, ...o,
+  });
+  const term = (o) => { const f = fin(o); return `${f.terminal}/${exitCodeFor(f.terminal)}`; };
+
+  check('3f exit code: PASS is 0, every other terminal is non-zero', exitCodeFor('PASS') === 0 && ['FAIL', 'UNRUNNABLE', 'HARNESS-ERROR', 'PASS (development subset, not a result)'].every((t) => exitCodeFor(t) === 1));
+  check('3f all classes green, PC-01 pass -> PASS, exit 0', term() === 'PASS/0', term());
+  // I1a: a permitted case miss inside a met class gate is NOT a run FAIL.
+  check('3f I1a positive 23/24 (gate >= 22) with every other gate met -> PASS, not a silent 100 percent', term({ results: failOn(green(), [idsOf('positive')[0]]) }) === 'PASS/0', term({ results: failOn(green(), [idsOf('positive')[0]]) }));
+  check('3f I1a positive 22/24 (the gate exactly) -> PASS', term({ results: failOn(green(), idsOf('positive').slice(0, 2)) }) === 'PASS/0');
+  check('3f I1a negative 11/12, temporal 7/8 (inversion-free) are also inside their gates -> PASS', term({ results: failOn(green(), [idsOf('negative')[0], idsOf('temporal')[0]]) }) === 'PASS/0');
+  check('3f positive 21/24 misses its gate -> FAIL naming the class', (() => { const f = fin({ results: failOn(green(), idsOf('positive').slice(0, 3)) }); return f.terminal === 'FAIL' && f.terminalBasis.some((b) => b.includes('positive')); })());
+  check('3f negative 10/12 misses its gate -> FAIL', term({ results: failOn(green(), idsOf('negative').slice(0, 2)) }) === 'FAIL/1');
+  check('3f a zero-tolerance class (DENY 5/6) misses its gate -> FAIL', term({ results: failOn(green(), [idsOf('deny')[0]]) }) === 'FAIL/1');
+  check('3f temporal 8/8 with one inversion misses the zero-inversion gate -> FAIL', term({ inversions: [{ id: 'T-02' }] }) === 'FAIL/1');
+  check('3f a leak (policy false positive) is fatal whatever the gates say -> FAIL', term({ policyFalsePositives: [{ id: 'C-01' }] }) === 'FAIL/1');
+  check('3f a budget breach is fatal -> FAIL', term({ budgetBreaches: [{ id: 'P-01', breaches: ['x'] }] }) === 'FAIL/1');
+  check('3f PC-01 red is fatal even with every class gate met -> FAIL', term({ results: failOn(green(), ['PC-01']) }) === 'FAIL/1');
+  check('3f harness errors -> HARNESS-ERROR', term({ harnessErrors: ['x'] }) === 'HARNESS-ERROR/1');
+  check('3f pin drift on an otherwise green run -> UNRUNNABLE', term({ pinDrift: [{ file: 'x' }] }) === 'UNRUNNABLE/1');
+  check('3f a FAIL is never masked by pin drift (5.3)', term({ pinDrift: [{ file: 'x' }], results: failOn(green(), idsOf('deny').slice(0, 1)) }) === 'FAIL/1');
+  check('3f an unrunnable class with no failure -> UNRUNNABLE, not FAIL', term({ results: green().map((r) => (r.class === 'negative' ? { ...r, status: 'unrunnable', requires: 'x' } : r)) }) === 'UNRUNNABLE/1');
+  check('3f a development subset is never a result', fin({ only: new Set(['P-01']) }).terminal.endsWith('(development subset, not a result)'));
+
+  // I1b: a failed expectation in an actually EXECUTED falsifier invalidates the run.
+  const f9rows = (label, delta) => green().map((r) => {
+    if (r.class === 'stale-index') return { ...r, stage: 'QUERY', label, proof: { readBack: { present: true }, control: { returned: true }, delta } };
+    if (r.class === 'deny' || r.class === 'skip' || (r.class === 'operator' && ['skip', 'deny'].includes((byId.get(r.id) || {}).kind))) {
+      return { ...r, stage: 'BUILD', label: 'BUILD-WITHHELD', proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: true } } };
+    }
+    return r;
+  });
+  const f9 = (rows, o = {}) => fin({ results: rows, spec: SCENARIOS.F9, scenario: 'F9', ...o });
+  const survived = f9(f9rows('QUERY-WITHHELD', 1));
+  check('3f I1b F9 with a surviving QUERY-WITHHELD label (everything else green) -> expectation false, terminal NOT PASS, non-zero exit',
+    survived.expectedRedHolds === false && survived.falsifierInvalid === true && survived.terminal !== 'PASS' && exitCodeFor(survived.terminal) === 1 && survived.terminalBasis.some((b) => /falsifier/.test(b)), JSON.stringify([survived.terminal, survived.expectedRedHolds, survived.terminalBasis]));
+  const held = f9(f9rows('RENDER-REFUSED', 0));
+  check('3f I1b F9 with its expected observation (no QUERY-WITHHELD) holds and is not punished -> PASS, exit 0', held.expectedRedHolds === true && held.falsifierInvalid === false && held.terminal === 'PASS', JSON.stringify([held.terminal, held.expectedRedHolds, held.scenarioAssertions.filter((a) => !a.ok)]));
+  // Missing preconditions and unexecuted mutations are accounted separately.
+  const unexec = fin({ spec: SCENARIOS.F7, scenario: 'F7', ran: false, results: green().map((r) => ({ ...r, status: 'unrunnable', requires: 'PREREG-002 F7 — abstention gate absent' })) });
+  check('3f I1b an UNEXECUTED mutation (F7, no gate) is UNRUNNABLE, never a falsifier-invalid FAIL', unexec.terminal === 'UNRUNNABLE' && unexec.falsifierInvalid === false, JSON.stringify([unexec.terminal, unexec.falsifierInvalid]));
+  const noDoctor = f9(f9rows('RENDER-REFUSED', 0).map((r) => (r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)));
+  check('3f I1b F9 whose U-class could not run (missing prerequisite) is UNRUNNABLE, not a failed expectation', noDoctor.terminal === 'UNRUNNABLE' && noDoctor.falsifierInvalid === false && noDoctor.expectedRedHolds === false, JSON.stringify([noDoctor.terminal, noDoctor.falsifierInvalid]));
+  const f5 = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: green().map((r) => (['undeclared'].includes(r.class) ? r : { ...r, status: 'unrunnable', requires: 'PREREG-001 6 F5' })) });
+  check('3f F5 (quality classes expected UNRUNNABLE, U pass) holds its expectation and is UNRUNNABLE', f5.expectedRedHolds === true && f5.falsifierInvalid === false && f5.terminal === 'UNRUNNABLE', JSON.stringify([f5.terminal, f5.expectedRedHolds, f5.expectedUnrunnableObserved]));
+  check('3f a BASELINE is never a falsifier: its own PC-01 miss is the PC-01 rule, not an expectation failure', fin({ results: failOn(green(), ['PC-01']) }).falsifierInvalid === false);
 }
 
 // ── self-check: QUERY-delta computation and control accounting (MED-4) ──────
@@ -1588,7 +1852,16 @@ const STUB_SEARCH = [
   "console.log('Loading index... ' + keep.length + ' entries loaded.' + (dropped ? ' (' + dropped + ' non-INDEX namespace chunk(s) filtered by namespace-registry.json)' : ''));",
   "console.log('\\nQuery: \"q\"\\n');",
   "console.log('\\nJSON:');",
-  "console.log(JSON.stringify(keep.slice(0, 5).map((n) => ({ path: n.path, title: n.title, score: 0.9, chunk: n.chunk })), null, 2));",
+  // STUB_SIDECAR: an empty results block plus the named sidecar defect on stderr.
+  "const mode = process.env.STUB_SIDECAR || '';",
+  "const side = (o) => console.error('AIGENT_ABSTAIN ' + JSON.stringify({ schema: 'abstain/1', invocation: process.env.AIGENT_SEARCH_INVOCATION, outcome: 'abstain', reason: 'below-tau', ...o }));",
+  "console.log(JSON.stringify(mode ? [] : keep.slice(0, 5).map((n) => ({ path: n.path, title: n.title, score: 0.9, chunk: n.chunk })), null, 2));",
+  "if (mode === 'malformed') console.error('AIGENT_ABSTAIN {nope');",
+  "else if (mode === 'duplicate') { side({}); side({}); }",
+  "else if (mode === 'unknown') side({ reason: 'because' });",
+  "else if (mode === 'unbound') side({ invocation: 'rec-ffffffffffffffff' });",
+  // STUB_CTL_FAIL: a permitted control prints its row and THEN exits non-zero.
+  "if (process.env.STUB_CTL_FAIL && idx.notes.some((n) => n.path.includes('recollection-control'))) process.exitCode = 1;",
 ].join('\n');
 const STUB_EMBED = [
   "const fs = require('fs'), path = require('path');",
@@ -1607,30 +1880,59 @@ function selfCheckWiring(check) {
   const clone = path.join(tmp, 'clone');
   const cl = spawnSync('git', ['clone', '-q', '--no-checkout', PRODUCT_TREE, clone], { encoding: 'utf8', env: gitIdentityEnv });
   const co = spawnSync('git', ['-C', clone, 'checkout', '-q', BASELINE_COMMIT], { encoding: 'utf8', env: gitIdentityEnv });
-  const ready = cl.status === 0 && co.status === 0;
-  check('0 wiring: a local clone at the baseline commit could be made', ready, `${cl.stderr || ''}${co.stderr || ''}`.slice(0, 160));
+  // The instrument under test, copied into its OWN repo and committed, so the
+  // registered instrument_commit is verified by git, not assumed.
+  const instRepo = path.join(tmp, 'inst');
+  cpSync(HERE, path.join(instRepo, 'evals', 'recollection'), { recursive: true, filter: (src) => path.basename(src) !== 'results' });
+  const ig = (...a) => spawnSync('git', ['-C', instRepo, ...a], { encoding: 'utf8', env: gitIdentityEnv });
+  ig('init', '-q');
+  ig('add', '-A');
+  ig('commit', '-q', '--no-verify', '-m', 'instrument');
+  const instCommit = ig('rev-parse', 'HEAD').stdout.trim();
+  const instFile = path.join(instRepo, 'evals', 'recollection', 'run-recollection.mjs');
+  const ready = cl.status === 0 && co.status === 0 && /^[0-9a-f]{40}$/.test(instCommit);
+  check('0 wiring: a local clone at the baseline commit and a committed instrument copy could be made', ready, `${cl.stderr || ''}${co.stderr || ''}`.slice(0, 160));
   const names = ['wiring: a dirty product tree reaches the identity refusal', 'wiring: an invalid --reference reaches a harness error',
-    'wiring: identity_run is true only with the instrument registered', 'wiring: an unregistered instrument is not an identity run'];
+    'wiring: identity_run is true only with the full 1.7 record', 'wiring: an unregistered instrument is not an identity run',
+    'wiring: an incomplete record is incomplete in the packet, not registered', 'wiring: a withdrawn record reads withdrawn in the packet, not absent',
+    'wiring: the finalizer reaches the exit code (refused run is non-zero) and the packet states the claim limits', 'wiring: a truncated --reference is refused through the real call site'];
   if (!ready) { for (const n of names) check(n, false, 'no clone'); return; }
   const run = (args) => {
-    const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--product-tree', clone, '--json', ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    try { return JSON.parse(r.stdout); } catch { return { parseFailure: (r.stderr || '').slice(0, 200) }; }
+    const r = spawnSync(process.execPath, [instFile, '--product-tree', clone, '--json', ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    try { return { ...JSON.parse(r.stdout), _exit: r.status }; } catch { return { parseFailure: (r.stderr || '').slice(0, 200), _exit: r.status }; }
   };
-  const reg = path.join(tmp, 'reg.md');
-  writeFileSync(reg, `baseline_instrument_sha256: ${fileHash(fileURLToPath(import.meta.url))}\n`);
-  const none = path.join(tmp, 'none.md');
-  writeFileSync(none, 'nothing registered\n');
-  const refFile = path.join(tmp, 'ref.json');
-  writeFileSync(refFile, JSON.stringify({ scenario: 'F9', cases: [{ id: 'x' }] }));
+  const env = { os: os.platform(), node: process.version, bash: bashProbe().resolved, model: 'Xenova/all-MiniLM-L6-v2' };
+  const instSha = fileHash(instFile);
+  const record = (o = {}) => registrationText({ id: 'B-001', commit: BASELINE_COMMIT, pins: BASELINE_PINS, instrumentSha: instSha, instrumentCommit: instCommit, env, ...o });
+  const file = (name, text) => { const f = path.join(tmp, name); writeFileSync(f, text); return f; };
+  const reg = file('reg.md', record());
+  const none = file('none.md', 'nothing registered\n');
+  const incomplete = file('incomplete.md', record({ omit: ['instrument_commit', 'environment_os'] }));
+  const withdrawn = file('withdrawn.md', `${record()}candidate_id: B-002\nwithdraws: B-001\n`);
+  const refFile = file('ref.json', JSON.stringify({ scenario: 'F9', cases: [{ id: 'x' }] }));
+  // Everything valid except the population: only the truncation can refuse it.
+  const truncated = file('truncated.json', JSON.stringify({
+    preregistration: PREREG, packet_sha256: PACKET_SHA256, scenario: 'BASELINE', development_subset: null, product_commit: BASELINE_COMMIT,
+    identity: { kind: 'baseline' }, instrument_sha256: instSha, search_now: { frozen: FROZEN_NOW, temporal_class: FROZEN_NOW },
+    hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash },
+    runtime_hashes_pinned: BASELINE_PINS, runtime_hash_mismatch: [], runtime_hash_pin_drift: [], harness_errors: [], cases: [{ id: 'P-01' }],
+  }));
   const clean = run(['--candidates', reg]);
   const withRef = run(['--candidates', reg, '--reference', refFile]);
+  const withTrunc = run(['--candidates', reg, '--reference', truncated]);
   const unreg = run(['--candidates', none]);
+  const inc = run(['--candidates', incomplete]);
+  const wd = run(['--candidates', withdrawn]);
   writeFileSync(path.join(clone, 'daemons', 'zz-untracked.txt'), 'x\n');
   const dirty = run(['--candidates', reg]);
   check(names[0], dirty.identity && dirty.identity.kind === 'REFUSED' && /dirty/.test(dirty.identity.refused || ''), JSON.stringify(dirty.identity || dirty));
   check(names[1], (withRef.harness_errors || []).some((e) => e.includes('--reference refused')), JSON.stringify(withRef.harness_errors || withRef));
-  check(names[2], clean.identity_run === true && clean.instrument_registered === true, JSON.stringify([clean.identity_run, clean.instrument_registered, clean.parseFailure]));
-  check(names[3], unreg.identity_run === false && unreg.instrument_registered === false, JSON.stringify([unreg.identity_run, unreg.instrument_registered, unreg.parseFailure]));
+  check(names[2], clean.identity_run === true && clean.instrument_registered === true && clean.registration && clean.registration?.state === 'registered' && clean.registration?.record?.instrument_commit === instCommit, JSON.stringify([clean.identity_run, clean.instrument_registered, clean.registration, clean.parseFailure]));
+  check(names[3], unreg.identity_run === false && unreg.instrument_registered === false && unreg.registration && unreg.registration?.state === 'absent', JSON.stringify([unreg.identity_run, unreg.instrument_registered, unreg.registration, unreg.parseFailure]));
+  check(names[4], inc.identity_run === false && inc.instrument_registered === false && inc.registration && inc.registration?.state === 'incomplete' && inc.registration?.problems.join(';').includes('instrument_commit'), JSON.stringify([inc.registration, inc.parseFailure]));
+  check(names[5], wd.identity_run === false && wd.registration && wd.registration?.state === 'withdrawn', JSON.stringify([wd.registration, wd.parseFailure]));
+  check(names[6], dirty._exit === 1 && dirty.terminal === 'UNRUNNABLE' && Array.isArray(dirty.terminal_basis) && Array.isArray(dirty.claims_limits) && dirty.claims_limits.length === CLAIM_LIMITS.length && dirty.claims_limits.some((l) => /F7/.test(l) && /NOT executable/.test(l)), JSON.stringify([dirty._exit, dirty.terminal, dirty.terminal_basis, dirty.claims_limits]));
+  check(names[7], (withTrunc.harness_errors || []).some((e) => e.includes('--reference refused') && /population|missing/i.test(e)), JSON.stringify(withTrunc.harness_errors || withTrunc));
 }
 
 async function selfCheckAccounting(check) {
@@ -1638,6 +1940,7 @@ async function selfCheckAccounting(check) {
     const b = makeSandbox(name);
     writeFileSync(path.join(b.sem, 'search-vault.js'), STUB_SEARCH);
     writeFileSync(path.join(b.sem, 'embed-vault.js'), STUB_EMBED);
+    writeFileSync(path.join(b.sem, 'embed-one.mjs'), "process.stdout.write('[0.1,0.2,0.3]');\n");
     return b;
   };
   const box = stubbed('selfcheck-acct');
@@ -1694,6 +1997,60 @@ async function selfCheckAccounting(check) {
   s1 = snap();
   check('5c BUILD control: built and returned in the auxiliary sandbox, byte-identical copy, same code', out.indexedRows === 1 && out.returned === true && out.targetSha256 === out.copySha256 && out.sandboxSameCodeAsScored === true, JSON.stringify(out));
   check('5c BUILD control output never reaches the scored record, scanPolicy or the leak list', s1.res === s0.res && s1.pfp === s0.pfp && s1.aux === s0.aux + 1, JSON.stringify({ s0, s1 }));
+
+  // ── I2 / I3: through scoreWithheld and scoreStaleIndex, the real scored-case callers.
+  const withEnv = (vars, fn) => {
+    const keep = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    try { return fn(); } finally { for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  };
+  const target = 'ops-deny/alarm-bypass-codes.md';
+  buildInputPresence = { [target]: true };
+  builtRowCounts = new Map();
+  const rebuild = () => { writeFileSync(box.embeddings, JSON.stringify(pre)); };
+  const last = () => results[results.length - 1];
+  const sidecarModes = { malformed: 'abstention-sidecar-malformed', duplicate: 'abstention-sidecar-duplicated', unknown: 'abstention-reason-unknown', unbound: 'abstention-sidecar-unbound' };
+  let n = 0;
+  for (const [mode, detail] of Object.entries(sidecarModes)) {
+    n += 1;
+    rebuild();
+    const before = results.length;
+    withEnv({ STUB_SIDECAR: mode }, () => scoreWithheld(box, { id: `C-7${n}`, class: 'deny', target, query: 'q' }));
+    check(`2c I2 scoreWithheld: a REJECTED sidecar (${mode}) on an empty-result invocation FAILs the case as ${detail}`, results.length === before + 1 && last().status === 'fail' && last().detail === detail, `${last().status} ${last().detail}`);
+    rebuild();
+    const seedStale = { id: `X-7${n}`, path: 'ops-deny/seed-stale.md', title: 't', chunk: `${CAN} stale` };
+    const beforeX = results.length;
+    withEnv({ STUB_SIDECAR: mode }, () => scoreStaleIndex(box, { id: `X-7${n}`, class: 'stale-index', query: 'q', canary: CAN, expectedDisposition: 'DENY' }, seedStale));
+    check(`2c I2 scoreStaleIndex: a REJECTED sidecar (${mode}) FAILs the case as ${detail}`, results.length === beforeX + 1 && last().status === 'fail' && last().detail === detail, `${last().status} ${last().detail}`);
+  }
+  rebuild();
+  withEnv({}, () => scoreWithheld(box, { id: 'C-70', class: 'deny', target, query: 'q' }));
+  check('2c I2 an ordinary non-abstaining query is NOT asked for a sidecar (BUILD-WITHHELD still PASSes)', last().status === 'pass' && last().label === 'BUILD-WITHHELD', `${last().status} ${last().detail}`);
+  rebuild();
+  withEnv({}, () => scoreStaleIndex(box, { id: 'X-70', class: 'stale-index', query: 'q', canary: CAN, expectedDisposition: 'DENY' }, { id: 'X-70', path: 'ops-deny/seed-stale.md', title: 't', chunk: `${CAN} stale` }));
+  check('2c I2 ... and the QUERY-stage case with no sidecar still reaches its proof (QUERY-WITHHELD)', last().status === 'pass' && last().label === 'QUERY-WITHHELD', `${last().status} ${last().detail}`);
+
+  // I3: a permitted control that prints its row and then exits non-zero is not a witness.
+  rebuild();
+  let p0 = snap();
+  withEnv({ STUB_CTL_FAIL: '1' }, () => scoreStaleIndex(box, { id: 'X-71', class: 'stale-index', query: 'q', canary: CAN, expectedDisposition: 'DENY' }, { id: 'X-71', path: 'ops-deny/seed-stale.md', title: 't', chunk: `${CAN} stale` }));
+  let p1 = snap();
+  const rq = last();
+  check('3c I3 QUERY: control prints its row, then exits 1 -> not returned, exit recorded, FAIL policy-withholding-not-demonstrated',
+    rq.status === 'fail' && rq.detail.startsWith(NOT_DEMONSTRATED) && rq.proof.control.returned === false && rq.proof.control.exit === 1 && rq.undemonstrated === true, `${rq.status} ${rq.detail} ${JSON.stringify(rq.proof && rq.proof.control)}`);
+  check('3c I3 QUERY: the failed control is recorded in its own block, returned=false, and never reaches the leak accounting', auxiliaryControls[auxiliaryControls.length - 1].returned === false && auxiliaryControls[auxiliaryControls.length - 1].exit === 1 && p1.pfp === p0.pfp, JSON.stringify([p0, p1]));
+  rebuild();
+  const ctlBuild = withEnv({ STUB_CTL_FAIL: '1' }, () => auxBuildControl(box, { id: 'C-72', class: 'deny', target, query: 'q' }));
+  check('3c I3 BUILD: control row printed then exit 1 -> indexed but NOT returned (searchExit 1 recorded)', ctlBuild.indexedRows === 1 && ctlBuild.searchExit === 1 && ctlBuild.returned === false, JSON.stringify(ctlBuild));
+  rebuild();
+  p0 = snap();
+  withEnv({ STUB_CTL_FAIL: '1' }, () => scoreWithheld(box, { id: 'C-73', class: 'deny', target, query: 'q' }));
+  p1 = snap();
+  check('3c I3 BUILD through scoreWithheld: FAIL policy-withholding-not-demonstrated, one scored record, no leak from the control canary',
+    last().status === 'fail' && last().detail.startsWith(NOT_DEMONSTRATED) && p1.res === p0.res + 1 && p1.pfp === p0.pfp, `${last().status} ${last().detail}`);
+  rebuild();
+  const healthy = auxBuildControl(box, { id: 'C-74', class: 'deny', target, query: 'q' });
+  check('3c I3 a healthy control (exit 0, row returned) is still returned', healthy.returned === true && healthy.searchExit === 0 && healthy.buildExit === 0, JSON.stringify(healthy));
 }
 
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
@@ -1753,7 +2110,7 @@ const SCENARIOS = {
   F5: {
     mutation: 'copy the undeclared overlay in as scratch/ AND delete the feedback row from the sandbox core registry',
     expectedRed: [], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
-    unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'],
+    unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness', 'positive-control'],
     runU: true, mutates: ['daemons/semantic-search/namespace-registry.json'],
   },
   F6: {
@@ -1767,9 +2124,10 @@ const SCENARIOS = {
     mutation: 'replace the abstention gate with one that returns zero rows unconditionally and still emits a valid bound sidecar (after index validation and both filters)',
     expectedRed: ['PC-01'], expectedRedClasses: ['positive'], expectPass: [], expectPassClasses: ['negative'],
     unrunnableClasses: [], runU: false, needsGate: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f7Mutate),
-    caveat: 'F7 mutates an abstention gate, and no gate exists at the baseline: this run is UNRUNNABLE there, naming that. '
-      + 'The hook (f7Mutate) and the observations it predicts are exercised only on synthetic process output by --self-check; '
-      + 'it cannot run end-to-end until a candidate with a gate exists and the hook is anchored to that gate.',
+    caveat: 'F7 is NOT executable at the baseline (no abstention gate exists: UNRUNNABLE, naming that), and it is NOT executable at a candidate '
+      + 'either as the hook stands: the entry check requires an AIGENT_ABSTAIN emission in search-vault.js and f7Mutate refuses a source that contains one. '
+      + 'The hook and the observations it predicts are exercised only on synthetic process output by --self-check. Candidate-era F7 support is incomplete '
+      + 'and is owed, with a real sandbox witness, before F7 may be used to certify a candidate.',
   },
   F8: {
     mutation: `run the temporal class with AIGENT_SEARCH_NOW set to ${PRE_WINDOW_NOW}, one day before the earliest corpus window end`,
@@ -1781,7 +2139,8 @@ const SCENARIOS = {
     mutation: 'delete the two query-stage filter calls from the sandbox search-vault.js (the render chokepoint, the directory guard, the helper modules and the indexer stay)',
     expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01'],
     unrunnableClasses: [], runU: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f9Mutate), assert: f9Assertions,
-    note: 'asserted per case: no QUERY-stage case may read QUERY-WITHHELD; BUILD-stage and U-class results must stand',
+    note: 'asserted per case: no QUERY-stage case may read QUERY-WITHHELD; BUILD-stage and U-class results must stand. '
+      + 'Only the filter-removal arm is executed: the forced-abstention second arm is NOT executable here (no abstention gate), and synthetic label tests are not its execution.',
   },
 };
 
@@ -1796,6 +2155,115 @@ const GATES = [
   { klass: 'undeclared', label: 'undeclared coverage', n: 2, gate: '2 of 2', min: 2 },
   { klass: 'operator', label: 'operator-owned', n: 3, gate: '3 of 3', min: 3 },
   { klass: 'loudness', label: 'load-time loudness', n: 2, gate: '2 of 2', min: 2 },
+];
+
+// ── finalization, PREREG-001 5.1 / 5.2 / 5.3 ─────────────────────────────────
+// Pure over the scored records so --self-check drives the REAL finalization with
+// synthetic cases (main calls exactly this). The run terminal is decided by the
+// declared CLASS GATES, PC-01, the fatal leak / budget / integrity / pin rules,
+// and, for a mutation run that actually executed, its expected red. A permitted
+// case miss inside a met class gate is not a run FAIL (positive >= 22 of 24).
+function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors, policyFalsePositives, budgetBreaches, pinDrift, referenceRows, referenceDev, ran, only }) {
+  const pcRed = results.some((r) => r.id === 'PC-01' && r.status === 'fail');
+  const classReport = GATES.map((g) => {
+    const rows = results.filter((r) => r.class === g.klass);
+    const passed = rows.filter((r) => r.status === 'pass').length;
+    const failed = rows.filter((r) => r.status === 'fail').length;
+    const unrunnable = rows.filter((r) => r.status === 'unrunnable').length;
+    // The gate counts PASSES. A case miss inside a met gate is permitted, never a
+    // silent 100 percent; an unrunnable case means the class cannot be certified.
+    const gateMet = passed >= g.min && (g.klass !== 'temporal' || inversions.length === 0);
+    let status = unrunnable > 0 ? (gateMet || failed === 0 ? 'UNRUNNABLE' : 'FAIL') : (gateMet ? 'PASS' : 'FAIL');
+    // PREREG-002 section 6: with PC-01 red no class can be certified PASS.
+    if (status === 'PASS' && pcRed) status = 'NOT-CERTIFIED';
+    return {
+      class: g.klass, label: g.label, gate: g.gate, n: g.n, gateMet,
+      pass: passed, fail: failed, unrunnable,
+      failingIds: rows.filter((r) => r.status === 'fail').map((r) => r.id),
+      unrunnableIds: rows.filter((r) => r.status === 'unrunnable').map((r) => r.id),
+      status,
+    };
+  });
+
+  // Expected-red accounting, PREREG-001 6: "A falsifier that does not produce its
+  // expected red is itself a FAIL of the benchmark, not of the product."
+  const statusOf = (id) => (results.find((r) => r.id === id) || {}).status || 'not-run';
+  const expectedRedIds = [
+    ...spec.expectedRed,
+    ...cases.filter((c) => (spec.expectedRedClasses || []).includes(c.class)).map((c) => c.id),
+  ];
+  const expectedRedObserved = expectedRedIds.map((id) => ({ id, expected: 'fail', observed: statusOf(id) }));
+  const expectedPassIds = [
+    ...(spec.expectPass || []),
+    ...cases.filter((c) => (spec.expectPassClasses || []).includes(c.class)).map((c) => c.id),
+  ];
+  const expectedPassObserved = expectedPassIds.map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
+  const scenarioAssertions = spec.assert && ran ? spec.assert(results, referenceRows, referenceDev) : [];
+  const expectedUnrunnableObserved = (spec.unrunnableClasses || []).map((klass) => {
+    const rows = results.filter((r) => r.class === klass);
+    return { class: klass, expected: 'unrunnable', n: rows.length, unrunnable: rows.filter((r) => r.status === 'unrunnable').length };
+  });
+  const inversionShortfall = spec.expectInversionsAtLeast != null && inversions.length < spec.expectInversionsAtLeast;
+  // Assert WHICH ids inverted, not just how many (see the F3 caveat).
+  const missingInversionIds = (spec.expectInversionIds || []).filter((id) => !inversions.some((v) => v.id === id));
+  // A harness-errored run has no measurement to hold: .every() over an empty
+  // fallback spec is vacuously true.
+  const expectedRedHolds = harnessErrors.length === 0
+    && expectedRedObserved.every((r) => r.observed === 'fail')
+    && expectedPassObserved.every((r) => r.observed === 'pass')
+    && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
+    && !inversionShortfall
+    && missingInversionIds.length === 0
+    && (spec.expectInversionCount == null || inversions.length === spec.expectInversionCount)
+    && scenarioAssertions.every((a) => a.ok);
+
+  const pc01 = results.find((r) => r.id === 'PC-01') || null;
+  const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
+  const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
+  // A failed expectation in a falsifier that EXECUTED invalidates the benchmark
+  // run (PREREG-001 5.4 / 6: "a benchmark FAIL"). A missing precondition is a
+  // different thing: an unrunnable case the scenario did not itself declare
+  // (no gate to mutate, a broken interpreter, a pin mismatch) means the mutation
+  // was not fully executed, and that stays UNRUNNABLE with the gap named.
+  const unexpectedUnrunnable = results.filter((r) => r.status === 'unrunnable' && !(spec.unrunnableClasses || []).includes(r.class));
+  const falsifierInvalid = scenario !== 'BASELINE' && ran && !expectedRedHolds && unexpectedUnrunnable.length === 0;
+
+  const failBasis = [
+    ...classReport.filter((c) => c.status === 'FAIL').map((c) => `class-gate-missed: ${c.class} ${c.pass}/${c.n} (${c.gate})`),
+    ...(policyFalsePositives.length ? [`policy-false-positives: ${policyFalsePositives.length}`] : []),
+    ...(budgetBreaches.length ? [`budget-breaches: ${budgetBreaches.length}`] : []),
+    ...(pc01 && pc01.status === 'fail' ? ['pc-01-failed'] : []),
+    ...(falsifierInvalid ? [`falsifier-expectation-failed: ${scenario} executed and did not produce its expected red`] : []),
+  ];
+  const unrunnableBasis = [
+    ...(pinDrift.length ? [`pin-drift: ${pinDrift.length} file(s)`] : []),
+    ...(anyUnrunnable ? [`unrunnable-cases: ${results.filter((r) => r.status === 'unrunnable').length}`] : []),
+  ];
+  // 5.3: a FAIL beside unrunnable cases is a FAIL, with the unrunnable listed in full.
+  const terminalBasis = [...failBasis, ...unrunnableBasis];
+
+  let terminal;
+  if (harnessErrors.length) terminal = 'HARNESS-ERROR';
+  else if (failBasis.length) terminal = 'FAIL';
+  else if (unrunnableBasis.length) terminal = 'UNRUNNABLE';
+  else terminal = 'PASS';
+  // A development subset scores some cases; its gates cannot be met and it is not a result.
+  if (only) terminal = `${terminal} (development subset, not a result)`;
+  return {
+    classReport, expectedRedIds, expectedPassIds, expectedRedObserved, expectedPassObserved, expectedUnrunnableObserved,
+    missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, undeclaredUnrunnable, terminal, terminalBasis, falsifierInvalid,
+  };
+}
+const exitCodeFor = (terminal) => (terminal === 'PASS' ? 0 : 1);
+
+// What this instrument can and cannot execute, stated in the packet and in the
+// self-check output (review of b73de78). The F7 entry check below requires an
+// AIGENT_ABSTAIN emission in search-vault.js; f7Mutate refuses a source that
+// contains one. Both are true at once, so F7 has no executable path today.
+const CLAIM_LIMITS = [
+  'F7 is NOT executable at the baseline (no abstention gate exists), and it is NOT executable at a candidate either as the hook stands: its entry check requires an AIGENT_ABSTAIN emission in search-vault.js while f7Mutate refuses a source that contains one. Only synthetic-output checks exist for it.',
+  'The F9 forced-abstention second arm is NOT executable here: only the filter-removal arm runs. Synthetic label tests do not constitute that arm\'s execution.',
+  'Candidate-era section-7 mutation support is INCOMPLETE: the F7 hook and the F9 abstention arm are owed to the candidate that carries a gate, with real sandbox witnesses, before they may be used to certify it.',
 ];
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -1889,9 +2357,14 @@ if (argv.includes('--self-check')) {
   await selfCheckPolicy(check);
   selfCheckReview(check);
   selfCheckWiring(check);
+  selfCheckFinalizer(check);
   await selfCheckAccounting(check);
+  check('8 claims: F7 and the F9 abstention arm are stated as NOT executable here, and candidate-era mutation support as incomplete', CLAIM_LIMITS.length === 3 && /F7/.test(CLAIM_LIMITS[0]) && /NOT executable/.test(CLAIM_LIMITS[0]) && /F9/.test(CLAIM_LIMITS[1]) && /NOT executable/.test(CLAIM_LIMITS[1]) && /INCOMPLETE/.test(CLAIM_LIMITS[2]));
+  check('8 claims: the stated F7 conflict is real (f7Mutate refuses a source carrying the emission the entry check demands)', (() => { try { f7Mutate(`x ${ABSTAIN_PREFIX}`); return false; } catch (e) { return /already emits/.test(e.message); } })());
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
+  console.log('NOT EXECUTABLE AT THIS IDENTITY, STATED PLAINLY:');
+  for (const l of CLAIM_LIMITS) console.log(`  - ${l}`);
   console.log(failed.length === 0 ? 'SELF-CHECK PASS' : `SELF-CHECK FAIL (${failed.length})`);
   process.exit(failed.length === 0 ? 0 : 1);
 }
@@ -1946,6 +2419,9 @@ let identity = resolveIdentity({
   candidatesText: candidatesPresent ? readFileSync(CANDIDATES_FILE, 'utf8') : '',
   candidatesSource: CANDIDATES_FILE ? `${CANDIDATES_FILE}${candidatesPresent ? '' : ' (file absent)'}` : null,
   instrumentSha: INSTRUMENT_SHA,
+  // 1.7 item 5: the record is bound to the environment this run observes.
+  environment: { os: env.platform, node: env.node, bash: BASH ? BASH.resolved : null, model: model.name },
+  verifyInstrumentCommit: instrumentCommitVerifier(ROOT, INSTRUMENT_REL, INSTRUMENT_SHA),
 });
 if (identity.ok) {
   const treeProblems = treeIdentityProblems(PRODUCT_TREE, observedCommit, identity.pins);
@@ -1959,7 +2435,10 @@ let referenceRows = null;
 if (REFERENCE_FILE) {
   let ref = null;
   try { ref = JSON.parse(readFileSync(REFERENCE_FILE, 'utf8')); } catch { ref = null; }
-  const problem = validateReference(ref, { commit: observedCommit, kind: identity.kind, instrumentSha: INSTRUMENT_SHA });
+  const problem = validateReference(ref, {
+    commit: observedCommit, kind: identity.kind, instrumentSha: INSTRUMENT_SHA, expectedIds: cases.map((c) => c.id),
+    hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash }, pins: ACTIVE_PINS, development: REFERENCE_DEV,
+  });
   if (problem) harnessErrors.push(`--reference refused: ${problem}`);
   else referenceRows = ref.cases;
 }
@@ -1971,7 +2450,6 @@ let box = null;
 const declareDoctorUnrunnable = () => declareUnrunnable(['U-01', 'U-02'],
   doctorGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
   `PREREG-002 4.3 (${doctorGaps.map((g) => `item ${g.item}`).join(', ')})`);
-let indexBuild = null;
 let doctor = null;
 const scenarioNotes = [];
 
@@ -1982,9 +2460,10 @@ function declareUnrunnable(ids, why, requires) {
 if (harnessErrors.length === 0 && !identity.ok) {
   declareUnrunnable(cases.map((c) => c.id), `PREREG-002 refuses to score: ${identity.why}`, identity.requires);
 } else if (harnessErrors.length === 0 && SPEC.needsGate && !readFileSync(path.join(SEM, 'search-vault.js'), 'utf8').includes(ABSTAIN_PREFIX)) {
+  // F7's entry check demands an emission site that f7Mutate then refuses (CLAIM_LIMITS): F7 never reaches a mutated run.
   declareUnrunnable(cases.map((c) => c.id),
     `${SCENARIO} mutates an abstention gate and this product's search-vault.js has no ${ABSTAIN_PREFIX} emission site, so there is no gate to replace`,
-    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity (cannot run end-to-end until a candidate exists)`);
+    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity; the F7 hook is also not executable against a candidate as written (CLAIM_LIMITS)`);
 } else if (harnessErrors.length === 0 && blockingGaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
     blockingGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
@@ -2169,103 +2648,34 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !g
   }
 }
 
-// ── terminal accounting, PREREG-001 5.1 / 5.2 / 5.3 ──────────────────────────
+// ── terminal accounting: finalizeRun() above, PREREG-001 5.1 / 5.2 / 5.3 ─────
 const wall = Date.now() - started;
 const wallBudget = SCENARIO === 'BASELINE' ? RUN_WALL_MAX_MS : FALSIFIER_WALL_MAX_MS;
 if (wall > wallBudget) budgetBreaches.push({ id: '(run)', breaches: [`wall clock ${(wall / 1000).toFixed(1)}s > ${(wallBudget / 1000).toFixed(0)}s`] });
-
-const classReport = GATES.map((g) => {
-  const rows = results.filter((r) => r.class === g.klass);
-  const passed = rows.filter((r) => r.status === 'pass').length;
-  const failed = rows.filter((r) => r.status === 'fail').length;
-  const unrunnable = rows.filter((r) => r.status === 'unrunnable').length;
-  let met = passed >= g.min;
-  if (g.klass === 'temporal') met = met && inversions.length === 0;
-  if (unrunnable > 0) met = false;
-  let status = (unrunnable > 0 && failed === 0) ? 'UNRUNNABLE' : (met ? 'PASS' : 'FAIL');
-  // PREREG-002 section 6: with PC-01 red no class can be certified PASS.
-  const pcRed = results.some((r) => r.id === 'PC-01' && r.status === 'fail');
-  if (status === 'PASS' && pcRed) status = 'NOT-CERTIFIED';
-  return {
-    class: g.klass, label: g.label, gate: g.gate, n: g.n,
-    pass: passed, fail: failed, unrunnable,
-    failingIds: rows.filter((r) => r.status === 'fail').map((r) => r.id),
-    unrunnableIds: rows.filter((r) => r.status === 'unrunnable').map((r) => r.id),
-    status,
-  };
-});
-
-// ── expected-red accounting, PREREG-001 6 ────────────────────────────────────
-// "A falsifier that does not produce its expected red is itself a FAIL of the
-// benchmark, not of the product." Checked here and written into the packet, so
-// a falsifier that stops falsifying shows up in the artifact.
-const statusOf = (id) => (results.find((r) => r.id === id) || {}).status || 'not-run';
-const expectedRedIds = [
-  ...SPEC.expectedRed,
-  ...cases.filter((c) => (SPEC.expectedRedClasses || []).includes(c.class)).map((c) => c.id),
-];
-const expectedRedObserved = expectedRedIds.map((id) => ({ id, expected: 'fail', observed: statusOf(id) }));
-const expectedPassIds = [
-  ...(SPEC.expectPass || []),
-  ...cases.filter((c) => (SPEC.expectPassClasses || []).includes(c.class)).map((c) => c.id),
-];
-const expectedPassObserved = expectedPassIds.map((id) => ({ id, expected: 'pass', observed: statusOf(id) }));
-// Per-case labels and control outcomes are asserted, not printed as a count.
-const scenarioAssertions = SPEC.assert && box ? SPEC.assert(results, referenceRows) : [];
-const expectedUnrunnableObserved = (SPEC.unrunnableClasses || []).map((klass) => {
-  const rows = results.filter((r) => r.class === klass);
-  return { class: klass, expected: 'unrunnable', n: rows.length, unrunnable: rows.filter((r) => r.status === 'unrunnable').length };
-});
-const inversionShortfall = SPEC.expectInversionsAtLeast != null && inversions.length < SPEC.expectInversionsAtLeast;
-// Assert WHICH ids inverted, not just how many. A count clause is satisfied by
-// inversions the mutation did not cause (see the F3 caveat).
-const missingInversionIds = (SPEC.expectInversionIds || []).filter((id) => !inversions.some((v) => v.id === id));
-// A harness-errored run has no measurement to hold: .every() over the empty
-// fallback SPEC is vacuously true, which printed "expected red holds: true"
-// beside "harness errors: 1".
-const expectedRedHolds = harnessErrors.length === 0
-  && expectedRedObserved.every((r) => r.observed === 'fail')
-  && expectedPassObserved.every((r) => r.observed === 'pass')
-  && expectedUnrunnableObserved.every((r) => r.n > 0 && r.unrunnable === r.n)
-  && !inversionShortfall
-  && missingInversionIds.length === 0
-  && (SPEC.expectInversionCount == null || inversions.length === SPEC.expectInversionCount)
-  && scenarioAssertions.every((a) => a.ok);
-
-const pc01 = results.find((r) => r.id === 'PC-01') || null;
-const undeclaredUnrunnable = results.filter((r) => r.status === 'unrunnable' && !r.requires);
-const anyFail = results.some((r) => r.status === 'fail');
-const anyUnrunnable = results.some((r) => r.status === 'unrunnable');
 
 // PREREG-001 1.3: "Any run whose sandbox copies of these files do not hash to
 // the values above is UNRUNNABLE, not a result." The pre-mutation gate at
 // runtimeHashGaps() cannot see a file a scenario edits afterwards, so the
 // observed hashes are sampled again here and a pinned file that drifted feeds
 // the terminal instead of sitting inert in the packet. Unpinned entries carry
-// pinned: null and never trip this.
+// pinned: null and never trip this. A file the scenario declares it mutates is
+// expected to differ from its pin.
 const observedHashes = observedRuntimeHashes(box, ACTIVE_PINS);
 const pinDrift = Object.entries(observedHashes || {})
-  // a file the scenario declares it mutates is expected to differ from its pin
   .filter(([file, v]) => v.pinned !== null && v.matchesPin === false && !(SPEC.mutates || []).includes(file))
   .map(([file, v]) => ({ file, expected: v.pinned, observed: v.observed }));
 
-// R2-5 asked for the pin-drift clause in the FAIL branch. PREREG-001 1.3 says
-// the opposite in as many words: "Any run whose sandbox copies of these files
-// do not hash to the values above is UNRUNNABLE, not a result." The packet wins
-// over the order, so drift lands on UNRUNNABLE. It is still consequential --
-// a drifted run can never report PASS -- and it is placed AFTER the FAIL branch
-// so a genuine FAIL is never masked by it, matching 5.3's rule that a run with
-// both a FAIL and an unrunnable is a FAIL.
-// Measured: implementing it literally in the FAIL branch flipped F5 from
-// UNRUNNABLE to FAIL, because F5's own mutation edits the pinned
-// namespace-registry.json. Reported in the ledger, not reconciled silently.
-let terminal;
-if (harnessErrors.length) terminal = 'HARNESS-ERROR';
-else if (anyFail || policyFalsePositives.length || budgetBreaches.length || (pc01 && pc01.status === 'fail')) terminal = 'FAIL';
-else if (pinDrift.length || anyUnrunnable) terminal = 'UNRUNNABLE';
-else terminal = 'PASS';
-// A development subset scores some cases; its gates cannot be met and it is not a result.
-if (ONLY) terminal = `${terminal} (development subset, not a result)`;
+// A mutation run EXECUTED only if a sandbox was built, nothing was harness-errored
+// and no pin mismatch declared every case unrunnable. Anything else is a missing
+// precondition, accounted separately from a failed expectation.
+const ran = !!box && harnessErrors.length === 0 && hashMismatch.length === 0;
+const {
+  classReport, expectedRedIds, expectedPassIds, expectedRedObserved, expectedPassObserved, expectedUnrunnableObserved,
+  missingInversionIds, expectedRedHolds, scenarioAssertions, pc01, undeclaredUnrunnable, terminal, terminalBasis, falsifierInvalid,
+} = finalizeRun({
+  results, cases, spec: SPEC, scenario: SCENARIO, inversions, harnessErrors, policyFalsePositives, budgetBreaches,
+  pinDrift, referenceRows, referenceDev: REFERENCE_DEV, ran, only: ONLY,
+});
 
 const packet = {
   preregistration: PREREG,
@@ -2274,6 +2684,8 @@ const packet = {
   // Named mutation runs are never identity runs (PREREG-002 section 6).
   identity_run: SCENARIO === 'BASELINE' && !ONLY && identity.ok && identity.instrumentRegistered === true,
   instrument_registered: identity.ok ? identity.instrumentRegistered === true : false,
+  // The registration record's own identity (1.7 items 1-7) and its state: registered / incomplete / withdrawn / absent.
+  registration: identity.registration || null,
   development_subset: ONLY ? [...ONLY] : null,
   product_commit: observedCommit,
   product_tree: PRODUCT_TREE,
@@ -2281,6 +2693,11 @@ const packet = {
   search_now: { frozen: FROZEN_NOW, temporal_class: SPEC.temporalNow || FROZEN_NOW },
   runtime_hash_mismatch: hashMismatch,
   terminal,
+  // Why the terminal reads as it does: missed class gates, fatal rules, a failed falsifier expectation, unrunnable cases.
+  terminal_basis: terminalBasis,
+  falsifier_invalid: falsifierInvalid,
+  // Stated plainly: what this instrument cannot execute (F7, the F9 abstention arm) and what is still owed.
+  claims_limits: CLAIM_LIMITS,
   ran_at: new Date().toISOString(),
   wall_ms: wall,
   hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash, frozen },
@@ -2310,7 +2727,10 @@ const packet = {
   expected_red_observed: expectedRedHolds,
   scenario_notes: scenarioNotes,
   scenario_assertions: scenarioAssertions,
-  reference_packet: REFERENCE_FILE ? { file: REFERENCE_FILE, sha256: existsSync(REFERENCE_FILE) ? fileHash(REFERENCE_FILE) : 'ABSENT' } : null,
+  reference_packet: REFERENCE_FILE ? {
+    file: REFERENCE_FILE, sha256: existsSync(REFERENCE_FILE) ? fileHash(REFERENCE_FILE) : 'ABSENT',
+    mode: !referenceRows ? 'refused' : REFERENCE_DEV ? 'development-comparison (narrower; NOT a full same-method reference)' : 'full-same-method-reference',
+  } : null,
   // 3.2a: one row per policy case, by stage and label. The auxiliary controls
   // are their own block and never enter scored totals, scanPolicy or leaks.
   policy_proof: results.filter((r) => r.stage).map((r) => ({ id: r.id, stage: r.stage, label: r.label, status: r.status, undemonstrated: !!r.undemonstrated })),
@@ -2332,7 +2752,7 @@ if (JSON_OUT) {
 } else {
   const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE' };
   console.log(`\n${PREREG} — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
-  console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)${identity.ok && !identity.instrumentRegistered ? '\n  NOT an identity run: this instrument is not registered for the baseline' : ''}`);
+  console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)${identity.ok && !identity.instrumentRegistered ? `\n  NOT an identity run: this instrument is not registered for the baseline (registration: ${identity.registration.state}${identity.registration.problems.length ? ` -- ${identity.registration.problems.join('; ')}` : ''})` : ''}`);
   console.log(`corpus           ${corpusHash}`);
   console.log(`overlay          ${overlayHash}`);
   console.log(`fixture-registry ${fixtureHash}\n`);
@@ -2356,7 +2776,9 @@ if (JSON_OUT) {
   console.log(`  harness errors: ${harnessErrors.length}`);
   for (const h of harnessErrors) console.log(`    ${h}`);
   console.log(`  undeclared unrunnable: ${undeclaredUnrunnable.length}`);
+  console.log(`  terminal basis: ${terminalBasis.length ? terminalBasis.join(' | ') : 'every class gate met, no fatal rule tripped'}`);
+  for (const l of CLAIM_LIMITS) console.log(`  limit: ${l}`);
   console.log(`\n  RUN TERMINAL: ${terminal}   (${(wall / 1000).toFixed(1)}s)\n`);
 }
 
-process.exit(terminal === 'PASS' ? 0 : 1);
+process.exit(exitCodeFor(terminal));
