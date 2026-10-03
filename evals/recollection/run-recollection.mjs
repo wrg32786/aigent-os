@@ -1027,7 +1027,10 @@ function scoreUndeclared(box, c, doctorResult) {
   }
   if (!doctorResult) fails.push('doctor not run');
   else if (!doctorResult.failedRecords.includes(c.doctorRecord)) fails.push(`doctor did not emit "${c.doctorRecord}" as a failure`);
-  const extra = { exit: res.status, doctorRecords: doctorResult ? doctorResult.failedRecords : null };
+  // Recorded for F5's complete witness (the directories the refusal named, in the order printed); ordinary U scoring above is scratch-only and unchanged.
+  const named = res.all.match(/REFUSING to run: undeclared vault namespace director(?:y|ies): ([^\n]*?)(?:\.\s|\.?$)/m);
+  const refusedDirs = named ? named[1].split(',').map((d) => d.trim()).filter(Boolean) : null;
+  const extra = { exit: res.status, doctorRecords: doctorResult ? doctorResult.failedRecords : null, refusedDirs };
   if (fails.length) return record(c.id, c.class, 'fail', fails.join('; '), extra);
   record(c.id, c.class, 'pass', `${script} refused and doctor failed the namespace record`, extra);
 }
@@ -1374,6 +1377,7 @@ function labelQueryStage(ev) {
     const why = ev.control && ev.control.failure ? `; ${ev.control.failure}` : '';
     return { label: null, demonstrated: false, gaps: [`matched-seeded-control-not-returned: a gate that also suppresses its own permitted control is not a causal witness${why}`] };
   }
+  if (ev.pristineFailure) return { label: null, demonstrated: false, gaps: [`pristine-comparison-failed: ${ev.pristineFailure}; its filter counts cannot establish a removal delta`] };
   if (ev.delta === ev.seededChunks) return { label: 'QUERY-WITHHELD', demonstrated: true, gaps };
   if (ev.delta === 0) return { label: 'DECLINED-BY-RETRIEVER', demonstrated: false, gaps: ['no target-attributable filter removal: the retriever declined, the policy layer never acted'] };
   return { label: null, demonstrated: false, gaps: [`filter-delta-mismatch (delta ${ev.delta}, seeded ${ev.seededChunks})`] };
@@ -1422,13 +1426,18 @@ function finishQueryStage(c, q, extra) {
   const controlFailure = controlCoherence(q.controlRes);
   const returned = controlRow !== -1 && controlFailure === null;
   const control = { path: q.controlPath, returned, rank: returned ? controlRow + 1 : null, exit: q.controlRes.status, failure: controlFailure };
+  // The pristine leg is evidence too: its counts can establish a removal delta only if
+  // that invocation succeeded (exit 0, a parsed results block, no rejected sidecar). It
+  // is not asked to return the target, and its output never reaches the leak totals.
+  const pristineFailure = controlCoherence(q.pristineRes);
   const seededCount = expected.filter ? (q.res.filterCounts || {})[expected.filter] : null;
-  const pristineCount = expected.filter ? (q.pristineRes.filterCounts || {})[expected.filter] : null;
+  const pristineCount = expected.filter && pristineFailure === null ? (q.pristineRes.filterCounts || {})[expected.filter] : null;
   const delta = seededCount == null || pristineCount == null ? null : seededCount - pristineCount;
-  const ev = { expected, readBack: q.readBack, targetReturned: !!present, targetRefused: refused, control, delta, seededChunks: q.readBack.count };
+  const ev = { expected, readBack: q.readBack, targetReturned: !!present, targetRefused: refused, control, delta, seededChunks: q.readBack.count, pristineFailure };
   const verdict = labelQueryStage(ev);
   const proof = {
     stage: 'QUERY', expected, readBack: q.readBack, control, filter: expected.filter, delta, seededChunks: q.readBack.count,
+    pristine: { exit: q.pristineRes.status, failure: pristineFailure, invocation: q.pristineRes.invocation },
     counts: { seeded: seededCount, pristine: pristineCount, seededSource: 'same invocation (the forbidden run)', pristineSource: 'paired invocation on the pristine index, same query' },
     gaps: verdict.gaps,
   };
@@ -1501,6 +1510,21 @@ function finishBuildStage(box, c, res, extra) {
   const out = { ...extra, stage: 'BUILD', label: verdict.label, proof };
   if (verdict.demonstrated) return record(c.id, c.class, 'pass', `BUILD-WITHHELD: source present, 0 index rows at the target, matched copy indexed and returned (rank ${control.rank})`, out);
   return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
+}
+
+// F5's complete expected observation (PREREG-001 6 F5, adopted unchanged by PREREG-002 section 6):
+// the embed and search refusals name BOTH undeclared directories, feedback and scratch, in sorted
+// order, and the doctor emits BOTH NAMESPACE_UNDECLARED records. Judged on what the real U scorer
+// recorded; U cases that could not run block these (a missing prerequisite), nothing else does.
+function f5Assertions(rows) {
+  const u = rows.filter((r) => r.class === 'undeclared');
+  const SORTED = JSON.stringify(['feedback', 'scratch']);
+  return [
+    { name: 'F5: the embed-vault.js and search-vault.js refusals name BOTH feedback and scratch, in sorted order',
+      ok: u.length === 2 && u.every((r) => JSON.stringify(r.refusedDirs) === SORTED), detail: u.map((r) => `${r.id}: ${JSON.stringify(r.refusedDirs)}`).join('; '), needs: 'undeclared' },
+    { name: 'F5: the doctor emitted BOTH NAMESPACE_UNDECLARED feedback and NAMESPACE_UNDECLARED scratch',
+      ok: u.length === 2 && u.every((r) => Array.isArray(r.doctorRecords) && r.doctorRecords.includes('NAMESPACE_UNDECLARED feedback') && r.doctorRecords.includes('NAMESPACE_UNDECLARED scratch')), detail: u.map((r) => `${r.id}: ${JSON.stringify(r.doctorRecords)}`).join('; '), needs: 'undeclared' },
+  ];
 }
 
 // ── named mutations (PREREG-002 section 6 F7, F9), applied to the SANDBOX copy ──
@@ -1908,13 +1932,28 @@ function selfCheckFinalizer(check) {
   check('3f R4-MED-1 F2 blind (N-04 not red) -> invalid; F4 whose C-02 stays NOT pass -> invalid', blindF2.falsifierInvalid === true && blindF4.falsifierInvalid === true);
 
   // R4-MED-2: F5 runs PC-01 and scores it behaviorally; the quality cases are UNRUNNABLE; U reports its refusal.
-  const f5res = (pc) => green().map((r) => {
+  const bothRefusal = { refusedDirs: ['feedback', 'scratch'], doctorRecords: ['NAMESPACE_UNDECLARED feedback', 'NAMESPACE_UNDECLARED scratch'] };
+  const f5res = (pc, u = bothRefusal) => green().map((r) => {
     if (r.id === 'PC-01') return { ...r, ...pc };
-    return r.class === 'undeclared' ? r : { ...r, status: 'unrunnable', requires: 'PREREG-001 6 F5' };
+    return r.class === 'undeclared' ? { ...r, ...u } : { ...r, status: 'unrunnable', requires: 'PREREG-001 6 F5' };
   });
   const f5 = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'fail', detail: 'search exited 1' }) });
   check('3f R4-MED-2 F5: PC-01 executed and a non-zero exit is a behavioral FAIL (terminal FAIL), quality UNRUNNABLE, U pass -> its expectations hold', f5.expectedRedHolds === true && f5.falsifierInvalid === false && f5.terminal === 'FAIL' && !SCENARIOS.F5.unrunnableClasses.includes('positive-control'), JSON.stringify([f5.terminal, f5.expectedRedHolds, f5.expectedRedObserved]));
   const f5old = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'unrunnable', requires: 'PREREG-001 6 F5 — coverage red' }) });
+  // R2: F5's complete witness (PREREG-001 6 F5): BOTH directories, sorted, in the refusal output AND both doctor records.
+  const f5w = (u) => fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'fail', detail: 'search exited 1' }, u) });
+  for (const [name, u] of [
+    ['scratch only in the refusal (feedback never witnessed)', { ...bothRefusal, refusedDirs: ['scratch'] }],
+    ['both directories in the WRONG order', { ...bothRefusal, refusedDirs: ['scratch', 'feedback'] }],
+    ['no refusal directories recorded', { ...bothRefusal, refusedDirs: null }],
+    ['doctor reported only NAMESPACE_UNDECLARED scratch', { ...bothRefusal, doctorRecords: ['NAMESPACE_UNDECLARED scratch'] }],
+    ['doctor records missing altogether', { ...bothRefusal, doctorRecords: null }],
+  ]) {
+    const r = f5w(u);
+    check(`3f R2 F5 with ${name} -> falsifier invalid, expectation not held, terminal FAIL/1`, r.falsifierInvalid === true && r.expectedRedHolds === false && r.terminal === 'FAIL' && r.terminalBasis.some((b) => /F5/.test(b)), JSON.stringify([r.terminal, r.falsifierInvalid]));
+  }
+  check('3f R2 F5 with the complete witness holds; ordinary U-01/U-02 scoring is unchanged (scratch only, outside F5)', f5w(bothRefusal).expectedRedHolds === true && f5w(bothRefusal).falsifierInvalid === false);
+  check('3f R2 F5 whose U cases could not run (doctor gap) is blocked, not a failed expectation', (() => { const r = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'fail' }).map((x) => (x.class === 'undeclared' ? { ...x, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)', refusedDirs: undefined, doctorRecords: undefined } : x)) }); return r.falsifierInvalid === false && r.terminal === 'FAIL'; })());
   check('3f R4-MED-2 F5: a PC-01 recorded UNRUNNABLE without being run does not satisfy the F5 expectation', f5old.expectedRedHolds === false);
   const f5ran = fin({ spec: SCENARIOS.F5, scenario: 'F5', results: f5res({ status: 'pass' }) });
   check('3f R4-MED-2 F5: PC-01 passing under a dirty registry (the mutation did not bite) -> invalid', f5ran.falsifierInvalid === true);
@@ -1939,6 +1978,11 @@ function selfCheckFinalizer(check) {
   // R5-LOW-2: BUILD-stage unchanged and U-class unchanged are two expectations.
   const buildRed = f9(f9rows('RENDER-REFUSED', 0).map((r) => (r.id === 'C-01' ? { ...r, status: 'fail', label: null } : r.class === 'undeclared' ? { ...r, status: 'unrunnable', requires: 'PREREG-002 4.3 (item 4)' } : r)), { referenceRows: fullRef });
   check('3f R5-LOW-2 F9 with a full reference, U unrunnable and a BUILD case turned red -> the BUILD expectation is judged: invalid', buildRed.falsifierInvalid === true && buildRed.terminalBasis.some((b) => /BUILD-stage results equal/.test(b)), JSON.stringify([buildRed.terminal, buildRed.falsifierInvalid]));
+  check('3f finalizeRun duplicate-id rejection, pure: every expected id once PLUS one repeat (nothing missing, nothing foreign) -> HARNESS-ERROR naming the id', (() => {
+    const he = []; const dupId = idsOf('positive')[3];
+    const f = fin({ results: [...green(), { ...green().find((r) => r.id === dupId) }], harnessErrors: he });
+    return f.terminal === 'HARNESS-ERROR' && he.length === 1 && he[0].includes(`duplicate [${dupId}]`) && he[0].includes('missing []') && he[0].includes('foreign []');
+  })());
   check('3f R5-LOW-1 an id outside the frozen list -> HARNESS-ERROR; the exact population -> PASS', popTerm([...green(), { id: 'Z-99', class: 'positive', status: 'pass' }]) === 'HARNESS-ERROR/1' && popTerm(green()) === 'PASS/0');
   check('3f a BASELINE is never a falsifier: its own PC-01 miss is the PC-01 rule, not an expectation failure', fin({ results: failOn(green(), ['PC-01']) }).falsifierInvalid === false);
 }
@@ -1948,18 +1992,23 @@ function selfCheckFinalizer(check) {
 // finishQueryStage and auxBuildControl run against a controlled index: a stub
 // prints the load line with the namespace-filtered count, returns the kept rows
 // with their chunk text, and logs a hash of every embedding it was handed.
+const STUB_REFUSE = "if (process.env.STUB_REFUSE_DIRS) { console.error('[stub] REFUSING to run: undeclared vault namespace directories: ' + process.env.STUB_REFUSE_DIRS); process.exit(1); }";
 const STUB_SEARCH = [
+  STUB_REFUSE,
   "const fs = require('fs'), path = require('path'), crypto = require('crypto');",
   "const idx = JSON.parse(fs.readFileSync(path.join(process.env.AIGENT_VAULT_ROOT, 'memory', 'embeddings.json'), 'utf8'));",
+  // The PRISTINE leg of a QUERY-stage proof: no seeded row, no control row. STUB_PRISTINE breaks only that leg.
+  "const pristineLeg = !!process.env.STUB_SEED_PATH && !idx.notes.some((n) => n.path === process.env.STUB_SEED_PATH) && !idx.notes.some((n) => n.path.includes('recollection-control'));",
+  "const pm = pristineLeg ? (process.env.STUB_PRISTINE || '') : '';",
   "const keep = idx.notes.filter((n) => !n.path.startsWith('ops-deny/'));",
   "const dropped = idx.notes.length - keep.length;",
   "keep.sort((a, b) => (b.path.includes('recollection-control') ? 1 : 0) - (a.path.includes('recollection-control') ? 1 : 0));",
   "fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify({ rows: idx.notes.map((n) => ({ path: n.path, emb: crypto.createHash('sha256').update(JSON.stringify(n.embedding)).digest('hex') })) }) + '\\n');",
-  "console.log('Loading index... ' + keep.length + ' entries loaded.' + (dropped ? ' (' + dropped + ' non-INDEX namespace chunk(s) filtered by namespace-registry.json)' : ''));",
+  "if (pm !== 'nocounts') console.log('Loading index... ' + keep.length + ' entries loaded.' + (dropped ? ' (' + dropped + ' non-INDEX namespace chunk(s) filtered by namespace-registry.json)' : ''));",
   "console.log('\\nQuery: \"q\"\\n');",
   "console.log('\\nJSON:');",
   // STUB_SIDECAR: an empty results block plus the named sidecar defect on stderr.
-  "const mode = process.env.STUB_SIDECAR || '';",
+  "const mode = pm === 'unbound' ? 'unbound' : (process.env.STUB_SIDECAR || '');",
   "const side = (o) => console.error('AIGENT_ABSTAIN ' + JSON.stringify({ schema: 'abstain/1', invocation: process.env.AIGENT_SEARCH_INVOCATION, outcome: 'abstain', reason: 'below-tau', ...o }));",
   "console.log(JSON.stringify(mode ? [] : keep.slice(0, 5).map((n) => ({ path: n.path, title: n.title, score: 0.9, chunk: n.chunk })), null, 2));",
   "if (mode === 'malformed') console.error('AIGENT_ABSTAIN {nope');",
@@ -1968,8 +2017,10 @@ const STUB_SEARCH = [
   "else if (mode === 'unbound') side({ invocation: 'rec-ffffffffffffffff' });",
   // STUB_CTL_FAIL: a permitted control prints its row and THEN exits non-zero.
   "if (process.env.STUB_CTL_FAIL && idx.notes.some((n) => n.path.includes('recollection-control'))) process.exitCode = 1;",
+  "if (pm === 'exit1') process.exitCode = 1;",
 ].join('\n');
 const STUB_EMBED = [
+  STUB_REFUSE,
   "const fs = require('fs'), path = require('path');",
   "const vault = process.env.AIGENT_VAULT_ROOT, notes = [];",
   "(function walk(d, rel) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const r = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) { if (r !== 'memory') walk(path.join(d, e.name), r); } else if (e.name.endsWith('.md') && !r.startsWith('ops-deny/')) notes.push({ path: r, title: e.name, tags: [], chunk: fs.readFileSync(path.join(d, e.name), 'utf8').slice(0, 500), embedding: [1, 2, 3], mtime: 0 }); } })(vault, '');",
@@ -2058,7 +2109,7 @@ function selfCheckWiringScored(check, ctx) {
   const sem = path.join(clone, 'daemons', 'semantic-search');
   const stubHead = [
     "const fsx = require('fs'), pathx = require('path');",
-    "if (fsx.existsSync(pathx.join(process.env.AIGENT_VAULT_ROOT, 'scratch'))) { console.error('[stub] REFUSING to run: undeclared vault namespace directories: scratch'); process.exit(1); }",
+    "if (fsx.existsSync(pathx.join(process.env.AIGENT_VAULT_ROOT, 'scratch'))) { console.error('[stub] REFUSING to run: undeclared vault namespace directories: feedback, scratch'); process.exit(1); }",
     "console.log('Embed: 1ms | Search: 1ms | Total: 2ms');",
     "const deniedPath = () => false, DENY_PREFIXES = [], namespaceDispositionForPath = () => 'INDEX', NAMESPACE_REGISTRY = {};",
     "const index = { notes: [] };",
@@ -2066,6 +2117,7 @@ function selfCheckWiringScored(check, ctx) {
   ].join('\n');
   writeFileSync(path.join(sem, 'search-vault.js'), `${stubHead}\n${STUB_SEARCH}`);
   writeFileSync(path.join(sem, 'embed-vault.js'), `${stubHead.split('\n').slice(0, 2).join('\n')}\n${STUB_EMBED}`);
+  // (stubHead lines 0-1 are the scratch refusal; STUB_REFUSE inside the stubs is the env-driven one)
   const pkg = path.join(sem, 'node_modules', '@xenova', 'transformers');
   mkdirSync(path.join(pkg, '.cache', 'Xenova', 'all-MiniLM-L6-v2', 'onnx'), { recursive: true });
   writeFileSync(path.join(pkg, '.cache', 'Xenova', 'all-MiniLM-L6-v2', 'onnx', 'model_quantized.onnx'), 'stub');
@@ -2214,6 +2266,50 @@ async function selfCheckAccounting(check) {
   rebuild();
   const healthy = auxBuildControl(box, { id: 'C-74', class: 'deny', target, query: 'q' });
   check('3c I3 a healthy control (exit 0, row returned) is still returned', healthy.returned === true && healthy.searchExit === 0 && healthy.buildExit === 0, JSON.stringify(healthy));
+
+  // ── R1: the PRISTINE comparison leg is evidence too. It must succeed (exit 0, a parsed
+  //    array, no rejected sidecar) before its counts can establish a removal delta; it is
+  //    NOT required to return the target, and its output never reaches the leak totals.
+  const sPath = 'ops-deny/seed-stale.md';
+  const seedRow = { id: 'X-60', path: sPath, title: 't', chunk: `${CAN} stale` };
+  const seedObj = { path: sPath, title: 't', chunk: `${CAN} stale`, vector: [0.1, 0.2, 0.3], pristineText: JSON.stringify(pre) };
+  seedObj.seededText = JSON.stringify({ notes: [...pre.notes, row(sPath, seedObj.chunk, seedObj.vector)], entryCount: 3 });
+  const viaStale = (vars, id) => { rebuild(); const k = snap(); withEnv({ STUB_SEED_PATH: sPath, ...vars }, () => scoreStaleIndex(box, { id, class: 'stale-index', query: 'q', canary: CAN, expectedDisposition: 'DENY' }, { ...seedRow, id })); return { r: last(), k0: k, k1: snap() }; };
+  const viaWithheld = (vars, id) => {
+    rebuild(); writeFileSync(box.embeddings, seedObj.seededText); F4_SEED = seedObj;
+    const k = snap();
+    try { withEnv({ STUB_SEED_PATH: sPath, ...vars }, () => scoreWithheld(box, { id, class: 'stale-index', target: sPath, query: 'q' })); }
+    finally { F4_SEED = null; rebuild(); }
+    return { r: last(), k0: k, k1: snap() };
+  };
+  // R2 through the real U scorer: what the runtimes' refusal output actually named, and the doctor records.
+  const uc = { id: 'U-90', class: 'undeclared', runtime: 'embed-vault.js', doctorRecord: 'NAMESPACE_UNDECLARED scratch' };
+  const uDoctor = { failedRecords: ['NAMESPACE_UNDECLARED feedback', 'NAMESPACE_UNDECLARED scratch'] };
+  const uRun = (dirs, c = uc) => { withEnv({ STUB_REFUSE_DIRS: dirs }, () => scoreUndeclared(box, c, uDoctor)); return last(); };
+  const u1 = uRun('feedback, scratch');
+  check('3c R2 scoreUndeclared records the directories the refusal named, in order, and the doctor records; scratch-only scoring is unchanged', u1.status === 'pass' && JSON.stringify(u1.refusedDirs) === '["feedback","scratch"]' && JSON.stringify(u1.doctorRecords) === JSON.stringify(uDoctor.failedRecords), JSON.stringify(u1));
+  const uReal = uRun('feedback, scratch. Declare the directory in namespace-registry.json before indexing or searching.');
+  check('3c R2 the REAL refusal wording (a trailing "Declare the directory ..." sentence) parses to exactly the directory names', JSON.stringify(uReal.refusedDirs) === '["feedback","scratch"]', JSON.stringify(uReal.refusedDirs));
+  const u2 = uRun('scratch');
+  check('3c R2 a scratch-only refusal still PASSes the ordinary U case but records only scratch (the F5 assertion is what rejects it)', u2.status === 'pass' && JSON.stringify(u2.refusedDirs) === '["scratch"]');
+  const f5viaScorer = (rows) => finalizeRun({ results: cases.map((c) => (c.class === 'undeclared' ? rows.find((r) => r.id === c.id) : c.id === 'PC-01' ? { id: c.id, class: c.class, status: 'fail', detail: 'search exited 1' } : { id: c.id, class: c.class, status: 'unrunnable', requires: 'PREREG-001 6 F5' })), cases, spec: SCENARIOS.F5, scenario: 'F5', inversions: [], harnessErrors: [], policyFalsePositives: [], budgetBreaches: [], pinDrift: [], referenceRows: null, referenceDev: false, ran: true, only: null });
+  const uA = withEnv({ STUB_REFUSE_DIRS: 'feedback, scratch' }, () => { scoreUndeclared(box, { ...uc, id: 'U-01' }, uDoctor); return last(); });
+  const uB = withEnv({ STUB_REFUSE_DIRS: 'feedback, scratch' }, () => { scoreUndeclared(box, { ...uc, id: 'U-02', runtime: 'search-vault.js', query: 'q' }, uDoctor); return last(); });
+  const uC = withEnv({ STUB_REFUSE_DIRS: 'scratch' }, () => { scoreUndeclared(box, { ...uc, id: 'U-02', runtime: 'search-vault.js', query: 'q' }, uDoctor); return last(); });
+  check('3c R2 F5 finalization over records from the real U scorer: complete witness holds; scratch-only refusal (the review counterexample) is invalid',
+    f5viaScorer([uA, uB]).falsifierInvalid === false && f5viaScorer([uA, uB]).expectedRedHolds === true && f5viaScorer([uA, uC]).falsifierInvalid === true);
+  check('3c R1 healthy pristine leg, both callers: QUERY-WITHHELD, delta 1', [viaStale({}, 'X-61'), viaWithheld({}, 'X-62')].every((o) => o.r.status === 'pass' && o.r.label === 'QUERY-WITHHELD' && o.r.proof.delta === 1), 'baseline of the R1 checks');
+  let n2 = 63;
+  for (const [mode, why] of [['exit1', 'prints counts then exits 1'], ['unbound', 'carries a wrong-invocation sidecar'], ['nocounts', 'prints no parseable counts']]) {
+    for (const [via, name] of [[viaStale, 'scoreStaleIndex'], [viaWithheld, 'scoreWithheld']]) {
+      const o = via({ STUB_PRISTINE: mode }, `X-${n2++}`);
+      check(`3c R1 ${name}: a pristine leg that ${why} -> FAIL policy-withholding-not-demonstrated, never QUERY-WITHHELD, no leak, pristine failure recorded`,
+        o.r.status === 'fail' && o.r.label !== 'QUERY-WITHHELD' && o.r.detail.startsWith(NOT_DEMONSTRATED) && o.k1.pfp === o.k0.pfp && (mode === 'nocounts' || (o.r.proof.pristine && o.r.proof.pristine.failure)),
+        `${o.r.status} ${o.r.label} ${o.r.detail.slice(0, 120)} ${JSON.stringify(o.r.proof && o.r.proof.pristine)}`);
+    }
+  }
+  // RENDER-REFUSED stays separate: a refused row returned in the forbidden run is demonstrated even if the pristine leg failed.
+  check('3c R1 a failed pristine leg does not touch the separate RENDER-REFUSED decision', labelQueryStage({ expected: { eligible: false, filter: 'namespace' }, readBack: { present: true }, targetReturned: true, targetRefused: true, control: { returned: true }, delta: null, seededChunks: 1, pristineFailure: 'x' }).label === 'RENDER-REFUSED');
 }
 
 // ── scenario table, PREREG-001 6 ─────────────────────────────────────────────
@@ -2277,7 +2373,7 @@ const SCENARIOS = {
     //                               a non-zero exit with every 4.3 prerequisite verified present is a behavioral FAIL, not UNRUNNABLE
     expectedRed: ['PC-01'], expectedRedClasses: [], expectPass: ['U-01', 'U-02'],
     unrunnableClasses: ['positive', 'negative', 'temporal', 'deny', 'skip', 'stale-index', 'operator', 'loudness'],
-    runU: true, mutates: ['daemons/semantic-search/namespace-registry.json'],
+    runU: true, mutates: ['daemons/semantic-search/namespace-registry.json'], assert: f5Assertions,
   },
   F6: {
     mutation: 'delete <sandbox vault>/memory/embeddings.json and run without rebuilding',
