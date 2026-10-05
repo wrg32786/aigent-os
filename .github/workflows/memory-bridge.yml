@@ -1,0 +1,28 @@
+name: Memory bridge contracts
+on:
+  push:
+    branches: ['gpt/56-hindsight-jev-memory-bridge']
+  pull_request:
+    paths:
+      - 'daemons/memory-bridge.mjs'
+      - 'daemons/tests/memory-bridge.test.mjs'
+      - 'daemons/lifecycle-common.mjs'
+      - 'daemons/semantic-search/**'
+      - '.github/workflows/memory-bridge.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Loopback-only memory integration tests
+        run: node --test daemons/tests/memory-bridge.test.mjs
