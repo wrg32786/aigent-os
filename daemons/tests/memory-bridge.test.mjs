@@ -1,10 +1,13 @@
 // Contract/security tests use loopback HTTP only, never real accounts or models.
 import test from 'node:test';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, realpathSync, symlinkSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadBridge, inspectSource, retain, recall, reflect, rank, localRecall } from '../memory-bridge.mjs';
@@ -44,6 +47,7 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     const body = JSON.parse(text);
     calls.push({ url: req.url, body, authorization: req.headers.authorization });
     res.setHeader('Content-Type', 'application/json');
+    if (mode === 'unauthorized') { res.writeHead(401); res.end('SECRET-ERROR-ECHO'); return; }
     if (mode === 'error') { res.writeHead(503); res.end('SECRET-ERROR-ECHO'); return; }
     if (mode === 'timeout') { return; }
     if (mode === 'redirect') { res.writeHead(307, { Location: '/redirect-target' }); res.end('{}'); return; }
@@ -87,6 +91,29 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     assert.equal(calls.length, 0); assert.equal(out.results.length, 2);
     assert.equal(out.answerability, 'not-evaluated'); assert.equal(out.authority, 'none');
   });
+  await t.test('local-only recall accepts punctuation, Unicode and large notes without export approval', async () => {
+    const names = ['research/notes, revised.md', "research/O'Brien & (design)#1.md", 'research/记忆.md', 'research/large.md'];
+    const large = '# Local preview\n' + 'x'.repeat(70000);
+    for (const name of names) writeFileSync(path.join(vault, name), name.endsWith('large.md') ? large : '# Ordinary local note');
+    try {
+      const before = calls.length;
+      const out = await recall(loadBridge({ root }), QUERY, names.map((name) => ({ path: name, score: 0.6 })));
+      assert.deepEqual(out.results.map((r) => r.path), names); assert.equal(out.status, 'ok');
+      assert.equal(out.results.at(-1).source_sha256, sha(large));
+      assert(out.results.at(-1).chunk.length < 1600); assert.equal(calls.length, before);
+    } finally { for (const name of names) rmSync(path.join(vault, name)); }
+  });
+  await t.test('missing local sources are counted separately from policy withholding', async () => {
+    const before = calls.length;
+    const out = await recall(loadBridge({ root }), QUERY, [
+      { path: 'research/absent.md' }, { path: 'research/also-absent.md' }, { path: 'private/secret.md' },
+    ]);
+    assert.deepEqual(out.notices, [
+      { provider: 'local', code: 'source-missing', count: 2 },
+      { provider: 'local', code: 'source-withheld', count: 1 },
+    ]);
+    assert.equal(calls.length, before);
+  });
   await t.test('retains approved exact bytes with stable document identity and source metadata', async () => {
     const ctx = setConfig();
     const first = await retain(ctx, A);
@@ -122,11 +149,54 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     await assert.rejects(retain(ctx, A));
     assert.equal(calls.length, before); writeFileSync(path.join(vault, A), textA);
   });
-  await t.test('symbolic links never grant source access', () => {
+  await t.test('symbolic links never grant source access', (t) => {
     const linked = path.join(vault, 'research', 'link.md');
-    symlinkSync(path.join(vault, A), linked, 'file');
+    try { symlinkSync(path.join(vault, A), linked, 'file'); }
+    catch (e) { if (['EPERM', 'EACCES'].includes(e.code)) { t.skip('symlink privilege unavailable'); return; } throw e; }
     assert.throws(() => inspectSource(setConfig(), 'research/link.md'), /symlink/);
     rmSync(linked);
+  });
+  await t.test('hardlinked source cannot be approved for export', () => {
+    const linked = path.join(vault, 'research', 'hardlink.md');
+    linkSync(path.join(vault, A), linked);
+    try { assert.throws(() => inspectSource(setConfig(), A, true), /source-hardlink-refused/); }
+    finally { rmSync(linked); }
+  });
+  await t.test('directory junction or symlink cannot escape the vault', (t) => {
+    const outside = path.join(root, 'outside'); mkdirSync(outside);
+    writeFileSync(path.join(outside, 'escape.md'), 'OUTSIDE-CANARY');
+    const link = path.join(vault, 'research', 'junction');
+    try { symlinkSync(outside, link, 'junction'); }
+    catch (e) { if (['EPERM', 'EACCES'].includes(e.code)) { t.skip('junction privilege unavailable'); return; } throw e; }
+    try { assert.throws(() => inspectSource(setConfig(), 'research/junction/escape.md'), /source-symlink-refused|source-outside-vault/); }
+    finally { rmSync(link, { recursive: true, force: true }); rmSync(outside, { recursive: true }); }
+  });
+  await t.test('realpath containment independently refuses an outside-vault resolution', (t) => {
+    const ctx = setConfig(); const real = fs.realpathSync;
+    t.mock.method(fs, 'realpathSync', (file, ...args) => file === path.join(ctx.vault, A) ? path.join(ctx.root, 'outside.md') : real(file, ...args));
+    syncBuiltinESMExports();
+    try { assert.throws(() => inspectSource(ctx, A, true), /source-outside-vault/); }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+  await t.test('direct Jev rank rejects an unapproved row without a request', async () => {
+    const name = 'research/unapproved.md'; writeFileSync(path.join(vault, name), 'UNAPPROVED-EGRESS-CANARY');
+    try {
+      const before = calls.length;
+      await assert.rejects(rank(setConfig(), QUERY, [...local, { path: name }]), /source-not-approved-at-this-version/);
+      assert.equal(calls.length, before);
+    } finally { rmSync(path.join(vault, name)); }
+  });
+  await t.test('recall ranks approved slots without exporting or moving an unapproved slot', async () => {
+    const name = 'research/unapproved.md'; writeFileSync(path.join(vault, name), 'UNAPPROVED-EGRESS-CANARY');
+    try {
+      const cfg = config(); cfg.hindsight.enabled = false;
+      const before = calls.length;
+      const out = await recall(setConfig(cfg), QUERY, [local[0], { path: name, score: 0.7 }, local[1]]);
+      assert.equal(calls.length, before + 1); assert.equal(out.ranking, 'jev-relative-order-only');
+      assert.deepEqual(out.results.map((r) => r.path), [B, name, A]);
+      assert.equal(Object.keys(calls.at(-1).body.questions.rank.criteria).length, 2);
+      assert(!JSON.stringify(calls.slice(before)).includes('UNAPPROVED-EGRESS-CANARY'));
+    } finally { rmSync(path.join(vault, name)); }
   });
   await t.test('query approval is separate from source approval', async () => {
     const cfg = config(); cfg.hindsight.allowQueries = false; cfg.jev.allowQueries = false;
@@ -192,6 +262,32 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     const out = await retain(setConfig(), A);
     assert.equal(out.status, 'unknown'); assert.equal(calls.length, before + 1); mode = '';
   });
+  await t.test('retain reports a rejected credential as refused, not an ambiguous write', async () => {
+    mode = 'unauthorized'; const before = calls.length;
+    try {
+      const out = await retain(setConfig(), A);
+      assert.equal(out.status, 'refused'); assert.equal(out.code, 'http-401'); assert.equal(out.retry, undefined);
+      assert.equal(calls.length, before + 1); assert(!JSON.stringify(out).includes('SECRET-ERROR-ECHO'));
+    } finally { mode = ''; }
+  });
+  await t.test('retain rejects the encoded-size limit before any request', async () => {
+    const name = 'research/encoded-limit.md'; const text = '\t'.repeat(60000);
+    writeFileSync(path.join(vault, name), text);
+    try {
+      const cfg = config(); cfg.sources[name] = sha(text);
+      const before = calls.length;
+      const out = await retain(setConfig(cfg), name);
+      assert.equal(out.status, 'refused'); assert.equal(out.code, 'request-too-large'); assert.equal(calls.length, before);
+    } finally { rmSync(path.join(vault, name)); }
+  });
+  await t.test('confirmed retain stays retained when the local revision changes in flight', async () => {
+    mode = 'edit-during-request';
+    try {
+      const out = await retain(setConfig(), A);
+      assert.equal(out.status, 'retained'); assert.equal(out.source_sha256, sha(textA));
+      assert.equal(out.notices[0].code, 'source-changed-after-retain');
+    } finally { mode = ''; writeFileSync(path.join(vault, A), textA); }
+  });
   await t.test('reflection is an inert HOLD candidate with checked local source links', async () => {
     const out = await reflect(setConfig(), QUERY);
     assert.equal(out.status, 'hold'); assert.equal(out.authority, 'none'); assert.equal(out.evidence.length, 1);
@@ -202,6 +298,16 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     await assert.rejects(reflect(setConfig(), QUERY), /reflection-source-proof-incomplete/);
     reflectionOverride = { text: 'UNVERIFIED-SECRET', based_on: { memories: [{ id: 'fact-0' }], directives: [{ id: 'approve' }] } };
     await assert.rejects(reflect(setConfig(), QUERY), /reflection-source-proof-incomplete/); reflectionOverride = null;
+  });
+  await t.test('reflection cannot ignore unverified observations or a future evidence type', async () => {
+    try {
+      for (const key of ['observations', 'unknown_evidence']) {
+        reflectionOverride = { text: 'UNVERIFIED-SECRET', based_on: { memories: [{ id: 'fact-0' }], [key]: [{ id: 'unchecked' }] } };
+        await assert.rejects(reflect(setConfig(), QUERY), /reflection-source-proof-incomplete/);
+      }
+      reflectionOverride = { text: 'safe candidate', based_on: { memories: [{ id: 'fact-0' }], observations: [] } };
+      assert.equal((await reflect(setConfig(), QUERY)).status, 'hold');
+    } finally { reflectionOverride = null; }
   });
   await t.test('the wrapper actually invokes the existing local search CLI', async () => {
     writeFileSync(path.join(sem, 'search-vault.js'), `console.log(JSON.stringify([{path:${JSON.stringify(A)},score:0.7}]))`);
@@ -218,6 +324,26 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     } finally {
       if (previous === undefined) delete process.env.AIGENT_STATE_HOME_DIR;
       else process.env.AIGENT_STATE_HOME_DIR = previous;
+    }
+  });
+  await t.test('an explicitly selected state home uses the native memory-root declaration', async () => {
+    const stateHome = path.join(root, 'selected-state');
+    mkdirSync(path.join(stateHome, '.aigent'), { recursive: true });
+    mkdirSync(path.join(stateHome, 'selected-memory'));
+    writeFileSync(path.join(stateHome, '.aigent', 'state.json'), JSON.stringify({ memory_root: 'selected-memory' }));
+    const resolver = fileURLToPath(new URL('../memory-root.cjs', import.meta.url));
+    writeFileSync(path.join(sem, 'search-vault.js'), `const {resolveMemoryRoot}=require(${JSON.stringify(resolver)}); console.log(JSON.stringify([{path:resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR)}]));`);
+    setConfig();
+    const out = await localRecall(loadBridge({ root, stateHome }), QUERY);
+    assert.equal(out.rows[0].path, path.join(realpathSync(stateHome), 'selected-memory')); assert.deepEqual(out.notices, []);
+    writeFileSync(path.join(stateHome, '.aigent', 'state.json'), JSON.stringify({ memory_root: '../outside' }));
+    const invalid = await localRecall(loadBridge({ root, stateHome }), QUERY);
+    assert.deepEqual(invalid.notices, [{ provider: 'local', code: 'memory-root-invalid' }]);
+  });
+  await t.test('unsupported native argv query shapes are refused instead of rewritten', async () => {
+    for (const q of ['--not-a-flag', '16']) {
+      const out = await localRecall(setConfig(), q);
+      assert.deepEqual(out.rows, []); assert.deepEqual(out.notices, [{ provider: 'local', code: 'local-query-argv-unsupported' }]);
     }
   });
   await t.test('configuration edits invalidate an in-memory bridge', async () => {
