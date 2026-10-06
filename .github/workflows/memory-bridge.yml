@@ -1,13 +1,13 @@
 name: Memory bridge contracts
 on:
   push:
-    branches: ['gpt/56-hindsight-jev-memory-bridge']
+    branches: ['master']
+    paths:
+      - 'daemons/**'
+      - '.github/workflows/memory-bridge.yml'
   pull_request:
     paths:
-      - 'daemons/memory-bridge.mjs'
-      - 'daemons/tests/memory-bridge.test.mjs'
-      - 'daemons/lifecycle-common.mjs'
-      - 'daemons/semantic-search/**'
+      - 'daemons/**'
       - '.github/workflows/memory-bridge.yml'
 permissions:
   contents: read

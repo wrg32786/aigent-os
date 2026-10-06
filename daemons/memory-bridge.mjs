@@ -16,6 +16,7 @@ import {
 } from './semantic-search/namespace-registry.mjs';
 import { deniedPath, loadDenyPrefixes } from './semantic-search/deny-list.mjs';
 import { renderPersisted } from './lifecycle-common.mjs';
+import { resolveMemoryRoot } from './memory-root.cjs';
 
 const exec = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,9 +32,17 @@ const ensure = (ok, code) => { if (!ok) throw error(code); };
 const notice = (provider, code) => ({ provider, code });
 const usage = (data) => object(data.usage) ? Object.fromEntries(Object.entries(data.usage)
   .filter(([k, v]) => ['input_tokens', 'output_tokens', 'total_tokens'].includes(k) && Number.isSafeInteger(v) && v >= 0)) : null;
-const safeCode = (e) => typeof e?.code === 'string' && /^[a-z0-9-]+$/.test(e.code) ? e.code : 'provider-unavailable';
+const safeCode = (e) => ({ ENOENT: 'source-missing', ENOTDIR: 'source-missing',
+  EACCES: 'source-unreadable', EPERM: 'source-unreadable', EMEMORYROOT: 'memory-root-invalid' }[e?.code]
+  || (typeof e?.code === 'string' && /^[a-z0-9-]+$/.test(e.code) ? e.code : 'provider-unavailable'));
+const compactNotices = (notices) => [...notices.reduce((out, n) => {
+  const key = `${n.provider}:${n.code}`;
+  out.set(key, { ...n, count: (out.get(key)?.count || 0) + 1 });
+  return out;
+}, new Map()).values()];
 
 function boundedFile(file, max = MAX_FILE) {
+  ensure(lstatSync(file).isFile(), 'file-not-bounded-regular');
   const fd = openSync(file, 'r');
   try {
     const stat = fstatSync(fd);
@@ -47,6 +56,44 @@ function boundedFile(file, max = MAX_FILE) {
     }
     ensure(n <= max, 'file-too-large');
     return bytes.subarray(0, n);
+  } finally { closeSync(fd); }
+}
+
+// Local-only names are not export identifiers. Retain the containment checks,
+// but do not apply the deliberately narrow egress allowlist grammar here.
+function localSourcePath(value) {
+  ensure(typeof value === 'string' && value.length <= 4096 && /\.md$/i.test(value)
+    && !path.posix.isAbsolute(value) && !path.win32.isAbsolute(value)
+    && !/[\\:\x00-\x1f\x7f]/.test(value)
+    && value.split('/').every((part) => part && part !== '.' && part !== '..'), 'source-path-invalid');
+  return value;
+}
+
+// ponytail: local revalidation streams the whole file for a version hash on each
+// call; cache only if measured I/O warrants it. Preview memory stays bounded.
+function localFile(file) {
+  const fd = openSync(file, 'r');
+  try {
+    const before = fstatSync(fd);
+    ensure(before.isFile() && before.nlink === 1, 'source-not-regular-or-linked');
+    const hash = createHash('sha256');
+    const buffer = Buffer.alloc(MAX_FILE);
+    let total = 0;
+    let prefix = Buffer.alloc(0);
+    while (total < before.size) {
+      const n = readSync(fd, buffer, 0, Math.min(buffer.length, before.size - total), null);
+      ensure(n > 0, 'source-changed-during-read');
+      hash.update(buffer.subarray(0, n));
+      if (prefix.length < MAX_FILE) prefix = Buffer.concat([prefix, buffer.subarray(0, Math.min(n, MAX_FILE - prefix.length))]);
+      total += n;
+    }
+    const after = fstatSync(fd);
+    ensure(before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs,
+      'source-changed-during-read');
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(prefix, { stream: total > prefix.length }); }
+    catch { throw error('source-invalid-utf8'); }
+    return { sha256: hash.digest('hex'), text, bytes: total, preview_truncated: total > prefix.length };
   } finally { closeSync(fd); }
 }
 
@@ -96,10 +143,10 @@ function readConfig(file) {
   return { config, hash: digest(bytes) };
 }
 
-export function loadBridge({ root = ROOT, vault = path.join(root, 'vault') } = {}) {
+export function loadBridge({ root = ROOT, vault = path.join(root, 'vault'), stateHome = root } = {}) {
   const configFile = path.join(root, '.aigent', 'memory-bridge.json');
   const { config, hash } = readConfig(configFile);
-  return { root: realpathSync(root), vault: realpathSync(vault), configFile, config, configHash: hash };
+  return { root: realpathSync(root), vault: realpathSync(vault), stateHome: realpathSync(stateHome), configFile, config, configHash: hash };
 }
 
 function currentPolicy(ctx) {
@@ -113,7 +160,7 @@ function currentPolicy(ctx) {
 // Re-read current policy and bytes before egress and again after network waits.
 // A hash match grants export only to providers explicitly enabled by the owner.
 export function inspectSource(ctx, name, approved = false) {
-  sourcePath(name);
+  (approved ? sourcePath : localSourcePath)(name);
   const { registry, deny } = currentPolicy(ctx);
   ensure(namespaceDispositionForPath(registry, name) === 'INDEX' && !deniedPath(deny, name), 'source-policy-refused');
   let file = ctx.vault;
@@ -123,7 +170,10 @@ export function inspectSource(ctx, name, approved = false) {
   }
   const rel = path.relative(ctx.vault, realpathSync(file));
   ensure(rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel), 'source-outside-vault');
-  ensure(lstatSync(file).nlink === 1, 'source-hardlink-refused');
+  const stat = lstatSync(file);
+  ensure(stat.isFile(), 'source-not-regular');
+  ensure(stat.nlink === 1, 'source-hardlink-refused');
+  if (!approved) return { path: name, ...localFile(file) };
   const bytes = boundedFile(file);
   const sha256 = digest(bytes);
   ensure(!approved || ctx.config.sources[name] === sha256, 'source-not-approved-at-this-version');
@@ -190,7 +240,9 @@ async function request(ctx, provider, route, body, needs) {
     let data;
     try { data = JSON.parse(Buffer.concat(parts).toString('utf8')); } catch { throw error('response-invalid-json'); }
     ensure(object(data), 'response-invalid');
-    currentPolicy(ctx);
+    // A confirmed write receipt must survive a later local edit/revocation.
+    // Retain reports that postflight condition separately; readers still fail closed.
+    if (!needs.write) currentPolicy(ctx);
     return { data, elapsed_ms: Math.round(performance.now() - t0) };
   } catch (e) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw error('request-timeout');
@@ -212,30 +264,45 @@ export async function retain(ctx, name) {
     aigent_source_path: source.path, aigent_source_sha256: source.sha256, aigent_bank: cfg.bank,
   } };
   const result = { operation: 'retain', bank: cfg.bank, document_id: id, path: name, source_sha256: source.sha256 };
+  let response;
   try {
-    const { data, elapsed_ms } = await request(ctx, 'hindsight', `/v1/default/banks/${cfg.bank}/memories`, { items: [item], async: false }, { sources: true });
+    response = await request(ctx, 'hindsight', `/v1/default/banks/${cfg.bank}/memories`, { items: [item], async: false }, { sources: true, write: true });
+    const { data } = response;
     ensure(data.success === true && data.async === false && data.bank_id === cfg.bank && data.items_count === 1, 'retain-not-confirmed');
-    inspectSource(ctx, name, true);
-    return { ...result, status: 'retained', elapsed_ms, usage: usage(data) };
   } catch (e) {
-    // A timed-out write might have completed upstream. No auto-retry or success claim.
-    return { ...result, status: 'unknown', code: safeCode(e), retry: 'reconcile-upstream-document-before-retry' };
+    const code = safeCode(e);
+    // 408 remains ambiguous. A definite request rejection is not a possible write.
+    if (code === 'request-too-large' || (/^http-4[0-9]{2}$/.test(code) && code !== 'http-408')) {
+      return { ...result, status: 'refused', code };
+    }
+    // Timeout, network failure and 5xx can follow a completed write. Never retry here.
+    return { ...result, status: 'unknown', code, retry: 'reconcile-upstream-document-before-retry' };
   }
+  const notices = [];
+  try { inspectSource(ctx, name, true); }
+  catch (e) { notices.push({ ...notice('source', 'source-changed-after-retain'), detail: safeCode(e) }); }
+  return { ...result, status: 'retained', elapsed_ms: response.elapsed_ms, usage: usage(response.data), notices };
 }
 
 // Use the native local CLI without shell interpolation or lifecycle-hook launch.
 export async function localRecall(ctx, query) {
   queryText(query);
   currentPolicy(ctx);
+  // Native argv parsing consumes these two query shapes as options/--top's value.
+  // Refuse visibly rather than searching a different question. No runtime parser fork.
+  if (query.startsWith('--') || query === String(MAX_CANDIDATES)) {
+    return { rows: [], notices: [notice('local', 'local-query-argv-unsupported')] };
+  }
   try {
+    resolveMemoryRoot(ctx.stateHome); // Same declaration and validation as native search.
     const { stdout } = await exec(process.execPath, [path.join(ctx.root, 'daemons', 'semantic-search', 'search-vault.js'), query, '--json', '--top', String(MAX_CANDIDATES)], {
       cwd: ctx.root, timeout: 30000, maxBuffer: MAX_RESPONSE,
-      env: { ...process.env, AIGENT_ROOT: ctx.root, AIGENT_STATE_HOME_DIR: ctx.root, AIGENT_VAULT_ROOT: ctx.vault },
+      env: { ...process.env, AIGENT_ROOT: ctx.root, AIGENT_STATE_HOME_DIR: ctx.stateHome, AIGENT_VAULT_ROOT: ctx.vault },
     });
     const rows = JSON.parse(stdout);
     ensure(Array.isArray(rows) && rows.length <= MAX_CANDIDATES, 'local-response-invalid');
     return { rows, notices: [] };
-  } catch { return { rows: [], notices: [notice('local', 'local-recall-unavailable')] }; }
+  } catch (e) { return { rows: [], notices: [notice('local', e.code === 'EMEMORYROOT' ? 'memory-root-invalid' : 'local-recall-unavailable')] }; }
 }
 
 async function hindsightRecall(ctx, query, sources) {
@@ -310,7 +377,7 @@ export async function recall(ctx, query, local = null) {
       seen.add(source.path);
       rows.push({ ...framed(source, source.text), origin: 'local',
         ...(Number.isFinite(r.score) ? { local_score: r.score } : {}) });
-    } catch { notices.push(notice('local', 'source-withheld')); }
+    } catch (e) { notices.push(notice('local', e.code === 'source-policy-refused' ? 'source-withheld' : safeCode(e))); }
   }
   const sources = approvedSources(ctx, notices);
   let remote = { rows: [] };
@@ -348,7 +415,7 @@ export async function recall(ctx, query, local = null) {
     catch { notices.push(notice('source', 'source-changed-during-recall')); return false; }
   });
   return { schema: 'MemoryBridgeResult/v1', status: notices.length ? 'degraded' : 'ok',
-    authority: 'none', answerability: 'not-evaluated', ranking, limit: 5, candidate_count: merged.length, results: out.slice(0, 5), notices,
+    authority: 'none', answerability: 'not-evaluated', ranking, limit: 5, candidate_count: merged.length, results: out.slice(0, 5), notices: compactNotices(notices),
     providers: { hindsight_ms: remote.elapsed_ms ?? null, jev_ms: rankResult?.elapsed_ms ?? null, jev_model: rankResult?.model ?? null, hindsight_usage: remote.usage ?? null, jev_usage: rankResult?.usage ?? null } };
 }
 
@@ -368,10 +435,10 @@ export async function reflect(ctx, query) {
   const based = data.based_on;
   // Unknown observations/mental models/directives cannot become source-backed local authority.
   const refs = based?.memories;
-  const verified = Array.isArray(refs) && refs.length > 0 && refs.length <= 32
-    && refs.every((r) => typeof r.id === 'string' && byId.has(r.id))
-    && (!based.mental_models || (Array.isArray(based.mental_models) && based.mental_models.length === 0))
-    && (!based.directives || (Array.isArray(based.directives) && based.directives.length === 0));
+  const verified = object(based) && Array.isArray(refs) && refs.length > 0 && refs.length <= 32
+    && refs.every((r) => object(r) && typeof r.id === 'string' && byId.has(r.id))
+    && Object.entries(based).every(([key, value]) => key === 'memories'
+      || value === null || (Array.isArray(value) && value.length === 0));
   ensure(verified && typeof data.text === 'string' && data.text.length <= 16000, 'reflection-source-proof-incomplete');
   const evidence = [...new Map(refs.map((r) => [byId.get(r.id).path, byId.get(r.id)])).values()];
   for (const r of evidence) inspectSource(ctx, r.path, true);
@@ -384,10 +451,11 @@ export async function reflect(ctx, query) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    root: { type: 'string' }, vault: { type: 'string' }, query: { type: 'string' }, path: { type: 'string' },
+    root: { type: 'string' }, vault: { type: 'string' }, 'state-home': { type: 'string' }, query: { type: 'string' }, path: { type: 'string' },
   } });
   ensure(positionals.length === 1 && ['inspect', 'retain', 'recall', 'reflect'].includes(positionals[0]), 'usage-memory-bridge-inspect-retain-recall-reflect');
   const ctx = loadBridge({ root: values.root || process.env.AIGENT_ROOT || ROOT,
+    ...(values['state-home'] ? { stateHome: values['state-home'] } : {}),
     ...(values.vault || process.env.AIGENT_VAULT_ROOT ? { vault: values.vault || process.env.AIGENT_VAULT_ROOT } : {}) });
   const command = positionals[0];
   let result;
@@ -397,7 +465,7 @@ export async function main(argv = process.argv.slice(2)) {
   } else if (command === 'retain') result = await retain(ctx, values.path);
   else result = await (command === 'recall' ? recall : reflect)(ctx, values.query);
   console.log(JSON.stringify(result, null, 2));
-  return result.status === 'unknown' ? 1 : 0;
+  return ['unknown', 'refused'].includes(result.status) ? 1 : 0;
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().then((code) => { process.exitCode = code; }).catch((e) => {
