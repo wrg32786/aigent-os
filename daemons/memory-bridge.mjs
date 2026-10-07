@@ -143,10 +143,27 @@ function readConfig(file) {
   return { config, hash: digest(bytes) };
 }
 
+// Binding errors are not missing source notes. Keep the selected location in
+// the error code, never the raw path or the operating system's error message.
+function bindingDirectory(value, label) {
+  let resolved, stat;
+  try { resolved = realpathSync(value); stat = lstatSync(resolved); }
+  catch (e) {
+    const reason = ['ENOENT', 'ENOTDIR'].includes(e.code) ? 'missing'
+      : ['EACCES', 'EPERM'].includes(e.code) ? 'unreadable' : 'invalid';
+    throw error(`${label}-${reason}`);
+  }
+  ensure(stat.isDirectory(), `${label}-not-directory`);
+  return resolved;
+}
+
 export function loadBridge({ root = ROOT, vault = path.join(root, 'vault'), stateHome = root } = {}) {
+  root = bindingDirectory(root, 'root');
+  vault = bindingDirectory(vault, 'vault');
+  stateHome = bindingDirectory(stateHome, 'state-home');
   const configFile = path.join(root, '.aigent', 'memory-bridge.json');
   const { config, hash } = readConfig(configFile);
-  return { root: realpathSync(root), vault: realpathSync(vault), stateHome: realpathSync(stateHome), configFile, config, configHash: hash };
+  return { root, vault, stateHome, configFile, config, configHash: hash };
 }
 
 function currentPolicy(ctx) {
