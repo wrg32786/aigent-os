@@ -32,7 +32,7 @@ An empty setting means the field is skipped and its command says "not configured
 
 | Field | Source |
 |---|---|
-| seat | env `SEAT`, else the session root's folder name. Lowercased, and it must match `[a-z0-9_-]+`, else `seat`. |
+| seat | env `AIGENT_SEAT` or `SEAT`, else the install folder's name with a trailing `-vault` dropped (an install at `beta-vault` is seat `beta`). Lowercased, and it must match `[a-z0-9_-]+`, else `seat`. |
 | ctx % | `$.session.usage().context.percent`, the engine's own figure, as the status line shows it |
 | room unread | count of `*.json` files directly in `<roomRoot>/inbox/<seat>/` |
 | results pending | `node <installRoot>/daemons/job-results.mjs pending`, run with `JOB_RESULTS_ROOT=<installRoot>`. The script's existence is checked once per session; when it is missing, nothing is ever spawned. |
