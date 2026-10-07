@@ -1,0 +1,38 @@
+{
+  "name": "fleet-delivery",
+  "version": "0.1.0",
+  "description": "Delivers a seat's Room inbox and pending job results into the session through the prompt API, one prompt per item, recorded in an on-disk ledger per seat. Inert until <installRoot>/.aigent/delivery-owner.json says {\"owner\":{\"<seat>\":\"mod\"}}.",
+  "author": { "name": "wrg32786" },
+  "userConfig": {
+    "installRoot": {
+      "type": "string",
+      "title": "Install root",
+      "description": "Folder holding .aigent/delivery-owner.json, memory/runtime/mod-delivery-ledger.<seat>.jsonl and daemons/job-results.mjs. Empty: the mod does nothing.",
+      "default": ""
+    },
+    "roomRoot": {
+      "type": "string",
+      "title": "Room root",
+      "description": "The Room's room/ folder; the seat's inbox is <roomRoot>/inbox/<seat>/. Empty: Room delivery is off.",
+      "default": ""
+    },
+    "seat": {
+      "type": "string",
+      "title": "Seat",
+      "description": "Seat name whose inbox is delivered. Empty: env SEAT, else the session root's folder name. Must match [a-z0-9_-]+, else the mod does nothing.",
+      "default": ""
+    },
+    "jobSeat": {
+      "type": "string",
+      "title": "Job results seat",
+      "description": "The one seat job results are delivered to (job records carry no recipient). Empty: job delivery is off.",
+      "default": ""
+    },
+    "submitTimeoutMinutes": {
+      "type": "number",
+      "title": "Submit timeout (minutes)",
+      "description": "How long a submit may wait for its turn to start before it is recorded deferred:submit-timeout.",
+      "default": 10
+    }
+  }
+}
