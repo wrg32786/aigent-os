@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, realpathSync, symlinkSync, linkSync } from 'node:fs';
@@ -47,6 +48,12 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     const body = JSON.parse(text);
     calls.push({ url: req.url, body, authorization: req.headers.authorization });
     res.setHeader('Content-Type', 'application/json');
+    if (mode === 'http-408') { res.writeHead(408); res.end('SECRET-ERROR-ECHO'); return; }
+    if (mode === 'revoke-during-request') {
+      const changed = JSON.parse(readFileSync(configFile, 'utf8'));
+      delete changed.sources[A];
+      writeFileSync(configFile, JSON.stringify(changed));
+    }
     if (mode === 'unauthorized') { res.writeHead(401); res.end('SECRET-ERROR-ECHO'); return; }
     if (mode === 'error') { res.writeHead(503); res.end('SECRET-ERROR-ECHO'); return; }
     if (mode === 'timeout') { return; }
@@ -90,6 +97,32 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     const out = await recall(loadBridge({ root }), QUERY, local);
     assert.equal(calls.length, 0); assert.equal(out.results.length, 2);
     assert.equal(out.answerability, 'not-evaluated'); assert.equal(out.authority, 'none');
+  });
+  await t.test('binding failures name the missing root, vault or state home, including through the CLI', () => {
+    const missing = path.join(root, 'absent-binding');
+    const cli = fileURLToPath(new URL('../memory-bridge.mjs', import.meta.url));
+    const before = calls.length;
+    for (const [field, flag, label] of [['root', '--root', 'root'], ['vault', '--vault', 'vault'], ['stateHome', '--state-home', 'state-home']]) {
+      assert.throws(() => loadBridge({ root, [field]: missing }), { code: `${label}-missing` });
+      const ran = spawnSync(process.execPath, [cli, 'inspect', '--root', root, flag, missing, '--path', A], { encoding: 'utf8', timeout: 5000 });
+      assert.equal(ran.status, 1); assert.equal(ran.stdout, '');
+      assert.deepEqual(JSON.parse(ran.stderr), { status: 'refused', code: `${label}-missing` });
+    }
+    assert.equal(calls.length, before);
+  });
+  await t.test('binding rejects regular files and reports unreadable directories without exposing paths', (t) => {
+    for (const [field, label] of [['root', 'root'], ['vault', 'vault'], ['stateHome', 'state-home']]) {
+      assert.throws(() => loadBridge({ root, [field]: path.join(vault, A) }), { code: `${label}-not-directory` });
+    }
+    const native = fs.realpathSync;
+    const blocked = path.join(root, 'blocked-state');
+    t.mock.method(fs, 'realpathSync', (file, ...args) => {
+      if (file === blocked) throw Object.assign(new Error('PRIVATE-PATH-DO-NOT-ECHO'), { code: 'EACCES' });
+      return native(file, ...args);
+    });
+    syncBuiltinESMExports();
+    try { assert.throws(() => loadBridge({ root, stateHome: blocked }), { code: 'state-home-unreadable', message: 'state-home-unreadable' }); }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
   });
   await t.test('local-only recall accepts punctuation, Unicode and large notes without export approval', async () => {
     const names = ['research/notes, revised.md', "research/O'Brien & (design)#1.md", 'research/记忆.md', 'research/large.md'];
@@ -170,6 +203,19 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
     catch (e) { if (['EPERM', 'EACCES'].includes(e.code)) { t.skip('junction privilege unavailable'); return; } throw e; }
     try { assert.throws(() => inspectSource(setConfig(), 'research/junction/escape.md'), /source-symlink-refused|source-outside-vault/); }
     finally { rmSync(link, { recursive: true, force: true }); rmSync(outside, { recursive: true }); }
+  });
+  await t.test('an in-vault INDEX-to-DENY junction cannot grant local read or approved export', async (t) => {
+    const name = 'research/private-link/secret.md';
+    const link = path.join(vault, 'research', 'private-link');
+    try { symlinkSync(path.join(vault, 'private'), link, 'junction'); }
+    catch (e) { if (['EPERM', 'EACCES'].includes(e.code)) { t.skip('junction privilege unavailable'); return; } throw e; }
+    try {
+      const cfg = config(); cfg.sources[name] = sha('DENIED-CANARY');
+      const ctx = setConfig(cfg); const before = calls.length;
+      assert.throws(() => inspectSource(ctx, name), { code: 'source-symlink-refused' });
+      await assert.rejects(retain(ctx, name), { code: 'source-symlink-refused' });
+      assert.equal(calls.length, before);
+    } finally { rmSync(link, { recursive: true, force: true }); setConfig(); }
   });
   await t.test('realpath containment independently refuses an outside-vault resolution', (t) => {
     const ctx = setConfig(); const real = fs.realpathSync;
@@ -269,6 +315,29 @@ test('memory bridge: actual HTTP path, current policy, provenance and degraded m
       assert.equal(out.status, 'refused'); assert.equal(out.code, 'http-401'); assert.equal(out.retry, undefined);
       assert.equal(calls.length, before + 1); assert(!JSON.stringify(out).includes('SECRET-ERROR-ECHO'));
     } finally { mode = ''; }
+  });
+  await t.test('HTTP 408 leaves a retain unresolved and never triggers an automatic retry', async () => {
+    mode = 'http-408'; const before = calls.length;
+    try {
+      const out = await retain(setConfig(), A);
+      assert.equal(out.status, 'unknown'); assert.equal(out.code, 'http-408');
+      assert.equal(out.retry, 'reconcile-upstream-document-before-retry');
+      assert.equal(calls.length, before + 1); assert(!JSON.stringify(out).includes('SECRET-ERROR-ECHO'));
+    } finally { mode = ''; }
+  });
+  await t.test('a confirmed retain survives in-flight configuration revocation, without permitting another write', async () => {
+    const ctx = setConfig(); const before = calls.length;
+    mode = 'revoke-during-request';
+    try {
+      const out = await retain(ctx, A);
+      assert.equal(out.status, 'retained'); assert.equal(out.source_sha256, sha(textA));
+      assert.deepEqual(out.notices, [{ provider: 'source', code: 'source-changed-after-retain', detail: 'configuration-changed' }]);
+      assert.equal(calls.length, before + 1);
+      assert.equal(stored.get(out.document_id).metadata.aigent_source_sha256, sha(textA));
+      await assert.rejects(retain(ctx, A), { code: 'configuration-changed' });
+      await assert.rejects(retain(loadBridge({ root }), A), { code: 'source-not-approved-at-this-version' });
+      assert.equal(calls.length, before + 1);
+    } finally { mode = ''; setConfig(); }
   });
   await t.test('retain rejects the encoded-size limit before any request', async () => {
     const name = 'research/encoded-limit.md'; const text = '\t'.repeat(60000);
