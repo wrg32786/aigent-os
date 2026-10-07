@@ -1,0 +1,40 @@
+{
+  "name": "fleet-band",
+  "version": "0.1.0",
+  "description": "Read-only fleet status band above the prompt (seat, context %, Room unread, pending job results, needs-you, held seats) plus /fires, /pending and /held commands that answer with no model turn.",
+  "author": { "name": "wrg32786" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "installRoot": {
+      "type": "string",
+      "title": "Install root",
+      "description": "Folder whose daemons/job-results.mjs lists pending job results. Empty: the results field and /fires are off.",
+      "default": ""
+    },
+    "roomRoot": {
+      "type": "string",
+      "title": "Room root",
+      "description": "The Room's room/ folder (inbox/<seat>/, state/<seat>.supervisor.log). Empty: room unread and held are off.",
+      "default": ""
+    },
+    "eodPath": {
+      "type": "string",
+      "title": "EOD file",
+      "description": "Path of the EOD latest.json whose needs_you[] is counted. Empty: needs-you is off.",
+      "default": ""
+    },
+    "watchedSeats": {
+      "type": "string",
+      "multiple": true,
+      "title": "Watched seats",
+      "description": "Seat names whose supervisor logs are checked for a held refresh cycle. Empty: held is off.",
+      "default": []
+    },
+    "showSummaries": {
+      "type": "boolean",
+      "title": "Show result summaries",
+      "description": "Print each pending result's summary in /fires (off: job and time only).",
+      "default": false
+    }
+  }
+}
