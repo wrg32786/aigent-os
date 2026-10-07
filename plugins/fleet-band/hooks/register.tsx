@@ -68,13 +68,16 @@ async function hasJobScript($: $): Promise<boolean> {
   return jobScript === 'present'
 }
 
+// Seat name: AIGENT_SEAT or SEAT when set, else the install folder's basename
+// with a trailing "-vault" dropped (a seat whose install lives at <seat>-vault
+// is still <seat>), lowercased and validated.
 async function seatName($: $): Promise<string> {
   try {
-    const fromEnv = (await $.env.get('SEAT'))?.toLowerCase()
+    const fromEnv = ((await $.env.get('AIGENT_SEAT')) || (await $.env.get('SEAT')))?.trim().toLowerCase()
     if (fromEnv) return SEAT_NAME.test(fromEnv) ? fromEnv : 'seat'
   } catch {}
   try {
-    const base = (await $.session.root()).split(/[\\/]/).filter(Boolean).pop()?.toLowerCase()
+    const base = (await $.session.root()).split(/[\\/]/).filter(Boolean).pop()?.toLowerCase().replace(/-vault$/, '')
     if (base && SEAT_NAME.test(base)) return base
   } catch {}
   return 'seat'

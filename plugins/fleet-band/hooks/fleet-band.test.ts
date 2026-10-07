@@ -51,6 +51,7 @@ type World = {
   process?: 'ok' | 'throw' | 'deny'
   isScriptMissing?: boolean
   isTimerRefused?: boolean
+  root?: string
 }
 
 function fleet(on: On, world: World = {}) {
@@ -62,7 +63,7 @@ function fleet(on: On, world: World = {}) {
     on('clock.every', () => ({ deny: 'no timers' }))
   }
   mock.env(on, world.env ?? { SEAT: 'main' })
-  on('session.root', () => ({ value: 'C:/example/Main' }))
+  on('session.root', () => ({ value: world.root ?? 'C:/example/Main' }))
   on('session.usage', () => ({
     value: { startedAt: 0, context: { window: 200_000, tokens: 84_000, percent: 42 }, rateLimits: [] },
   }))
@@ -160,6 +161,20 @@ test('seat comes from the session root without SEAT', async ($, on) => {
   await $.command.run({ command: 'held', ...RUN })
   const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
   expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toBe('main · ctx 42%')
+})
+
+test('a "-vault" install folder names the seat without the suffix', async ($, on) => {
+  fleet(on, { env: {}, root: 'C:/example/Beta-Vault' })
+  await $.command.run({ command: 'held', ...RUN })
+  const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
+  expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toBe('beta · ctx 42%')
+})
+
+test('AIGENT_SEAT wins over the install folder', async ($, on) => {
+  fleet(on, { env: { AIGENT_SEAT: 'gamma' }, root: 'C:/example/Beta-Vault' })
+  await $.command.run({ command: 'held', ...RUN })
+  const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
+  expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toBe('gamma · ctx 42%')
 })
 
 test('an invalid SEAT falls back to "seat"', async ($, on) => {
