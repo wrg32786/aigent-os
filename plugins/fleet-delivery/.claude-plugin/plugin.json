@@ -1,13 +1,14 @@
 {
   "name": "fleet-delivery",
   "version": "0.1.0",
-  "description": "Delivers a seat's Room inbox and pending job results into the session through the prompt API, one prompt per item, recorded in an on-disk ledger per seat. Inert until <installRoot>/.aigent/delivery-owner.json says {\"owner\":{\"<seat>\":\"mod\"}}.",
+  "description": "Delivers a seat's Room inbox and pending job results into the session through the prompt API, one prompt per item, tracked in the plugin's store and logged per seat. Inert until <installRoot>/.aigent/delivery-owner.json says {\"owner\":{\"<seat>\":\"mod\"}}.",
   "author": { "name": "wrg32786" },
+  "types": "./types/index.d.ts",
   "userConfig": {
     "installRoot": {
       "type": "string",
       "title": "Install root",
-      "description": "Folder holding .aigent/delivery-owner.json, memory/runtime/mod-delivery-ledger.<seat>.jsonl and daemons/job-results.mjs. Empty: the mod does nothing.",
+      "description": "Folder holding .aigent/delivery-owner.json, .aigent/state.json and daemons/job-results.mjs; the log and the refresh state are in its memory root. \"session\": the session's own root. Empty: the mod does nothing.",
       "default": ""
     },
     "roomRoot": {
@@ -19,7 +20,7 @@
     "seat": {
       "type": "string",
       "title": "Seat",
-      "description": "Seat name whose inbox is delivered. Empty: env SEAT, else the session root's folder name. Must match [a-z0-9_-]+, else the mod does nothing.",
+      "description": "Seat name whose inbox is delivered. Empty: env AIGENT_SEAT, then SEAT, then the session root's folder name with a trailing -vault dropped. Must match [a-z0-9_-]+, else the mod does nothing.",
       "default": ""
     },
     "jobSeat": {
@@ -31,8 +32,14 @@
     "submitTimeoutMinutes": {
       "type": "number",
       "title": "Submit timeout (minutes)",
-      "description": "How long a submit may wait for its turn to start before it is recorded deferred:submit-timeout.",
+      "description": "How long a submit may wait for its turn to start before it is recorded submitting:unresolved and delivery holds until it settles or is reconciled.",
       "default": 10
+    },
+    "requireRefreshState": {
+      "type": "boolean",
+      "title": "Require refresh state",
+      "description": "On: a missing, unreadable or invalid <memoryRoot>/runtime/auto-clear-cycle.json holds delivery. Off: a missing one means no refresh cycle on this install.",
+      "default": true
     }
   }
 }
