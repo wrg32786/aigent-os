@@ -1,0 +1,9 @@
+{
+  "name": "aigent-os",
+  "description": "Mods for aigent-OS: Claude Code plugins of function hooks.",
+  "owner": { "name": "wrg32786" },
+  "plugins": [
+    { "name": "fleet-band", "source": "./plugins/fleet-band" },
+    { "name": "fleet-delivery", "source": "./plugins/fleet-delivery" }
+  ]
+}
