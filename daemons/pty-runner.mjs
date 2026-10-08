@@ -737,6 +737,14 @@ export class InputOwnershipTracker {
             this.unknown = this.preSequenceUnknown;
             this.lastTaint = this.preSequenceLastTaint;
             this._restorePending();
+            // A paste IS content (review of 4e71bb3, F3): marked here, at
+            // the start, so a confirmation that lands between this chunk and
+            // the payload chunk cannot read the record as "nothing placed
+            // since" and _submitted() the tracker mid-paste -- the request
+            // would fire into a composer the payload then lands on. The
+            // empty-paste end marker restores the unmarked snapshot, so an
+            // empty paste still confirms EMPTY.
+            this._contentAfterPending();
             this.mode = 'paste';
             this.sequence = '';
             this.activePaste = true;

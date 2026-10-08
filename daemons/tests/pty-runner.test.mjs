@@ -2079,6 +2079,41 @@ test('ML12 F1: inert sequences after the uncertain CR (Enter keyup, focus/mouse 
   assert.equal(sandwich.pendingSubmission.dirtyAfter, true, 'the focus-out restores the record WITH its dirty mark');
   assert.equal(sandwich.confirmSubmission(), true);
   assert.equal(sandwich.snapshot().knownEmpty, false);
+
+  // Review of 4e71bb3 (F3, LOW): a paste IS content from its START. A
+  // confirmation landing between a completed ESC[200~ chunk and its payload
+  // chunk must not read "nothing placed since" and _submitted() the tracker
+  // mid-paste (the request would fire into a composer the payload then lands
+  // on, and the payload would be parsed in normal mode).
+  const midPaste = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) midPaste.observe(chunk);
+  midPaste.observe(`${ESC}[200~`);
+  assert.equal(midPaste.snapshot().activePaste, true);
+  assert.equal(midPaste.pendingSubmission.dirtyAfter, true, 'a completed paste start marks the record as content -- MUST be red on 4e71bb3');
+  assert.equal(midPaste.confirmSubmission(), true);
+  let mid = midPaste.snapshot();
+  assert.equal(mid.knownEmpty, false, 'confirmed mid-paste: the composer is about to hold the payload -- MUST be red on 4e71bb3');
+  assert.equal(mid.activePaste, true, 'the paste is still in flight');
+  assert.equal(mid.pendingSubmission, false);
+  assert.equal(mid.unknown, false, 'the pre-CR taint is spent; the paste is observed byte-for-byte');
+  // The payload, its end marker and the operator's Enter then behave exactly
+  // as a paste on a clean line does.
+  midPaste.observe('pasted text');
+  midPaste.observe(`${ESC}[201~`);
+  mid = midPaste.snapshot();
+  assert.equal(mid.activePaste, false);
+  assert.equal(mid.knownEmpty, false, 'the payload is in the composer');
+  midPaste.observe('\r');
+  assert.equal(midPaste.snapshot().knownEmpty, true, 'the Enter after the paste is a clean boundary');
+  // The EMPTY paste still confirms EMPTY: its end marker restores the
+  // unmarked snapshot (case (b) above), so nothing else changes.
+  const emptyPaste = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) emptyPaste.observe(chunk);
+  emptyPaste.observe(`${ESC}[200~`);
+  emptyPaste.observe(`${ESC}[201~`);
+  assert.equal(emptyPaste.pendingSubmission.dirtyAfter, false, 'an empty paste placed nothing');
+  assert.equal(emptyPaste.confirmSubmission(), true);
+  assert.equal(emptyPaste.snapshot().knownEmpty, true);
 });
 
 test('post-submit kill and cancellation retain queued input when they cancel the wake Enter', async (t) => {
