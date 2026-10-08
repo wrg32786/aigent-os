@@ -1281,7 +1281,13 @@ test('input ownership parser remains fail-closed across fragmented controls and 
   tracker.observe('A');
   assert.equal(tracker.snapshot().unknown, true);
   assert.equal(tracker.snapshot().knownEmpty, false);
+  // Review of 436c1dd: a CR on a tainted line is UNCERTAIN, never a
+  // submission on its own; the runner's transcript evidence resolves it.
+  // confirmSubmission() stands in for that evidence throughout this test.
   tracker.observe('\r');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'CR after a completed arrow is not proof of submission');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
   assert.equal(tracker.snapshot().knownEmpty, true);
 
   tracker.observe('\u001b[200~pasted\rtext');
@@ -1290,8 +1296,9 @@ test('input ownership parser remains fail-closed across fragmented controls and 
   tracker.observe('\u001b[201~');
   assert.equal(tracker.snapshot().activePaste, false);
   assert.equal(tracker.snapshot().knownEmpty, false);
+  assert.equal(tracker.snapshot().unknown, false, 'a completed paste is observed byte-for-byte: no taint survives it');
   tracker.observe('\r');
-  assert.equal(tracker.snapshot().knownEmpty, true);
+  assert.equal(tracker.snapshot().knownEmpty, true, 'the Enter after a paste is a clean boundary');
 
   tracker.observe('\u001b[');
   tracker.observe('\r');
@@ -1301,6 +1308,9 @@ test('input ownership parser remains fail-closed across fragmented controls and 
     'CR inside an incomplete CSI must not fabricate an empty prompt',
   );
   tracker.observe('A\r');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'the CR after the completed control is uncertain');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
   assert.equal(tracker.snapshot().knownEmpty, true);
 
   tracker.observe('\u001b]0;title\r');
@@ -1310,6 +1320,9 @@ test('input ownership parser remains fail-closed across fragmented controls and 
     'CR inside OSC must remain fail-closed until its terminator',
   );
   tracker.observe('\u0007\r');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'the CR after the OSC is uncertain');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
   assert.equal(tracker.snapshot().knownEmpty, true);
 
   tracker.observe('\u001bPpayload\r');
@@ -1319,6 +1332,9 @@ test('input ownership parser remains fail-closed across fragmented controls and 
     'DCS payloads are active controls until ST',
   );
   tracker.observe('\u001b\\\r');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'the CR after the DCS is uncertain');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
   assert.equal(tracker.snapshot().knownEmpty, true);
 });
 
@@ -1391,7 +1407,10 @@ test('input ownership tracker records a bounded, printable lastTaint at every ta
   );
 
   tracker.observe('\r');
-  assert.equal(tracker.snapshot().lastTaint, null, 'CR submission clears lastTaint along with the rest of the state');
+  assert.equal(tracker.snapshot().lastTaint, afterArrow, 'a CR on the tainted line is uncertain: the cause stays named while the evidence is awaited');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
+  assert.equal(tracker.snapshot().lastTaint, null, 'the confirmed submission clears lastTaint along with the rest of the state');
 
   const longTracker = new InputOwnershipTracker();
   longTracker.observe(`${ESC}]0;${'x'.repeat(200)}`);
@@ -1529,10 +1548,21 @@ test('win32-input-mode: mixed raw and win32-encoded traffic interleave correctly
   tracker.observe(`${ESC}[A`); // raw arrow -- still fail-closed
   assert.equal(tracker.snapshot().unknown, true, 'a raw arrow between win32 events must still taint');
 
-  // win32 Enter keydown must still submit unconditionally, exactly like a
-  // raw CR does even when the line is currently unknown-tainted
+  // win32 Enter keydown has exactly raw-CR semantics, including on an
+  // unknown-tainted line (review of 436c1dd): uncertain, not a submission,
+  // resolved by the runner's transcript evidence.
   tracker.observe(`${ESC}[13;28;13;1;0;1_`);
-  assert.equal(tracker.snapshot().knownEmpty, true, 'win32 Enter keydown submits unconditionally, same as raw CR');
+  assert.equal(tracker.snapshot().knownEmpty, false, 'win32 plain Enter keydown on a tainted line is uncertain, same as a raw CR');
+  assert.equal(tracker.snapshot().pendingSubmission, true);
+  assert.equal(tracker.confirmSubmission(), true);
+  assert.equal(tracker.snapshot().knownEmpty, true);
+
+  // On a CLEAN line it is the zero-latency boundary, same as a raw CR.
+  const clean = new InputOwnershipTracker();
+  clean.observe('raw-typed-text');
+  clean.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(clean.snapshot().knownEmpty, true, 'win32 plain Enter keydown on a clean line submits outright');
+  assert.equal(clean.snapshot().pendingSubmission, false);
 });
 
 // MULTILINE INPUT IS NOT SUBMISSION (PR #59 review 5356605916, P1). Claude
@@ -1648,12 +1678,17 @@ test('ML4 multiline: win32 backslash keydown + plain Enter keydown is a newline,
 });
 
 test('ML5 multiline: Ctrl+J (LF) and Alt+Enter (ESC CR) never submit, raw or win32-encoded (regression guards)', () => {
-  // Raw LF: a control byte -- taints, dirty, and only a CR clears it.
+  // Raw LF: a control byte -- taints, dirty. The CR that follows is on a
+  // tainted line and therefore uncertain (review of 436c1dd); the runner's
+  // transcript evidence (confirmSubmission here) is what clears it.
   const lf = new InputOwnershipTracker();
   lf.observe('first line');
   lf.observe('\n');
   assert.equal(lf.snapshot().knownEmpty, false, 'Ctrl+J is chat:newline, never a submission');
   lf.observe('second line\r');
+  assert.equal(lf.snapshot().knownEmpty, false, 'the CR after a taint is uncertain, not a submission');
+  assert.equal(lf.snapshot().pendingSubmission, true);
+  assert.equal(lf.confirmSubmission(), true);
   assert.equal(lf.snapshot().knownEmpty, true);
 
   // Raw Alt/Option+Enter: ESC then CR -- the escape branch taints, no submission.
@@ -1662,6 +1697,9 @@ test('ML5 multiline: Ctrl+J (LF) and Alt+Enter (ESC CR) never submit, raw or win
   meta.observe(`${ESC}\r`);
   assert.equal(meta.snapshot().knownEmpty, false, 'Meta+Enter is a newline chord, never a submission');
   meta.observe('\r');
+  assert.equal(meta.snapshot().knownEmpty, false, 'the CR after a taint is uncertain, not a submission');
+  assert.equal(meta.snapshot().pendingSubmission, true);
+  assert.equal(meta.confirmSubmission(), true);
   assert.equal(meta.snapshot().knownEmpty, true);
 
   // win32 Ctrl+J: VK_J=74, Uc=10, Cs=LEFT_CTRL -- a non-printable keydown, fail-closed.
@@ -1670,6 +1708,9 @@ test('ML5 multiline: Ctrl+J (LF) and Alt+Enter (ESC CR) never submit, raw or win
   win32.observe(`${ESC}[74;36;10;1;8;1_`);
   assert.equal(win32.snapshot().knownEmpty, false, 'win32 Ctrl+J never submits');
   win32.observe(`${ESC}[13;28;13;1;0;1_`);
+  assert.equal(win32.snapshot().knownEmpty, false, 'the plain Enter keydown after a taint is uncertain, not a submission');
+  assert.equal(win32.snapshot().pendingSubmission, true);
+  assert.equal(win32.confirmSubmission(), true);
   assert.equal(win32.snapshot().knownEmpty, true);
 });
 
@@ -1701,16 +1742,17 @@ test('ML6 multiline: bracketed paste with embedded newlines stays non-submitting
   assert.equal(torn.snapshot().knownEmpty, false, 'torn end marker: the byte before it is still the last payload byte');
 });
 
-test('ML7 multiline: an unknown control between backslash and CR keeps the pre-existing CR boundary; inert reports do not launder it', () => {
+test('ML7 multiline: an unknown control between backslash and CR makes the CR uncertain; inert reports do not launder it', () => {
   // An arrow between them may have moved the cursor: the tracker cannot say
-  // where the backslash is, so the CR keeps its existing role as the one
-  // boundary that clears an unknown line.
+  // where the backslash is, so the CR is neither a submission nor a newline
+  // -- it is recorded as an uncertain submission for the runner to prove.
   const arrow = new InputOwnershipTracker();
   arrow.observe('first line\\');
   arrow.observe(`${ESC}[D`);
   assert.equal(arrow.snapshot().unknown, true);
   arrow.observe('\r');
-  assert.equal(arrow.snapshot().knownEmpty, true, 'CR after an unknown control clears the taint exactly as before');
+  assert.equal(arrow.snapshot().knownEmpty, false, 'CR after an unknown control is not proof of submission -- MUST be red on 436c1dd');
+  assert.equal(arrow.snapshot().pendingSubmission, true, 'the snapshot names the wait');
 
   // A focus report, a CPR, or a modifier keyup places nothing and moves
   // nothing: the backslash is still before the cursor, so the CR is a newline.
@@ -1776,15 +1818,17 @@ test('ML8 multiline: snapshot names the newline mechanism, and the Ctrl+Enter-on
   assert.equal(snapshot.lastNewline, false);
 });
 
-test('ML9 multiline: REGRESSION GUARD for the known residual -- a tainting control between backslash and CR restores the CR as the boundary', () => {
-  // Review of 8d4a8b4 (LOW, residual): after any tainting control (DEL,
-  // backspace, arrows, CSI-u, unfinished ESC) lastByte is null, so the next
-  // CR submits even if the byte before the cursor is (or may be) a
-  // backslash. This is the pre-existing "CR is the only thing that clears
-  // unknown" trade-off, documented in the class comment. The assertions
-  // below pin the CURRENT behaviour so nobody turns it into a permanent
-  // defer: the alternative pins the taint until a SECOND Enter for every
-  // operator who edits a line with arrows or backspace.
+test('ML9 multiline: REGRESSION GUARD -- a CR after a tainting control is an UNCERTAIN submission, resolved only by evidence, never by the CR itself', () => {
+  // Review of 8d4a8b4 (LOW, residual) pinned the OLD behaviour: after any
+  // tainting control (DEL, backspace, arrows, CSI-u, unfinished ESC) the
+  // next CR submitted and cleared the taint even if the byte before the
+  // cursor was a backslash. Review of 436c1dd (MED) rejected that: the
+  // backslash case makes the CR a NEWLINE and the request was typed into the
+  // draft. The CONTRACT now: the CR is recorded as pendingSubmission, the
+  // line stays dirty and tainted, and only confirmSubmission() (runner-side
+  // transcript evidence) clears it. Nobody turns this back into "CR clears
+  // unknown", and nobody turns it into a permanent defer either: the
+  // confirmation path below is the liveness control.
   const cases = [
     ['DEL after two backslashes', ['abc\\\\', '\u007f', '\r']],
     ['backspace (0x08) after a backslash', ['abc\\', '\u0008', '\r']],
@@ -1797,10 +1841,22 @@ test('ML9 multiline: REGRESSION GUARD for the known residual -- a tainting contr
     for (const chunk of chunks.slice(0, -1)) tracker.observe(chunk);
     assert.equal(tracker.snapshot().unknown, true, `${label}: setup, the control taints`);
     assert.equal(tracker.snapshot().lastByte === '\\\\', false, `${label}: the taint nulls or replaces lastByte`);
+    const before = tracker.snapshot();
     tracker.observe(chunks[chunks.length - 1]);
-    const snapshot = tracker.snapshot();
-    assert.equal(snapshot.knownEmpty, true, `${label}: the CR after a tainting control submits and clears the taint (known residual, kept)`);
-    assert.equal(snapshot.unknown, false, `${label}: CR is the only thing that clears unknown`);
+    let snapshot = tracker.snapshot();
+    assert.equal(snapshot.knownEmpty, false, `${label}: the CR after a tainting control is NOT proof of submission -- MUST be red on 436c1dd`);
+    assert.equal(before.pendingSubmission, false, `${label}: nothing was pending before the CR`);
+    assert.equal(snapshot.unknown, true, `${label}: the CR does not clear unknown`);
+    assert.equal(snapshot.pendingSubmission, true, `${label}: the snapshot names the mechanism`);
+    assert.equal(snapshot.lastNewline, false, `${label}: not claimed as a newline either -- uncertain`);
+    // Liveness: evidence resolves it, exactly as a clean CR would have.
+    assert.equal(tracker.confirmSubmission(), true, `${label}: a pending record is resolved`);
+    snapshot = tracker.snapshot();
+    assert.equal(snapshot.knownEmpty, true, `${label}: confirmed -> empty`);
+    assert.equal(snapshot.unknown, false);
+    assert.equal(snapshot.pendingSubmission, false);
+    assert.equal(snapshot.lastTaint, null);
+    assert.equal(tracker.confirmSubmission(), false, `${label}: nothing left to confirm`);
   }
 });
 
@@ -1825,6 +1881,242 @@ test('ML10 multiline: an EMPTY bracketed paste places nothing, so a backslash be
   nonEmpty.observe(`${ESC}[200~x${ESC}[201~`);
   nonEmpty.observe('\r');
   assert.equal(nonEmpty.snapshot().knownEmpty, true, 'a one-byte paste ending in x: the CR is a plain Enter');
+});
+
+// Review of 436c1dd (MED): the reviewer's two specimens, raw and under
+// win32-input-mode. In both the editable prompt ends in a backslash the
+// tracker lost sight of, so the Enter is Claude Code's backslash+Enter
+// NEWLINE -- and the tracker used to read it as a submission.
+const SPECIMEN_1_RAW = ['abc\\x', '\u007f', '\r'];
+const SPECIMEN_2_RAW = ['abc\\', `${ESC}[D`, `${ESC}[C`, '\r'];
+// VK_BACK=8 (uc=8, below 0x20: the non-printable keydown branch), VK_LEFT=37,
+// VK_RIGHT=39, then a PLAIN VK_RETURN keydown (Cs=0). The live wire sends a
+// keyup after every keydown (review of 7b3a728, F1) -- the Enter keyup is
+// the exact byte string measured on the live seat 2026-08-05 22:55:05Z --
+// so the win32 specimens carry them, and the keyups must change nothing.
+const WIN32_BACKSPACE = `${ESC}[8;14;8;1;0;1_`;
+const WIN32_BACKSPACE_UP = `${ESC}[8;14;8;0;0;1_`;
+const WIN32_LEFT = `${ESC}[37;75;0;1;0;1_`;
+const WIN32_LEFT_UP = `${ESC}[37;75;0;0;0;1_`;
+const WIN32_RIGHT = `${ESC}[39;77;0;1;0;1_`;
+const WIN32_RIGHT_UP = `${ESC}[39;77;0;0;0;1_`;
+const WIN32_PLAIN_ENTER = `${ESC}[13;28;13;1;0;1_`;
+const WIN32_PLAIN_ENTER_UP = `${ESC}[13;28;13;0;0;1_`;
+const SPECIMEN_1_WIN32 = ['abc\\x', WIN32_BACKSPACE, WIN32_BACKSPACE_UP, WIN32_PLAIN_ENTER, WIN32_PLAIN_ENTER_UP];
+const SPECIMEN_2_WIN32 = ['abc\\', WIN32_LEFT, WIN32_LEFT_UP, WIN32_RIGHT, WIN32_RIGHT_UP, WIN32_PLAIN_ENTER, WIN32_PLAIN_ENTER_UP];
+
+test('ML11 specimens: an edited line ending in a lost backslash + Enter is UNCERTAIN, not a submission (raw and win32); evidence confirms it', () => {
+  for (const [label, chunks] of [
+    ['specimen 1 raw: abc\\x DEL CR', SPECIMEN_1_RAW],
+    ['specimen 2 raw: abc\\ Left Right CR', SPECIMEN_2_RAW],
+    ['specimen 1 win32: abc\\x VK_BACK VK_RETURN', SPECIMEN_1_WIN32],
+    ['specimen 2 win32: abc\\ VK_LEFT VK_RIGHT VK_RETURN', SPECIMEN_2_WIN32],
+  ]) {
+    const tracker = new InputOwnershipTracker();
+    for (const chunk of chunks) tracker.observe(chunk);
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.knownEmpty, false, `${label}: knownEmpty must stay false after the CR -- MUST be red on 436c1dd`);
+    assert.equal(snapshot.unknown, true, `${label}: the edit taint is not cleared by the CR`);
+    assert.equal(snapshot.pendingSubmission, true, `${label}: the snapshot names the uncertain submission`);
+    assert.equal(snapshot.lastNewline, false, `${label}: not claimed as a newline either`);
+    // The record counts everything up to and including the CR itself -- not
+    // the Enter keyup that follows it on the win32 wire.
+    const enterIndex = chunks.findIndex((chunk) => chunk === '\r' || chunk === WIN32_PLAIN_ENTER);
+    assert.equal(tracker.pendingSubmission.units, chunks.slice(0, enterIndex + 1).join('').length,
+      `${label}: the record counts everything up to and including the CR`);
+    assert.equal(tracker.pendingSubmission.taintedAfter, false);
+    assert.equal(tracker.pendingSubmission.dirtyAfter, false, `${label}: a trailing keyup places nothing`);
+    // No timer: ticks of nothing change nothing.
+    assert.equal(tracker.snapshot().pendingSubmission, true);
+    // Liveness: the runner's evidence resolves it.
+    assert.equal(tracker.confirmSubmission(), true, `${label}: confirmed`);
+    assert.equal(tracker.snapshot().knownEmpty, true, `${label}: confirmed -> known empty`);
+    assert.equal(tracker.snapshot().pendingSubmission, false);
+  }
+
+  // The record counts up to the CR ITSELF, not the chunk's tail: '\rxyz' in
+  // one chunk leaves xyz typed after the uncertain CR, and confirmation of
+  // that CR must not declare xyz gone.
+  const tail = new InputOwnershipTracker();
+  tail.observe('abc\\x');
+  tail.observe('\u007f');
+  tail.observe('\rxyz');
+  assert.equal(tail.pendingSubmission.units, tail.receivedUnits - 3, 'units stop at the CR');
+  assert.equal(tail.confirmSubmission(), true);
+  assert.equal(tail.snapshot().knownEmpty, false, 'xyz was typed after the confirmed CR: the composer holds it');
+  assert.equal(tail.snapshot().unknown, false, 'the pre-CR taint is spent; xyz was observed byte-for-byte');
+  assert.equal(tail.snapshot().pendingSubmission, false);
+  tail.observe('\r');
+  assert.equal(tail.snapshot().knownEmpty, true, 'xyz is a clean line: its plain Enter submits outright');
+
+  // A taint that lands AFTER the uncertain CR survives confirmation: the
+  // fresh line is itself unknown and its next CR is uncertain again.
+  const tainted = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_2_RAW) tainted.observe(chunk);
+  tainted.observe('more');
+  tainted.observe(`${ESC}[A`);
+  assert.equal(tainted.pendingSubmission.taintedAfter, true);
+  assert.equal(tainted.confirmSubmission(), true);
+  assert.equal(tainted.snapshot().unknown, true, 'the post-CR arrow still taints');
+  assert.equal(tainted.snapshot().pendingSubmission, false);
+  tainted.observe('\r');
+  assert.equal(tainted.snapshot().pendingSubmission, true, 'uncertain again: evidence needed again');
+
+  // A second uncertain CR replaces the record (evidence is attributed to the
+  // latest CR), and a clean _submitted() path never leaves one behind.
+  const twice = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) twice.observe(chunk);
+  const first = twice.pendingSubmission.units;
+  twice.observe('second line\r');
+  assert.equal(twice.pendingSubmission.units, first + 'second line\r'.length, 'the latest CR owns the record');
+  assert.equal(twice.snapshot().pendingSubmission, true);
+
+  // Fail-closed cost, stated: a known printable typed AFTER an edit does not
+  // make the next CR certain (the model does not claim to know where the
+  // cursor is); it waits for evidence like the specimens do.
+  const edited = new InputOwnershipTracker();
+  edited.observe('abc');
+  edited.observe(`${ESC}[D`);
+  edited.observe('d\r');
+  assert.equal(edited.snapshot().pendingSubmission, true);
+
+  // A clean line is untouched by any of this: zero-latency boundary as before.
+  const clean = new InputOwnershipTracker();
+  clean.observe('abc\\x');
+  clean.observe('\r');
+  assert.equal(clean.snapshot().knownEmpty, true, 'no edit, no uncertainty');
+  assert.equal(clean.snapshot().pendingSubmission, false);
+});
+
+// Review of 7b3a728 (F1, BLOCK): inert sequences after the uncertain CR --
+// above all the Enter's OWN win32 keyup, which always precedes the transcript
+// record on the live seat -- marked the record taintedAfter through the
+// ESC-arrival taint. confirmSubmission() then left unknown=true on an EMPTY
+// composer, every later clean prompt kept it unknown, and the capsule
+// request deferred for the rest of the session: no ack, no clear, pressure
+// unbounded, only a relaunch recovered.
+test('ML12 F1: inert sequences after the uncertain CR (Enter keyup, focus/mouse reports, empty paste) do not spoil its confirmation; real controls still do', () => {
+  // (a) The reviewer's probe: abcd, VK_BACK down/up, VK_RETURN down/up, then
+  // the record. Confirmed EMPTY and clean -- and it stays that way through
+  // five further clean prompts with keydown+keyup each.
+  const probe = new InputOwnershipTracker();
+  for (const chunk of ['abcd', WIN32_BACKSPACE, WIN32_BACKSPACE_UP, WIN32_PLAIN_ENTER, WIN32_PLAIN_ENTER_UP]) probe.observe(chunk);
+  assert.equal(probe.snapshot().pendingSubmission, true);
+  assert.equal(probe.pendingSubmission.taintedAfter, false, 'the Enter keyup is inert: it must not mark the record -- MUST be red on 7b3a728');
+  assert.equal(probe.pendingSubmission.dirtyAfter, false, 'nor does it place content');
+  assert.equal(probe.confirmSubmission(), true);
+  let snapshot = probe.snapshot();
+  assert.equal(snapshot.knownEmpty, true, 'confirmed with only a keyup after the CR: the composer is EMPTY -- MUST be red on 7b3a728');
+  assert.equal(snapshot.unknown, false, 'and clean');
+  assert.equal(snapshot.lastTaint, null);
+  for (let i = 0; i < 5; i += 1) {
+    probe.observe(`prompt ${i}`);
+    assert.equal(probe.snapshot().knownEmpty, false);
+    probe.observe(WIN32_PLAIN_ENTER);
+    assert.equal(probe.snapshot().knownEmpty, true, `clean prompt ${i}: the plain Enter keydown on a clean line submits outright`);
+    assert.equal(probe.snapshot().pendingSubmission, false, `clean prompt ${i}: nothing uncertain about it`);
+    probe.observe(WIN32_PLAIN_ENTER_UP);
+    snapshot = probe.snapshot();
+    assert.equal(snapshot.knownEmpty, true, `clean prompt ${i}: the keyup changes nothing`);
+    assert.equal(snapshot.unknown, false, `clean prompt ${i}: still clean -- the F1 session-long defer is closed`);
+  }
+
+  // (b) Raw mode: a mouse-wheel report, a focus-out, a CPR, a modifier keyup
+  // or an EMPTY paste between the CR and the tick that reads the record.
+  for (const [label, inert] of [
+    ['mouse wheel', `${ESC}[<64;10;10M`],
+    ['focus-out', `${ESC}[O`],
+    ['CPR', `${ESC}[24;80R`],
+    ['win32 Shift keyup', `${ESC}[16;42;0;0;0;1_`],
+    ['empty paste', `${ESC}[200~${ESC}[201~`],
+  ]) {
+    const tracker = new InputOwnershipTracker();
+    for (const chunk of SPECIMEN_1_RAW) tracker.observe(chunk);
+    tracker.observe(inert);
+    assert.equal(tracker.snapshot().pendingSubmission, true, `${label}: the record survives an inert sequence`);
+    assert.equal(tracker.pendingSubmission.taintedAfter, false, `${label}: an inert sequence does not mark it -- MUST be red on 7b3a728`);
+    assert.equal(tracker.confirmSubmission(), true);
+    assert.equal(tracker.snapshot().knownEmpty, true, `${label}: confirmed EMPTY -- MUST be red on 7b3a728`);
+    assert.equal(tracker.snapshot().unknown, false, `${label}: and clean`);
+  }
+
+  // (c) A genuinely tainting control after the CR (arrow, DEL, backspace
+  // keydown) still leaves the line dirty and unknown after confirmation --
+  // the existing contract. And known content after the CR (a printable, a
+  // non-empty paste) leaves it dirty but clean.
+  for (const [label, control] of [
+    ['arrow-up', `${ESC}[A`],
+    ['DEL', '\u007f'],
+    ['win32 backspace keydown', WIN32_BACKSPACE],
+  ]) {
+    const tracker = new InputOwnershipTracker();
+    for (const chunk of SPECIMEN_2_RAW) tracker.observe(chunk);
+    tracker.observe(control);
+    assert.equal(tracker.pendingSubmission.taintedAfter, true, `${label}: a real control after the CR marks the record`);
+    assert.equal(tracker.confirmSubmission(), true);
+    assert.equal(tracker.snapshot().knownEmpty, false, `${label}: confirmed, but the line after it is dirty`);
+    assert.equal(tracker.snapshot().unknown, true, `${label}: and unknown -- existing contract preserved`);
+  }
+  for (const [label, content] of [
+    ['printable', 'x'],
+    ['win32 printable keydown', `${ESC}[88;45;120;1;0;1_`],
+    ['non-empty paste', `${ESC}[200~pasted${ESC}[201~`],
+  ]) {
+    const tracker = new InputOwnershipTracker();
+    for (const chunk of SPECIMEN_2_RAW) tracker.observe(chunk);
+    tracker.observe(content);
+    assert.equal(tracker.pendingSubmission.dirtyAfter, true, `${label}: content after the CR marks the record dirty`);
+    assert.equal(tracker.pendingSubmission.taintedAfter, false, `${label}: but not tainted`);
+    assert.equal(tracker.confirmSubmission(), true);
+    assert.equal(tracker.snapshot().knownEmpty, false, `${label}: the composer holds the new content`);
+    assert.equal(tracker.snapshot().unknown, false, `${label}: seen byte-for-byte, clean`);
+  }
+
+  // An inert sequence sandwiched between real content keeps the content's
+  // mark: the restore is a snapshot of the record as it was at ESC arrival,
+  // not a reset.
+  const sandwich = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) sandwich.observe(chunk);
+  sandwich.observe('y');
+  sandwich.observe(`${ESC}[O`);
+  assert.equal(sandwich.pendingSubmission.dirtyAfter, true, 'the focus-out restores the record WITH its dirty mark');
+  assert.equal(sandwich.confirmSubmission(), true);
+  assert.equal(sandwich.snapshot().knownEmpty, false);
+
+  // Review of 4e71bb3 (F3, LOW): a paste IS content from its START. A
+  // confirmation landing between a completed ESC[200~ chunk and its payload
+  // chunk must not read "nothing placed since" and _submitted() the tracker
+  // mid-paste (the request would fire into a composer the payload then lands
+  // on, and the payload would be parsed in normal mode).
+  const midPaste = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) midPaste.observe(chunk);
+  midPaste.observe(`${ESC}[200~`);
+  assert.equal(midPaste.snapshot().activePaste, true);
+  assert.equal(midPaste.pendingSubmission.dirtyAfter, true, 'a completed paste start marks the record as content -- MUST be red on 4e71bb3');
+  assert.equal(midPaste.confirmSubmission(), true);
+  let mid = midPaste.snapshot();
+  assert.equal(mid.knownEmpty, false, 'confirmed mid-paste: the composer is about to hold the payload -- MUST be red on 4e71bb3');
+  assert.equal(mid.activePaste, true, 'the paste is still in flight');
+  assert.equal(mid.pendingSubmission, false);
+  assert.equal(mid.unknown, false, 'the pre-CR taint is spent; the paste is observed byte-for-byte');
+  // The payload, its end marker and the operator's Enter then behave exactly
+  // as a paste on a clean line does.
+  midPaste.observe('pasted text');
+  midPaste.observe(`${ESC}[201~`);
+  mid = midPaste.snapshot();
+  assert.equal(mid.activePaste, false);
+  assert.equal(mid.knownEmpty, false, 'the payload is in the composer');
+  midPaste.observe('\r');
+  assert.equal(midPaste.snapshot().knownEmpty, true, 'the Enter after the paste is a clean boundary');
+  // The EMPTY paste still confirms EMPTY: its end marker restores the
+  // unmarked snapshot (case (b) above), so nothing else changes.
+  const emptyPaste = new InputOwnershipTracker();
+  for (const chunk of SPECIMEN_1_RAW) emptyPaste.observe(chunk);
+  emptyPaste.observe(`${ESC}[200~`);
+  emptyPaste.observe(`${ESC}[201~`);
+  assert.equal(emptyPaste.pendingSubmission.dirtyAfter, false, 'an empty paste placed nothing');
+  assert.equal(emptyPaste.confirmSubmission(), true);
+  assert.equal(emptyPaste.snapshot().knownEmpty, true);
 });
 
 test('post-submit kill and cancellation retain queued input when they cancel the wake Enter', async (t) => {
@@ -4265,7 +4557,7 @@ test('C3 an empty composer fires the request immediately, and a submitted prompt
   }
 });
 
-test('C4 uncertain input ownership (an unfinished or editing control) defers, and the operator CR releases it', () => {
+test('C4 uncertain input ownership (an unfinished or editing control) defers; the operator CR plus its transcript record releases it', () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     assert.equal(harness.core.tick().state.state, 'pressure');
@@ -4280,11 +4572,25 @@ test('C4 uncertain input ownership (an unfinished or editing control) defers, an
       'the deferral names the tracker state so the cause is diagnosable from disk');
     assert.deepEqual(harness.pty.writes, [arrowUp], 'nothing is written over the recalled text');
 
-    harness.operator(Buffer.from('\r')); // the operator submits whatever was recalled
+    // The operator presses Enter on the recalled text. Review of 436c1dd:
+    // the recalled line may end in a backslash the runner never saw, so this
+    // CR alone is not proof of submission -- the request stays deferred and
+    // the refusal names the wait.
+    harness.operator(Buffer.from('\r'));
     harness.drive();
     assert.equal(harness.core.state.state, 'checkpoint-confirmed',
-      'the release fires through the deferred-cycle gate at checkpoint-confirmed');
-    assert.equal(capsuleTextWriteCount(harness), 1, 'CR is the boundary: the request fires on the next tick');
+      'the transport walks on; the deferred cycle stays owed at checkpoint-confirmed');
+    assert.equal(capsuleTextWriteCount(harness), 0, 'a CR on an unknown line is uncertain: still deferred -- MUST be red on 436c1dd');
+    assert.equal(harness.runner.lastReason?.code, 'runner-capsule-request-composer-busy');
+    assert.equal(harness.runner.lastReason?.detail?.input?.pendingSubmission, true,
+      'the composer-busy refusal names the mechanism: waiting on the transcript');
+
+    // The prompt lands in the transcript: that is the proof. The request
+    // fires through the deferred-cycle gate on the next tick, once.
+    appendOperatorPromptRecord(harness, 'the recalled prompt');
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'CR + its transcript record is the boundary: the request fires on the next tick');
+    assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 1);
   } finally {
     harness.cleanup();
   }
@@ -4418,6 +4724,232 @@ test('C7 a bracketed paste with embedded newlines defers the capsule request; th
     harness.drive();
     assert.equal(capsuleTextWriteCount(harness), 1, 'the operator Enter after the paste is the boundary');
     assert.equal(harness.fireEnter(), true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// A genuine operator prompt as Claude Code writes it: a non-meta
+// "type":"user" record. String content or a text block -- both shapes occur.
+function appendOperatorPromptRecord(harness, text, { shape = 'string', transcriptPath } = {}) {
+  const content = shape === 'string'
+    ? JSON.stringify(text)
+    : `[{"type":"text","text":${JSON.stringify(text)}}]`;
+  fs.appendFileSync(
+    transcriptPath || harness.fixture.transcriptPath,
+    `\n{"type":"user","message":{"role":"user","content":${content}},"uuid":"u-${Date.now()}"}\n`,
+  );
+}
+
+// Review of 436c1dd (MED): the two specimens end to end. The composed prompt
+// ends in a backslash the tracker lost sight of (DEL, or Left+Right), so the
+// Enter is a NEWLINE: the request must stay deferred, nothing may be written
+// by the runner, and the operator's bytes pass through byte-for-byte. On
+// 436c1dd the CR submitted and '/context-capsule' was typed into the draft.
+test('C8 specimens: an edited prompt ending in a lost backslash + Enter keeps the request deferred; the transcript record releases it once', () => {
+  for (const [label, chunks] of [
+    ['specimen 1 raw', SPECIMEN_1_RAW],
+    ['specimen 2 raw', SPECIMEN_2_RAW],
+    ['specimen 1 win32', SPECIMEN_1_WIN32],
+    ['specimen 2 win32', SPECIMEN_2_WIN32],
+  ]) {
+    const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+    try {
+      assert.equal(harness.core.tick().state.state, 'pressure');
+      const buffers = chunks.map((chunk) => Buffer.from(chunk));
+      for (const buffer of buffers) harness.operator(buffer);
+      assert.deepEqual(harness.pty.writes, buffers, `${label}: operator sovereignty, every byte passes through untouched`);
+
+      harness.drive(); // pressure -> checkpoint-requested: the request would fire here
+      assert.equal(harness.core.state.state, 'checkpoint-requested');
+      assert.equal(capsuleTextWriteCount(harness), 0,
+        `${label}: the edited CR is not proof of submission, the request must stay deferred -- MUST be red on 436c1dd (writes: ${JSON.stringify(harness.pty.writes.map(String))})`);
+      assert.equal(capsuleEventCount(harness, 'submission-uncertain'), 1, `${label}: the uncertain CR is logged once`);
+      assert.equal(harness.fireEnter(), false, `${label}: no Enter is scheduled for a deferred request`);
+      assert.equal(capsuleDeferredEvents(harness).length, 1);
+      assert.equal(capsuleDeferredEvents(harness)[0].detail?.code, 'runner-capsule-request-composer-busy');
+      const deferred = capsuleDeferredEvents(harness)[0].detail?.detail;
+      assert.equal(deferred?.input?.knownEmpty, false);
+      assert.equal(deferred?.input?.pendingSubmission, true, `${label}: the deferral names its mechanism`);
+      assert.equal(harness.runner.capsuleRequestCycleId, null, `${label}: deferring must not spend the cycle_id latch`);
+
+      // Ticks are not evidence: nothing lands, nothing changes, nothing is
+      // written. The composer-busy refusal at checkpoint-confirmed names it.
+      for (let i = 0; i < 10; i += 1) harness.drive();
+      assert.equal(harness.core.state.state, 'checkpoint-confirmed');
+      assert.equal(capsuleTextWriteCount(harness), 0, `${label}: no timer releases it`);
+      assert.deepEqual(harness.pty.writes, buffers, `${label}: no kill-line, no request, no CR over the draft`);
+      assert.equal(harness.runner.lastReason?.code, 'runner-capsule-request-composer-busy');
+      assert.equal(harness.runner.lastReason?.detail?.input?.pendingSubmission, true);
+
+      // LIVENESS: the operator finishes the draft and really sends it -- the
+      // prompt record lands in the bound transcript past the noted offset.
+      // (The second Enter is uncertain too: the line is still tainted. The
+      // record is what resolves it.)
+      const win32 = label.includes('win32');
+      const second = (win32
+        ? ['second line', WIN32_PLAIN_ENTER, WIN32_PLAIN_ENTER_UP]
+        : ['second line\r']).map((chunk) => Buffer.from(chunk));
+      for (const chunk of second) harness.operator(chunk);
+      harness.drive();
+      assert.equal(capsuleTextWriteCount(harness), 0, `${label}: a second Enter without a record is still not proof`);
+      appendOperatorPromptRecord(harness, 'abc\nsecond line', { shape: win32 ? 'text-block' : 'string' });
+      harness.drive();
+      assert.equal(capsuleTextWriteCount(harness), 1, `${label}: the record confirms the submission and the request fires once`);
+      assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 1);
+      assert.equal(capsuleEventCount(harness, 'capsule-request-resumed'), 1);
+      assert.equal(harness.runner.input.snapshot().knownEmpty, true, `${label}: the tracker is known-empty after confirmation (the Enter keyup is inert) -- MUST be red on 7b3a728 for win32`);
+      assert.equal(harness.runner.input.snapshot().unknown, false, `${label}: no taint survives an inert keyup`);
+      assert.deepEqual(
+        harness.pty.writes.map((w) => w.toString('latin1')),
+        [...buffers.map(String), ...second.map(String), CAPSULE_REQUEST_TEXT],
+        `${label}: physical order -- the whole draft, its submission, then the request as its own chunk`,
+      );
+      assert.equal(harness.fireEnter(), true, `${label}: the request Enter is its own separate write`);
+      for (let i = 0; i < 40; i += 1) harness.drive();
+      assert.equal(capsuleTextWriteCount(harness), 1, `${label}: exactly once`);
+      assert.equal(capsuleDeferredEvents(harness).length, 1);
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
+test('C9 specimens: records that are not operator prompts do not confirm -- tool_result content, isMeta records, and records before the noted offset', () => {
+  // A record BEFORE the offset: written before the uncertain CR goes by.
+  const early = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(early.core.tick().state.state, 'pressure');
+    appendOperatorPromptRecord(early, 'an earlier prompt, already on disk');
+    for (const chunk of SPECIMEN_1_RAW) early.operator(Buffer.from(chunk));
+    const noted = early.runner.pendingSubmissionWatch;
+    assert.equal(noted?.offset, fs.statSync(early.fixture.transcriptPath).size, 'the offset is noted at the CR, after the earlier record');
+    for (let i = 0; i < 5; i += 1) early.drive();
+    assert.equal(capsuleTextWriteCount(early), 0, 'a record before the noted offset must not confirm');
+    assert.equal(early.runner.input.snapshot().pendingSubmission, true);
+    assert.equal(capsuleEventCount(early, 'submission-confirmed'), 0);
+  } finally {
+    early.cleanup();
+  }
+
+  // Records AFTER the offset that are not prompts.
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    for (const chunk of SPECIMEN_2_RAW) harness.operator(Buffer.from(chunk));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0);
+
+    // The child answering its own tool call: "type":"user" with a tool_result
+    // block, text inside it and all.
+    fs.appendFileSync(
+      harness.fixture.transcriptPath,
+      '\n{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"abc\\\\ looks like a prompt but is not"}]}}\n',
+    );
+    for (let i = 0; i < 3; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'a tool_result record is not a prompt -- must not confirm');
+    assert.equal(harness.runner.input.snapshot().pendingSubmission, true);
+
+    // Bookkeeping the child writes as the user: isMeta, carrying text.
+    fs.appendFileSync(
+      harness.fixture.transcriptPath,
+      '\n{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Caveat: local command output"}]}}\n'
+      + '{"type":"user","isMeta":true,"message":{"role":"user","content":"a meta string"}}\n',
+    );
+    for (let i = 0; i < 3; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'an isMeta record is not a prompt -- must not confirm');
+    assert.equal(harness.runner.input.snapshot().pendingSubmission, true);
+
+    // Not user records at all, and a half-written line. (The assistant text
+    // deliberately avoids the capsule ack literal: an ack would legitimately
+    // satisfy the cycle through _checkCapsuleAck and this test is about the
+    // composer guard, not the ack gate.)
+    fs.appendFileSync(
+      harness.fixture.transcriptPath,
+      '\n{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"the user said abc"}]}}\n'
+      + '{"type":"system","content":"user typed something"}\n'
+      + '{"type":"user","message":{"role":"user","content":"half-writ',
+    );
+    for (let i = 0; i < 3; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'assistant/system records and a half-written user line do not confirm');
+    assert.equal(harness.runner.input.snapshot().pendingSubmission, true);
+
+    // The half-written line completes: now it is a prompt record, past the
+    // offset. Confirmed, released once.
+    fs.appendFileSync(harness.fixture.transcriptPath, 'ten"}}\n');
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'the completed prompt record confirms');
+    assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 1);
+    assert.equal(harness.fireEnter(), true);
+    for (let i = 0; i < 20; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'exactly once');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C10 specimens: a prompt record that lands while the operator keeps typing confirms the CR without declaring the new text gone', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    for (const chunk of SPECIMEN_1_RAW) harness.operator(Buffer.from(chunk));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0);
+    // The record lands, and before the next tick the operator has started the
+    // next prompt. Confirmation resolves the old line; the new text is live.
+    appendOperatorPromptRecord(harness, 'abc\n');
+    harness.operator(Buffer.from('next prompt'));
+    harness.drive();
+    assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 1);
+    assert.equal(capsuleTextWriteCount(harness), 0, 'the composer holds "next prompt": still deferred, no mangling');
+    assert.equal(harness.runner.input.snapshot().knownEmpty, false);
+    assert.equal(harness.runner.input.snapshot().unknown, false, 'the old taint is spent; the new line was seen byte-for-byte');
+    assert.equal(harness.runner.input.snapshot().pendingSubmission, false);
+    // A clean line: its plain Enter is the zero-latency boundary as before.
+    harness.operator(Buffer.from('\r'));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'the clean Enter releases it without waiting for a record');
+    assert.equal(harness.fireEnter(), true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review of 7b3a728 (F2): the runner's OWN prompts land in the transcript as
+// non-meta user records too -- the '/context-capsule' invocation
+// (<command-name>/context-capsule</command-name>) and the post-clear wake
+// message. Operator bytes observed during the request's Enter window can
+// leave a pending CR that those records would "confirm", with the queued
+// draft about to be flushed into a composer the tracker just called clean.
+test('C11 F2: the runner\'s own records (capsule invocation, wake message) never confirm a pending CR; a real operator prompt after them does', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    for (const chunk of SPECIMEN_1_RAW) harness.operator(Buffer.from(chunk));
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0);
+
+    // The invocation record, as Claude Code writes a slash command: string
+    // content, not isMeta. Also as a text block, and the wake message.
+    fs.appendFileSync(
+      harness.fixture.transcriptPath,
+      `\n{"type":"user","message":{"role":"user","content":"<command-message>context-capsule</command-message>\\n<command-name>${CAPSULE_REQUEST_TEXT}</command-name>"}}\n`
+      + `{"type":"user","message":{"role":"user","content":[{"type":"text","text":${JSON.stringify(CAPSULE_REQUEST_TEXT)}}]}}\n`
+      + `{"type":"user","message":{"role":"user","content":${JSON.stringify(WAKE_MESSAGE)}}}\n`,
+    );
+    for (let i = 0; i < 5; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'the runner\'s own records must not confirm the operator\'s pending CR -- MUST be red on 7b3a728');
+    assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 0);
+    assert.equal(harness.runner.input.snapshot().pendingSubmission, true, 'still waiting on evidence');
+
+    // A real operator prompt after them confirms, and the request fires once.
+    appendOperatorPromptRecord(harness, 'a real prompt, sent after the request');
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'the operator\'s own record confirms');
+    assert.equal(capsuleEventCount(harness, 'submission-confirmed'), 1);
+    assert.equal(harness.fireEnter(), true);
+    for (let i = 0; i < 20; i += 1) harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 1, 'exactly once');
   } finally {
     harness.cleanup();
   }

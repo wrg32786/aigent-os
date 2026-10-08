@@ -394,6 +394,43 @@ function parseWin32InputModeEvent(sequence) {
   return { vk, sc, uc, kd, cs, rc };
 }
 
+// One transcript line IS an operator prompt record when it parses as a
+// "type":"user" record that is not isMeta and whose message content is a
+// non-empty string or carries at least one text block. tool_result-only
+// content (the child answering its own tool calls) and isMeta records
+// (local-command caveats, skill bodies) are bookkeeping, never a prompt.
+// Half-written or non-JSON lines are simply not records.
+// NOT THE RUNNER'S OWN PROMPTS (review of 7b3a728, F2): the capsule request
+// ('/context-capsule', which Claude Code records as a
+// <command-name>/context-capsule</command-name> user record) and the
+// post-clear wake message are typed by the runner, and operator bytes seen
+// during their Enter window can leave a pending CR that those records would
+// then "confirm" -- with the operator's queued draft about to be flushed
+// into a composer the tracker just called clean. Any record carrying either
+// text is skipped. Cost, fail-closed: an operator prompt that merely quotes
+// '/context-capsule' confirms nothing; the next one does.
+const RUNNER_OWN_PROMPT_TEXTS = [CAPSULE_REQUEST_TEXT, WAKE_MESSAGE];
+
+function isOperatorPromptRecord(line) {
+  if (!line.includes('"user"')) return false;
+  let record;
+  try { record = JSON.parse(line); } catch { return false; }
+  if (!record || record.type !== 'user' || record.isMeta === true) return false;
+  const content = record.message?.content;
+  let text = null;
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n');
+    if (!content.some((block) => block && block.type === 'text' && typeof block.text === 'string')) text = null;
+  }
+  if (text === null || text.length === 0) return false;
+  return !RUNNER_OWN_PROMPT_TEXTS.some((own) => text.includes(own));
+}
+
 /**
  * Fail-closed model of the operator's current input line.
  *
@@ -438,14 +475,40 @@ function parseWin32InputModeEvent(sequence) {
  *     that never comes. Deliberate: a wrong "submitted" there is the mangled
  *     prompt; the deferral is visible (composer-busy refusal every tick,
  *     snapshot `lastNewline:true`) and clears at the next plain Enter.
- *   - A CR after an intervening UNKNOWN control keeps the pre-existing
- *     boundary semantics: the cursor context is unknown, `lastByte` is
- *     null, and the CR submits and clears the taint. So `abc\` + DEL + CR
- *     and `abc\` + Left + Right + CR both read as submitted even though the
- *     byte before the cursor is (or may be) a backslash. Pre-existing
- *     trade-off ("CR is the only thing that clears unknown"), kept: the
- *     alternative pins the taint until a SECOND Enter for every operator
- *     who edits a line with arrows or backspace.
+ * UNCERTAIN SUBMISSION (review of 436c1dd, MED): a plain CR that arrives
+ * while the line is UNKNOWN-tainted is not proof of submission either. The
+ * taint means an editing control (DEL, backspace, an arrow, an unfinished
+ * ESC) may have moved the cursor or changed the text, so the byte before the
+ * cursor is whatever the runner last failed to see -- `abc\` + DEL + CR and
+ * `abc\` + Left + Right + CR both leave the cursor after a backslash, and
+ * that CR is Claude Code's backslash+Enter NEWLINE. Before this fix the CR
+ * submitted and cleared the taint ("CR is the only thing that clears
+ * unknown"), and the capsule request was typed into the operator's draft.
+ * Now such a CR is recorded as `pendingSubmission` {units, taintedAfter}:
+ * the line stays dirty, nothing is cleared, and the runner resolves it with
+ * EVIDENCE it already reads -- a new non-meta "type":"user" prompt record in
+ * the bound transcript past the offset noted when the CR went by
+ * (ManagedPtyRunner#_checkPendingSubmission). That record confirms the
+ * submission (confirmSubmission -> _submitted) and is the liveness control;
+ * no record means the line stays dirty and the guard keeps deferring, with
+ * snapshot `pendingSubmission:true` naming the wait. Fail-closed cost: an
+ * operator who edits a line and submits it waits one transcript read (one
+ * tick) instead of zero; an operator whose edited CR was a newline waits,
+ * correctly, until the draft is really sent. A CR on a CLEAN line keeps its
+ * zero-latency boundary role above.
+ * KNOWN RESIDUAL of the evidence rule: the offset is re-noted at every
+ * uncertain CR, so a record is attributed to the LATEST one. A record from
+ * an earlier CR can only be misattributed if the child took longer to write
+ * it than the operator took to type a backslash and press Enter again. On
+ * Claude Code's queued-prompt path (a prompt submitted into a busy turn is
+ * recorded when it is dequeued at turn end) that window is the whole busy
+ * turn, not the child's write latency.
+ * CLOSED (review of 7b3a728, F1): inert sequences after the uncertain CR --
+ * the Enter's own win32 keyup, focus/mouse reports, query responses, an
+ * empty paste -- used to mark the record taintedAfter through the ESC-
+ * arrival taint, so a confirmed EMPTY composer stayed unknown for the rest
+ * of the session under win32-input-mode. The record is now snapshotted and
+ * restored with the other pre-sequence flags.
  */
 export class InputOwnershipTracker {
   constructor() {
@@ -481,6 +544,15 @@ export class InputOwnershipTracker {
     // sequence (keyup, report) restores it and a decoded printable replaces it.
     this.lastByte = null;
     this.preSequenceLastByte = null;
+    // A plain CR observed while the line was unknown-tainted (class comment,
+    // UNCERTAIN SUBMISSION): {units: receivedUnits at that CR, taintedAfter:
+    // whether any taint landed since, dirtyAfter: whether any CONTENT was
+    // placed since}. Null when no such CR is outstanding. Resolved only by
+    // confirmSubmission() (transcript evidence, runner-side) or by a later
+    // _submitted(); never by a timer. Snapshotted (as a copy) on ESC arrival
+    // like the flags above, so an inert sequence restores it unmarked.
+    this.pendingSubmission = null;
+    this.preSequencePending = null;
   }
 
   // Records that this observation tainted the tracker and WHY, bounded and
@@ -491,6 +563,29 @@ export class InputOwnershipTracker {
   _taint(cause) {
     this.unknown = true;
     this.lastTaint = cause.split(ESC).join('\\e').slice(0, 80);
+    if (this.pendingSubmission !== null) {
+      this.pendingSubmission.taintedAfter = true;
+      this.pendingSubmission.dirtyAfter = true;
+    }
+  }
+
+  // Content landed in the composer after the pending uncertain CR: once that
+  // CR is confirmed it no longer implies an EMPTY composer. Called at every
+  // site that places text (printable, control byte, paste payload, newline);
+  // the fail-closed branches reach it through _taint.
+  _contentAfterPending() {
+    if (this.pendingSubmission !== null) this.pendingSubmission.dirtyAfter = true;
+  }
+
+  // A completed sequence proved inert (or a known keystroke): put back the
+  // record as it was at ESC arrival. Always a FRESH copy, so the later marks
+  // of this sequence's own bytes (an empty paste's end marker, say) can
+  // never have reached the snapshot, and so one snapshot can be restored
+  // more than once.
+  _restorePending() {
+    this.pendingSubmission = this.preSequencePending === null
+      ? null
+      : { ...this.preSequencePending };
   }
 
   _submitted() {
@@ -503,6 +598,49 @@ export class InputOwnershipTracker {
     this.activeControl = false;
     this.lastTaint = null;
     this.lastByte = null;
+    this.pendingSubmission = null;
+    this.preSequencePending = null;
+  }
+
+  // A plain CR on an UNKNOWN-tainted line: maybe a submission, maybe the
+  // backslash+Enter newline (the taint hides the byte before the cursor).
+  // Nothing is cleared. `units` is the receivedUnits count up to and
+  // including this CR, so the runner can tell whether anything was typed
+  // after it when the evidence arrives. A later uncertain CR replaces the
+  // record: evidence is attributed to the latest one.
+  _uncertainSubmission(units) {
+    this.pendingSubmission = { units, taintedAfter: false, dirtyAfter: false };
+    this.knownEmpty = false;
+    this.lastByte = null;
+  }
+
+  // Runner-side evidence (a new operator prompt record in the transcript past
+  // the offset noted at the pending CR) says that CR submitted. Nothing
+  // PLACED since (dirtyAfter false -- inert sequences such as the Enter's own
+  // win32 keyup, focus and mouse reports do not count, review of 7b3a728 F1):
+  // the composer is empty, full _submitted(). Content placed since: it is a
+  // fresh line the tracker already observed byte-for-byte, so the pre-CR
+  // taint is spent -- unless a taint landed after the CR, which stays.
+  // Returns true when a pending record was resolved.
+  confirmSubmission() {
+    const pending = this.pendingSubmission;
+    if (pending === null) return false;
+    if (!pending.dirtyAfter) {
+      this._submitted();
+      return true;
+    }
+    this.pendingSubmission = null;
+    // A sequence in flight at this moment restores from the snapshot when it
+    // completes: nulled here so a resolved record can never be resurrected.
+    // (Its own ESC arrival marked the live record, which is why this is the
+    // dirty branch; the line stays unknown until the next uncertain CR is
+    // confirmed in turn -- one extra round, fail-closed.)
+    this.preSequencePending = null;
+    if (!pending.taintedAfter) {
+      this.unknown = false;
+      this.lastTaint = null;
+    }
+    return true;
   }
 
   // The CR (raw, or a win32 VK_RETURN keydown) was a composer NEWLINE, not a
@@ -511,25 +649,38 @@ export class InputOwnershipTracker {
   _newline() {
     this.knownEmpty = false;
     this.lastByte = '\r';
+    this._contentAfterPending();
   }
 
   observe(data) {
     const text = asText(data);
+    // receivedUnits is counted for the whole chunk up front; `seen` walks it
+    // so an uncertain CR can record the count up to and including ITSELF, not
+    // the chunk's tail ('\rxyz' must not read as "nothing typed since").
+    const unitsBefore = this.receivedUnits;
     this.receivedUnits += text.length;
+    let seen = 0;
 
     for (const character of text) {
+      seen += character.length;
       if (this.mode === 'paste') {
         this.knownEmpty = false;
+        this._contentAfterPending();
         // Seven bytes, not six: the one before the end marker is the last
         // PAYLOAD byte, which now sits before the cursor -- a paste ending
         // in a backslash makes the operator's next Enter a newline too.
         this.pasteEndProbe = `${this.pasteEndProbe}${character}`.slice(-7);
         if (this.pasteEndProbe.endsWith('\u001b[201~')) {
           // An EMPTY paste places nothing: the byte before the cursor is
-          // still whatever preceded the paste-start sequence.
-          this.lastByte = this.pasteEndProbe.length === 7
-            ? this.pasteEndProbe[0]
-            : this.preSequenceLastByte;
+          // still whatever preceded the paste-start sequence -- and the
+          // pending record goes back to its ESC-arrival snapshot, since the
+          // end marker's own bytes marked it dirty above.
+          if (this.pasteEndProbe.length === 7) {
+            this.lastByte = this.pasteEndProbe[0];
+          } else {
+            this.lastByte = this.preSequenceLastByte;
+            this._restorePending();
+          }
           this.mode = 'normal';
           this.pasteEndProbe = '';
           this.activePaste = false;
@@ -544,6 +695,14 @@ export class InputOwnershipTracker {
         // split across chunks -- lastByte carries across observe() calls.
         if (this.lastByte === '\\') {
           this._newline();
+          continue;
+        }
+        // Unknown-tainted line: the byte before the cursor may be a
+        // backslash the runner never saw move into place. Not proof of
+        // submission -- recorded, and resolved by transcript evidence
+        // (class comment, UNCERTAIN SUBMISSION).
+        if (this.unknown) {
+          this._uncertainSubmission(unitsBefore + seen);
           continue;
         }
         this._submitted();
@@ -585,6 +744,24 @@ export class InputOwnershipTracker {
         const code = character.codePointAt(0);
         if (code >= 0x40 && code <= 0x7e) {
           if (this.sequence === '\u001b[200~') {
+            // A completed paste start proves the ESC was not an editing
+            // control: its payload is observed byte-for-byte and lands at
+            // the cursor, so the ESC-arrival poison is lifted exactly as the
+            // report whitelists below do. Without this every paste left the
+            // line unknown-tainted (lastTaint "\e") and, now that a CR on a
+            // tainted line waits for evidence, the Enter after a paste would
+            // wait too -- while knownEmpty stays false through the paste.
+            this.unknown = this.preSequenceUnknown;
+            this.lastTaint = this.preSequenceLastTaint;
+            this._restorePending();
+            // A paste IS content (review of 4e71bb3, F3): marked here, at
+            // the start, so a confirmation that lands between this chunk and
+            // the payload chunk cannot read the record as "nothing placed
+            // since" and _submitted() the tracker mid-paste -- the request
+            // would fire into a composer the payload then lands on. The
+            // empty-paste end marker restores the unmarked snapshot, so an
+            // empty paste still confirms EMPTY.
+            this._contentAfterPending();
             this.mode = 'paste';
             this.sequence = '';
             this.activePaste = true;
@@ -610,6 +787,7 @@ export class InputOwnershipTracker {
             this.knownEmpty = this.preSequenceKnownEmpty;
             this.lastTaint = this.preSequenceLastTaint;
             this.lastByte = this.preSequenceLastByte;
+            this._restorePending();
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -625,6 +803,7 @@ export class InputOwnershipTracker {
             this.knownEmpty = this.preSequenceKnownEmpty;
             this.lastTaint = this.preSequenceLastTaint;
             this.lastByte = this.preSequenceLastByte;
+            this._restorePending();
             this.mode = 'normal';
             this.sequence = '';
             this.activeControl = false;
@@ -638,11 +817,15 @@ export class InputOwnershipTracker {
             const event = parseWin32InputModeEvent(this.sequence);
             if (event.kd === 0) {
               // KEYUP: places nothing in the composer -- same restore
-              // semantics as the report whitelists above.
+              // semantics as the report whitelists above. The Enter's own
+              // keyup always follows an uncertain keydown on the live wire,
+              // so this restore is what keeps that CR confirmable as EMPTY
+              // (review of 7b3a728, F1).
               this.unknown = this.preSequenceUnknown;
               this.knownEmpty = this.preSequenceKnownEmpty;
               this.lastTaint = this.preSequenceLastTaint;
               this.lastByte = this.preSequenceLastByte;
+              this._restorePending();
               this.mode = 'normal';
               this.sequence = '';
               this.activeControl = false;
@@ -658,15 +841,27 @@ export class InputOwnershipTracker {
               // Lock/enhanced bits are masked out by WIN32_CS_MODIFIER_MASK.
               this.unknown = this.preSequenceUnknown;
               this.lastTaint = this.preSequenceLastTaint;
+              this._restorePending();
               this._newline();
               this.mode = 'normal';
               this.sequence = '';
               this.activeControl = false;
             } else if (event.kd === 1 && event.vk === VK_RETURN) {
               // KEYDOWN plain Enter: identical submission semantics to a raw
-              // CR -- unconditional, same as the raw-CR branch above, even
-              // if the line is currently unknown-tainted from something else.
-              this._submitted();
+              // CR, including the uncertain case -- on a line that was
+              // unknown-tainted BEFORE this event (the ESC arrival itself
+              // taints, so the pre-sequence flag is the one that counts) it
+              // is recorded, not trusted, and the transcript decides.
+              if (this.preSequenceUnknown) {
+                this.unknown = true;
+                this.lastTaint = this.preSequenceLastTaint;
+                this._uncertainSubmission(unitsBefore + seen);
+                this.mode = 'normal';
+                this.sequence = '';
+                this.activeControl = false;
+              } else {
+                this._submitted();
+              }
             } else if (event.kd === 1 && event.uc >= 0x20 && event.uc !== 0x7f) {
               // KEYDOWN printable (same 0x20..0x7e boundary the raw-byte
               // path below already uses for its DEL/control check): we
@@ -679,6 +874,8 @@ export class InputOwnershipTracker {
               this.knownEmpty = false;
               this.lastTaint = this.preSequenceLastTaint;
               this.lastByte = String.fromCodePoint(event.uc);
+              this._restorePending();
+              this._contentAfterPending();
               this.mode = 'normal';
               this.sequence = '';
               this.activeControl = false;
@@ -748,6 +945,13 @@ export class InputOwnershipTracker {
         // so a CR after it keeps the pre-existing boundary semantics.
         this.preSequenceLastByte = this.lastByte;
         this.lastByte = null;
+        // A COPY of the pending record, taken before the arrival taint marks
+        // it: every branch that proves the sequence inert (or a known
+        // keystroke) restores this copy, so only a fail-closed completion
+        // leaves taintedAfter/dirtyAfter set (review of 7b3a728, F1).
+        this.preSequencePending = this.pendingSubmission === null
+          ? null
+          : { ...this.pendingSubmission };
         this.mode = 'escape';
         this.sequence = character;
         this.activeControl = true;
@@ -762,6 +966,7 @@ export class InputOwnershipTracker {
       }
       this.knownEmpty = false;
       this.lastByte = character;
+      this._contentAfterPending();
     }
     return this.snapshot();
   }
@@ -788,6 +993,9 @@ export class InputOwnershipTracker {
       // request waits on a PLAIN Enter.
       lastByte: this.lastByte === null ? null : JSON.stringify(this.lastByte).slice(1, -1),
       lastNewline: this.lastByte === '\r',
+      // Names the wait outright: a plain Enter went by on a tainted line and
+      // the runner is waiting for the transcript to show the prompt it sent.
+      pendingSubmission: this.pendingSubmission !== null,
     };
   }
 }
@@ -1095,6 +1303,11 @@ export class ManagedPtyRunner {
     // text (or uncertain input ownership). Diagnostic latch only — it makes
     // the deferral a once-per-cycle event; the request itself stays pending.
     this.capsuleRequestDeferredCycleId = null;
+    // Evidence watch for the tracker's pendingSubmission: {units, transcript,
+    // offset, midLine}. Noted when an uncertain CR goes by, scanned each tick
+    // by _checkPendingSubmission for a new operator prompt record. Null when
+    // the tracker has nothing pending.
+    this.pendingSubmissionWatch = null;
     // Ack sentinel: transcript offset to scan from, set when the capsule
     // request is written. The ack literal appearing past it IS the completion
     // signal (the event-driven transport design, 2026-08-04).
@@ -1343,13 +1556,16 @@ export class ManagedPtyRunner {
     // below, not by the deferral — a deferred cycle still owns its one write.
     // Once per cycle, not per tick: _event is a state-change log.
     // FAIL-CLOSED CONSEQUENCE, stated plainly: the runner cannot see the
-    // composer, and CR is the only boundary the tracker trusts. An operator
-    // who typed and then cleared the line with Esc or Ctrl+C leaves the
-    // tracker tainted, so the request stays deferred until their next Enter
-    // — the transport sits at checkpoint-confirmed (not HOLD) with pressure
-    // still climbing, signalled by the one deferred event here plus the
-    // composer-busy refusal _prepareSubmission repeats each tick. Chosen over
-    // guessing: a wrong "empty" verdict is exactly the mangled prompt above.
+    // composer, and a CR on a CLEAN line is the only boundary the tracker
+    // trusts outright. An operator who typed and then cleared the line with
+    // Esc or Ctrl+C leaves the tracker tainted, so the request stays deferred
+    // until their next Enter AND the prompt it sent shows up in the transcript
+    // (tracker pendingSubmission, runner _checkPendingSubmission) — the
+    // transport sits at checkpoint-confirmed (not HOLD) with pressure still
+    // climbing, signalled by the one deferred event here plus the
+    // composer-busy refusal _prepareSubmission repeats each tick, its detail
+    // naming `pendingSubmission:true` while the evidence is awaited. Chosen
+    // over guessing: a wrong "empty" verdict is exactly the mangled prompt above.
     // Known gap, not closed here: a relaunch starts a fresh tracker
     // (knownEmpty) even if the composer already held text from before.
     const composer = this.input.snapshot();
@@ -1419,6 +1635,92 @@ export class ManagedPtyRunner {
       const lastBreak = buffer.lastIndexOf(0x0a);
       if (lastBreak >= 0) {
         this.capsuleAckSearchFrom = Math.max(this.capsuleAckSearchFrom, from + lastBreak + 1);
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  // Pair the tracker's pendingSubmission with the transcript offset at the
+  // moment the uncertain CR went by. Keyed on the tracker's `units` so each
+  // new uncertain CR re-notes (evidence is attributed to the latest one) and
+  // a resolved/cleared record drops the watch. Offset resolution failures
+  // read as 0 -- fail-closed only in the sense that the watch still waits
+  // for a record; the path is re-resolved each tick (see _checkPendingSubmission).
+  _notePendingSubmission() {
+    const pending = this.input.pendingSubmission;
+    if (pending === null) {
+      this.pendingSubmissionWatch = null;
+      return;
+    }
+    if (this.pendingSubmissionWatch?.units === pending.units) return;
+    let transcript = null;
+    let offset = 0;
+    try {
+      transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
+      offset = transcript ? fs.statSync(transcript).size : 0;
+    } catch { offset = 0; }
+    this.pendingSubmissionWatch = { units: pending.units, transcript, offset, midLine: false };
+    this._event('submission-uncertain', { units: pending.units, offset });
+  }
+
+  // LIVENESS for an edited-then-submitted prompt (review of 436c1dd, MED):
+  // the tracker will not read a CR on a tainted line as a submission, so the
+  // runner proves it with evidence it already reads -- the bound session's
+  // transcript. A genuinely submitted prompt lands there as a NEW non-meta
+  // "type":"user" record with prompt text (string content or a text block;
+  // tool_result blocks and isMeta records are the child's own bookkeeping,
+  // not prompts) past the offset noted when the CR went by. Same bounded
+  // read and complete-line discipline as _checkCapsuleAck; additionally a
+  // single line longer than the window is skipped whole (a multi-hundred-k
+  // tool_result record must not park the watch for the rest of the session).
+  // No timer, no retry: until a record appears the line stays dirty and the
+  // capsule request keeps deferring with `pendingSubmission:true` in the
+  // refusal detail. A session rebind changes the transcript path; the watch
+  // then re-notes against the new file's current size, never its history.
+  _checkPendingSubmission() {
+    if (this.input.pendingSubmission === null) {
+      this.pendingSubmissionWatch = null;
+      return false;
+    }
+    if (this.pendingSubmissionWatch === null) this._notePendingSubmission();
+    const watch = this.pendingSubmissionWatch;
+    try {
+      const transcript = transcriptPathFor({ cwd: this.cwd, sessionId: this.sessionId, homeDir: this.homeDir, env: this.env });
+      if (!transcript) return false;
+      if (watch.transcript !== transcript) {
+        watch.transcript = transcript;
+        watch.offset = fs.statSync(transcript).size;
+        watch.midLine = false;
+        return false;
+      }
+      const size = fs.statSync(transcript).size;
+      if (size <= watch.offset) return false;
+      const length = Math.min(size - watch.offset, 262144);
+      const buffer = Buffer.alloc(length);
+      const fd = fs.openSync(transcript, 'r');
+      try { fs.readSync(fd, buffer, 0, length, watch.offset); } finally { fs.closeSync(fd); }
+      const lastBreak = buffer.lastIndexOf(0x0a);
+      if (lastBreak < 0) {
+        // No complete line in the window. A partial tail is read again next
+        // tick; a FULL window with no newline is one oversize line -- step
+        // over it and discard its remainder up to the next newline.
+        if (length === 262144) {
+          watch.offset += length;
+          watch.midLine = true;
+        }
+        return false;
+      }
+      const lines = buffer.toString('utf8', 0, lastBreak).split('\n');
+      if (watch.midLine) {
+        lines.shift();
+        watch.midLine = false;
+      }
+      watch.offset += lastBreak + 1;
+      if (lines.some(isOperatorPromptRecord)) {
+        this.input.confirmSubmission();
+        this.pendingSubmissionWatch = null;
+        this._event('submission-confirmed', { offset: watch.offset, input: this.input.snapshot() });
+        return true;
       }
       return false;
     } catch { return false; }
@@ -1537,6 +1839,10 @@ export class ManagedPtyRunner {
     const chunk = asPtyInput(data);
     this.input.observe(chunk);
     this._event('operator-input', asText(chunk));
+    // Before the bytes reach the child (write or queue below): a CR the
+    // tracker could not trust is noted against the transcript's CURRENT size,
+    // so only a record written after it can ever confirm it.
+    this._notePendingSubmission();
 
     // Queue whenever automatic command text may still occupy the composer: a
     // hold, a pending wake Enter, a pending shared control Enter (the capsule
@@ -2924,6 +3230,12 @@ export class ManagedPtyRunner {
     }
     if (!this.capsuleAckSeen && this.capsuleAckSearchFrom !== null) {
       this._checkCapsuleAck();
+    }
+    // An uncertain operator CR resolves here, BEFORE the composer guard below
+    // consults the tracker, so a confirmed submission releases a deferred
+    // request on this same tick -- exactly once, through the usual gate.
+    if (this.input.pendingSubmission !== null) {
+      this._checkPendingSubmission();
     }
     // PATCH-001S-r3: the seat is owed a capsule and the request fires HERE,
     // at request-checkpoint / checkpoint-requested — deliberately while the
