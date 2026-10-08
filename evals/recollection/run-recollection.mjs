@@ -40,8 +40,9 @@
 //                           development comparison, never a full same-method reference
 //   --only <ids>            development subset; the packet says it is not a
 //                           scored-run candidate
-// Scenarios: BASELINE, F1..F9. F7 and the F9 forced-abstention arm are NOT executable
-// here (see CLAIM_LIMITS): only F9's filter-removal arm and F1-F6, F8 run.
+// Scenarios: BASELINE, F1..F9, E1A, E1B. F7 and the F9 forced-abstention arm are NOT
+// executable here (see CLAIM_LIMITS): only F9's filter-removal arm and F1-F6, F8 run.
+// E1A / E1B are PREREG-002-ERRATUM-001 section 5's two instrument self-checks.
 
 import {
   copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync,
@@ -99,8 +100,14 @@ const RUN_WALL_MAX_MS = 30 * 60 * 1000;
 const FALSIFIER_WALL_MAX_MS = 10 * 60 * 1000;
 
 // ── PREREG-002 identity (frozen packet_sha256 below) ─────────────────────────
-const PREREG = 'recollection-44/PREREG-002';
+// PREREG-002-ERRATUM-001, accepted 2026-10-07: the governing method is
+// PREREG-002+E1 (the BUILD-stage control proves indexability, not top-K
+// retrieval; 3.2a step 4, 3.2, 3.3 third bullet, 7 item 5). Every packet and
+// every 1.7 record this runner writes or accepts carries this string AND both
+// hashes; it has no path that records the unamended `recollection-44/PREREG-002`.
+const PREREG = 'recollection-44/PREREG-002+E1';
 const PACKET_SHA256 = 'a4d23198bdaed689d75d3198e8fdb6b2eec890b3a9b7f2d0990a07df9c310c2f';
+const ERRATUM_SHA256 = 'e8c3275cc498a6b2fba00aac190a2150709b115de68222bc46b05d306ffd9add';
 const BASELINE_COMMIT = 'd3dd339612f9254af87ec3afffb546cd36063741';
 
 // PREREG-002 1.6: one evaluation instant for every run under this packet.
@@ -363,7 +370,7 @@ function observeProductCommit(tree) {
 //   candidate_id  product_commit  repository  branch                      (1, 2)
 //   instrument_sha256  instrument_commit                                  (4)
 //   environment_os  environment_node  environment_bash  environment_model (5)
-//   protocol  packet_sha256                                               (6)
+//   protocol  packet_sha256  erratum_sha256                               (6, +E1)
 //   registered_at  registered_by                                          (7)
 //   <64 hex>  daemons/semantic-search/search-vault.js   (x10)             (3)
 // A later `withdraws: <id>` line revokes an earlier record (1.7: never edited).
@@ -387,6 +394,7 @@ function parseCandidates(text) {
       environment_model: grab('environment_model', free),
       protocol: grab('protocol', free),
       packet_sha256: grab('packet_sha256', '[0-9a-f]{64}'),
+      erratum_sha256: grab('erratum_sha256', '[0-9a-f]{64}'),
       registered_at: grab('registered_at', free),
       registered_by: grab('registered_by', free),
       withdraws: [...block.matchAll(/^\s*(?:[-*]\s*)?withdraws\s*:\s*`?([CB]-\d+)`?/gim)].map((m) => m[1]),
@@ -429,6 +437,7 @@ function registrationProblems(rec, { kind, instrumentSha, environment, verifyIns
   }
   need('protocol', rec.protocol === PREREG, `${rec.protocol} is not ${PREREG}`);
   need('packet_sha256', rec.packet_sha256 === PACKET_SHA256, `carries packet_sha256 ${rec.packet_sha256}, expected ${PACKET_SHA256}`);
+  need('erratum_sha256', rec.erratum_sha256 === ERRATUM_SHA256, `carries erratum_sha256 ${rec.erratum_sha256}, expected ${ERRATUM_SHA256}`);
   need('registered_at', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(rec.registered_at || '') && Date.parse(rec.registered_at) <= now, `${rec.registered_at} is not a UTC Z instant that has already passed`);
   need('registered_by', true, '');
   return p;
@@ -517,6 +526,7 @@ function validateReference(ref, want) {
   if (Array.isArray(ref.harness_errors) && ref.harness_errors.length) return 'reference packet carries harness errors';
   if (ref.preregistration !== PREREG) return `reference protocol ${ref.preregistration} is not ${PREREG}`;
   if (ref.packet_sha256 !== PACKET_SHA256) return `reference packet_sha256 ${ref.packet_sha256} is not ${PACKET_SHA256}`;
+  if (ref.erratum_sha256 !== ERRATUM_SHA256) return `reference erratum_sha256 ${ref.erratum_sha256} is not ${ERRATUM_SHA256}`;
   if (ref.product_commit !== want.commit) return `reference product_commit ${ref.product_commit} is not ${want.commit}`;
   if ((ref.identity || {}).kind !== want.kind) return `reference identity kind ${(ref.identity || {}).kind} is not ${want.kind}`;
   if (ref.instrument_sha256 !== want.instrumentSha) return `reference was produced by instrument ${ref.instrument_sha256}, not ${want.instrumentSha}`;
@@ -1104,7 +1114,7 @@ function registrationText({ id, commit, pins, instrumentSha, instrumentCommit, e
     candidate_id: id, product_commit: commit, repository: 'wrg32786/aigent-os', branch: 'titus/fixture',
     instrument_sha256: instrumentSha, instrument_commit: instrumentCommit,
     environment_os: env.os, environment_node: env.node, environment_bash: env.bash, environment_model: env.model,
-    protocol: PREREG, packet_sha256: PACKET_SHA256, registered_at: '2026-10-02T00:00:00Z', registered_by: 'titus',
+    protocol: PREREG, packet_sha256: PACKET_SHA256, erratum_sha256: ERRATUM_SHA256, registered_at: '2026-10-02T00:00:00Z', registered_by: 'titus',
     ...over,
   };
   const head = Object.entries(f).filter(([k]) => !omit.includes(k)).map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -1203,7 +1213,7 @@ function selfCheckIdentity(check) {
     check('9 I4 the full record is registered and its identity is preserved', reg.ok && reg.registration && reg.registration?.state === 'registered' && reg.registration?.record?.instrument_commit === IC && reg.registration?.record?.registered_by === 'titus' && reg.registration?.record?.registered_at === '2026-10-02T00:00:00Z', JSON.stringify(reg.registration));
     const minimal = `candidate_id: C-001\nproduct_commit: ${CAND}\ninstrument_sha256: ${SHA}\npacket_sha256: ${PACKET_SHA256}\n${Object.entries(fakePins).map(([f, h]) => `${h}  ${f}`).join('\n')}\n`;
     check("9 I4 the review's minimal record (id, commit, instrument hash, packet hash, ten pins) is NOT registered", !gate(CAND, minimal).ok);
-    for (const key of ['repository', 'branch', 'instrument_commit', 'environment_os', 'environment_node', 'environment_bash', 'environment_model', 'protocol', 'packet_sha256', 'registered_at', 'registered_by']) {
+    for (const key of ['repository', 'branch', 'instrument_commit', 'environment_os', 'environment_node', 'environment_bash', 'environment_model', 'protocol', 'packet_sha256', 'erratum_sha256', 'registered_at', 'registered_by']) {
       check(`9 I4 candidate record without ${key} -> NOT registered, ${key} named`, (() => { const r = gate(CAND, rec('C-001', CAND, { omit: [key] })); return !r.ok && r.why.includes(key); })());
     }
     check('9 I4 an instrument_commit that does not contain this instrument -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { instrument_commit: 'e'.repeat(40) } })).ok);
@@ -1211,7 +1221,11 @@ function selfCheckIdentity(check) {
     check('9 I4 a record from another host environment -> NOT registered (model)', !gate(CAND, rec('C-001', CAND), SHA, { ...ENV, model: 'other/model' }).ok);
     check('9 I4 registered_at that is not a Z instant -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { registered_at: 'yesterday' } })).ok);
     check('9 I4 registered_at in the future -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { registered_at: '2999-01-01T00:00:00Z' } })).ok);
-    check('9 I4 a protocol string other than recollection-44/PREREG-002 -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { protocol: 'recollection-44/PREREG-001' } })).ok);
+    check('9 I4 a protocol string other than recollection-44/PREREG-002+E1 -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { protocol: 'recollection-44/PREREG-001' } })).ok);
+    // E1 section 6: the method identity is the +E1 string plus both hashes; the unamended identity is not this method.
+    check('9 E1 the runner method identity is recollection-44/PREREG-002+E1 with the accepted erratum hash', PREREG === 'recollection-44/PREREG-002+E1' && ERRATUM_SHA256 === 'e8c3275cc498a6b2fba00aac190a2150709b115de68222bc46b05d306ffd9add');
+    check('9 E1 a record carrying only the unamended protocol recollection-44/PREREG-002 -> NOT registered', (() => { const r = gate(CAND, rec('C-001', CAND, { over: { protocol: 'recollection-44/PREREG-002' } })); return !r.ok && r.why.includes('protocol'); })());
+    check('9 E1 a candidate record carrying another erratum_sha256 -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { erratum_sha256: 'e'.repeat(64) } })).ok);
     const brec = (o = {}) => rec('B-001', BASELINE_COMMIT, { pins: BASELINE_PINS, ...o });
     const bGate = (text, o) => gate(BASELINE_COMMIT, text, SHA, o);
     check('9 I4 baseline: the full record registers the instrument', bGate(brec()).instrumentRegistered === true && bGate(brec()).registration?.state === 'registered', JSON.stringify(bGate(brec()).registration));
@@ -1222,6 +1236,7 @@ function selfCheckIdentity(check) {
     // R4-LOW-4: the packet_sha256 binding, and a withdrawal only from a LATER record (1.7).
     check('9 R4-LOW-4 candidate record carrying another packet_sha256 value -> NOT registered', !gate(CAND, rec('C-001', CAND, { over: { packet_sha256: 'e'.repeat(64) } })).ok);
     check('9 R4-LOW-4 baseline record carrying another packet_sha256 value -> incomplete', bGate(brec({ over: { packet_sha256: 'e'.repeat(64) } })).registration?.state === 'incomplete');
+    check('9 E1 baseline record without erratum_sha256 or with the unamended protocol -> incomplete, not registered', ['erratum_sha256'].every((k) => bGate(brec({ omit: [k] })).registration?.state === 'incomplete') && bGate(brec({ over: { protocol: 'recollection-44/PREREG-002' } })).registration?.state === 'incomplete');
     check('9 R4-LOW-4 a withdraws: line that PRECEDES the record it names does not withdraw it', bGate(`candidate_id: B-000\nwithdraws: B-001\n${brec()}`).registration?.state === 'registered');
     check('9 R4-LOW-4 ... nor a candidate', gate(CAND, `candidate_id: C-000\nwithdraws: C-001\n${rec('C-001', CAND)}`).ok);
     // R2: withdrawn is distinguishable from absent.
@@ -1354,13 +1369,33 @@ function controlCoherence(res) {
   return null;
 }
 
-// BUILD-stage label. All four conditions of 3.2a or no label.
+// E1 3.1 / 3.3: the BUILD-stage permitted control is INDEXABILITY evidence. It
+// fails when the auxiliary build exits non-zero, the copy is not byte-identical
+// to the target, the copy path is not INDEX-eligible, the auxiliary sandbox runs
+// other code, or the auxiliary build wrote no row at the copy's path. The query
+// diagnostic (`control_retrieval`) is not read here and can never fail it (M2).
+function buildControlFailure(ctl) {
+  if (!ctl) return 'no control was run';
+  if (ctl.error) return ctl.error;
+  if (ctl.buildExit !== 0) return `auxiliary build exited ${ctl.buildExit}`;
+  if (ctl.sandboxSameCodeAsScored !== true) return 'auxiliary sandbox code differs from the scored sandbox';
+  if (!ctl.targetSha256 || ctl.copySha256 !== ctl.targetSha256) return `copy sha256 ${ctl.copySha256} is not the target's ${ctl.targetSha256}`;
+  if (ctl.copyEligible !== true) return 'copy path is not INDEX-eligible';
+  if (!(ctl.indexedRows >= 1)) return 'auxiliary build wrote no row at the copy path';
+  return null;
+}
+
+// BUILD-stage label. All four conditions of 3.2a as amended by E1, or no label.
+// M1: the scored build must itself exit 0; zero target rows in an index a failed
+// build wrote is not evidence of policy withholding.
 function labelBuildStage(ev) {
   const gaps = [];
   if (ev.expected.eligible) gaps.push('expected-eligible: the target path is INDEX-eligible, so there is nothing for a build to withhold');
   if (!ev.sourcePresentAtBuild) gaps.push('source-not-present-at-build');
+  if (ev.scoredBuildExit !== 0) gaps.push(`scored-build-exit-nonzero (exit ${ev.scoredBuildExit}): absence from a failed build is not policy withholding`);
   if (ev.indexRowsAtTarget !== 0) gaps.push(`index-holds-target-rows (${ev.indexRowsAtTarget})`);
-  if (!ev.control || !(ev.control.indexedRows >= 1 && ev.control.returned)) gaps.push(`matched-permitted-control-failed${ev.control && ev.control.failure ? ` (${ev.control.failure})` : ''}`);
+  const ctlWhy = buildControlFailure(ev.control);
+  if (ctlWhy) gaps.push(`matched-permitted-control-failed (${ctlWhy})`);
   return gaps.length ? { label: null, demonstrated: false, gaps } : { label: 'BUILD-WITHHELD', demonstrated: true, gaps };
 }
 
@@ -1450,8 +1485,12 @@ function finishQueryStage(c, q, extra) {
 // The auxiliary sandbox for BUILD-stage controls: one sandbox, reused. For each
 // case its vault is a fresh copy of the scored vault (same mutations) plus ONE
 // byte-identical copy of the target note under an INDEX path; the index is built
-// from scratch by the same indexer, then the same query runs against it.
+// from scratch by the same indexer. E1: the evidence is that build's exit code
+// and the copy's row count. The same query then runs against it as a recorded
+// DIAGNOSTIC only (`control_retrieval`), never a condition and never scored.
 let auxBox = null;
+// E1-B points this at a SKIP path; every other run uses the INDEX path.
+let buildControlPathFor = controlPathFor;
 function auxBuildControl(box, c) {
   if (!auxBox) {
     auxBox = makeSandbox(`aux-${SCENARIO.toLowerCase()}`);
@@ -1463,31 +1502,40 @@ function auxBuildControl(box, c) {
     const b = sandboxFileMap(box)[l];
     return existsSync(a) && existsSync(b) && fileHash(a) === fileHash(b);
   });
-  const controlPath = controlPathFor(c.id);
+  const controlPath = buildControlPathFor(c.id);
   const src = path.join(box.vault, ...c.target.split('/'));
-  const out = { case: c.id, stage: 'BUILD', kind: 'matched-permitted-copy', controlPath, sandboxSameCodeAsScored: sameCode, targetSha256: null, copySha256: null, indexedRows: 0, returned: false, rank: null, buildExit: null, searchExit: null, failure: null };
-  if (!existsSync(src)) { auxiliaryControls.push({ ...out, error: 'target source absent in the scored vault' }); return out; }
+  const out = {
+    case: c.id, stage: 'BUILD', kind: 'matched-permitted-copy', target: c.target, controlPath, sandboxSameCodeAsScored: sameCode,
+    targetSha256: null, copySha256: null, copyEligible: null, buildExit: null, indexedRows: 0, failure: null,
+    control_retrieval: { returned: null, rank: null, score: null, searchExit: null, failure: null, diagnostic: 'not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)' },
+  };
+  if (!existsSync(src)) {
+    out.error = 'target source absent in the scored vault';
+    out.failure = buildControlFailure(out);
+    auxiliaryControls.push(out);
+    return out;
+  }
   rmSync(aux.vault, { recursive: true, force: true });
   cpSync(box.vault, aux.vault, { recursive: true, filter: (s) => path.basename(s) !== 'embeddings.json' });
   mkdirSync(path.join(aux.vault, 'memory'), { recursive: true });
   const bytes = readFileSync(src);
+  mkdirSync(path.dirname(path.join(aux.vault, ...controlPath.split('/'))), { recursive: true });
   writeFileSync(path.join(aux.vault, ...controlPath.split('/')), bytes);
   out.targetSha256 = sha256(bytes);
   out.copySha256 = sha256(readFileSync(path.join(aux.vault, ...controlPath.split('/'))));
-  const eligible = expectedEligibility(POLICY, controlPath).eligible;
+  out.copyEligible = expectedEligibility(POLICY, controlPath).eligible;
   const build = buildIndex(aux);
   out.buildExit = build.status;
-  if (build.status === 0 && existsSync(aux.embeddings) && sameCode && eligible) {
-    out.indexedRows = readIndex(aux).notes.filter((n) => n.path === controlPath).length;
+  // Rows are read even after a failed build (recorded, never a pass: buildExit gates it).
+  if (existsSync(aux.embeddings)) { try { out.indexedRows = readIndex(aux).notes.filter((n) => n.path === controlPath).length; } catch { out.indexedRows = 0; } }
+  if (build.status === 0 && existsSync(aux.embeddings)) {
     const r = search(aux, c.query);
-    out.searchExit = r.status;
     const i = (r.rows || []).findIndex((x) => x.path === controlPath);
-    out.failure = controlCoherence(r);
-    out.returned = i !== -1 && out.failure === null && out.buildExit === 0;
-    out.rank = out.returned ? i + 1 : null;
-    out.invocation = r.invocation;
-    out.topPaths = (r.rows || []).map((x) => x.path);
+    const failure = controlCoherence(r);
+    const returned = i !== -1 && failure === null;
+    out.control_retrieval = { ...out.control_retrieval, returned, rank: returned ? i + 1 : null, score: returned ? (r.rows[i].score ?? null) : null, searchExit: r.status, failure, invocation: r.invocation, topPaths: (r.rows || []).map((x) => x.path) };
   }
+  out.failure = buildControlFailure(out);
   auxiliaryControls.push(out);
   return out;
 }
@@ -1496,19 +1544,22 @@ function finishBuildStage(box, c, res, extra) {
   const expected = expectedEligibility(POLICY, c.target);
   const control = auxBuildControl(box, c);
   const ev = {
-    expected, sourcePresentAtBuild: buildInputPresence[c.target] === true,
+    expected, sourcePresentAtBuild: buildInputPresence[c.target] === true, scoredBuildExit: indexBuild ? indexBuild.status : null,
     indexRowsAtTarget: builtRowCounts ? (builtRowCounts.get(c.target) || 0) : null, control,
   };
   const verdict = labelBuildStage(ev);
   const proof = {
-    stage: 'BUILD', expected, sourcePresentAtBuild: ev.sourcePresentAtBuild, indexRowsAtTarget: ev.indexRowsAtTarget,
+    stage: 'BUILD', expected, target: c.target, targetSha256: control.targetSha256, sourcePresentAtBuild: ev.sourcePresentAtBuild,
+    // E1 3.1: target-level values, never an aggregate exclusion count.
+    scoredBuildExit: ev.scoredBuildExit, indexRowsAtTarget: ev.indexRowsAtTarget,
     // corroboration only: an aggregate count that unrelated files can supply is never the evidence
     indexerDenyLine: (indexBuild?.all.match(/\[deny\] \d+ file\(s\) excluded by index-deny\.json/) || [null])[0],
-    queryStageCounts: res.filterCounts, control: { path: control.controlPath, indexedRows: control.indexedRows, returned: control.returned, rank: control.rank, failure: control.failure, searchExit: control.searchExit, buildExit: control.buildExit, targetSha256: control.targetSha256, copySha256: control.copySha256 },
+    queryStageCounts: res.filterCounts,
+    control: { path: control.controlPath, copySha256: control.copySha256, targetSha256: control.targetSha256, copyEligible: control.copyEligible, buildExit: control.buildExit, indexedRows: control.indexedRows, sandboxSameCodeAsScored: control.sandboxSameCodeAsScored, failure: control.failure, control_retrieval: control.control_retrieval },
     gaps: verdict.gaps,
   };
   const out = { ...extra, stage: 'BUILD', label: verdict.label, proof };
-  if (verdict.demonstrated) return record(c.id, c.class, 'pass', `BUILD-WITHHELD: source present, 0 index rows at the target, matched copy indexed and returned (rank ${control.rank})`, out);
+  if (verdict.demonstrated) return record(c.id, c.class, 'pass', `BUILD-WITHHELD: scored build exit 0, source present, 0 index rows at the target; byte-identical copy at ${control.controlPath} indexed by the exit-0 auxiliary build (${control.indexedRows} row(s))`, out);
   return record(c.id, c.class, 'fail', `${NOT_DEMONSTRATED}: ${verdict.gaps.join('; ')}`, { ...out, undemonstrated: true });
 }
 
@@ -1563,6 +1614,55 @@ function mutateSandboxSearch(box, fn) {
   writeFileSync(file, fn(readFileSync(file, 'utf8')));
 }
 
+// E1-A (PREREG-002-ERRATUM-001 section 5): the indexer includes the forbidden
+// target. Disables the namespace-disposition and denied-prefix exclusion in
+// collectFiles() and both carried-forward purges of the sandbox embed-vault.js;
+// the query-stage filters and the render chokepoint stay. Same anchor rule as F9.
+const E1A_EDITS = [
+  ["    if (row.disposition !== 'INDEX') continue;\n", ''],
+  ['const kept = files.filter((f) => !deniedPath(DENY_PREFIXES, relative(VAULT_ROOT, f.fullPath)));', 'const kept = files;'],
+  ["(note) => namespaceDispositionForPath(NAMESPACE_REGISTRY, note.path) === 'INDEX',", '() => true,'],
+  ['existing.notes = (existing.notes || []).filter((n) => !deniedPath(DENY_PREFIXES, n.path));', 'existing.notes = existing.notes || [];'],
+];
+function e1aMutate(source) {
+  let out = source;
+  for (const [from, to] of E1A_EDITS) {
+    const n = out.split(from).length - 1;
+    if (n !== 1) throw new Error(`E1A anchor found ${n} time(s), expected exactly 1: ${from.trim().slice(0, 70)}`);
+    out = out.replace(from, () => to);
+  }
+  return out;
+}
+function mutateSandboxEmbed(box, fn) {
+  const file = path.join(box.sem, 'embed-vault.js');
+  writeFileSync(file, fn(readFileSync(file, 'utf8')));
+}
+
+// E1-A expected red: step 3 fails for every BUILD-stage case (target rows in the
+// index) and none reads BUILD-WITHHELD.
+function e1aAssertions(rows) {
+  const b = rows.filter((r) => r.stage === 'BUILD');
+  return [
+    { name: 'E1-A: BUILD-stage population present (12)', ok: b.length === 12, detail: `${b.length} case(s)` },
+    { name: 'E1-A: every BUILD-stage case has target rows in the index (step 3 fails)', ok: b.length > 0 && b.every((r) => r.proof && r.proof.indexRowsAtTarget > 0), detail: b.map((r) => `${r.id}:${r.proof?.indexRowsAtTarget}`).join(' ') },
+    { name: 'E1-A: no BUILD-stage case reads BUILD-WITHHELD', ok: b.every((r) => r.label !== 'BUILD-WITHHELD' && r.status !== 'pass'), detail: b.map((r) => `${r.id}=${r.status}/${r.label}`).join(' ') },
+  ];
+}
+
+// E1-B expected red: the permitted copy sits on a SKIP path, so the auxiliary
+// build cannot index it. Step 3 still holds; step 4 fails; the case reads
+// policy-withholding-not-demonstrated and is not a leak.
+const E1B_CONTROL_PATH = (id) => `templates/recollection-control-${String(id).toLowerCase()}.md`;
+function e1bAssertions(rows) {
+  const b = rows.filter((r) => r.stage === 'BUILD');
+  return [
+    { name: 'E1-B: BUILD-stage population present (12)', ok: b.length === 12, detail: `${b.length} case(s)` },
+    { name: 'E1-B: step 3 still holds (scored build exit 0, zero target rows) for every BUILD-stage case', ok: b.length > 0 && b.every((r) => r.proof && r.proof.scoredBuildExit === 0 && r.proof.indexRowsAtTarget === 0), detail: b.map((r) => `${r.id}:${r.proof?.scoredBuildExit}/${r.proof?.indexRowsAtTarget}`).join(' ') },
+    { name: 'E1-B: the auxiliary build wrote no row at the SKIP-path copy and the control failed', ok: b.every((r) => r.proof && r.proof.control && r.proof.control.indexedRows === 0 && !!r.proof.control.failure), detail: b.map((r) => `${r.id}:${r.proof?.control?.indexedRows} ${r.proof?.control?.failure}`).join('; ') },
+    { name: 'E1-B: every BUILD-stage case reads FAIL policy-withholding-not-demonstrated, not BUILD-WITHHELD, not a leak', ok: b.every((r) => r.status === 'fail' && r.label === null && r.undemonstrated === true && r.detail.startsWith(NOT_DEMONSTRATED)), detail: b.map((r) => `${r.id}=${r.status}`).join(' ') },
+  ];
+}
+
 // Assert per-case labels and control outcomes, not a printed count (7 item 8).
 // Under F9: no QUERY-stage case may read QUERY-WITHHELD; RENDER-REFUSED or a
 // DECLINED-BY-RETRIEVER FAIL may stand; each QUERY case must have exercised the
@@ -1610,7 +1710,8 @@ function f9Assertions(rows, reference = null, development = false) {
       add('F9: U-class results equal the unmutated reference run', u.length === 2 && us.moved.length === 0, us.text, 'undeclared');
     }
   } else {
-    const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : r.proof.control && r.proof.control.returned === false);
+    // E1: a BUILD FAIL is explained by its control only through the control's indexability failure.
+    const intact = (r) => r.proof && r.proof.sourcePresentAtBuild === true && r.proof.scoredBuildExit === 0 && r.proof.indexRowsAtTarget === 0 && (r.status === 'pass' ? r.label === 'BUILD-WITHHELD' : !!(r.proof.control && r.proof.control.failure));
     add('F9: BUILD-stage build-side evidence intact, every FAIL explained by its control alone (no --reference given: narrower check)',
       buildRows.length > 0 && buildRows.every(intact), `${buildRows.filter(intact).length}/${buildRows.length}`);
     add('F9: U-01/U-02 PASS (no --reference given)', u.length === 2 && u.every((r) => r.status === 'pass'), u.map((r) => `${r.id}=${r.status}`).join(', '), 'undeclared');
@@ -1672,13 +1773,26 @@ async function selfCheckPolicy(check) {
 
   // BUILD-stage label
   const bExp = { eligible: false, filter: 'namespace', disposition: 'DENY' };
-  const bOk = { expected: bExp, sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { indexedRows: 1, returned: true } };
+  const ctlOk = { buildExit: 0, sandboxSameCodeAsScored: true, targetSha256: 'a'.repeat(64), copySha256: 'a'.repeat(64), copyEligible: true, indexedRows: 1, control_retrieval: { returned: true, rank: 1 } };
+  const bOk = { expected: bExp, sourcePresentAtBuild: true, scoredBuildExit: 0, indexRowsAtTarget: 0, control: ctlOk };
   check('5 BUILD-WITHHELD needs all four conditions', labelBuildStage(bOk).label === 'BUILD-WITHHELD');
   for (const [name, patch] of Object.entries({
     'source absent at build': { sourcePresentAtBuild: false }, 'index holds target rows': { indexRowsAtTarget: 2 },
-    'control not indexed': { control: { indexedRows: 0, returned: true } }, 'control not returned': { control: { indexedRows: 1, returned: false } },
+    'control not indexed': { control: { ...ctlOk, indexedRows: 0 } },
     'target eligible': { expected: { eligible: true } },
+    'E1 M1 scored build exited 1 (zero target rows notwithstanding)': { scoredBuildExit: 1 },
+    'E1 M1 scored build exit unknown': { scoredBuildExit: null },
+    'E1 auxiliary build exited 1 (copy row present notwithstanding)': { control: { ...ctlOk, buildExit: 1 } },
+    'E1 copy sha256 differs from the target': { control: { ...ctlOk, copySha256: 'b'.repeat(64) } },
+    'E1 copy path not INDEX-eligible': { control: { ...ctlOk, copyEligible: false } },
+    'E1 auxiliary sandbox code differs': { control: { ...ctlOk, sandboxSameCodeAsScored: false } },
+    'no control at all': { control: null },
   })) check(`5 BUILD: ${name} -> no label, not demonstrated`, (() => { const v = labelBuildStage({ ...bOk, ...patch }); return v.label === null && !v.demonstrated; })());
+  // E1 M2: the retrieval diagnostic is never a condition, whatever it recorded.
+  for (const [name, diag] of Object.entries({ 'not returned': { returned: false, rank: null }, 'search error on the diagnostic leg': { returned: false, searchExit: 1, failure: 'control-invocation-failed (exit 1)' }, 'never run': null })) {
+    check(`5 E1 M2 BUILD: retrieval diagnostic ${name} -> still BUILD-WITHHELD`, labelBuildStage({ ...bOk, control: { ...ctlOk, control_retrieval: diag } }).label === 'BUILD-WITHHELD');
+  }
+  check('5 E1 M1 the scored-build gap is named in the verdict', labelBuildStage({ ...bOk, scoredBuildExit: 1 }).gaps.some((g) => g.startsWith('scored-build-exit-nonzero')));
 
   // QUERY-stage label, including the freeze review's counterexample.
   const qOk = { expected: bExp, readBack: { present: true, count: 1 }, targetReturned: false, targetRefused: false, control: { returned: true }, delta: 1, seededChunks: 1 };
@@ -1705,6 +1819,23 @@ async function selfCheckPolicy(check) {
     check('8 F7 hook: unconditional zero rows plus a bound sidecar, after the results are final', f7.includes('results.length = 0') && f7.includes("invocation: process.env.AIGENT_SEARCH_INVOCATION") && f7.indexOf('results.length = 0') > f7.indexOf(F7_ANCHOR));
     check('8 F7 hook refuses a source that already carries a gate', (() => { try { f7Mutate(f7); return false; } catch (e) { return /already emits/.test(e.message); } })());
   }
+  // E1-A: the indexer's own exclusion, from git like F9, failing by name if unavailable.
+  const embedSrc = gitShowText(PRODUCT_TREE, BASELINE_COMMIT, EMBED_FILE);
+  const e1a = (() => { try { return embedSrc === null ? null : e1aMutate(embedSrc); } catch { return null; } })();
+  check('8 E1-A lands every edit on the baseline embed-vault.js and removes both exclusions and both purges', e1a !== null && E1A_EDITS.every(([from, to]) => !e1a.includes(from) && e1a.includes(to)), embedSrc === null ? 'baseline embed-vault.js unavailable' : '');
+  check('8 E1-A leaves the directory guard in place and is not an identity run', e1a !== null && e1a.includes('requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT') && sha256(e1a) !== BASELINE_PINS[EMBED_FILE]);
+  check('8 E1-A on a source without an anchor throws', embedSrc !== null && (() => { try { e1aMutate(embedSrc.replace(E1A_EDITS[1][0], '')); return false; } catch (e) { return /anchor/.test(e.message); } })());
+  check('8 E1-B control path is a SKIP path (not INDEX-eligible), the default control path is INDEX', !el(E1B_CONTROL_PATH('S-01')).eligible && el(controlPathFor('S-01')).eligible);
+  // E1-A / E1-B assertions: green on the predicted observation, red on an unmutated-looking run.
+  const bRow = (id, o = {}) => ({ id, stage: 'BUILD', status: 'pass', label: 'BUILD-WITHHELD', detail: 'BUILD-WITHHELD', proof: { scoredBuildExit: 0, indexRowsAtTarget: 0, control: { indexedRows: 1, failure: null } }, ...o });
+  const twelve = ['C-01', 'C-02', 'C-03', 'C-04', 'C-05', 'C-06', 'S-01', 'S-02', 'S-03', 'S-04', 'O-02', 'O-03'];
+  const okAll = (a) => a.every((x) => x.ok);
+  const e1aRed = twelve.map((id) => bRow(id, { status: 'fail', label: null, undemonstrated: true, detail: `${NOT_DEMONSTRATED}: index-holds-target-rows (1)`, proof: { scoredBuildExit: 0, indexRowsAtTarget: 1, control: { indexedRows: 1, failure: null } } }));
+  const e1bRed = twelve.map((id) => bRow(id, { status: 'fail', label: null, undemonstrated: true, detail: `${NOT_DEMONSTRATED}: matched-permitted-control-failed`, proof: { scoredBuildExit: 0, indexRowsAtTarget: 0, control: { indexedRows: 0, failure: 'copy path is not INDEX-eligible' } } }));
+  const unmut = twelve.map((id) => bRow(id));
+  check('8 E1-A assertions: predicted observation -> GREEN; unmutated run -> RED; one case still BUILD-WITHHELD -> RED', okAll(e1aAssertions(e1aRed)) && !okAll(e1aAssertions(unmut)) && !okAll(e1aAssertions([...e1aRed.slice(1), bRow('C-01', { proof: { scoredBuildExit: 0, indexRowsAtTarget: 0, control: { indexedRows: 1, failure: null } } })])));
+  check('8 E1-A assertions: every case FAILs but the targets were never indexed (step 3 held) -> RED', !okAll(e1aAssertions(e1bRed)));
+  check('8 E1-B assertions: predicted observation -> GREEN; unmutated run -> RED; one case still BUILD-WITHHELD -> RED', okAll(e1bAssertions(e1bRed)) && !okAll(e1bAssertions(unmut)) && !okAll(e1bAssertions([...e1bRed.slice(1), bRow('C-01', { proof: { scoredBuildExit: 0, indexRowsAtTarget: 0, control: { indexedRows: 0, failure: 'x' } } })])));
 
   // F7 expected observations, scored on synthetic process output: every positive
   // fails (no rows), every negative is an honest abstention PASS, PC-01 fails.
@@ -1718,7 +1849,7 @@ async function selfCheckPolicy(check) {
   const q = (id, label, extra = {}) => ({ id, class: 'stale-index', stage: 'QUERY', status: label === 'DECLINED-BY-RETRIEVER' ? 'fail' : 'pass', label, proof: { readBack: { present: true }, control: { returned: true }, delta: label === 'QUERY-WITHHELD' ? 1 : 0, ...extra } });
   const b = (id, extra = {}) => ({ id, class: 'deny', stage: 'BUILD', status: 'pass', label: 'BUILD-WITHHELD', ...extra });
   const u = [{ id: 'U-01', class: 'undeclared', status: 'pass' }, { id: 'U-02', class: 'undeclared', status: 'pass' }];
-  const bp = (id, extra = {}) => b(id, { proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: true } }, ...extra });
+  const bp = (id, extra = {}) => b(id, { proof: { sourcePresentAtBuild: true, scoredBuildExit: 0, indexRowsAtTarget: 0, control: { failure: null } }, ...extra });
   const mutatedRun = [q('X-01', 'RENDER-REFUSED'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u];
   const allOk = (rows, ref) => f9Assertions(rows, ref).filter((x) => !x.notEvaluated).every((x) => x.ok);
   check('8 F9 assertions: QUERY-WITHHELD present (unmutated) -> RED', !allOk([q('X-01', 'QUERY-WITHHELD'), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u]));
@@ -1726,7 +1857,9 @@ async function selfCheckPolicy(check) {
   check('8 F9 assertions: abstention arm (DECLINED-BY-RETRIEVER with control returned) -> GREEN', allOk([q('X-01', 'DECLINED-BY-RETRIEVER'), q('X-02', 'DECLINED-BY-RETRIEVER'), q('X-03', 'DECLINED-BY-RETRIEVER'), bp('C-01'), ...u]));
   check('8 F9 assertions: a QUERY case whose control was suppressed is not a witness -> RED', !allOk([q('X-01', 'RENDER-REFUSED', { control: { returned: false } }), q('X-02', 'RENDER-REFUSED'), q('X-03', 'RENDER-REFUSED'), bp('C-01'), ...u]));
   check('8 F9 assertions: a BUILD case forced red with its control fine -> RED', !allOk([...mutatedRun.slice(0, 3), bp('C-01', { status: 'fail', label: null }), ...u]));
-  check('8 F9 assertions: a BUILD case already red unmutated because its control never returned -> GREEN', allOk([...mutatedRun.slice(0, 3), bp('S-01', { status: 'fail', label: null, proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: false } } }), ...u]));
+  check('8 F9 assertions: a BUILD case already red unmutated because its control was not indexed -> GREEN', allOk([...mutatedRun.slice(0, 3), bp('S-01', { status: 'fail', label: null, proof: { sourcePresentAtBuild: true, scoredBuildExit: 0, indexRowsAtTarget: 0, control: { failure: 'auxiliary build wrote no row at the copy path' } } }), ...u]));
+  check('8 E1 F9 assertions: a BUILD FAIL whose control only missed the retrieval diagnostic is NOT explained by its control -> RED', !allOk([...mutatedRun.slice(0, 3), bp('S-01', { status: 'fail', label: null, proof: { sourcePresentAtBuild: true, scoredBuildExit: 0, indexRowsAtTarget: 0, control: { failure: null, control_retrieval: { returned: false } } } }), ...u]));
+  check('8 E1 F9 assertions: a BUILD case on a non-zero scored build is not intact -> RED', !allOk([...mutatedRun.slice(0, 3), bp('C-01', { proof: { sourcePresentAtBuild: true, scoredBuildExit: 1, indexRowsAtTarget: 0, control: { failure: null } } }), ...u]));
   check('8 F9 assertions: U-class forced red -> RED', !allOk([...mutatedRun.slice(0, 4), { ...u[0], status: 'fail' }, u[1]]));
   const refRows = [bp('C-01'), ...u];
   check('8 F9 assertions with a reference: identical BUILD/U -> GREEN, any change -> RED',
@@ -1779,7 +1912,7 @@ function selfCheckReview(check) {
   const ids = ['PC-01', 'P-01', 'P-02', 'N-01'];
   const want = { commit: 'a'.repeat(40), kind: 'baseline', instrumentSha: 'b'.repeat(64), expectedIds: ids, hashes: H, pins: PINS, development: false };
   const good = {
-    preregistration: PREREG, packet_sha256: PACKET_SHA256, scenario: 'BASELINE', development_subset: null,
+    preregistration: PREREG, packet_sha256: PACKET_SHA256, erratum_sha256: ERRATUM_SHA256, scenario: 'BASELINE', development_subset: null,
     product_commit: want.commit, identity: { kind: 'baseline' }, instrument_sha256: want.instrumentSha,
     search_now: { frozen: FROZEN_NOW, temporal_class: FROZEN_NOW }, hashes: { ...H },
     runtime_hashes_pinned: PINS, runtime_hash_mismatch: [], runtime_hash_pin_drift: [], harness_errors: [],
@@ -1800,6 +1933,9 @@ function selfCheckReview(check) {
     'no clock at all': { search_now: undefined },
     'a wrong packet_sha256': { packet_sha256: 'e'.repeat(64) },
     'a wrong protocol': { preregistration: 'recollection-44/PREREG-001' },
+    'E1: a packet under the unamended recollection-44/PREREG-002': { preregistration: 'recollection-44/PREREG-002', erratum_sha256: undefined },
+    'E1: a wrong erratum_sha256': { erratum_sha256: 'e'.repeat(64) },
+    'E1: no erratum_sha256': { erratum_sha256: undefined },
     'another corpus hash': { hashes: { ...H, corpus_sha256: '9'.repeat(64) } },
     'another fixture-registry hash': { hashes: { ...H, fixture_registry_sha256: '9'.repeat(64) } },
     'a reported runtime pin mismatch': { runtime_hash_mismatch: [{ file: 'x' }] },
@@ -1888,7 +2024,7 @@ function selfCheckFinalizer(check) {
   const f9rows = (label, delta) => green().map((r) => {
     if (r.class === 'stale-index') return { ...r, stage: 'QUERY', label, proof: { readBack: { present: true }, control: { returned: true }, delta } };
     if (r.class === 'deny' || r.class === 'skip' || (r.class === 'operator' && ['skip', 'deny'].includes((byId.get(r.id) || {}).kind))) {
-      return { ...r, stage: 'BUILD', label: 'BUILD-WITHHELD', proof: { sourcePresentAtBuild: true, indexRowsAtTarget: 0, control: { returned: true } } };
+      return { ...r, stage: 'BUILD', label: 'BUILD-WITHHELD', proof: { sourcePresentAtBuild: true, scoredBuildExit: 0, indexRowsAtTarget: 0, control: { failure: null } } };
     }
     return r;
   });
@@ -2026,6 +2162,8 @@ const STUB_EMBED = [
   "(function walk(d, rel) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const r = rel ? rel + '/' + e.name : e.name; if (e.isDirectory()) { if (r !== 'memory') walk(path.join(d, e.name), r); } else if (e.name.endsWith('.md') && !r.startsWith('ops-deny/')) notes.push({ path: r, title: e.name, tags: [], chunk: fs.readFileSync(path.join(d, e.name), 'utf8').slice(0, 500), embedding: [1, 2, 3], mtime: 0 }); } })(vault, '');",
   "fs.mkdirSync(path.join(vault, 'memory'), { recursive: true });",
   "fs.writeFileSync(path.join(vault, 'memory', 'embeddings.json'), JSON.stringify({ notes, entryCount: notes.length }));",
+  // STUB_EMBED_EXIT: the index is written (copy row included) and THEN the build exits non-zero.
+  "if (process.env.STUB_EMBED_EXIT) process.exitCode = Number(process.env.STUB_EMBED_EXIT);",
 ].join('\n');
 
 // R2-LOW-2: the main path calls the functions above; spawn the runner against a
@@ -2069,7 +2207,7 @@ function selfCheckWiring(check) {
   const refFile = file('ref.json', JSON.stringify({ scenario: 'F9', cases: [{ id: 'x' }] }));
   // Everything valid except the population: only the truncation can refuse it.
   const truncated = file('truncated.json', JSON.stringify({
-    preregistration: PREREG, packet_sha256: PACKET_SHA256, scenario: 'BASELINE', development_subset: null, product_commit: BASELINE_COMMIT,
+    preregistration: PREREG, packet_sha256: PACKET_SHA256, erratum_sha256: ERRATUM_SHA256, scenario: 'BASELINE', development_subset: null, product_commit: BASELINE_COMMIT,
     identity: { kind: 'baseline' }, instrument_sha256: instSha, search_now: { frozen: FROZEN_NOW, temporal_class: FROZEN_NOW },
     hashes: { corpus_sha256: corpusHash, overlay_sha256: overlayHash, fixture_registry_sha256: fixtureHash },
     runtime_hashes_pinned: BASELINE_PINS, runtime_hash_mismatch: [], runtime_hash_pin_drift: [], harness_errors: [], cases: [{ id: 'P-01' }],
@@ -2210,7 +2348,7 @@ async function selfCheckAccounting(check) {
   s0 = snap();
   const out = auxBuildControl(box, cb);
   s1 = snap();
-  check('5c BUILD control: built and returned in the auxiliary sandbox, byte-identical copy, same code', out.indexedRows === 1 && out.returned === true && out.targetSha256 === out.copySha256 && out.sandboxSameCodeAsScored === true, JSON.stringify(out));
+  check('5c BUILD control: indexed by an exit-0 auxiliary build, byte-identical copy, INDEX path, same code; retrieval recorded as a diagnostic', out.indexedRows === 1 && out.buildExit === 0 && out.failure === null && out.copyEligible === true && out.targetSha256 === out.copySha256 && out.sandboxSameCodeAsScored === true && out.control_retrieval.returned === true && out.control_retrieval.rank === 1 && out.control_retrieval.score === 0.9, JSON.stringify(out));
   check('5c BUILD control output never reaches the scored record, scanPolicy or the leak list', s1.res === s0.res && s1.pfp === s0.pfp && s1.aux === s0.aux + 1, JSON.stringify({ s0, s1 }));
 
   // ── I2 / I3: through scoreWithheld and scoreStaleIndex, the real scored-case callers.
@@ -2222,6 +2360,7 @@ async function selfCheckAccounting(check) {
   const target = 'ops-deny/alarm-bypass-codes.md';
   buildInputPresence = { [target]: true };
   builtRowCounts = new Map();
+  indexBuild = { status: 0, all: '' };
   const rebuild = () => { writeFileSync(box.embeddings, JSON.stringify(pre)); };
   const last = () => results[results.length - 1];
   const sidecarModes = { malformed: 'abstention-sidecar-malformed', duplicate: 'abstention-sidecar-duplicated', unknown: 'abstention-reason-unknown', unbound: 'abstention-sidecar-unbound' };
@@ -2256,16 +2395,40 @@ async function selfCheckAccounting(check) {
   check('3c I3 QUERY: the failed control is recorded in its own block, returned=false, and never reaches the leak accounting', auxiliaryControls[auxiliaryControls.length - 1].returned === false && auxiliaryControls[auxiliaryControls.length - 1].exit === 1 && p1.pfp === p0.pfp, JSON.stringify([p0, p1]));
   rebuild();
   const ctlBuild = withEnv({ STUB_CTL_FAIL: '1' }, () => auxBuildControl(box, { id: 'C-72', class: 'deny', target, query: 'q' }));
-  check('3c I3 BUILD: control row printed then exit 1 -> indexed but NOT returned (searchExit 1 recorded)', ctlBuild.indexedRows === 1 && ctlBuild.searchExit === 1 && ctlBuild.returned === false, JSON.stringify(ctlBuild));
+  check('3c E1 BUILD: diagnostic search prints the copy row then exits 1 -> diagnostic not returned (searchExit 1 recorded), indexability intact', ctlBuild.indexedRows === 1 && ctlBuild.control_retrieval.searchExit === 1 && ctlBuild.control_retrieval.returned === false && ctlBuild.failure === null, JSON.stringify(ctlBuild));
   rebuild();
   p0 = snap();
   withEnv({ STUB_CTL_FAIL: '1' }, () => scoreWithheld(box, { id: 'C-73', class: 'deny', target, query: 'q' }));
   p1 = snap();
-  check('3c I3 BUILD through scoreWithheld: FAIL policy-withholding-not-demonstrated, one scored record, no leak from the control canary',
-    last().status === 'fail' && last().detail.startsWith(NOT_DEMONSTRATED) && p1.res === p0.res + 1 && p1.pfp === p0.pfp, `${last().status} ${last().detail}`);
+  check('3c E1 M2 BUILD through scoreWithheld: a search error on the diagnostic leg never becomes a BUILD gate (BUILD-WITHHELD), one scored record, no leak from the control canary',
+    last().status === 'pass' && last().label === 'BUILD-WITHHELD' && last().proof.control.control_retrieval.returned === false && p1.res === p0.res + 1 && p1.pfp === p0.pfp, `${last().status} ${last().detail}`);
   rebuild();
   const healthy = auxBuildControl(box, { id: 'C-74', class: 'deny', target, query: 'q' });
-  check('3c I3 a healthy control (exit 0, row returned) is still returned', healthy.returned === true && healthy.searchExit === 0 && healthy.buildExit === 0, JSON.stringify(healthy));
+  check('3c a healthy control (exit 0, row indexed and returned) records no failure', healthy.failure === null && healthy.control_retrieval.returned === true && healthy.control_retrieval.searchExit === 0 && healthy.buildExit === 0, JSON.stringify(healthy));
+  // E1 3.3: the auxiliary build exiting non-zero fails the control even though its index holds the copy row.
+  rebuild();
+  const auxFail = withEnv({ STUB_EMBED_EXIT: '1' }, () => auxBuildControl(box, { id: 'C-75', class: 'deny', target, query: 'q' }));
+  check('3c E1 BUILD: auxiliary build writes the copy row then exits 1 -> control failed, row count and exit recorded', auxFail.buildExit === 1 && auxFail.indexedRows === 1 && /auxiliary build exited 1/.test(auxFail.failure || ''), JSON.stringify(auxFail));
+  rebuild();
+  p0 = snap();
+  withEnv({ STUB_EMBED_EXIT: '1' }, () => scoreWithheld(box, { id: 'C-76', class: 'deny', target, query: 'q' }));
+  p1 = snap();
+  check('3c E1 BUILD through scoreWithheld: auxiliary build exit 1 -> FAIL policy-withholding-not-demonstrated, not a leak',
+    last().status === 'fail' && last().undemonstrated === true && last().detail.startsWith(NOT_DEMONSTRATED) && /auxiliary build exited 1/.test(last().detail) && p1.pfp === p0.pfp, `${last().status} ${last().detail}`);
+  // E1 M1: the scored build exited non-zero; the index it left holds zero target rows.
+  rebuild();
+  indexBuild = { status: 1, all: '' };
+  p0 = snap();
+  try { scoreWithheld(box, { id: 'C-77', class: 'deny', target, query: 'q' }); } finally { indexBuild = { status: 0, all: '' }; }
+  p1 = snap();
+  check('3c E1 M1 BUILD through scoreWithheld: scored build exit 1 with zero target rows -> FAIL scored-build-exit-nonzero, never BUILD-WITHHELD, not a leak',
+    last().status === 'fail' && last().label === null && /scored-build-exit-nonzero \(exit 1\)/.test(last().detail) && last().proof.scoredBuildExit === 1 && last().proof.indexRowsAtTarget === 0 && p1.pfp === p0.pfp, `${last().status} ${last().detail}`);
+  // E1-B shape through the real caller: the copy on a SKIP path is not indexed.
+  rebuild();
+  buildControlPathFor = E1B_CONTROL_PATH;
+  try { scoreWithheld(box, { id: 'C-78', class: 'deny', target, query: 'q' }); } finally { buildControlPathFor = controlPathFor; }
+  check('3c E1-B BUILD through scoreWithheld: copy under templates/ -> not INDEX-eligible, FAIL policy-withholding-not-demonstrated',
+    last().status === 'fail' && last().proof.control.copyEligible === false && /not INDEX-eligible/.test(last().detail), `${last().status} ${last().detail}`);
 
   // ── R1: the PRISTINE comparison leg is evidence too. It must succeed (exit 0, a parsed
   //    array, no rejected sidecar) before its counts can establish a removal delta; it is
@@ -2322,6 +2485,7 @@ async function selfCheckAccounting(check) {
 // into every packet, so a falsifier that stops falsifying is visible in the
 // artifact rather than only in prose.
 const SEARCH_FILE = 'daemons/semantic-search/search-vault.js';
+const EMBED_FILE = 'daemons/semantic-search/embed-vault.js';
 // The ids a scenario that does not apply the undeclared overlay declares NOT-APPLICABLE (excluded from its
 // population, recorded as such). BASELINE and every identity run declare none. Enforced in finalizeRun.
 const NA_U = ['U-01', 'U-02'];
@@ -2403,6 +2567,20 @@ const SCENARIOS = {
     unrunnableClasses: [], runU: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f9Mutate), assert: f9Assertions,
     note: 'asserted per case: no QUERY-stage case may read QUERY-WITHHELD; BUILD-stage and U-class results must stand. '
       + 'Only the filter-removal arm is executed: the forced-abstention second arm is NOT executable here (no abstention gate), and synthetic label tests are not its execution.',
+  },
+  // E1-A, E1-B: PREREG-002-ERRATUM-001 section 5 instrument self-checks, named
+  // mutation runs like F7-F9 (never an identity run, never a scored case).
+  E1A: {
+    mutation: 'disable the namespace-disposition and denied-prefix exclusion in the sandbox embed-vault.js collectFiles() and both carried-forward purges, then a full rebuild',
+    expectedRed: ['O-02', 'O-03'], expectedRedClasses: ['deny', 'skip'], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false, notApplicable: NA_U, mutates: [EMBED_FILE], applyCode: (b) => mutateSandboxEmbed(b, e1aMutate), assert: e1aAssertions,
+    note: 'ERRATUM-001 section 5 E1-A: step 3 must fail for every BUILD-stage case; none may read BUILD-WITHHELD. The query-stage filters stay, so no canary is expected in output; any that appears is the PREREG-001 3.5 zero-tolerance FAIL.',
+  },
+  E1B: {
+    mutation: 'place the BUILD-stage permitted copy under templates/ (SKIP in the sandbox registry) instead of research/, so the auxiliary build cannot index it',
+    expectedRed: ['O-02', 'O-03'], expectedRedClasses: ['deny', 'skip'], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: false, notApplicable: NA_U, buildControlPath: E1B_CONTROL_PATH, assert: e1bAssertions,
+    note: 'ERRATUM-001 section 5 E1-B: step 4 must fail for every BUILD-stage case (policy-withholding-not-demonstrated), never recorded as a leak.',
   },
 };
 
@@ -2813,12 +2991,16 @@ if (harnessErrors.length === 0 && identity.ok && blockingGaps.length === 0 && !g
       scenarioNotes.push('F5 mutation: copied the undeclared overlay into the sandbox vault as scratch/ AND deleted the feedback row from the sandbox core registry, so feedback/ is undeclared too');
     }
 
+    if (SPEC.buildControlPath) {
+      buildControlPathFor = SPEC.buildControlPath;
+      scenarioNotes.push(`${SCENARIO} mutation: BUILD-stage permitted copies placed at ${SPEC.buildControlPath('<id>')} (not INDEX-eligible)`);
+    }
     if (SPEC.applyCode) {
       try {
         SPEC.applyCode(box);
-        const drifted = fileHash(sandboxFileMap(box)[SEARCH_FILE]) !== ACTIVE_PINS[SEARCH_FILE];
-        if (!drifted) harnessErrors.push(`${SCENARIO}: the mutation did not land (the sandbox search-vault.js still hashes to its pin)`);
-        else scenarioNotes.push(`${SCENARIO} mutation applied to the sandbox search-vault.js: ${SPEC.mutation}`);
+        const notLanded = (SPEC.mutates || []).filter((f) => fileHash(sandboxFileMap(box)[f]) === ACTIVE_PINS[f]);
+        if (notLanded.length) harnessErrors.push(`${SCENARIO}: the mutation did not land (the sandbox ${notLanded.join(', ')} still hashes to its pin)`);
+        else scenarioNotes.push(`${SCENARIO} mutation applied to the sandbox ${(SPEC.mutates || []).join(', ')}: ${SPEC.mutation}`);
       } catch (e) { harnessErrors.push(`${SCENARIO}: ${e.message}`); }
     }
 
@@ -2960,6 +3142,7 @@ const {
 const packet = {
   preregistration: PREREG,
   packet_sha256: PACKET_SHA256,
+  erratum_sha256: ERRATUM_SHA256,
   scenario: SCENARIO,
   // Named mutation runs are never identity runs (PREREG-002 section 6).
   identity_run: SCENARIO === 'BASELINE' && !ONLY && identity.ok && identity.instrumentRegistered === true,
@@ -3034,7 +3217,7 @@ if (JSON_OUT) {
   console.log(JSON.stringify(packet, null, 2));
 } else {
   const MARK = { pass: 'PASS', fail: 'FAIL', unrunnable: 'UNRUNNABLE', 'not-applicable': 'N/A' };
-  console.log(`\n${PREREG} — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
+  console.log(`\n${PREREG} (packet_sha256 ${PACKET_SHA256}, erratum_sha256 ${ERRATUM_SHA256}) — scenario ${SCENARIO} — product ${(observedCommit || 'UNOBSERVED').slice(0, 8)} (${identity.ok ? identity.kind + (identity.candidate_id ? ' ' + identity.candidate_id : '') : 'REFUSED'})`);
   console.log(`instrument_sha256 ${INSTRUMENT_SHA}  (register this before any scored run)${identity.ok && !identity.instrumentRegistered ? `\n  NOT an identity run: this instrument is not registered for the baseline (registration: ${identity.registration.state}${identity.registration.problems.length ? ` -- ${identity.registration.problems.join('; ')}` : ''})` : ''}`);
   console.log(`corpus           ${corpusHash}`);
   console.log(`overlay          ${overlayHash}`);
