@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-09-29-e54e8f2f",
-  "public_product_commit": "e54e8f2f21cd1f5961785046c3a9007ed69a4d09",
+  "baseline_id": "aigent-os-2026-10-08-e6212407",
+  "public_product_commit": "e6212407ff716196bf52fa38a2c4e087c2cda6da",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -22,7 +22,8 @@
     "Third v8 cut (declared resume procedure blocks, loud reuse of a spent capsule, YAML block scalars in the shared reader). Pins that moved for that reason: daemons/resume-verb.mjs, daemons/lifecycle-extension.mjs, daemons/lifecycle-common.mjs. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 36 pinned, 36 matching, 0 missing. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash.",
     "Fourth v8 cut (frontmatter reader import surfaces in the resume procedure): daemons/frontmatter-reader.cjs is newly added to required_files because it is imported by the pinned daemons/lifecycle-common.mjs and its output now enters the resume procedure, on the same reasoning that admitted daemons/render_boundary.py (v6) and daemons/lifecycle-extension.mjs (v7). Pins that moved for that reason: daemons/resume-verb.mjs, daemons/frontmatter-reader.cjs. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 37 pinned, 37 matching, 0 missing. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash.",
     "Fifth v8 cut (runtime repairs integration, 2026-09: boot-receipt hold recovery, capsule request composer guard, watched post-clear wake submission): daemons/auto-clear-transport.mjs changed so a boot-receipt hold raised from idle is recovered once the bound session's receipt is back (PR #58), and daemons/pty-runner.mjs changed to defer the capsule request while the composer may hold operator text, naming the wait at checkpoint-confirmed (PR #59), and to watch the post-clear wake submission the same way the clear is watched (fix/wake-submit-watched). Pins that moved for that reason: daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 37 pinned, 37 matching, 0 missing. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash.",
-    "Sixth v8 cut (runtime repairs integration, 2026-09, corrected: PR #59 multiline-input correction -- backslash+Enter and modified win32 Enter are newlines, not submissions; PR #61 wake-watch evidence hardening -- parsed user record, transcript-unresolvable, retry-write code, rebind close): daemons/pty-runner.mjs moved again; every hash recomputed from the product commit, no pin added or removed."
+    "Sixth v8 cut (runtime repairs integration, 2026-09, corrected: PR #59 multiline-input correction -- backslash+Enter and modified win32 Enter are newlines, not submissions; PR #61 wake-watch evidence hardening -- parsed user record, transcript-unresolvable, retry-write code, rebind close): daemons/pty-runner.mjs moved again; every hash recomputed from the product commit, no pin added or removed.",
+    "Seventh v8 cut (runtime repairs integration composed with master 9c7766ec; PR #59 edited-input correction: a CR on an unknown-tainted line is an uncertain submission confirmed only by a new operator prompt record in the bound transcript, inert sequences and the runner's own records never confirm, a paste is content from its start): daemons/pty-runner.mjs moved again; every hash recomputed from the product commit, no pin added or removed."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -47,7 +48,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "2a56f0b438f8c3280653854d75f6efee3c6f90492f788b821ccaf2f0c46782d0",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "38f66f4e5cacae76d15f0b0b3b33efd8d309ad7f0330c7e78cfac85fdce04a8d",
+    "daemons/pty-runner.mjs": "3cf26930ea362a99838711f19f327fc92532bbb36a5ec6515d06270747157d3d",
     "daemons/auto-clear-transport.mjs": "2c442da887cc316e566cce6566cbaa95b7dd325535385ab56a0ab1053cfd26cb",
     "daemons/lifecycle-common.mjs": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
