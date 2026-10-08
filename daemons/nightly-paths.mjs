@@ -132,6 +132,12 @@ export function pathInsideOperationalRoots(paths, target) {
   return pathInside(paths.repositoryRoot, target) || pathInside(paths.stateRoot, target);
 }
 
+// A short id can be ambiguous or later unresolvable, so git artifacts must
+// carry the full 40-character commit id (`git rev-parse HEAD`, copied verbatim).
+export function isFullCommitSha(value) {
+  return /^[0-9a-f]{40}$/i.test(String(value || ''));
+}
+
 export function portablePath(value) {
   return String(value || '').replace(/\\/g, '/');
 }

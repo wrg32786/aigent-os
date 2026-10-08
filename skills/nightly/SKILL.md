@@ -78,9 +78,12 @@ After each checkpoint:
 ```text
 node daemons/nightly-pass.mjs record --root <aigent-root> \
   --checkpoint <name> --status <pass|skipped|fail> --exit-code <integer> \
-  --artifact <file:PATH|git:SHA|stdout:CHECKPOINT@exit=N|none:ALLOWLISTED-REASON> \
+  --artifact <file:PATH|git:FULL-40-CHAR-SHA|stdout:CHECKPOINT@exit=N|none:ALLOWLISTED-REASON> \
   --detail "<bounded factual detail>"
 ```
+
+A `git:` artifact must be the full 40-character commit id, copied verbatim
+from `git rev-parse HEAD`; a short id is refused.
 
 Any nonzero exit, missing/stale/noncanonical artifact, illegal skip, or explicit
 failure becomes `fail` and raises

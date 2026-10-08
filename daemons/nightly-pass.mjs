@@ -30,6 +30,7 @@ import { reviewNightlyLedgers } from './nightly-ledger-review.mjs';
 import {
   buildNightlyChildEnv,
   defaultNightlyRoot,
+  isFullCommitSha,
   pathInside,
   pathInsideOperationalRoots,
   resolveMemoryRelative,
@@ -525,10 +526,10 @@ function artifactCheck(root, ref, {
   }
 
   if (scheme === 'git') {
-    if (!/^[0-9a-f]{7,40}$/i.test(payload)) {
+    if (!isFullCommitSha(payload)) {
       return {
         ok: false,
-        detail: 'git artifact must be a 7-40 character hexadecimal commit id',
+        detail: 'git artifact must be the full 40-character hexadecimal commit id',
       };
     }
     try {
@@ -1104,8 +1105,8 @@ export function recordEvidenceCommitSuccess({
   if (!state.log_written || !['pass', 'fail'].includes(state.status)) {
     throw new Error('nightly evidence-commit success can be recorded only after finish');
   }
-  if (!/^[0-9a-f]{7,40}$/i.test(String(sha || ''))) {
-    throw new Error('evidence success requires a commit sha');
+  if (!isFullCommitSha(sha)) {
+    throw new Error('evidence success requires the full 40-character commit sha');
   }
   try {
     const context = childContext(root, state);
