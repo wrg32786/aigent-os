@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   defaultNightlyRoot,
+  isFullCommitSha,
   pathInside,
   pathInsideOperationalRoots,
   resolveNightlyPaths,
@@ -110,8 +111,8 @@ export function runLedgerPredicate({
       artifactRef = `file:${String(args.path).replace(/\\/g, '/')}#${args.pointer || ''}`;
       ok = JSON.stringify(stable(observed)) === JSON.stringify(stable(expected));
     } else {
-      if (!/^[0-9a-f]{7,40}$/i.test(String(args.sha || ''))) {
-        throw new Error('git sha must be 7-40 hexadecimal characters');
+      if (!isFullCommitSha(args.sha)) {
+        throw new Error('git sha must be the full 40 hexadecimal characters');
       }
       const repo = targetInside(paths, args.repo || '.');
       execFileSync('git', ['-C', repo, 'cat-file', '-e', `${args.sha}^{commit}`], {

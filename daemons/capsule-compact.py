@@ -64,12 +64,30 @@ def walk_chain(capsules_dir, head_id):
     while cur and cur not in seen and cur != "null":
         seen.add(cur)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,239}", cur):
-            chain.append((cur, None, None, None, None))
+            # The head keeps its (id, None, ...) marker so the caller refuses it
+            # and a traversal-shaped id never reaches the filesystem; a bad
+            # parent mid-chain ends the walk at the last real capsule instead
+            # of leaving a phantom in the fold window.
+            if not chain:
+                chain.append((cur, None, None, None, None))
+            else:
+                print(f"WARNING: chain link {inert(cur, 160)} is not a valid capsule id; stopping walk", file=sys.stderr)
             break
         path = capsules_dir / f"{cur}.md"
         if not path.exists():
-            chain.append((cur, None, None, None, None))
-            break
+            # A parent already moved to _archive/ is still a real link; walk into it.
+            archived = capsules_dir / "_archive" / f"{cur}.md"
+            if archived.exists():
+                path = archived
+            elif not chain:
+                chain.append((cur, None, None, None, None))
+                break
+            else:
+                # Truly missing link: end the chain at the last real capsule. A
+                # phantom (cur, None, ...) entry lands in the fold window and
+                # crashes the summarizer on its None frontmatter.
+                print(f"WARNING: chain link {inert(cur, 160)} not found on disk or in _archive; stopping walk", file=sys.stderr)
+                break
         text = path.read_text(encoding="utf-8")
         fm, body = unsafeRawCapsuleParts(
             text,
