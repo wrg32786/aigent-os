@@ -56,8 +56,9 @@ Either variant clones aigent-OS to `~/aigent-os` and prints the next steps: `cd`
 ## What happens next
 
 - aigent-OS copies its kernel files into place and writes a `.claude/settings.json` wired to your actual paths.
-- It installs semantic search if Node.js is present (optional, it works fine without it).
-- It tells you to start a fresh conversation and run `/start`.
+- It installs local semantic search and the managed Auto-Refresh runner. This needs Node.js 18+ with npm; without Node the default install stops and tells you so. `--no-deps` is the explicit fallback that skips them (no automatic clear).
+- It wires the `aigent` command (skip with `--no-launcher`). Open a new terminal and run `aigent`, or start a fresh Claude Code conversation in the install folder and run `/start`.
+- Preview everything first with `bash install.sh --dry-run`. The full list of changes, and how to undo them, is in the README: [What this changes on your machine](README.md#what-this-changes-on-your-machine).
 
 ---
 
