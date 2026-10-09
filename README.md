@@ -52,7 +52,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 |---|:---:|:---:|:---:|:---:|:---:|
 | Persistent cross-session memory | ✅ | ✅ | ⚠️¹ | ✅ | ✅ (first-party) |
 | Git-native, auditable memory store | ✅ | ❌ (SQLite+Chroma, outside version control) | n/a | ⚠️ files trackable, not sync-verified | ❌ |
-| Compaction-survival auto-resume | ✅ | partial (Stop-hook based) | ❌ | ✅ (`/handoff`) | ✅ (native) |
+| Session continuity across context limits | ✅ (Managed Auto-Refresh, no compaction) | partial (Stop-hook based) | ❌ | ✅ (`/handoff`) | ✅ (native) |
 | 3-tier memory architecture | ✅ | ❌ (flat) | ❌ | ✅ (same shape) | ❌ (2-tier) |
 | Self-testing of its own operating rules | ❌ (Roadmap) | ❌ | partial (pre/post code-quality checks, not self-rules) | ❌ | ❌ |
 | Model-tier routing across sub-agents, enforced | ✅ advisory default, opt-in enforce | ❌ | ✅ (behavioral config) | ❌ | n/a |
@@ -60,7 +60,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 
 ¹ via bundled Serena MCP.
 
-**The honest framing:** compaction-survival and cross-session memory are populated categories now; several projects do them well. Git-native auditability is where this repo is currently ahead. Routing and non-Claude execution are real, tested mechanisms, scoped in the table to exactly what ships and no more.
+**The honest framing:** session continuity and cross-session memory are populated categories now; several projects do them well. Git-native auditability is where this repo is currently ahead. Routing and non-Claude execution are real, tested mechanisms, scoped in the table to exactly what ships and no more.
 
 ---
 
