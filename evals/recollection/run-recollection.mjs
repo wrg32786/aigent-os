@@ -3004,7 +3004,7 @@ if (harnessErrors.length === 0 && !identity.ok) {
   // F7 / F9ABSTAIN mutate an abstention gate; the baseline has none. (A candidate whose gate line the hook cannot find is a harness error at applyCode.)
   declareUnrunnable(cases.map((c) => c.id),
     `${SCENARIO} mutates an abstention gate and this product's search-vault.js has no ${ABSTAIN_PREFIX} emission site, so there is no gate to replace`,
-    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity`);
+    `PREREG-002 ${SCENARIO}: abstention gate absent at this identity`);
 } else if (harnessErrors.length === 0 && blockingGaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
     blockingGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),

@@ -164,6 +164,12 @@ const box = makeSandbox('main');
   writeIndex(box, [['memory/edge.md', 0.30], ['memory/low.md', 0.01]]);
   const edge = search(box, ['edge'], env);
   check('positive untouched: a top-1 of exactly 0.30 reaches the floor and is answered', answered(edge, ['memory/edge.md', 'memory/low.md']), JSON.stringify(edge.lines));
+  // The gate reads the score the rows carry (4 decimals): raw 0.29996 is emitted
+  // as 0.3, so gating on the raw cosine would abstain on a row it then calls 0.3.
+  writeIndex(box, [['memory/rounds-up.md', 0.29996], ['memory/low.md', 0.01]]);
+  const up = search(box, ['edge'], env);
+  check('positive untouched: raw top-1 0.29996, emitted as 0.3, is answered (the gate uses the emitted score)',
+    answered(up, ['memory/rounds-up.md', 'memory/low.md']) && up.rows[0].score === 0.3, `${JSON.stringify(up.rows && up.rows.map((x) => x.score))} ${JSON.stringify(up.lines)}`);
 }
 {
   writeIndex(box, BELOW);
