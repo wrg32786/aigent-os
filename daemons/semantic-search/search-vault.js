@@ -25,7 +25,7 @@
  */
 
 import { pipeline } from '@xenova/transformers';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
@@ -211,6 +211,10 @@ async function embedText(text) {
   return Array.from(output.data);
 }
 
+// A source counts as present only if it is a regular file (a directory or a
+// dangling name is missing). Used by the load-time loudness check in main().
+const isFile = (p) => statSync(p, { throwIfNoEntry: false })?.isFile() === true;
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   // Search refuses the same undeclared physical state as index construction.
@@ -237,6 +241,15 @@ async function main() {
   if (!jsonOnly) {
     console.log(`${index.notes.length} entries loaded.${deniedCount ? ` (${deniedCount} confidential-class chunk(s) filtered by index-deny.json)` : ''}${namespaceCount ? ` (${namespaceCount} non-INDEX namespace chunk(s) filtered by namespace-registry.json)` : ''}`);
   }
+
+  // Load-time loudness: an indexed row whose source file is gone (deleted after
+  // the build, or never there) is named on stderr now, at population load, not
+  // left for a later audit (recollection-44 PREREG-001 3.7). One line per path.
+  // Only rows that survived both filters above are checked, so a DENY or SKIP
+  // path can never be named here; the rows themselves are left untouched, and
+  // the check sits before the Embed/Search timers. stderr, so --json sees it too.
+  const missingSources = [...new Set(index.notes.map((n) => n.path))].filter((p) => !isFile(join(VAULT_ROOT, p)));
+  for (const p of missingSources) console.error(`search-vault: indexed source missing at load: ${inert(p, 200)} (stale index rows; re-run embed-vault.js)`);
 
   // Embed query
   const t0 = Date.now();
