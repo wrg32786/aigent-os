@@ -128,6 +128,14 @@ check('clean corpus: every source present, nothing announced, results unchanged'
   check('--json: stdout is still a parseable array and stderr still names the source', Array.isArray(j.rows) && j.loud.length === 1 && j.stderr.includes(GONE));
 }
 check('filtered rows are never named: a DENY-prefix and a SKIP row without sources stay silent', filteredUnnamed(box));
+// "Present" means a regular file: an indexed path that is a directory has no source note.
+const dirNamed = (b) => {
+  seed(b, [...CLEAN, ['memory/dir.md', 0.5, false]]);
+  mkdirSync(path.join(b.vault, 'memory', 'dir.md'), { recursive: true });
+  const r = search(b, ['what is kept']);
+  return r.status === 0 && r.loud.length === 1 && r.loud[0].includes('memory/dir.md');
+};
+check('a directory at an indexed path is named as a missing source (regular files only)', dirNamed(makeSandbox('dir')));
 {
   seed(box, [['memory/kept-a.md', 0.2, true], [GONE, 0.1, false]]);
   const r = search(box, ['off topic']);
