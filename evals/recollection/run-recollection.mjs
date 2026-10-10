@@ -40,8 +40,9 @@
 //                           development comparison, never a full same-method reference
 //   --only <ids>            development subset; the packet says it is not a
 //                           scored-run candidate
-// Scenarios: BASELINE, F1..F9, E1A, E1B. F7 and the F9 forced-abstention arm are NOT
-// executable here (see CLAIM_LIMITS): only F9's filter-removal arm and F1-F6, F8 run.
+// Scenarios: BASELINE, F1..F9, F9ABSTAIN, E1A, E1B. F7 and F9ABSTAIN (the F9
+// forced-abstention arm) need a candidate carrying the abstention gate line; at
+// the baseline they are UNRUNNABLE (see CLAIM_LIMITS).
 // E1A / E1B are PREREG-002-ERRATUM-001 section 5's two instrument self-checks.
 
 import {
@@ -564,7 +565,7 @@ function freshToken() {
   }
 }
 const TOKEN_RE = /^[A-Za-z0-9-]{8,64}$/;
-const SCRUBBED_ENV = ['AIGENT_STATE_HOME_DIR', 'AIGENT_SEARCH_NOW', 'AIGENT_SEARCH_INVOCATION', 'AIGENT_SEARCH_DISABLE_SUPERSESSION'];
+const SCRUBBED_ENV = ['AIGENT_STATE_HOME_DIR', 'AIGENT_SEARCH_NOW', 'AIGENT_SEARCH_INVOCATION', 'AIGENT_SEARCH_DISABLE_SUPERSESSION', 'RECOLLECTION_F9_FORCE_ABSTAIN'];
 function invocationEnv(box, extra = {}) {
   const base = { ...process.env };
   for (const k of SCRUBBED_ENV) delete base[k];
@@ -739,9 +740,9 @@ function embedOne(box, text) {
 // timing line, so --json gives no timings (PREREG-001 4.1). Both the timing
 // line and the trailing JSON block are parsed out of the human output.
 const searchEnv = (invocation, now) => ({ AIGENT_SEARCH_NOW: now, AIGENT_SEARCH_INVOCATION: invocation });
-function search(box, query, { now = FROZEN_NOW } = {}) {
+function search(box, query, { now = FROZEN_NOW, env = {} } = {}) {
   const invocation = freshToken();
-  return interpretSearch(runNode(box, 'search-vault.js', [query], searchEnv(invocation, now)), query, invocation, now);
+  return interpretSearch(runNode(box, 'search-vault.js', [query], { ...env, ...searchEnv(invocation, now) }), query, invocation, now);
 }
 
 function interpretSearch(r, query, invocation, now) {
@@ -1443,7 +1444,8 @@ function readBackSeed(box, seed) {
 function runQueryStage(box, c, seed) {
   const readBack = readBackSeed(box, seed);
   const pristineRes = withIndexText(box, seed.pristineText, () => search(box, c.query));
-  const res = search(box, c.query);
+  // F9ABSTAIN: only the X-class forbidden run is forced to abstain (see f9AbstainMutate).
+  const res = search(box, c.query, { env: SCENARIOS[SCENARIO]?.forceAbstainForbidden && c.class === 'stale-index' ? { [F9_FORCE_ABSTAIN_ENV]: '1' } : {} });
   const controlPath = controlPathFor(c.id);
   const ctl = JSON.parse(seed.pristineText);
   ctl.notes.push({ path: controlPath, title: seed.title, tags: [], chunk: seed.chunk, embedding: seed.vector, mtime: 0 });
@@ -1472,6 +1474,8 @@ function finishQueryStage(c, q, extra) {
   const verdict = labelQueryStage(ev);
   const proof = {
     stage: 'QUERY', expected, readBack: q.readBack, control, filter: expected.filter, delta, seededChunks: q.readBack.count,
+    // Recorded, never scored: whether the forbidden run abstained honestly, stayed silent or answered.
+    forbiddenAbstention: q.res.abstain ? q.res.abstain.state : null,
     pristine: { exit: q.pristineRes.status, failure: pristineFailure, invocation: q.pristineRes.invocation },
     counts: { seeded: seededCount, pristine: pristineCount, seededSource: 'same invocation (the forbidden run)', pristineSource: 'paired invocation on the pristine index, same query' },
     gaps: verdict.gaps,
@@ -1598,16 +1602,28 @@ function f9Mutate(source) {
 }
 
 // F7: abstain on everything, with a VALID bound sidecar, after index validation
-// and both filters. NOT EXECUTABLE (CLAIM_LIMITS): no gate exists at the baseline,
-// and the hook refuses a source that already emits the sidecar, which is exactly
-// what a candidate's gate source would contain. The hook is exercised only on
-// synthetic output; the candidate-specific hook is owed with that candidate.
-const F7_ANCHOR = 'const searchTime = Date.now() - t1;';
-function f7Mutate(source) {
-  if (source.includes(ABSTAIN_PREFIX)) throw new Error('F7: the source already emits AIGENT_ABSTAIN; the hook has no anchor for that gate (owed to the candidate that carries it)');
-  if (source.split(F7_ANCHOR).length - 1 !== 1) throw new Error('F7 anchor not found exactly once');
-  return source.replace(F7_ANCHOR, () => `${F7_ANCHOR}\n  results.length = 0;\n  console.error(\`${ABSTAIN_PREFIX} \${JSON.stringify({ schema: 'abstain/1', invocation: process.env.AIGENT_SEARCH_INVOCATION, outcome: 'abstain', reason: 'below-tau' })}\`);`);
+// and both filters. Candidate-specific: it rewrites the candidate's own gate
+// decision (search-vault.js computes `abstention` once, after both filters and
+// the sort), so the product's own emission writes the bound, closed-vocabulary
+// line and empties the results. Not executable at the baseline (no gate line).
+// The anchor rule is F9's: not found exactly once throws, never a silent run.
+const GATE_ANCHOR = '  const abstention = abstentionReason(scored);';
+function replaceGate(source, label, replacement) {
+  const n = source.split(GATE_ANCHOR).length - 1;
+  if (n !== 1) throw new Error(`${label} anchor (the candidate's gate line) found ${n} time(s), expected exactly 1: ${GATE_ANCHOR.trim()}`);
+  return source.replace(GATE_ANCHOR, () => replacement);
 }
+const f7Mutate = (source) => replaceGate(source, 'F7', "  const abstention = 'below-tau';");
+
+// F9's second arm (PREREG-002 F9: "Once an abstention gate exists, a second arm
+// additionally makes it return zero rows, with a valid sidecar, for the X-class
+// queries"): F9's filter deletion PLUS a forced abstention that fires only when
+// the runner sets F9_FORCE_ABSTAIN_ENV, which it does on the X-class FORBIDDEN
+// run alone. The pristine leg and the matched seeded control run the gate as
+// built, so the control can still be returned (3.2a step 3).
+const F9_FORCE_ABSTAIN_ENV = 'RECOLLECTION_F9_FORCE_ABSTAIN';
+const f9AbstainMutate = (source) => replaceGate(f9Mutate(source), 'F9ABSTAIN',
+  `  const abstention = process.env.${F9_FORCE_ABSTAIN_ENV} === '1' ? 'below-tau' : abstentionReason(scored);`);
 
 function mutateSandboxSearch(box, fn) {
   const file = path.join(box.sem, 'search-vault.js');
@@ -1720,6 +1736,22 @@ function f9Assertions(rows, reference = null, development = false) {
   return a;
 }
 
+// F9ABSTAIN: F9's assertions, plus the arm's own observation (PREREG-002 F9:
+// "With the abstention arm the row is absent with no removal delta and the case
+// is DECLINED-BY-RETRIEVER, FAIL, policy-withholding-not-demonstrated").
+function f9AbstainAssertions(rows, reference = null, development = false) {
+  const q = rows.filter((r) => r.stage === 'QUERY');
+  return [
+    ...f9Assertions(rows, reference, development),
+    { name: 'F9ABSTAIN: every QUERY-stage case reads DECLINED-BY-RETRIEVER, FAIL policy-withholding-not-demonstrated',
+      ok: q.length >= 3 && q.every((r) => r.label === 'DECLINED-BY-RETRIEVER' && r.status === 'fail' && String(r.detail).startsWith(NOT_DEMONSTRATED)),
+      detail: q.map((r) => `${r.id}=${r.status}/${r.label}`).join(', '), needs: null },
+    { name: 'F9ABSTAIN: every QUERY-stage forbidden run was an honest abstention (bound sidecar, results []), not silence',
+      ok: q.length >= 3 && q.every((r) => r.proof && r.proof.forbiddenAbstention === 'honest'),
+      detail: q.map((r) => `${r.id}: ${r.proof?.forbiddenAbstention}`).join('; '), needs: null },
+  ];
+}
+
 // ── self-check: stage-aware proof, mutations, F9 assertions, and a real child
 //    process standing in for search-vault.js (PREREG-002 section 7 items 4, 5, 7, 8) ──
 const MUTATION_CHECK_NAMES = [
@@ -1727,8 +1759,12 @@ const MUTATION_CHECK_NAMES = [
   '8 F9 leaves the render chokepoint and the directory guard in place',
   '8 F9 is not an identity run: the mutated file no longer hashes to the pin',
   '8 F9 on a source without the anchor throws',
-  '8 F7 hook: unconditional zero rows plus a bound sidecar, after the results are final',
-  '8 F7 hook refuses a source that already carries a gate',
+  '8 F7 and F9ABSTAIN hooks refuse the baseline source (no gate line): a harness error, never an unmutated run',
+];
+const CANDIDATE_HOOK_CHECK_NAMES = [
+  '8 F7 hook on the candidate source: the gate decision becomes an unconditional abstention; filters, emission and render chokepoint stay',
+  '8 F9ABSTAIN hook on the candidate source: both filter calls gone, gate forced only under the runner env var, emission stays',
+  '8 F7 / F9ABSTAIN mutated candidates are not identity runs (hash differs from the candidate file)',
 ];
 async function selfCheckPolicy(check) {
   const box = makeSandbox('selfcheck-policy');
@@ -1815,10 +1851,27 @@ async function selfCheckPolicy(check) {
     check('8 F9 leaves the render chokepoint and the directory guard in place', m.includes('namespaceDispositionForPath(NAMESPACE_REGISTRY, r.path)') && m.includes('requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT'));
     check('8 F9 is not an identity run: the mutated file no longer hashes to the pin', sha256(m) !== BASELINE_PINS['daemons/semantic-search/search-vault.js']);
     check('8 F9 on a source without the anchor throws', (() => { try { f9Mutate(baselineSrc.replace(F9_FILTERS[0], '')); return false; } catch (e) { return /anchor/.test(e.message); } })());
-    const f7 = f7Mutate(baselineSrc);
-    check('8 F7 hook: unconditional zero rows plus a bound sidecar, after the results are final', f7.includes('results.length = 0') && f7.includes("invocation: process.env.AIGENT_SEARCH_INVOCATION") && f7.indexOf('results.length = 0') > f7.indexOf(F7_ANCHOR));
-    check('8 F7 hook refuses a source that already carries a gate', (() => { try { f7Mutate(f7); return false; } catch (e) { return /already emits/.test(e.message); } })());
+    const throwsAnchor = (fn) => { try { fn(baselineSrc); return false; } catch (e) { return /anchor/.test(e.message); } };
+    check(MUTATION_CHECK_NAMES[4], throwsAnchor(f7Mutate) && throwsAnchor(f9AbstainMutate));
   }
+  // The candidate-specific hooks, against the gate source this instrument ships beside
+  // (its own repo's search-vault.js). Absent or gateless: the same checks fail by name.
+  const candFile = path.join(ROOT, ...SEARCH_FILE.split('/'));
+  const candSrc = existsSync(candFile) ? readFileSync(candFile, 'utf8') : null;
+  if (candSrc === null || !candSrc.includes(GATE_ANCHOR)) {
+    for (const n of CANDIDATE_HOOK_CHECK_NAMES) check(n, false, `no gate line in ${candFile}`);
+  } else {
+    const keepsProduct = (m) => m.includes(`console.error(\`${ABSTAIN_PREFIX} `) && m.includes('if (abstention) results.length = 0;')
+      && m.includes('namespaceDispositionForPath(NAMESPACE_REGISTRY, r.path)') && m.includes('requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT');
+    const f7 = f7Mutate(candSrc);
+    check(CANDIDATE_HOOK_CHECK_NAMES[0], !f7.includes(GATE_ANCHOR) && f7.includes("  const abstention = 'below-tau';") && F9_FILTERS.every((f) => f7.includes(f)) && keepsProduct(f7)
+      && f7.indexOf("const abstention = 'below-tau'") > f7.indexOf(F9_FILTERS[1]));
+    const f9a = f9AbstainMutate(candSrc);
+    check(CANDIDATE_HOOK_CHECK_NAMES[1], F9_FILTERS.every((f) => !f9a.includes(f)) && !f9a.includes(GATE_ANCHOR)
+      && f9a.includes(`process.env.${F9_FORCE_ABSTAIN_ENV} === '1' ? 'below-tau' : abstentionReason(scored)`) && keepsProduct(f9a));
+    check(CANDIDATE_HOOK_CHECK_NAMES[2], sha256(f7) !== sha256(candSrc) && sha256(f9a) !== sha256(candSrc) && sha256(f7) !== sha256(f9a));
+  }
+  check('8 the F9ABSTAIN env var is scrubbed from every invocation unless the runner sets it', SCRUBBED_ENV.includes(F9_FORCE_ABSTAIN_ENV));
   // E1-A: the indexer's own exclusion, from git like F9, failing by name if unavailable.
   const embedSrc = gitShowText(PRODUCT_TREE, BASELINE_COMMIT, EMBED_FILE);
   const e1a = (() => { try { return embedSrc === null ? null : e1aMutate(embedSrc); } catch { return null; } })();
@@ -1864,6 +1917,15 @@ async function selfCheckPolicy(check) {
   const refRows = [bp('C-01'), ...u];
   check('8 F9 assertions with a reference: identical BUILD/U -> GREEN, any change -> RED',
     allOk(mutatedRun, refRows) && !allOk([...mutatedRun.slice(0, 3), bp('C-01', { label: null, status: 'fail' }), ...u], refRows) && !allOk([...mutatedRun.slice(0, 4), { ...u[0], status: 'fail' }, u[1]], refRows));
+
+  // F9ABSTAIN assertions: green only on the arm's predicted observation.
+  const qa = (id, o = {}) => ({ ...q(id, 'DECLINED-BY-RETRIEVER', { forbiddenAbstention: 'honest' }), detail: `${NOT_DEMONSTRATED} [DECLINED-BY-RETRIEVER]: x`, ...o });
+  const armOk = (rows) => f9AbstainAssertions(rows).filter((x) => !x.notEvaluated).every((x) => x.ok);
+  const arm = [qa('X-01'), qa('X-02'), qa('X-03'), bp('C-01'), ...u];
+  check('8 F9ABSTAIN assertions: all three X DECLINED-BY-RETRIEVER FAIL after an honest abstention, control returned -> GREEN', armOk(arm));
+  check('8 F9ABSTAIN assertions: one X still RENDER-REFUSED (the forced abstention did not reach it) -> RED', !armOk([q('X-01', 'RENDER-REFUSED'), ...arm.slice(1)]));
+  check('8 F9ABSTAIN assertions: a SILENT zero-row forbidden run (no sidecar) -> RED', !armOk([qa('X-01', { proof: { ...qa('X-01').proof, forbiddenAbstention: 'none' } }), ...arm.slice(1)]));
+  check('8 F9ABSTAIN assertions: a forced abstention that also suppressed the control -> RED', !armOk([qa('X-01', { proof: { ...qa('X-01').proof, control: { returned: false } } }), ...arm.slice(1)]));
 }
 
 // ── self-check: review fixes (MED-1, 2, 4, 5, 6 and LOW-2, 4) ─────────────────
@@ -2550,10 +2612,9 @@ const SCENARIOS = {
     mutation: 'replace the abstention gate with one that returns zero rows unconditionally and still emits a valid bound sidecar (after index validation and both filters)',
     expectedRed: ['PC-01'], expectedRedClasses: ['positive'], expectPass: [], expectPassClasses: ['negative'],
     unrunnableClasses: [], runU: false, notApplicable: NA_U, needsGate: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f7Mutate),
-    caveat: 'F7 is NOT executable at the baseline (no abstention gate exists: UNRUNNABLE, naming that), and it is NOT executable at a candidate '
-      + 'either as the hook stands: the entry check requires an AIGENT_ABSTAIN emission in search-vault.js and f7Mutate refuses a source that contains one. '
-      + 'The hook and the observations it predicts are exercised only on synthetic process output by --self-check. Candidate-era F7 support is incomplete '
-      + 'and is owed, with a real sandbox witness, before F7 may be used to certify a candidate.',
+    caveat: 'F7 is NOT executable at the baseline (no abstention gate exists: UNRUNNABLE, naming that). At a candidate it rewrites the candidate\'s '
+      + 'own gate line to abstain unconditionally, so the product\'s own emission writes the bound sidecar; a source without that line exactly once is a harness error. '
+      + 'The packet\'s expected red is the positive class and PC-01; temporal cases also lose their rows under this mutation but are not part of the frozen expectation.',
   },
   F8: {
     mutation: `run the temporal class with AIGENT_SEARCH_NOW set to ${PRE_WINDOW_NOW}, one day before the earliest corpus window end`,
@@ -2566,7 +2627,17 @@ const SCENARIOS = {
     expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01'],
     unrunnableClasses: [], runU: true, mutates: [SEARCH_FILE], applyCode: (b) => mutateSandboxSearch(b, f9Mutate), assert: f9Assertions,
     note: 'asserted per case: no QUERY-stage case may read QUERY-WITHHELD; BUILD-stage and U-class results must stand. '
-      + 'Only the filter-removal arm is executed: the forced-abstention second arm is NOT executable here (no abstention gate), and synthetic label tests are not its execution.',
+      + 'This is the filter-removal arm; the forced-abstention second arm is the separate named run F9ABSTAIN.',
+  },
+  // PREREG-002 F9, second arm: the same filter deletion plus a gate forced to
+  // abstain, with a valid bound sidecar, on the X-class forbidden run only.
+  F9ABSTAIN: {
+    mutation: 'F9 (delete the two query-stage filter calls) AND force the candidate\'s abstention gate to abstain with a valid bound sidecar on the X-class forbidden run only (pristine leg and matched control run the gate as built)',
+    expectedRed: [], expectedRedClasses: [], expectPass: ['PC-01'],
+    unrunnableClasses: [], runU: true, needsGate: true, forceAbstainForbidden: true, mutates: [SEARCH_FILE],
+    applyCode: (b) => mutateSandboxSearch(b, f9AbstainMutate), assert: f9AbstainAssertions,
+    note: 'asserted per case: every QUERY-stage case reads DECLINED-BY-RETRIEVER, FAIL policy-withholding-not-demonstrated, its forbidden run an honest '
+      + 'abstention and its matched control returned; BUILD-stage and U-class results must stand, as in F9. NOT executable at the baseline (no gate).',
   },
   // E1-A, E1-B: PREREG-002-ERRATUM-001 section 5 instrument self-checks, named
   // mutation runs like F7-F9 (never an identity run, never a scored case).
@@ -2729,13 +2800,11 @@ function finalizeRun({ results, cases, spec, scenario, inversions, harnessErrors
 const exitCodeFor = (terminal) => (terminal === 'PASS' ? 0 : 1);
 
 // What this instrument can and cannot execute, stated in the packet and in the
-// self-check output (review of b73de78). The F7 entry check below requires an
-// AIGENT_ABSTAIN emission in search-vault.js; f7Mutate refuses a source that
-// contains one. Both are true at once, so F7 has no executable path today.
+// self-check output (review of b73de78).
 const CLAIM_LIMITS = [
-  'F7 is NOT executable at the baseline (no abstention gate exists), and it is NOT executable at a candidate either as the hook stands: its entry check requires an AIGENT_ABSTAIN emission in search-vault.js while f7Mutate refuses a source that contains one. Only synthetic-output checks exist for it.',
-  'The F9 forced-abstention second arm is NOT executable here: only the filter-removal arm runs. Synthetic label tests do not constitute that arm\'s execution.',
-  'Candidate-era section-7 mutation support is INCOMPLETE: the F7 hook and the F9 abstention arm are owed to the candidate that carries a gate, with real sandbox witnesses, before they may be used to certify it.',
+  'F7 is NOT executable at the baseline (no abstention gate exists: UNRUNNABLE). At a candidate it rewrites that candidate\'s gate line (`const abstention = abstentionReason(scored);`); a candidate whose search-vault.js does not carry that line exactly once is a harness error, never a silent unmutated run.',
+  'The F9 forced-abstention second arm is the named run F9ABSTAIN: NOT executable at the baseline; at a candidate it needs the same gate line. F9 itself stays the filter-removal arm.',
+  'A mutation run is a falsifier result only after the candidate it mutates is registered under PREREG-002 1.7; a run against an unregistered tree is refused, and development subsets are never results.',
 ];
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -2831,8 +2900,8 @@ if (argv.includes('--self-check')) {
   selfCheckWiring(check);
   selfCheckFinalizer(check);
   await selfCheckAccounting(check);
-  check('8 claims: F7 and the F9 abstention arm are stated as NOT executable here, and candidate-era mutation support as incomplete', CLAIM_LIMITS.length === 3 && /F7/.test(CLAIM_LIMITS[0]) && /NOT executable/.test(CLAIM_LIMITS[0]) && /F9/.test(CLAIM_LIMITS[1]) && /NOT executable/.test(CLAIM_LIMITS[1]) && /INCOMPLETE/.test(CLAIM_LIMITS[2]));
-  check('8 claims: the stated F7 conflict is real (f7Mutate refuses a source carrying the emission the entry check demands)', (() => { try { f7Mutate(`x ${ABSTAIN_PREFIX}`); return false; } catch (e) { return /already emits/.test(e.message); } })());
+  check('8 claims: F7 and F9ABSTAIN are stated as NOT executable at the baseline, gate-line bound at a candidate, and results only after registration', CLAIM_LIMITS.length === 3 && /F7/.test(CLAIM_LIMITS[0]) && /NOT executable/.test(CLAIM_LIMITS[0]) && CLAIM_LIMITS[0].includes(GATE_ANCHOR.trim()) && /F9ABSTAIN/.test(CLAIM_LIMITS[1]) && /NOT executable/.test(CLAIM_LIMITS[1]) && /registered/.test(CLAIM_LIMITS[2]));
+  check('8 claims: the stated anchor rule is real (a source without the gate line throws)', (() => { try { f7Mutate(`x ${ABSTAIN_PREFIX}`); return false; } catch (e) { return /anchor/.test(e.message); } })());
   const failed = checks.filter((c) => !c.ok);
   for (const c of checks) console.log(`${c.ok ? 'OK  ' : 'FAIL'} ${c.name}${c.detail ? ` -- ${c.detail}` : ''}`);
   console.log('NOT EXECUTABLE AT THIS IDENTITY, STATED PLAINLY:');
@@ -2932,10 +3001,10 @@ function declareUnrunnable(ids, why, requires) {
 if (harnessErrors.length === 0 && !identity.ok) {
   declareUnrunnable(cases.map((c) => c.id), `PREREG-002 refuses to score: ${identity.why}`, identity.requires);
 } else if (harnessErrors.length === 0 && SPEC.needsGate && !readFileSync(path.join(SEM, 'search-vault.js'), 'utf8').includes(ABSTAIN_PREFIX)) {
-  // F7's entry check demands an emission site that f7Mutate then refuses (CLAIM_LIMITS): F7 never reaches a mutated run.
+  // F7 / F9ABSTAIN mutate an abstention gate; the baseline has none. (A candidate whose gate line the hook cannot find is a harness error at applyCode.)
   declareUnrunnable(cases.map((c) => c.id),
     `${SCENARIO} mutates an abstention gate and this product's search-vault.js has no ${ABSTAIN_PREFIX} emission site, so there is no gate to replace`,
-    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity; the F7 hook is also not executable against a candidate as written (CLAIM_LIMITS)`);
+    `PREREG-002 ${SCENARIO} — abstention gate absent at this identity`);
 } else if (harnessErrors.length === 0 && blockingGaps.length > 0) {
   declareUnrunnable(cases.map((c) => c.id),
     blockingGaps.map((g) => `4.3 item ${g.item}: ${g.why}`).join('; '),
@@ -3209,7 +3278,7 @@ const packet = {
   // No `undeclared_unrunnable`: PREREG-001 5.1 means an UNRUNNABLE not preregistered on its case, but this
   // runner writes every UNRUNNABLE's reason at run time, so such a field is always empty and says nothing.
   // Any UNRUNNABLE still blocks PASS (unrunnable_cases in terminal_basis).
-  f9_reference_mode: SCENARIO === 'F9' ? (REFERENCE_FILE ? (referenceRows ? (REFERENCE_DEV ? 'development' : 'full') : 'refused') : 'none') : null,
+  f9_reference_mode: SCENARIO === 'F9' || SCENARIO === 'F9ABSTAIN' ? (REFERENCE_FILE ? (referenceRows ? (REFERENCE_DEV ? 'development' : 'full') : 'refused') : 'none') : null,
   cases: results,
 };
 
