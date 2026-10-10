@@ -1,15 +1,15 @@
 {
   "title": "aigent-OS, Auto-Refresh: clear the window, lose nothing",
-  "ariaLabel": "A managed Claude Code session reaches 60% context; Managed Auto-Refresh requests and verifies a capsule, submits /clear, rebinds the fresh session, and resumes the work at 10% context without operator input.",
+  "ariaLabel": "A managed Claude Code session reaches 80% context; Managed Auto-Refresh requests and verifies a capsule, submits /clear, rebinds the fresh session, and resumes the work at 10% context without operator input.",
   "turns": [
     {
       "speaker": "sys",
-      "lines": ["[context 60%: managed Auto-Refresh requests a capsule]"]
+      "lines": ["[context 80%: managed Auto-Refresh requests a capsule]"]
     },
     {
       "speaker": "ai",
       "lines": [
-        "Context at 60%. Checkpointing myself before the window fills:",
+        "Context at 80%. Checkpointing myself before the window fills:",
         "nothing to save by hand.",
         "",
         "Wrote vault/memory/capsules/2026-04-25-onboarding-v2.md",
