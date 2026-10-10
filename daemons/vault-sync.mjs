@@ -4,6 +4,8 @@
 // Rolling Stop capsules stay local and cheap. A capsule-cycle close calls this
 // helper after its memory writes land: stage only the installed memory tree,
 // create a "vault sync:" commit, push it, and verify the remote received HEAD.
+// Every effective push URL must first be approved in this repository's local
+// aigent.vaultSyncPushUrl config. A clone origin alone is never approval.
 //
 // The close lifecycle is never gated on Git. Every failure is returned rather
 // than thrown; the CLI is silent and always exits 0. A missing remote is an
@@ -410,6 +412,20 @@ function selectRemote(root, remotes, branch) {
   };
 }
 
+// Native Git resolves pushurl and URL rewrites; approval is of those exact
+// destinations, never a remote name or an inherited global/include setting.
+function destinationApprovalError(root, selected) {
+  const grant = git(root, ['config', '--local', '--no-includes', '--get-all', 'aigent.vaultSyncPushUrl']);
+  if (grant.code !== 0 || !grant.out) {
+    return 'vault sync destination approval missing or unreadable; configure local aigent.vaultSyncPushUrl after reviewing the destination';
+  }
+  const approved = new Set(grant.out.split(/\r?\n/).filter(Boolean));
+  if (!selected.pushUrls.length || selected.pushUrls.some((url) => !approved.has(url))) {
+    return 'vault sync destination not approved locally; every effective push URL must match aigent.vaultSyncPushUrl';
+  }
+  return null;
+}
+
 function remoteHead(root, remote, remoteBranch) {
   const reference = `refs/heads/${remoteBranch}`;
   const found = git(root, ['ls-remote', '--heads', '--', remote, reference]);
@@ -484,6 +500,8 @@ export function syncInstalledVault(start, { reason = 'capsule-cycle close' } = {
     if (branchResult.code !== 0 || !branchResult.out) return fail('detached HEAD; vault sync refused');
     const selected = selectRemote(root, remotes, branchResult.out);
     if (selected.error) return fail(selected.error);
+    const approvalError = destinationApprovalError(root, selected);
+    if (approvalError) return fail(approvalError);
     // Never commit local daemon/runtime state, even on installations whose
     // pre-existing .gitignore lacks the current managed rules.
     const pathspecFor = (scope) => [
@@ -530,38 +548,34 @@ export function syncInstalledVault(start, { reason = 'capsule-cycle close' } = {
 
     const local = git(root, ['rev-parse', 'HEAD']);
     if (local.code !== 0) return fail(`git HEAD failed: ${local.err}`);
-    if (selected.hasUpstream && !result.committed) {
-      const ahead = git(root, ['rev-list', '--count', `@{u}..${local.out}`]);
-      if (ahead.code === 0 && Number(ahead.out) === 0) {
-        result.ok = true;
-        result.pushed = true;
-        result.detail = 'clean; already in sync';
-        return result;
-      }
+    // Recheck permission and routing after local writes, before any network
+    // operation. Revocation keeps the local commit; it never authorizes a push.
+    // ponytail: Git config is owner-controlled, not atomic against another
+    // config writer; serialize reconfiguration before enabling automated sync.
+    const current = selectRemote(root, remotes, branchResult.out);
+    if (current.error) return fail(current.error);
+    const currentApprovalError = destinationApprovalError(root, current);
+    if (currentApprovalError) return fail(currentApprovalError);
+    if (JSON.stringify(current) !== JSON.stringify(selected)) {
+      return fail('vault sync destination changed during sync; review routing before retrying');
     }
 
     const pushed = git(root, [
-      'push', '--no-verify', '--', selected.remote,
+      'push', '--no-verify', '--no-follow-tags', '--recurse-submodules=no', '--', selected.remote,
       `${local.out}:refs/heads/${selected.remoteBranch}`,
     ]);
     if (pushed.code !== 0) return fail(`git push failed: ${pushed.err || pushed.out}`);
 
-    let verified = false;
-    let verifyDetail = '';
-    if (selected.hasUpstream) {
-      const after = git(root, ['rev-list', '--count', `@{u}..${local.out}`]);
-      verified = after.code === 0 && Number(after.out) === 0;
-      verifyDetail = after.err || `${after.out || '?'} commit(s) still ahead`;
-    } else {
-      const checks = selected.pushUrls.map(
-        (pushUrl) => remoteHead(root, pushUrl, selected.remoteBranch),
-      );
-      verified = checks.every((check) => check.ok && check.sha === local.out);
-      verifyDetail = checks
-        .filter((check) => !check.ok || check.sha !== local.out)
-        .map((check) => check.detail || `${check.sha || 'no remote SHA'} != ${local.out}`)
-        .join('; ');
-    }
+    // A local upstream tracking ref is not proof that the approved PUSH
+    // destination (which may differ from the fetch URL) received this commit.
+    const checks = selected.pushUrls.map(
+      (pushUrl) => remoteHead(root, pushUrl, selected.remoteBranch),
+    );
+    const verified = checks.every((check) => check.ok && check.sha === local.out);
+    const verifyDetail = checks
+      .filter((check) => !check.ok || check.sha !== local.out)
+      .map((check) => check.detail || `${check.sha || 'no remote SHA'} != ${local.out}`)
+      .join('; ');
     if (verified) {
       result.ok = true;
       result.pushed = true;

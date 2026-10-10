@@ -45,6 +45,7 @@ add_remote() {
   local work="$1" remote="$2"
   git init -q --bare "$remote"
   git -C "$work" remote add origin "$remote"
+  git -C "$work" config --local --add aigent.vaultSyncPushUrl "$remote"
   git -C "$work" push -q -u origin main
 }
 
@@ -142,6 +143,7 @@ make_vault "$FAIL_WORK"
 add_remote "$FAIL_WORK" "$FAIL_BARE"
 FAIL_REMOTE_BEFORE="$(git --git-dir="$FAIL_BARE" rev-parse refs/heads/main)"
 git -C "$FAIL_WORK" remote set-url --push origin "$WORK/missing/push-failure.git"
+git -C "$FAIL_WORK" config --local --add aigent.vaultSyncPushUrl "$WORK/missing/push-failure.git"
 printf 'retry me\n' > "$FAIL_WORK/vault/memory/capsules/push-failure.md"
 FAIL_OUT="$(run_cycle "$FAIL_WORK" 'push failure' 2>&1)"
 [[ -z "$FAIL_OUT" ]] || fail "push failure escaped to lifecycle output: $FAIL_OUT"
