@@ -196,7 +196,11 @@ writeFileSync(box.embeddings, indexText(NOTES));
 // ── stderr stays quiet when every date is readable ───────────────────────────
 {
   const clean = makeSandbox('clean');
-  writeFileSync(clean.embeddings, indexText(NOTES.filter(([p]) => p !== MALFORMED)));
+  const readable = NOTES.filter(([p]) => p !== MALFORMED);
+  // Every indexed row gets its source file: search-vault names a missing source
+  // on stderr at load, and this check is about a healthy, readable corpus.
+  for (const [p] of readable) writeFileSync(path.join(clean.vault, p), body(path.basename(p, '.md'), null));
+  writeFileSync(clean.embeddings, indexText(readable));
   const res = search(clean, ['what is the rule']);
   check('readable corpus: nothing is written to stderr', res.stderr === '', res.stderr.slice(0, 300));
   check('readable corpus: the ENDED window is still demoted out of the top 5', !res.paths.includes(EXPIRED));
