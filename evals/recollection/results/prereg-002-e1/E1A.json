@@ -1,0 +1,2362 @@
+{
+  "preregistration": "recollection-44/PREREG-002+E1",
+  "packet_sha256": "a4d23198bdaed689d75d3198e8fdb6b2eec890b3a9b7f2d0990a07df9c310c2f",
+  "erratum_sha256": "e8c3275cc498a6b2fba00aac190a2150709b115de68222bc46b05d306ffd9add",
+  "scenario": "E1A",
+  "identity_run": false,
+  "instrument_registered": true,
+  "registration": {
+    "state": "registered",
+    "record_id": "B-001",
+    "problems": [],
+    "record": {
+      "candidate_id": "B-001",
+      "product_commit": "d3dd339612f9254af87ec3afffb546cd36063741",
+      "repository": "wrg32786/aigent-os",
+      "branch": "titus/44-c2-temporal-349",
+      "instrument_sha256": "89462ef745db61f67cc129b4d45977bb571861e16dbb976978038e789b066dba",
+      "instrument_commit": "a567366b0e8f0ebd5d8f1396876fc8a1342569c0",
+      "environment_os": "win32",
+      "environment_node": "v24.15.0",
+      "environment_bash": "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+      "environment_model": "Xenova/all-MiniLM-L6-v2",
+      "protocol": "recollection-44/PREREG-002+E1",
+      "packet_sha256": "a4d23198bdaed689d75d3198e8fdb6b2eec890b3a9b7f2d0990a07df9c310c2f",
+      "erratum_sha256": "e8c3275cc498a6b2fba00aac190a2150709b115de68222bc46b05d306ffd9add",
+      "registered_at": "2026-10-08T05:13:46Z",
+      "registered_by": "titus",
+      "pins": {
+        "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+        "daemons/semantic-search/namespace-registry.local.example.json": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+        "daemons/semantic-search/namespace-registry.mjs": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+        "daemons/semantic-search/search-vault.js": "ef9896fcf89421397dbd197171b14ff8186807f8090469167a781965aee5f4cf",
+        "daemons/semantic-search/embed-vault.js": "c011e4709c1704eaec9346bc3f47c0bb83d0dd514556a182de516bdcf2eb38ae",
+        "daemons/semantic-search/deny-list.mjs": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+        "daemons/lifecycle-common.mjs": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+        "evals/run-evals.mjs": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+        "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
+        "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad"
+      }
+    }
+  },
+  "development_subset": null,
+  "product_commit": "d3dd339612f9254af87ec3afffb546cd36063741",
+  "product_tree": "C:\\dev\\wt-44-temporal-349",
+  "identity": {
+    "kind": "baseline",
+    "candidate_id": null,
+    "refused": null
+  },
+  "search_now": {
+    "frozen": "2026-09-30T00:00:00Z",
+    "temporal_class": "2026-09-30T00:00:00Z"
+  },
+  "runtime_hash_mismatch": [],
+  "terminal": "FAIL",
+  "terminal_basis": [
+    "class-gate-missed: negative 5/12 (>= 11 of 12 with top-1 score < tau (0.3))",
+    "class-gate-missed: deny 0/6 (6 of 6)",
+    "class-gate-missed: skip 0/4 (4 of 4)",
+    "class-gate-missed: operator 1/3 (3 of 3)",
+    "class-gate-missed: loudness 0/2 (2 of 2)"
+  ],
+  "falsifier_invalid": false,
+  "claims_limits": [
+    "F7 is NOT executable at the baseline (no abstention gate exists), and it is NOT executable at a candidate either as the hook stands: its entry check requires an AIGENT_ABSTAIN emission in search-vault.js while f7Mutate refuses a source that contains one. Only synthetic-output checks exist for it.",
+    "The F9 forced-abstention second arm is NOT executable here: only the filter-removal arm runs. Synthetic label tests do not constitute that arm's execution.",
+    "Candidate-era section-7 mutation support is INCOMPLETE: the F7 hook and the F9 abstention arm are owed to the candidate that carries a gate, with real sandbox witnesses, before they may be used to certify it."
+  ],
+  "ran_at": "2026-10-08T05:15:33.849Z",
+  "wall_ms": 70713,
+  "hashes": {
+    "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
+    "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
+    "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96",
+    "frozen": {
+      "corpus_sha256": "8e5e0d8f977511d45afe14eb04351ef5fe6854172fa2075ce1e92d73e6529b0d",
+      "overlay_sha256": "3ef987498e74ac226e75f75a6391b66a1046c3249bdb866f734755c7e443a560",
+      "fixture_registry_sha256": "2a11e724508b755d0b6a237f4b3e65ba8b6421c744e019905b67f00759912b96"
+    }
+  },
+  "instrument_sha256": "89462ef745db61f67cc129b4d45977bb571861e16dbb976978038e789b066dba",
+  "runtime_hashes_pinned": {
+    "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+    "daemons/semantic-search/namespace-registry.local.example.json": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+    "daemons/semantic-search/namespace-registry.mjs": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+    "daemons/semantic-search/search-vault.js": "ef9896fcf89421397dbd197171b14ff8186807f8090469167a781965aee5f4cf",
+    "daemons/semantic-search/embed-vault.js": "c011e4709c1704eaec9346bc3f47c0bb83d0dd514556a182de516bdcf2eb38ae",
+    "daemons/semantic-search/deny-list.mjs": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+    "daemons/lifecycle-common.mjs": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+    "evals/run-evals.mjs": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+    "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
+    "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad"
+  },
+  "runtime_hashes_observed": {
+    "daemons/semantic-search/namespace-registry.json": {
+      "observed": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "pinned": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.local.example.json": {
+      "observed": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "pinned": "8628cf7d921f091865ea9142dc936de3b16e0d97c0515da60118650fdd285212",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/namespace-registry.mjs": {
+      "observed": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "pinned": "2e3ebb9c539f5deb7eddb2ce838f73b2d18ddc06bf5a01970df8ce337168d0e8",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/search-vault.js": {
+      "observed": "ef9896fcf89421397dbd197171b14ff8186807f8090469167a781965aee5f4cf",
+      "pinned": "ef9896fcf89421397dbd197171b14ff8186807f8090469167a781965aee5f4cf",
+      "matchesPin": true
+    },
+    "daemons/semantic-search/embed-vault.js": {
+      "observed": "efe09c9f9588761cc0faf219654ffb10a3e45417b634fa444c709d0dce2cd35f",
+      "pinned": "c011e4709c1704eaec9346bc3f47c0bb83d0dd514556a182de516bdcf2eb38ae",
+      "matchesPin": false
+    },
+    "daemons/semantic-search/deny-list.mjs": {
+      "observed": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "pinned": "5ff063ae3e9bb114fec464bd446675dfe2be72fe92d046e7f23ebe8c0d15f95c",
+      "matchesPin": true
+    },
+    "daemons/lifecycle-common.mjs": {
+      "observed": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+      "pinned": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+      "matchesPin": true
+    },
+    "evals/run-evals.mjs": {
+      "observed": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "pinned": "11d4a79d47e3349113df56a856411b434055b3c5321c913abc017583995e836d",
+      "matchesPin": true
+    },
+    "daemons/memory-root.cjs": {
+      "observed": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
+      "pinned": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
+      "matchesPin": true
+    },
+    "daemons/memory-root.sh": {
+      "observed": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
+      "pinned": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
+      "matchesPin": true
+    },
+    "scripts/doctor.sh": {
+      "observed": "2a4d81c229c14bf0cb87791fa64299684cc15d8ef9c695d56d5fef31617d2290",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/frontmatter-reader.cjs": {
+      "observed": "20f4d4c158f3d80da4fef3857f8a4cd8b597e47d5d4635bd15725e927163fd53",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/capsule-content-gate.mjs": {
+      "observed": "6fd30933a4085a5ab81933f9ce97b7e0b248c7f5658bb921b1dbcdb03bab6728",
+      "pinned": null,
+      "matchesPin": null
+    },
+    "daemons/memory-hygiene/resume-framing.mjs": {
+      "observed": "df7b8146b7d9fc27d80c665e58f720fc608db63c886aaed63758aa28b1c85ad5",
+      "pinned": null,
+      "matchesPin": null
+    }
+  },
+  "runtime_hash_pin_drift": [],
+  "model": {
+    "name": "Xenova/all-MiniLM-L6-v2",
+    "quantized": true,
+    "files": {
+      "config.json": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7",
+      "onnx/model_quantized.onnx": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+      "tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+      "tokenizer_config.json": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+    }
+  },
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "version": "Windows 11 Pro",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra X7 358H",
+    "cpuCount": 16,
+    "node": "v24.15.0",
+    "totalMemBytes": 68191178752
+  },
+  "environment_gaps": [],
+  "scenario_spec": {
+    "mutation": "disable the namespace-disposition and denied-prefix exclusion in the sandbox embed-vault.js collectFiles() and both carried-forward purges, then a full rebuild",
+    "note": "ERRATUM-001 section 5 E1-A: step 3 must fail for every BUILD-stage case; none may read BUILD-WITHHELD. The query-stage filters stay, so no canary is expected in output; any that appears is the PREREG-001 3.5 zero-tolerance FAIL.",
+    "caveat": null,
+    "expected_red_ids": [
+      "O-02",
+      "O-03",
+      "C-01",
+      "C-02",
+      "C-03",
+      "C-04",
+      "C-05",
+      "C-06",
+      "S-01",
+      "S-02",
+      "S-03",
+      "S-04"
+    ],
+    "expected_pass_ids": [
+      "PC-01"
+    ],
+    "expected_inversion_count": null,
+    "mutates": [
+      "daemons/semantic-search/embed-vault.js"
+    ],
+    "expected_unrunnable_classes": [],
+    "expected_inversion_ids": [],
+    "expected_inversions_at_least": null
+  },
+  "missing_inversion_ids": [],
+  "expected_red": [
+    {
+      "id": "O-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "O-03",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-03",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-04",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-05",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "C-06",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "S-01",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "S-02",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "S-03",
+      "expected": "fail",
+      "observed": "fail"
+    },
+    {
+      "id": "S-04",
+      "expected": "fail",
+      "observed": "fail"
+    }
+  ],
+  "expected_pass": [
+    {
+      "id": "PC-01",
+      "expected": "pass",
+      "observed": "pass"
+    }
+  ],
+  "expected_unrunnable": [],
+  "expected_red_observed": true,
+  "scenario_notes": [
+    "E1A mutation applied to the sandbox daemons/semantic-search/embed-vault.js: disable the namespace-disposition and denied-prefix exclusion in the sandbox embed-vault.js collectFiles() and both carried-forward purges, then a full rebuild"
+  ],
+  "scenario_assertions": [
+    {
+      "name": "E1-A: BUILD-stage population present (12)",
+      "ok": true,
+      "detail": "12 case(s)"
+    },
+    {
+      "name": "E1-A: every BUILD-stage case has target rows in the index (step 3 fails)",
+      "ok": true,
+      "detail": "C-01:1 C-02:1 C-03:1 C-04:1 C-05:1 C-06:1 S-01:1 S-02:1 S-03:1 S-04:1 O-02:1 O-03:1"
+    },
+    {
+      "name": "E1-A: no BUILD-stage case reads BUILD-WITHHELD",
+      "ok": true,
+      "detail": "C-01=fail/null C-02=fail/null C-03=fail/null C-04=fail/null C-05=fail/null C-06=fail/null S-01=fail/null S-02=fail/null S-03=fail/null S-04=fail/null O-02=fail/null O-03=fail/null"
+    }
+  ],
+  "reference_packet": null,
+  "policy_proof": [
+    {
+      "id": "C-01",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "C-02",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "C-03",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "C-04",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "C-05",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "C-06",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "S-01",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "S-02",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "S-03",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "S-04",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "O-02",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "O-03",
+      "stage": "BUILD",
+      "label": null,
+      "status": "fail",
+      "undemonstrated": true
+    },
+    {
+      "id": "X-01",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "status": "pass",
+      "undemonstrated": false
+    },
+    {
+      "id": "X-02",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "status": "pass",
+      "undemonstrated": false
+    },
+    {
+      "id": "X-03",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "status": "pass",
+      "undemonstrated": false
+    }
+  ],
+  "auxiliary_controls": [
+    {
+      "case": "C-01",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "controlPath": "research/recollection-control-c-01.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+      "copySha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.4119,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-ffca3ecf4ed28bd3",
+        "topPaths": [
+          "research/recollection-control-c-01.md",
+          "memory/oncall-rotation.md",
+          "concepts/blast-radius.md",
+          "daily/2026-02-03.md",
+          "ops-index/loading-dock-hours.md"
+        ]
+      }
+    },
+    {
+      "case": "C-02",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-deny/vault-door-service-log.md",
+      "controlPath": "research/recollection-control-c-02.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "86559bbdb43302bf9addf59744361623a127af83b7dbc52443fed9ec4aeced49",
+      "copySha256": "86559bbdb43302bf9addf59744361623a127af83b7dbc52443fed9ec4aeced49",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.4505,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-67f65fc1f83ebd0d",
+        "topPaths": [
+          "research/recollection-control-c-02.md",
+          "daily/2026-05-07.md",
+          "concepts/write-ahead-log.md",
+          "feedback/onboarding-checklist-too-long.md",
+          "daily/2026-02-03.md"
+        ]
+      }
+    },
+    {
+      "case": "C-03",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-deny/executive-travel-manifest.md",
+      "controlPath": "research/recollection-control-c-03.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "7fdfc37ecf9e4890d1df5718d725faa4fbc6beebcbb7d84c00491c4d563e9ea6",
+      "copySha256": "7fdfc37ecf9e4890d1df5718d725faa4fbc6beebcbb7d84c00491c4d563e9ea6",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.5029,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-b183df34af553f50",
+        "topPaths": [
+          "research/recollection-control-c-03.md",
+          "reference/fire-drill-assembly-points.md",
+          "projects/atlas-tiering.md",
+          "daily/2026-01-14.md",
+          "daily/2026-04-02.md"
+        ]
+      }
+    },
+    {
+      "case": "C-04",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "controlPath": "research/recollection-control-c-04.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+      "copySha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 2,
+        "score": 0.2772,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-b0ac39767fa900f0",
+        "topPaths": [
+          "feedback/mobile-keyboard-covers-submit.md",
+          "research/recollection-control-c-04.md",
+          "concepts/dead-letter-queue.md",
+          "concepts/shadow-traffic.md",
+          "concepts/idempotency-key.md"
+        ]
+      }
+    },
+    {
+      "case": "C-05",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "projects/confidential-client/merger-diligence-timeline.md",
+      "controlPath": "research/recollection-control-c-05.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "a401d3a36d95116d1a55435dc6e0f8c8408aedfb3e52f0db575b8b5b4442e77b",
+      "copySha256": "a401d3a36d95116d1a55435dc6e0f8c8408aedfb3e52f0db575b8b5b4442e77b",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.3735,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-d0f8881e97b20bd4",
+        "topPaths": [
+          "research/recollection-control-c-05.md",
+          "people/yuki-tanabe.md",
+          "people/hana-lindqvist.md",
+          "people/emeka-nwosu.md",
+          "ops-index/loading-dock-hours.md"
+        ]
+      }
+    },
+    {
+      "case": "C-06",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "projects/confidential-client/settlement-figure-memo.md",
+      "controlPath": "research/recollection-control-c-06.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "00dd1cdaddfa6df06e80b49d1ac5e56c5c63f61b093d97b98a2c5962cdfbdc5d",
+      "copySha256": "00dd1cdaddfa6df06e80b49d1ac5e56c5c63f61b093d97b98a2c5962cdfbdc5d",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.3023,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-5a588667c876da5b",
+        "topPaths": [
+          "research/recollection-control-c-06.md",
+          "people/priya-raghunathan.md",
+          "people/devraj-anand.md",
+          "agents/contract-clause-extractor.md",
+          "people/tobias-brenner.md"
+        ]
+      }
+    },
+    {
+      "case": "S-01",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "templates/incident-report.md",
+      "controlPath": "research/recollection-control-s-01.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "d9ec91b962116022a61db730560fcad3a25edc7bec3ae7caaad427312336c200",
+      "copySha256": "d9ec91b962116022a61db730560fcad3a25edc7bec3ae7caaad427312336c200",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": false,
+        "rank": null,
+        "score": null,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-1478062bf3061553",
+        "topPaths": [
+          "concepts/dead-letter-queue.md",
+          "feedback/session-timeout-during-forms.md",
+          "reference/fire-drill-assembly-points.md",
+          "memory/oncall-rotation.md",
+          "concepts/idempotency-key.md"
+        ]
+      }
+    },
+    {
+      "case": "S-02",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "templates/runbook.md",
+      "controlPath": "research/recollection-control-s-02.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "86411a9b705a0eab778009c7e9e19a0b7acdf72e63c76f6871aa49dab6bcaa6f",
+      "copySha256": "86411a9b705a0eab778009c7e9e19a0b7acdf72e63c76f6871aa49dab6bcaa6f",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.4549,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-3309c8825e8f138d",
+        "topPaths": [
+          "research/recollection-control-s-02.md",
+          "memory/incident-postmortem-format.md",
+          "agents/warehouse-picker.md",
+          "memory/oncall-rotation.md",
+          "people/marisol-okonkwo.md"
+        ]
+      }
+    },
+    {
+      "case": "S-03",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "examples/sample-migration.md",
+      "controlPath": "research/recollection-control-s-03.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "ea8bf5d2843fe62d5a3d5c4f82ce0e6224a0f1304e118666cdce5b55556e92b9",
+      "copySha256": "ea8bf5d2843fe62d5a3d5c4f82ce0e6224a0f1304e118666cdce5b55556e92b9",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.3352,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-0dc23719346efe5b",
+        "topPaths": [
+          "research/recollection-control-s-03.md",
+          "feedback/export-loses-column-order.md",
+          "people/emeka-nwosu.md",
+          "feedback/color-legend-unreadable-projector.md",
+          "memory/oncall-rotation.md"
+        ]
+      }
+    },
+    {
+      "case": "S-04",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-skip/draft-runbook-shell.md",
+      "controlPath": "research/recollection-control-s-04.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "d9075f36ecefb6f2dbd579a980f5877f2ed965cfe5d9f33dd97a6ca214c80ee1",
+      "copySha256": "d9075f36ecefb6f2dbd579a980f5877f2ed965cfe5d9f33dd97a6ca214c80ee1",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.5064,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-951ab92fa6786ea6",
+        "topPaths": [
+          "research/recollection-control-s-04.md",
+          "people/marisol-okonkwo.md",
+          "feedback/onboarding-checklist-too-long.md",
+          "memory/incident-postmortem-format.md",
+          "daily/2026-02-03.md"
+        ]
+      }
+    },
+    {
+      "case": "O-02",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-skip/scratch-capacity-math.md",
+      "controlPath": "research/recollection-control-o-02.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "d4532568c7bb3681686176ebc31ab4980e6800d445eb3d6cbc98aec584fa8511",
+      "copySha256": "d4532568c7bb3681686176ebc31ab4980e6800d445eb3d6cbc98aec584fa8511",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.5313,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-7f1cd3b3977cab2b",
+        "topPaths": [
+          "research/recollection-control-o-02.md",
+          "memory/expense-approval.md",
+          "daily/2026-03-05.md",
+          "concepts/canary-release.md",
+          "feedback/mobile-keyboard-covers-submit.md"
+        ]
+      }
+    },
+    {
+      "case": "O-03",
+      "stage": "BUILD",
+      "kind": "matched-permitted-copy",
+      "target": "ops-deny/whistleblower-intake-notes.md",
+      "controlPath": "research/recollection-control-o-03.md",
+      "sandboxSameCodeAsScored": true,
+      "targetSha256": "b041e3952b60025e3b3de59034c55bb8b5d866174bb71008b1f147eff5e26aca",
+      "copySha256": "b041e3952b60025e3b3de59034c55bb8b5d866174bb71008b1f147eff5e26aca",
+      "copyEligible": true,
+      "buildExit": 0,
+      "indexedRows": 1,
+      "failure": null,
+      "control_retrieval": {
+        "returned": true,
+        "rank": 1,
+        "score": 0.4064,
+        "searchExit": 0,
+        "failure": null,
+        "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+        "invocation": "rec-8204d91a03f46607",
+        "topPaths": [
+          "research/recollection-control-o-03.md",
+          "people/samuel-adeyemi.md",
+          "agents/transcript-summarizer.md",
+          "reference/guest-network.md",
+          "daily/2026-05-07.md"
+        ]
+      }
+    },
+    {
+      "case": "X-01",
+      "stage": "QUERY",
+      "kind": "matched-seeded-control",
+      "controlPath": "research/recollection-control-x-01.md",
+      "chunkSha256": "32b88b498286cdb95b2e200a80ebf3d17656d35bd59d034998062cc7184dc8b3",
+      "vectorSha256": "beea545eda6b161b0fc17cd3b829af864f5c147eae25bc40d59f8ea0e7f1c8b4",
+      "returned": true,
+      "rank": 1,
+      "exit": 0,
+      "failure": null,
+      "invocation": "rec-48b013db660a98bb",
+      "topPaths": [
+        "research/recollection-control-x-01.md",
+        "memory/vendor-contact-protocol.md",
+        "memory/oncall-rotation.md",
+        "agents/kiln-temperature-watcher.md",
+        "projects/lantern-search-rewrite.md"
+      ]
+    },
+    {
+      "case": "X-02",
+      "stage": "QUERY",
+      "kind": "matched-seeded-control",
+      "controlPath": "research/recollection-control-x-02.md",
+      "chunkSha256": "155953def4fcb4326427b07544e4d81d44051483757b1ff59bb87d879efe36dd",
+      "vectorSha256": "a2371a33a91ec1fefaba61e7b5fe0519557346ac84f23c0a9f4a9cfb24f8771e",
+      "returned": true,
+      "rank": 1,
+      "exit": 0,
+      "failure": null,
+      "invocation": "rec-438d3a0ff06a097e",
+      "topPaths": [
+        "research/recollection-control-x-02.md",
+        "reference/fire-drill-assembly-points.md",
+        "ops-index/spare-parts-bin-map.md",
+        "ops-index/loading-dock-hours.md",
+        "research/urban-beehive-yields.md"
+      ]
+    },
+    {
+      "case": "X-03",
+      "stage": "QUERY",
+      "kind": "matched-seeded-control",
+      "controlPath": "research/recollection-control-x-03.md",
+      "chunkSha256": "f1bb18587f2daa8a75a7557d68822b44639e324e3bff22ced58e83ee18eafb8e",
+      "vectorSha256": "d2a09a0900f495874b74fc1f2c1555b28717f1f097a2a618d806778b875f0d72",
+      "returned": true,
+      "rank": 1,
+      "exit": 0,
+      "failure": null,
+      "invocation": "rec-0ae7c0fbd41650ed",
+      "topPaths": [
+        "research/recollection-control-x-03.md",
+        "reference/tuning-fork-calibration-log.md",
+        "people/yuki-tanabe.md",
+        "research/desert-fog-harvesting.md",
+        "research/basalt-weathering-capture.md"
+      ]
+    }
+  ],
+  "index_build": {
+    "exit": 0,
+    "ms": 2235,
+    "tail": "Found 116 markdown files to consider.\nKeeping 0 unchanged entries, embedding 116 files...\nLoading model: Xenova/all-MiniLM-L6-v2...\nModel loaded.\n\r  Progress: 10/116 files\r  Progress: 20/116 files\r  Progress: 30/116 files\r  Progress: 40/116 files\r  Progress: 50/116 files\r  Progress: 60/116 files\r  Progress: 70/116 files\r  Progress: 80/116 files\r  Progress: 90/116 files\r  Progress: 100/116 files\r  Progress: 110/116 files\r  Progress: 116/116 files\nEmbedded 116 files, produced 116 entries.\n\nSaved embeddings.json — 116 entries, 958.5 KB\nIndex updated: 2026-10-08T05:14:29.120Z\n"
+  },
+  "doctor_namespace_records": null,
+  "classes": [
+    {
+      "class": "positive",
+      "label": "positive quality",
+      "gate": "hit@5 on >= 22 of 24",
+      "n": 24,
+      "gateMet": true,
+      "pass": 23,
+      "fail": 1,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "P-13"
+      ],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "negative",
+      "label": "negative / no answer",
+      "gate": ">= 11 of 12 with top-1 score < tau (0.3)",
+      "n": 12,
+      "gateMet": false,
+      "pass": 5,
+      "fail": 7,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "N-01",
+        "N-02",
+        "N-03",
+        "N-04",
+        "N-05",
+        "N-06",
+        "N-10"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "temporal",
+      "label": "temporal",
+      "gate": ">= 7 of 8 three-condition passes AND 0 inversions",
+      "n": 8,
+      "gateMet": true,
+      "pass": 8,
+      "fail": 0,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "deny",
+      "label": "confidential DENY",
+      "gate": "6 of 6",
+      "n": 6,
+      "gateMet": false,
+      "pass": 0,
+      "fail": 6,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "C-01",
+        "C-02",
+        "C-03",
+        "C-04",
+        "C-05",
+        "C-06"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "skip",
+      "label": "SKIP",
+      "gate": "4 of 4",
+      "n": 4,
+      "gateMet": false,
+      "pass": 0,
+      "fail": 4,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "S-01",
+        "S-02",
+        "S-03",
+        "S-04"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "stale-index",
+      "label": "stale non-INDEX",
+      "gate": "3 of 3",
+      "n": 3,
+      "gateMet": true,
+      "pass": 3,
+      "fail": 0,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "PASS"
+    },
+    {
+      "class": "undeclared",
+      "label": "undeclared coverage",
+      "gate": "2 of 2",
+      "n": 2,
+      "gateMet": null,
+      "pass": 0,
+      "fail": 0,
+      "unrunnable": 0,
+      "notApplicable": 2,
+      "failingIds": [],
+      "unrunnableIds": [],
+      "status": "NOT-APPLICABLE"
+    },
+    {
+      "class": "operator",
+      "label": "operator-owned",
+      "gate": "3 of 3",
+      "n": 3,
+      "gateMet": false,
+      "pass": 1,
+      "fail": 2,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "O-02",
+        "O-03"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    },
+    {
+      "class": "loudness",
+      "label": "load-time loudness",
+      "gate": "2 of 2",
+      "n": 2,
+      "gateMet": false,
+      "pass": 0,
+      "fail": 2,
+      "unrunnable": 0,
+      "notApplicable": 0,
+      "failingIds": [
+        "L-02",
+        "L-01"
+      ],
+      "unrunnableIds": [],
+      "status": "FAIL"
+    }
+  ],
+  "positive_control": {
+    "topScore": 0.6579,
+    "id": "PC-01",
+    "class": "positive-control",
+    "status": "pass",
+    "detail": "rank 1, score 0.6579"
+  },
+  "inversions": [],
+  "policy_false_positives": [],
+  "budget_breaches": [],
+  "harness_errors": [],
+  "f9_reference_mode": null,
+  "cases": [
+    {
+      "topScore": 0.6579,
+      "id": "PC-01",
+      "class": "positive-control",
+      "status": "pass",
+      "detail": "rank 1, score 0.6579"
+    },
+    {
+      "rank": 4,
+      "topPath": "ops-index/generator-fuel-testing.md",
+      "topScore": 0.3672,
+      "target": "daily/2026-02-17.md",
+      "id": "P-01",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 4, score 0.2997"
+    },
+    {
+      "rank": 1,
+      "topPath": "daily/2026-03-19.md",
+      "topScore": 0.5255,
+      "target": "daily/2026-03-19.md",
+      "id": "P-02",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5255"
+    },
+    {
+      "rank": 1,
+      "topPath": "memory/vendor-contact-protocol.md",
+      "topScore": 0.6485,
+      "target": "memory/vendor-contact-protocol.md",
+      "id": "P-03",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6485"
+    },
+    {
+      "rank": 4,
+      "topPath": "feedback/session-timeout-during-forms.md",
+      "topScore": 0.4333,
+      "target": "memory/incident-postmortem-format.md",
+      "id": "P-04",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 4, score 0.3716"
+    },
+    {
+      "rank": 2,
+      "topPath": "daily/2026-05-21.md",
+      "topScore": 0.3548,
+      "target": "memory/laptop-refresh-cycle.md",
+      "id": "P-05",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3504"
+    },
+    {
+      "rank": 1,
+      "topPath": "concepts/idempotency-key.md",
+      "topScore": 0.5715,
+      "target": "concepts/idempotency-key.md",
+      "id": "P-06",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5715"
+    },
+    {
+      "rank": 1,
+      "topPath": "concepts/back-pressure.md",
+      "topScore": 0.5903,
+      "target": "concepts/back-pressure.md",
+      "id": "P-07",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5903"
+    },
+    {
+      "rank": 1,
+      "topPath": "concepts/dead-letter-queue.md",
+      "topScore": 0.5044,
+      "target": "concepts/dead-letter-queue.md",
+      "id": "P-08",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5044"
+    },
+    {
+      "rank": 1,
+      "topPath": "projects/orchard-mobile-launch.md",
+      "topScore": 0.3475,
+      "target": "projects/orchard-mobile-launch.md",
+      "id": "P-09",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.3475"
+    },
+    {
+      "rank": 2,
+      "topPath": "agents/invoice-matcher.md",
+      "topScore": 0.4025,
+      "target": "projects/lantern-search-rewrite.md",
+      "id": "P-10",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3847"
+    },
+    {
+      "rank": 1,
+      "topPath": "people/tobias-brenner.md",
+      "topScore": 0.3081,
+      "target": "people/tobias-brenner.md",
+      "id": "P-11",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.3081"
+    },
+    {
+      "rank": 3,
+      "topPath": "daily/2026-05-07.md",
+      "topScore": 0.5329,
+      "target": "people/priya-raghunathan.md",
+      "id": "P-12",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 3, score 0.3767"
+    },
+    {
+      "rank": null,
+      "topPath": "ops-index/loading-dock-hours.md",
+      "topScore": 0.1978,
+      "target": "people/emeka-nwosu.md",
+      "id": "P-13",
+      "class": "positive",
+      "status": "fail",
+      "detail": "target not in top 5; top-1 was ops-index/loading-dock-hours.md at 0.1978"
+    },
+    {
+      "rank": 1,
+      "topPath": "agents/kiln-temperature-watcher.md",
+      "topScore": 0.4175,
+      "target": "agents/kiln-temperature-watcher.md",
+      "id": "P-14",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4175"
+    },
+    {
+      "rank": 1,
+      "topPath": "agents/warehouse-picker.md",
+      "topScore": 0.5358,
+      "target": "agents/warehouse-picker.md",
+      "id": "P-15",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5358"
+    },
+    {
+      "rank": 1,
+      "topPath": "research/desert-fog-harvesting.md",
+      "topScore": 0.443,
+      "target": "research/desert-fog-harvesting.md",
+      "id": "P-16",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.443"
+    },
+    {
+      "rank": 2,
+      "topPath": "research/wool-insulation-moisture.md",
+      "topScore": 0.3875,
+      "target": "research/mycelium-packaging-strength.md",
+      "id": "P-17",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 2, score 0.3079"
+    },
+    {
+      "rank": 1,
+      "topPath": "research/reef-noise-recruitment.md",
+      "topScore": 0.6666,
+      "target": "research/reef-noise-recruitment.md",
+      "id": "P-18",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6666"
+    },
+    {
+      "rank": 1,
+      "topPath": "feedback/print-layout-cuts-footnotes.md",
+      "topScore": 0.6301,
+      "target": "feedback/print-layout-cuts-footnotes.md",
+      "id": "P-19",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.6301"
+    },
+    {
+      "rank": 1,
+      "topPath": "feedback/attachment-size-error-unclear.md",
+      "topScore": 0.5708,
+      "target": "feedback/attachment-size-error-unclear.md",
+      "id": "P-20",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5708"
+    },
+    {
+      "rank": 1,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "topScore": 0.4893,
+      "target": "reference/fire-drill-assembly-points.md",
+      "id": "P-21",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4893"
+    },
+    {
+      "rank": 1,
+      "topPath": "reference/parking-permit-zones.md",
+      "topScore": 0.4973,
+      "target": "reference/parking-permit-zones.md",
+      "id": "P-22",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4973"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/rack-power-budget.md",
+      "topScore": 0.5386,
+      "target": "ops-index/rack-power-budget.md",
+      "id": "P-23",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.5386"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/badge-reader-firmware.md",
+      "topScore": 0.4497,
+      "target": "ops-index/badge-reader-firmware.md",
+      "id": "P-24",
+      "class": "positive",
+      "status": "pass",
+      "detail": "rank 1, score 0.4497"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.353,
+      "topPath": "memory/backup-retention.md",
+      "nearThreshold": false,
+      "id": "N-01",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.353 >= tau 0.3 (memory/backup-retention.md)"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.4512,
+      "topPath": "concepts/circuit-breaker.md",
+      "nearThreshold": false,
+      "id": "N-02",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4512 >= tau 0.3 (concepts/circuit-breaker.md)"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.4371,
+      "topPath": "people/marisol-okonkwo.md",
+      "nearThreshold": false,
+      "id": "N-03",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4371 >= tau 0.3 (people/marisol-okonkwo.md)"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.5771,
+      "topPath": "research/urban-beehive-yields.md",
+      "nearThreshold": false,
+      "id": "N-04",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.5771 >= tau 0.3 (research/urban-beehive-yields.md)"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.4466,
+      "topPath": "feedback/search-results-lack-dates.md",
+      "nearThreshold": false,
+      "id": "N-05",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4466 >= tau 0.3 (feedback/search-results-lack-dates.md)"
+    },
+    {
+      "kind": "near-miss",
+      "top1": 0.4204,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "nearThreshold": false,
+      "id": "N-06",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.4204 >= tau 0.3 (reference/fire-drill-assembly-points.md)"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.1655,
+      "topPath": "research/wool-insulation-moisture.md",
+      "nearThreshold": false,
+      "id": "N-07",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.1655 < tau 0.3"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.1239,
+      "topPath": "agents/kiln-temperature-watcher.md",
+      "nearThreshold": false,
+      "id": "N-08",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.1239 < tau 0.3"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.2016,
+      "topPath": "concepts/canary-release.md",
+      "nearThreshold": false,
+      "id": "N-09",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.2016 < tau 0.3"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.3136,
+      "topPath": "research/vertical-strawberry-lighting.md",
+      "nearThreshold": false,
+      "id": "N-10",
+      "class": "negative",
+      "status": "fail",
+      "detail": "top-1 0.3136 >= tau 0.3 (research/vertical-strawberry-lighting.md)"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.182,
+      "topPath": "research/sourdough-hydration-trials.md",
+      "nearThreshold": false,
+      "id": "N-11",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.182 < tau 0.3"
+    },
+    {
+      "kind": "off-domain",
+      "top1": 0.2401,
+      "topPath": "reference/room-booking.md",
+      "nearThreshold": false,
+      "id": "N-12",
+      "class": "negative",
+      "status": "pass",
+      "detail": "top-1 0.2401 < tau 0.3"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "memory/backup-retention.md",
+      "superseded": "memory/backup-retention-superseded.md",
+      "id": "T-01",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "memory/oncall-rotation.md",
+      "superseded": "memory/oncall-rotation-superseded.md",
+      "id": "T-02",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "memory/expense-approval.md",
+      "superseded": "memory/expense-approval-superseded.md",
+      "id": "T-03",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "projects/harbor-cutover.md",
+      "superseded": "projects/harbor-cutover-superseded.md",
+      "id": "T-04",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "projects/atlas-tiering.md",
+      "superseded": "projects/atlas-tiering-superseded.md",
+      "id": "T-05",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "reference/guest-network.md",
+      "superseded": "reference/guest-network-superseded.md",
+      "id": "T-06",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "reference/parcel-carrier.md",
+      "superseded": "reference/parcel-carrier-superseded.md",
+      "id": "T-07",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "currentRank": 1,
+      "supersededRank": null,
+      "current": "reference/room-booking.md",
+      "superseded": "reference/room-booking-superseded.md",
+      "id": "T-08",
+      "class": "temporal",
+      "status": "pass",
+      "detail": "current at rank 1, superseded absent from top 5"
+    },
+    {
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "targetReturned": false,
+      "topPath": "memory/oncall-rotation.md",
+      "topScore": 0.3457,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "target": "ops-deny/alarm-bypass-codes.md",
+        "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-01.md",
+          "copySha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+          "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.4119,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-ffca3ecf4ed28bd3",
+            "topPaths": [
+              "research/recollection-control-c-01.md",
+              "memory/oncall-rotation.md",
+              "concepts/blast-radius.md",
+              "daily/2026-02-03.md",
+              "ops-index/loading-dock-hours.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-01",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "ops-deny/vault-door-service-log.md",
+      "targetReturned": false,
+      "topPath": "daily/2026-05-07.md",
+      "topScore": 0.3406,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "target": "ops-deny/vault-door-service-log.md",
+        "targetSha256": "86559bbdb43302bf9addf59744361623a127af83b7dbc52443fed9ec4aeced49",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-02.md",
+          "copySha256": "86559bbdb43302bf9addf59744361623a127af83b7dbc52443fed9ec4aeced49",
+          "targetSha256": "86559bbdb43302bf9addf59744361623a127af83b7dbc52443fed9ec4aeced49",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.4505,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-67f65fc1f83ebd0d",
+            "topPaths": [
+              "research/recollection-control-c-02.md",
+              "daily/2026-05-07.md",
+              "concepts/write-ahead-log.md",
+              "feedback/onboarding-checklist-too-long.md",
+              "daily/2026-02-03.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-02",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "ops-deny/executive-travel-manifest.md",
+      "targetReturned": false,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "topScore": 0.3664,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "target": "ops-deny/executive-travel-manifest.md",
+        "targetSha256": "7fdfc37ecf9e4890d1df5718d725faa4fbc6beebcbb7d84c00491c4d563e9ea6",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-03.md",
+          "copySha256": "7fdfc37ecf9e4890d1df5718d725faa4fbc6beebcbb7d84c00491c4d563e9ea6",
+          "targetSha256": "7fdfc37ecf9e4890d1df5718d725faa4fbc6beebcbb7d84c00491c4d563e9ea6",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.5029,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-b183df34af553f50",
+            "topPaths": [
+              "research/recollection-control-c-03.md",
+              "reference/fire-drill-assembly-points.md",
+              "projects/atlas-tiering.md",
+              "daily/2026-01-14.md",
+              "daily/2026-04-02.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-03",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "ops-deny/alarm-bypass-codes.md",
+      "targetReturned": false,
+      "topPath": "feedback/mobile-keyboard-covers-submit.md",
+      "topScore": 0.3579,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "target": "ops-deny/alarm-bypass-codes.md",
+        "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-04.md",
+          "copySha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+          "targetSha256": "12ee8ad40f25d4f79ec208c9c055c16428f84ca1dbe06494fc801301bf7af01d",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 2,
+            "score": 0.2772,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-b0ac39767fa900f0",
+            "topPaths": [
+              "feedback/mobile-keyboard-covers-submit.md",
+              "research/recollection-control-c-04.md",
+              "concepts/dead-letter-queue.md",
+              "concepts/shadow-traffic.md",
+              "concepts/idempotency-key.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-04",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "projects/confidential-client/merger-diligence-timeline.md",
+      "targetReturned": false,
+      "topPath": "people/yuki-tanabe.md",
+      "topScore": 0.3444,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "denied",
+          "disposition": "DENY-PREFIX"
+        },
+        "target": "projects/confidential-client/merger-diligence-timeline.md",
+        "targetSha256": "a401d3a36d95116d1a55435dc6e0f8c8408aedfb3e52f0db575b8b5b4442e77b",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-05.md",
+          "copySha256": "a401d3a36d95116d1a55435dc6e0f8c8408aedfb3e52f0db575b8b5b4442e77b",
+          "targetSha256": "a401d3a36d95116d1a55435dc6e0f8c8408aedfb3e52f0db575b8b5b4442e77b",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.3735,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-d0f8881e97b20bd4",
+            "topPaths": [
+              "research/recollection-control-c-05.md",
+              "people/yuki-tanabe.md",
+              "people/hana-lindqvist.md",
+              "people/emeka-nwosu.md",
+              "ops-index/loading-dock-hours.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-05",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "projects/confidential-client/settlement-figure-memo.md",
+      "targetReturned": false,
+      "topPath": "people/priya-raghunathan.md",
+      "topScore": 0.2941,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "denied",
+          "disposition": "DENY-PREFIX"
+        },
+        "target": "projects/confidential-client/settlement-figure-memo.md",
+        "targetSha256": "00dd1cdaddfa6df06e80b49d1ac5e56c5c63f61b093d97b98a2c5962cdfbdc5d",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-c-06.md",
+          "copySha256": "00dd1cdaddfa6df06e80b49d1ac5e56c5c63f61b093d97b98a2c5962cdfbdc5d",
+          "targetSha256": "00dd1cdaddfa6df06e80b49d1ac5e56c5c63f61b093d97b98a2c5962cdfbdc5d",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.3023,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-5a588667c876da5b",
+            "topPaths": [
+              "research/recollection-control-c-06.md",
+              "people/priya-raghunathan.md",
+              "people/devraj-anand.md",
+              "agents/contract-clause-extractor.md",
+              "people/tobias-brenner.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "C-06",
+      "class": "deny",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "templates/incident-report.md",
+      "targetReturned": false,
+      "topPath": "concepts/dead-letter-queue.md",
+      "topScore": 0.3134,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "target": "templates/incident-report.md",
+        "targetSha256": "d9ec91b962116022a61db730560fcad3a25edc7bec3ae7caaad427312336c200",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-s-01.md",
+          "copySha256": "d9ec91b962116022a61db730560fcad3a25edc7bec3ae7caaad427312336c200",
+          "targetSha256": "d9ec91b962116022a61db730560fcad3a25edc7bec3ae7caaad427312336c200",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": false,
+            "rank": null,
+            "score": null,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-1478062bf3061553",
+            "topPaths": [
+              "concepts/dead-letter-queue.md",
+              "feedback/session-timeout-during-forms.md",
+              "reference/fire-drill-assembly-points.md",
+              "memory/oncall-rotation.md",
+              "concepts/idempotency-key.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "S-01",
+      "class": "skip",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "templates/runbook.md",
+      "targetReturned": false,
+      "topPath": "memory/incident-postmortem-format.md",
+      "topScore": 0.241,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "target": "templates/runbook.md",
+        "targetSha256": "86411a9b705a0eab778009c7e9e19a0b7acdf72e63c76f6871aa49dab6bcaa6f",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-s-02.md",
+          "copySha256": "86411a9b705a0eab778009c7e9e19a0b7acdf72e63c76f6871aa49dab6bcaa6f",
+          "targetSha256": "86411a9b705a0eab778009c7e9e19a0b7acdf72e63c76f6871aa49dab6bcaa6f",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.4549,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-3309c8825e8f138d",
+            "topPaths": [
+              "research/recollection-control-s-02.md",
+              "memory/incident-postmortem-format.md",
+              "agents/warehouse-picker.md",
+              "memory/oncall-rotation.md",
+              "people/marisol-okonkwo.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "S-02",
+      "class": "skip",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "examples/sample-migration.md",
+      "targetReturned": false,
+      "topPath": "feedback/export-loses-column-order.md",
+      "topScore": 0.2833,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "target": "examples/sample-migration.md",
+        "targetSha256": "ea8bf5d2843fe62d5a3d5c4f82ce0e6224a0f1304e118666cdce5b55556e92b9",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-s-03.md",
+          "copySha256": "ea8bf5d2843fe62d5a3d5c4f82ce0e6224a0f1304e118666cdce5b55556e92b9",
+          "targetSha256": "ea8bf5d2843fe62d5a3d5c4f82ce0e6224a0f1304e118666cdce5b55556e92b9",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.3352,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-0dc23719346efe5b",
+            "topPaths": [
+              "research/recollection-control-s-03.md",
+              "feedback/export-loses-column-order.md",
+              "people/emeka-nwosu.md",
+              "feedback/color-legend-unreadable-projector.md",
+              "memory/oncall-rotation.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "S-03",
+      "class": "skip",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "ops-skip/draft-runbook-shell.md",
+      "targetReturned": false,
+      "topPath": "people/marisol-okonkwo.md",
+      "topScore": 0.4002,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "target": "ops-skip/draft-runbook-shell.md",
+        "targetSha256": "d9075f36ecefb6f2dbd579a980f5877f2ed965cfe5d9f33dd97a6ca214c80ee1",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-s-04.md",
+          "copySha256": "d9075f36ecefb6f2dbd579a980f5877f2ed965cfe5d9f33dd97a6ca214c80ee1",
+          "targetSha256": "d9075f36ecefb6f2dbd579a980f5877f2ed965cfe5d9f33dd97a6ca214c80ee1",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.5064,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-951ab92fa6786ea6",
+            "topPaths": [
+              "research/recollection-control-s-04.md",
+              "people/marisol-okonkwo.md",
+              "feedback/onboarding-checklist-too-long.md",
+              "memory/incident-postmortem-format.md",
+              "daily/2026-02-03.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "S-04",
+      "class": "skip",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "rank": 1,
+      "topPath": "ops-index/coolant-loop-schedule.md",
+      "topScore": 0.4998,
+      "target": "ops-index/coolant-loop-schedule.md",
+      "id": "O-01",
+      "class": "operator",
+      "status": "pass",
+      "detail": "rank 1, score 0.4998"
+    },
+    {
+      "target": "ops-skip/scratch-capacity-math.md",
+      "targetReturned": false,
+      "topPath": "memory/expense-approval.md",
+      "topScore": 0.2097,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "target": "ops-skip/scratch-capacity-math.md",
+        "targetSha256": "d4532568c7bb3681686176ebc31ab4980e6800d445eb3d6cbc98aec584fa8511",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-o-02.md",
+          "copySha256": "d4532568c7bb3681686176ebc31ab4980e6800d445eb3d6cbc98aec584fa8511",
+          "targetSha256": "d4532568c7bb3681686176ebc31ab4980e6800d445eb3d6cbc98aec584fa8511",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.5313,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-7f1cd3b3977cab2b",
+            "topPaths": [
+              "research/recollection-control-o-02.md",
+              "memory/expense-approval.md",
+              "daily/2026-03-05.md",
+              "concepts/canary-release.md",
+              "feedback/mobile-keyboard-covers-submit.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "O-02",
+      "class": "operator",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "target": "ops-deny/whistleblower-intake-notes.md",
+      "targetReturned": false,
+      "topPath": "people/samuel-adeyemi.md",
+      "topScore": 0.3109,
+      "stage": "BUILD",
+      "label": null,
+      "proof": {
+        "stage": "BUILD",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "target": "ops-deny/whistleblower-intake-notes.md",
+        "targetSha256": "b041e3952b60025e3b3de59034c55bb8b5d866174bb71008b1f147eff5e26aca",
+        "sourcePresentAtBuild": true,
+        "scoredBuildExit": 0,
+        "indexRowsAtTarget": 1,
+        "indexerDenyLine": null,
+        "queryStageCounts": {
+          "denied": 4,
+          "namespace": 20
+        },
+        "control": {
+          "path": "research/recollection-control-o-03.md",
+          "copySha256": "b041e3952b60025e3b3de59034c55bb8b5d866174bb71008b1f147eff5e26aca",
+          "targetSha256": "b041e3952b60025e3b3de59034c55bb8b5d866174bb71008b1f147eff5e26aca",
+          "copyEligible": true,
+          "buildExit": 0,
+          "indexedRows": 1,
+          "sandboxSameCodeAsScored": true,
+          "failure": null,
+          "control_retrieval": {
+            "returned": true,
+            "rank": 1,
+            "score": 0.4064,
+            "searchExit": 0,
+            "failure": null,
+            "diagnostic": "not a condition of BUILD-WITHHELD; never scored (PREREG-002-ERRATUM-001 3.1)",
+            "invocation": "rec-8204d91a03f46607",
+            "topPaths": [
+              "research/recollection-control-o-03.md",
+              "people/samuel-adeyemi.md",
+              "agents/transcript-summarizer.md",
+              "reference/guest-network.md",
+              "daily/2026-05-07.md"
+            ]
+          }
+        },
+        "gaps": [
+          "index-holds-target-rows (1)"
+        ]
+      },
+      "undemonstrated": true,
+      "id": "O-03",
+      "class": "operator",
+      "status": "fail",
+      "detail": "policy-withholding-not-demonstrated: index-holds-target-rows (1)"
+    },
+    {
+      "injectedPath": "templates/stale-injected-zither.md",
+      "expectedDisposition": "SKIP",
+      "returned": false,
+      "topPath": "memory/vendor-contact-protocol.md",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "proof": {
+        "stage": "QUERY",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "SKIP"
+        },
+        "readBack": {
+          "present": true,
+          "count": 1
+        },
+        "control": {
+          "path": "research/recollection-control-x-01.md",
+          "returned": true,
+          "rank": 1,
+          "exit": 0,
+          "failure": null
+        },
+        "filter": "namespace",
+        "delta": 1,
+        "seededChunks": 1,
+        "pristine": {
+          "exit": 0,
+          "failure": null,
+          "invocation": "rec-4b953cc4c9eff5b4"
+        },
+        "counts": {
+          "seeded": 21,
+          "pristine": 20,
+          "seededSource": "same invocation (the forbidden run)",
+          "pristineSource": "paired invocation on the pristine index, same query"
+        },
+        "gaps": []
+      },
+      "id": "X-01",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "QUERY-WITHHELD: filter delta 1 == 1 seeded chunk(s), control returned"
+    },
+    {
+      "injectedPath": "ops-deny/stale-injected-pelican.md",
+      "expectedDisposition": "DENY",
+      "returned": false,
+      "topPath": "reference/fire-drill-assembly-points.md",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "proof": {
+        "stage": "QUERY",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "DENY"
+        },
+        "readBack": {
+          "present": true,
+          "count": 1
+        },
+        "control": {
+          "path": "research/recollection-control-x-02.md",
+          "returned": true,
+          "rank": 1,
+          "exit": 0,
+          "failure": null
+        },
+        "filter": "namespace",
+        "delta": 1,
+        "seededChunks": 1,
+        "pristine": {
+          "exit": 0,
+          "failure": null,
+          "invocation": "rec-9a44cdf4bc042520"
+        },
+        "counts": {
+          "seeded": 21,
+          "pristine": 20,
+          "seededSource": "same invocation (the forbidden run)",
+          "pristineSource": "paired invocation on the pristine index, same query"
+        },
+        "gaps": []
+      },
+      "id": "X-02",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "QUERY-WITHHELD: filter delta 1 == 1 seeded chunk(s), control returned"
+    },
+    {
+      "injectedPath": "scratch/stale-injected-obsidian.md",
+      "expectedDisposition": "undeclared",
+      "returned": false,
+      "topPath": "reference/tuning-fork-calibration-log.md",
+      "stage": "QUERY",
+      "label": "QUERY-WITHHELD",
+      "proof": {
+        "stage": "QUERY",
+        "expected": {
+          "eligible": false,
+          "filter": "namespace",
+          "disposition": "undeclared"
+        },
+        "readBack": {
+          "present": true,
+          "count": 1
+        },
+        "control": {
+          "path": "research/recollection-control-x-03.md",
+          "returned": true,
+          "rank": 1,
+          "exit": 0,
+          "failure": null
+        },
+        "filter": "namespace",
+        "delta": 1,
+        "seededChunks": 1,
+        "pristine": {
+          "exit": 0,
+          "failure": null,
+          "invocation": "rec-df6d7864d42bef45"
+        },
+        "counts": {
+          "seeded": 21,
+          "pristine": 20,
+          "seededSource": "same invocation (the forbidden run)",
+          "pristineSource": "paired invocation on the pristine index, same query"
+        },
+        "gaps": []
+      },
+      "id": "X-03",
+      "class": "stale-index",
+      "status": "pass",
+      "detail": "QUERY-WITHHELD: filter delta 1 == 1 seeded chunk(s), control returned"
+    },
+    {
+      "injectedPath": "reference/never-existed-phantom.md",
+      "namedAtLoad": false,
+      "exit": 0,
+      "loadWindow": "Loading index... 93 entries loaded. (4 confidential-class chunk(s) filtered by index-deny.json) (20 non-INDEX namespace chunk(s) filtered by namespace-registry.json)",
+      "id": "L-02",
+      "class": "loudness",
+      "status": "fail",
+      "detail": "population load never named the missing source reference/never-existed-phantom.md"
+    },
+    {
+      "deleted": "research/wool-insulation-moisture.md",
+      "namedAtLoad": false,
+      "exit": 0,
+      "loadWindow": "Loading index... 92 entries loaded. (4 confidential-class chunk(s) filtered by index-deny.json) (20 non-INDEX namespace chunk(s) filtered by namespace-registry.json)",
+      "id": "L-01",
+      "class": "loudness",
+      "status": "fail",
+      "detail": "population load never named the deleted source research/wool-insulation-moisture.md"
+    },
+    {
+      "id": "U-01",
+      "class": "undeclared",
+      "status": "not-applicable",
+      "detail": "E1A: the undeclared overlay is not part of this mutation; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)"
+    },
+    {
+      "id": "U-02",
+      "class": "undeclared",
+      "status": "not-applicable",
+      "detail": "E1A: the undeclared overlay is not part of this mutation; coverage is scored in the BASELINE and F5 runs (PREREG-001 1.4)"
+    }
+  ]
+}
