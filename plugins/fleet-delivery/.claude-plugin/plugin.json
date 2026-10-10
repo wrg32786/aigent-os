@@ -1,7 +1,7 @@
 {
   "name": "fleet-delivery",
-  "version": "0.1.0",
-  "description": "Delivers a seat's Room inbox and pending job results into the session through the prompt API, one prompt per item, tracked in the plugin's store and logged per seat. Inert until <installRoot>/.aigent/delivery-owner.json says {\"owner\":{\"<seat>\":\"mod\"}}.",
+  "version": "0.2.0",
+  "description": "Delivers a seat's Room inbox and pending job results into the session through the prompt API, one prompt per item, tracked in a per-seat log, and moves each delivered Room file to processed/. Inert until <installRoot>/.aigent/delivery-owner.json says {\"owner\":{\"<seat>\":\"mod\"}}.",
   "author": { "name": "wrg32786" },
   "types": "./types/index.d.ts",
   "userConfig": {
