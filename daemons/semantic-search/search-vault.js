@@ -175,6 +175,30 @@ function demoteSuperseded(rows, nowMs) {
   return rows.slice().sort((a, b) => (ended.has(a.path) ? 1 : 0) - (ended.has(b.path) ? 1 : 0));
 }
 
+// ── Honest abstention ────────────────────────────────────────────────────────
+// When nothing the filters left reaches the relevance floor, the honest answer
+// is "I have nothing", not five unrelated rows. The results stay an array (`[]`)
+// and the reason rides ONE stderr line, never inside the array:
+//   AIGENT_ABSTAIN {"schema":"abstain/1","invocation":"<token>","outcome":"abstain","reason":"<reason>"}
+// reason: `no-eligible-candidates` when the deny and namespace filters left no
+// row at all; `below-tau` when every remaining row scores under the floor.
+// The decision runs only after the index loaded and BOTH filters ran, so a
+// missing or malformed index, a namespace refusal or a bad deny file keeps its
+// own non-zero exit and is never relabelled as an abstention.
+//
+// The floor is 0.30 on the score as emitted (4 decimals), the abstain floor
+// frozen at recollection-44 PREREG-001 3.2 from the model's general calibration,
+// with no measurement of any corpus. It is not tunable here on purpose.
+//
+// The token is echoed exactly as given (AIGENT_SEARCH_INVOCATION, '' if unset),
+// never invented: a caller that binds the line to its own invocation can tell a
+// missing or wrong token apart from a real one.
+const ABSTAIN_TAU = 0.30;
+function abstentionReason(sortedRows) {
+  if (sortedRows.length === 0) return 'no-eligible-candidates';
+  return parseFloat(sortedRows[0].score.toFixed(4)) < ABSTAIN_TAU ? 'below-tau' : null;
+}
+
 // ── Embed query ──────────────────────────────────────────────────────────────
 let embedder = null;
 
@@ -234,6 +258,7 @@ async function main() {
 
   // Sort descending
   scored.sort((a, b) => b.score - a.score);
+  const abstention = abstentionReason(scored);
 
   // Demote every chunk whose validity window has ended below every chunk whose
   // has not. Placed here, between the sort and the truncation below, so a
@@ -250,8 +275,12 @@ async function main() {
     }
     if (results.length >= topK) break;
   }
+  if (abstention) results.length = 0;
 
   const searchTime = Date.now() - t1;
+  if (abstention) {
+    console.error(`AIGENT_ABSTAIN ${JSON.stringify({ schema: 'abstain/1', invocation: process.env.AIGENT_SEARCH_INVOCATION ?? '', outcome: 'abstain', reason: abstention })}`);
+  }
 
   // Output. Every result's chunk renders through the trust-boundary
   // chokepoint exactly once, reused for both the JSON and human sites -- see
@@ -280,6 +309,7 @@ async function main() {
   console.log('─'.repeat(60));
   console.log(FRAMING_LINES[0]);
   console.log();
+  if (abstention) console.log(`No result reached the relevance floor (${abstention}).\n`);
   for (let i = 0; i < rendered.length; i++) {
     const { r, persisted } = rendered[i];
     // title/path/tags/chunkIndex/chunkCount are the same persisted, same
