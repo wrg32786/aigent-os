@@ -226,6 +226,11 @@ function runDoctor(box) {
   };
 }
 
+// The healthy row scores cosine 0.6 against the stub query [1,0,0,0]: below the
+// forbidden 1.0 row, above search-vault's 0.30 abstention floor, so its absence
+// can only mean a filter over-removed, never an honest abstention.
+const HEALTHY_VEC = [0.6, 0.8, 0, 0];
+
 function indexNote(notePath, chunk, embedding = [1, 0, 0, 0]) {
   return {
     path: notePath,
@@ -413,7 +418,7 @@ loaderRejects('unreadable registry path', null, true);
   // of the build-time exclusion.
   writeIndex(box, [
     indexNote('templates/starter.md', SKIPPED, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   const search = runNode(box, 'search-vault.js', ['starter template', '--top', '10']);
   assertSearchIsolation('SKIP search', search, SKIPPED);
@@ -447,7 +452,7 @@ loaderRejects('unreadable registry path', null, true);
   mkdirSync(path.join(box.vault, PRIVATE_DIR), { recursive: true });
   writeIndex(box, [
     indexNote(`${PRIVATE_DIR}/secret.md`, DENIED, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   check('stale DENY: healthy INDEX canary is present in the seeded artifact', readIndexText(box).includes(HEALTHY));
   const search = runNode(box, 'search-vault.js', ['private secret', '--top', '10']);
@@ -461,7 +466,7 @@ loaderRejects('unreadable registry path', null, true);
   const box = makeSandbox('stale-undeclared');
   writeIndex(box, [
     indexNote(`${ROGUE_DIR}/secret.md`, ROGUE, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   const search = runNode(box, 'search-vault.js', ['rogue secret', '--top', '10']);
   assertSearchIsolation('stale undeclared query-time chokepoint', search, ROGUE);
@@ -506,7 +511,7 @@ loaderRejects('unreadable registry path', null, true);
 
   writeIndex(box, [
     indexNote(`${ROGUE_DIR}/secret.md`, ROGUE, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   const search = runNode(box, 'search-vault.js', ['rogue secret', '--top', '10']);
   check('undeclared: search exits nonzero', search.status === 1, search.all.slice(0, 300));
@@ -688,7 +693,7 @@ assertInvalidRegistryMutation(
   mkdirSync(path.join(box.vault, PRIVATE_DIR), { recursive: true });
   writeIndex(box, [
     indexNote(`${PRIVATE_DIR}/secret.md`, DENIED, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   check('local stale DENY: healthy INDEX canary is present in the seeded artifact', readIndexText(box).includes(HEALTHY));
   const search = runNode(box, 'search-vault.js', ['private secret', '--top', '10']);
@@ -702,7 +707,7 @@ assertInvalidRegistryMutation(
   mkdirSync(path.join(box.vault, PRIVATE_DIR), { recursive: true });
   writeIndex(box, [
     indexNote(`${PRIVATE_DIR}/secret.md`, DENIED, [1, 0, 0, 0]),
-    indexNote('feedback/healthy.md', HEALTHY, [0, 1, 0, 0]),
+    indexNote('feedback/healthy.md', HEALTHY, HEALTHY_VEC),
   ]);
   const searchPath = path.join(box.sem, 'search-vault.js');
   const original = readFileSync(searchPath, 'utf8');
