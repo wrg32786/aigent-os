@@ -1,6 +1,6 @@
 <div align="center">
 
-# aigent-OS
+<h1><img src="assets/aigent-os-logo.png" alt="aigent-OS" width="560"></h1>
 
 **Claude Code that refreshes its own context instead of compacting.**
 
