@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, PromptSubmitResult } from 'claude-code'
 
-import { renameArgv } from './register'
+import { MOVE, renameArgv } from './register'
 
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
@@ -14,6 +14,7 @@ const CYCLE = `${ROOT}/memory/runtime/auto-clear-cycle.json`
 const SCRIPT = `${ROOT}/daemons/job-results.mjs`
 const INBOX = `${ROOM}/inbox/alpha`
 const PROCESSED = `${ROOM}/processed/alpha`
+const CLAIMED = `${ROOM}/claimed/alpha`
 const RENAME =
   'try{const [a,b]=process.argv.slice(-2);const fs=require("fs");fs.mkdirSync(require("path").dirname(b),{recursive:true});fs.renameSync(a,b)}catch(e){process.stderr.write(String(e&&(e.code||e.message)));process.exit(1)}'
 const norm = (path: string) => path.replace(/\\/g, '/')
@@ -53,7 +54,23 @@ type World = {
   sessionRoot?: string
   // Folders that are symbolic links.
   links?: string[]
-  // The Room-file move exits non-zero.
+  // Each prompt.submit answers the next of these first.
+  queue?: Promise<PromptSubmitResult>[]
+  // Folders that exist even with no file in them (a folder is removed with `dirs.delete`).
+  dirs?: string[]
+  // fs.exists on these paths errors.
+  existsThrows?: string[]
+  // Runs once, when the tick first reads the prompt box: after the queue is built, before the claim.
+  beforeRead?: () => void
+  // Runs once, just before the first Room-file move: room_drain or an unmount acting first.
+  beforeMove?: () => void
+  // Every Room-file move fails to run at all (the host process throws).
+  moveRunFails?: boolean
+  // Runs once, when the log is next read for an append: another settle landing between a note's snapshot and its write.
+  onLogRead?: () => void
+  // A Room-file move whose source path contains this text exits non-zero (EPERM).
+  failMoveFor?: string
+  // The Room-file move exits non-zero (EPERM).
   failMove?: boolean
   // How many log writes ($.fs.write) fail before they succeed again.
   failWrites?: number
@@ -89,13 +106,20 @@ function seat(on: On, world: World = {}) {
   // Every store call the plugin makes, by kind.
   const storeCalls: string[] = []
   const log: string[] = []
+  // The inbox's files at the moment of each submit.
+  const inboxAtSubmit: string[][] = []
+  // Log writes ($.fs.write calls).
+  const writes = { count: 0 }
+  const claimedAtSubmit: string[][] = []
+  const processedAtSubmit: string[][] = []
   const box = { text: world.draft ?? '' }
   const clock = mock.clock(on, { now: Date.parse('2026-10-07T18:30:00Z') })
   mock.env(on, world.env ?? {})
   on('session.root', () => ({ value: world.sessionRoot ?? 'C:/example/alpha' }))
   // A folder exists when some file lies under it.
-  const isDir = (path: string) => [...files.keys()].some(key => key.startsWith(`${path}/`))
-  on('fs.exists', ($, e) => ({ value: files.has(norm(e.path)) || isDir(norm(e.path)) }))
+  const dirs = new Set(world.dirs ?? [])
+  const isDir = (path: string) => dirs.has(path) || [...files.keys()].some(key => key.startsWith(`${path}/`))
+  on('fs.exists', ($, e) => ((world.existsThrows ?? []).includes(norm(e.path)) ? { deny: 'EIO' } : { value: files.has(norm(e.path)) || isDir(norm(e.path)) }))
   on('fs.stat', ($, e) => {
     const path = norm(e.path)
     const text = files.get(path)
@@ -105,6 +129,11 @@ function seat(on: On, world: World = {}) {
     return { deny: 'ENOENT' }
   })
   on('fs.read', ($, e) => {
+    if (world.onLogRead && norm(e.path) === LOG) {
+      const run = world.onLogRead
+      world.onLogRead = undefined
+      run()
+    }
     if (world.denyLogRead && norm(e.path) === LOG) return { deny: 'EACCES' }
     const text = files.get(norm(e.path))
     return text === undefined ? { deny: 'ENOENT' } : { value: text }
@@ -116,6 +145,7 @@ function seat(on: On, world: World = {}) {
       failWrites--
       return { deny: 'EIO' }
     }
+    writes.count++
     files.set(norm(e.path), e.text)
     return { value: undefined }
   })
@@ -164,10 +194,23 @@ function seat(on: On, world: World = {}) {
     const held = slot('generation')
     slots.set('generation', { value: Number(held.value ?? 0) + 1, version: held.version + 1 })
   }
-  on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
+  on('prompt.read', () => {
+    if (world.beforeRead) {
+      const run = world.beforeRead
+      world.beforeRead = undefined
+      run()
+    }
+    return { value: { text: box.text, cursor: box.text.length } }
+  })
   on('prompt.submit', async ($, e) => {
     expect('asUser' in e.origin && e.origin.asUser).toBeFalsy()
     log.push(`submit ${e.text}`)
+    const under = (dir: string) => [...files.keys()].filter(key => key.startsWith(`${dir}/`))
+    inboxAtSubmit.push(under(INBOX))
+    claimedAtSubmit.push(under(CLAIMED))
+    processedAtSubmit.push(under(PROCESSED))
+    const queued = world.queue?.shift()
+    if (queued) return queued
     if (world.submit === 'reject') throw new Error('queue refused')
     if (world.submit instanceof Promise) return world.submit
     return { text: e.text }
@@ -178,16 +221,31 @@ function seat(on: On, world: World = {}) {
     const ran = { stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
     if (e.argv[1] === '-e') {
       // A rename: the paths ride argv after `--`, never the code.
-      expect(e.argv.slice(0, 4)).toEqual(['node', '-e', RENAME, '--'])
+      expect(e.argv[1]).toBe('-e')
+      expect(e.argv[3]).toBe('--')
       expect(e.argv).toHaveLength(6)
       const [from, to] = e.argv.slice(4).map(norm)
       const isLog = from?.endsWith('.jsonl.tmp')
+      // The log is replaced over itself; a Room file is never moved over another.
+      expect(e.argv[2]).toBe(isLog ? RENAME : MOVE)
+      if (!isLog && world.beforeMove) {
+        const run = world.beforeMove
+        world.beforeMove = undefined
+        run()
+      }
       if (!isLog) {
         log.push(`move ${from} ${to}`)
         logAtMove.push(files.get(LOG) ?? '')
       }
+      if (!isLog && to !== undefined && files.has(to) && !world.failMove) {
+        return { value: { ...ran, exitCode: 1, stderr: 'EEXIST' } }
+      }
+      if (!isLog && world.moveRunFails) throw new Error('no node')
+      if (!isLog && from !== undefined && world.failMoveFor && from.includes(world.failMoveFor)) {
+        return { value: { ...ran, exitCode: 1, stderr: 'EPERM' } }
+      }
       if ((!isLog && world.failMove) || from === undefined || to === undefined || !files.has(from)) {
-        return { value: { ...ran, exitCode: 1, stderr: 'ENOENT' } }
+        return { value: { ...ran, exitCode: 1, stderr: !isLog && world.failMove ? 'EPERM' : 'ENOENT' } }
       }
       files.set(to, files.get(from)!)
       files.delete(from)
@@ -208,7 +266,7 @@ function seat(on: On, world: World = {}) {
   })
   on('turn.complete', () => ({ text: '' }))
   // The log's lines past the seed and the store-import marker, length prefix checked.
-  const ledger = (at = LOG) =>
+  const allLines = (at = LOG) =>
     (files.get(at) ?? '')
       .split('\n')
       .filter(Boolean)
@@ -218,6 +276,10 @@ function seat(on: On, world: World = {}) {
         return JSON.parse(json ?? '')
       })
       .filter(entry => entry.id !== 'seed' && entry.id !== 'store-import')
+  const isSweep = (entry: { detail?: string }) => String(entry.detail).startsWith('note: swept')
+  // The stray sweep's note lines are read apart, so the other tests count deliveries only.
+  const ledger = (at = LOG) => allLines(at).filter(entry => !isSweep(entry))
+  const sweeps = () => allLines().filter(isSweep)
   const lastStatus = () => log.filter(entry => entry.startsWith('status ')).at(-1) ?? ''
   // Room-file moves only, not the log's own rename.
   const moves = () => runs.filter(argv => argv[1] === '-e' && !String(argv[4]).endsWith('.jsonl.tmp'))
@@ -229,7 +291,23 @@ function seat(on: On, world: World = {}) {
   const storeUp = () => {
     storeDown = false
   }
-  return { files, runs, moves, logAtMove, store, storeCalls, storeUp, reload, failNext, held, log, box, clock, ledger, lastStatus }
+  // Arms the one-shot hook that runs just before the first Room-file move.
+  const beforeMove = (run: () => void) => {
+    world.beforeMove = run
+  }
+  const onLogRead = (run: () => void) => {
+    world.onLogRead = run
+  }
+  // Puts an entry straight into the session ledger, as another settle would.
+  const setHeld = (id: string, entry: Entries[string]) => {
+    const held = slot('ledger')
+    const all = (held.value ?? {}) as Record<string, Entries>
+    slots.set('ledger', { value: { ...all, alpha: { ...(all.alpha ?? {}), [id]: entry } }, version: held.version + 1 })
+  }
+  const beforeRead = (run: () => void) => {
+    world.beforeRead = run
+  }
+  return { onLogRead, setHeld, writes, dirs, sweeps, beforeMove, beforeRead, files, inboxAtSubmit, claimedAtSubmit, processedAtSubmit, runs, moves, logAtMove, store, storeCalls, storeUp, reload, failNext, held, log, box, clock, ledger, lastStatus }
 }
 
 const submits = (log: string[]) => log.filter(line => line.startsWith('submit '))
@@ -292,15 +370,24 @@ test('owner mod: a Room item is submitted once, framed and trailed, never asUser
   expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
-test('a submitted Room item is moved exactly once, by argv, after it is recorded submitted', CONFIGURED, async ($, on) => {
+test('a Room item is claimed into claimed/ before the claim line and the submit, then finished into processed/', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY })
   await w.turn()
   await w.turn()
-  expect(w.moves()).toEqual([['node', '-e', RENAME, '--', `${INBOX}/a.json`, `${PROCESSED}/a.json`]])
-  // The move comes after the submit, and after the submitted line is on disk.
-  expect(w.log.filter(entry => entry.startsWith('submit ') || entry.startsWith('move ')).map(entry => entry.split(' ')[0])).toEqual(['submit', 'move'])
-  expect(w.logAtMove).toHaveLength(1)
-  expect(w.logAtMove[0]).toContain('"id":"room:alpha:a.json","source":"room","at":"2026-10-07T18:30:00.000Z","status":"submitted"')
+  expect(w.moves()).toEqual([
+    ['node', '-e', MOVE, '--', `${INBOX}/a.json`, `${CLAIMED}/a.json`],
+    ['node', '-e', MOVE, '--', `${CLAIMED}/a.json`, `${PROCESSED}/a.json`],
+  ])
+  expect(w.log.filter(entry => entry.startsWith('submit ') || entry.startsWith('move ')).map(entry => entry.split(' ')[0])).toEqual(['move', 'submit', 'move'])
+  // In flight, the file is in claimed/ only: not in inbox/ (room_drain) and not in processed/ (read to the Room).
+  expect(w.inboxAtSubmit).toEqual([[]])
+  expect(w.processedAtSubmit).toEqual([[]])
+  expect(w.claimedAtSubmit).toEqual([[`${CLAIMED}/a.json`]])
+  // The rename comes before any claim line; the finish comes after the submitted line.
+  expect(w.logAtMove[0]).not.toContain('"status":"submitting"')
+  expect(w.logAtMove[1]).toContain('"status":"submitted"')
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
 })
 
 // The engine resolves a relative $.fs path against the plugin folder, so a
@@ -318,30 +405,320 @@ test('a path that starts with a dash rides after --, never as a node option', as
   ])
 })
 
-test('a dropped or deferred Room item is never moved', CONFIGURED, async ($, on) => {
+test('a dropped Room item goes back to inbox/, final for the mod; a composer-busy one is never claimed', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY, submit: Promise.resolve({ drop: 'a hook refused it' }) })
   await w.turn()
+  await w.turn()
   expect(statuses(w.ledger())).toEqual(['submitting', 'dropped'])
+  expect(submits(w.log)).toHaveLength(1)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(false)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
+  const moves = w.moves().length
   w.box.text = 'a draft'
   w.files.set(`${INBOX}/b.json`, ENVELOPE)
   await w.turn()
   expect(statuses(w.ledger())).toEqual(['submitting', 'dropped', 'deferred:composer-busy'])
-  expect(w.moves()).toEqual([])
-  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.moves()).toHaveLength(moves)
   expect(w.files.has(`${INBOX}/b.json`)).toBe(true)
 })
 
-test('a failed move leaves the item submitted, notes it once, and never delivers it again', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: READY, failMove: true })
-  for (let i = 0; i < 3; i++) await w.turn()
-  expect(submits(w.log)).toHaveLength(1)
-  expect(w.moves()).toHaveLength(1)
+test('a retryable reject leaves the file in claimed/ and retries it; the final reject returns it to inbox/', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, submit: 'reject' })
+  await w.turn()
+  expect(statuses(w.ledger())).toEqual(['submitting', 'deferred:submit-rejected'])
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(2)
+  expect(w.ledger().at(-1)?.attempts).toBe(2)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  await w.turn()
+  expect(statuses(w.ledger()).at(-1)).toBe('error:submit-rejected')
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
-  const lines = w.ledger()
-  expect(lines.map(entry => entry.status)).toEqual(['submitting', 'submitted', 'submitted'])
-  // The one-liner prints the error code alone, so the note names it.
-  expect(lines.filter(entry => entry.detail === 'note: move to processed failed: exit 1 ENOENT')).toHaveLength(1)
-  expect(w.lastStatus()).toBe('status delivery: mod · 0 queued')
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
+  expect(w.moves().map(argv => argv[5])).toEqual([`${CLAIMED}/a.json`, `${INBOX}/a.json`])
+})
+
+test('a claim deferral goes on to the next item, which is delivered the same tick', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/b.json`]: ENVELOPE }, failMoveFor: '/a.json' })
+  await w.turn()
+  const of = (name: string) => statuses(w.ledger().filter(entry => entry.id === `room:alpha:${name}`))
+  expect(of('a.json')).toEqual(['deferred:claim-move'])
+  expect(of('b.json')).toEqual(['submitting', 'submitted'])
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('the third claim deferral ends the tick: four unclaimable heads cost three spawns, nothing behind them is tried', CONFIGURED, async ($, on) => {
+  const files = { ...READY, [`${INBOX}/b.json`]: ENVELOPE, [`${INBOX}/c.json`]: ENVELOPE, [`${INBOX}/d.json`]: ENVELOPE, [`${INBOX}/e.json`]: ENVELOPE }
+  const w = world(on, $, { files, moveRunFails: true })
+  await w.turn()
+  expect(w.moves()).toHaveLength(3)
+  expect(w.ledger().map(entry => entry.id)).toEqual(['room:alpha:a.json', 'room:alpha:b.json', 'room:alpha:c.json'])
+  expect(submits(w.log)).toEqual([])
+  await w.turn()
+  expect(w.moves()).toHaveLength(6)
+})
+
+test('one Item per id: a held copy and an inbox copy of the same name queue once', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [`${CLAIMED}/a.json`]: ENVELOPE } })
+  w.box.text = 'a draft'
+  await w.turn()
+  expect(w.lastStatus()).toContain('1 queued')
+  expect(w.lastStatus()).toContain('composer busy')
+})
+
+test('items stuck on a claim deferral sort after the rest, so they cannot hold the queue head', CONFIGURED, async ($, on) => {
+  const stuck = (name: string) => line({ id: `room:alpha:${name}`, source: 'room', at: 'x', status: 'deferred:claim-move' })
+  const files: Record<string, string> = { ...READY, [LOG]: `${SEED}${IMPORTED}${stuck('a.json')}${stuck('b.json')}${stuck('c.json')}${stuck('d.json')}` }
+  for (const name of ['b', 'c', 'd', 'e']) files[`${INBOX}/${name}.json`] = ENVELOPE
+  const w = world(on, $, { files })
+  await w.turn()
+  expect(statuses(w.ledger().filter(entry => entry.id === 'room:alpha:e.json'))).toEqual(['submitting', 'submitted'])
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('the sweep has its own budget of three moves and never pre-spends the claim deferrals', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const files: Record<string, string> = { ...rest }
+  let log = `${SEED}${IMPORTED}`
+  for (const name of ['a', 'b', 'c', 'd']) {
+    files[`${CLAIMED}/${name}.json`] = ENVELOPE
+    log += SWEPT(`${name}.json`, 'submitted')
+  }
+  files[LOG] = log
+  for (const name of ['x', 'y', 'z']) files[`${INBOX}/${name}.json`] = ENVELOPE
+  const w = world(on, $, { files, moveRunFails: true })
+  await w.turn()
+  // Sweep: three attempts (the fourth waits). Claims: three deferrals of their own.
+  expect(w.moves()).toHaveLength(6)
+  expect(submits(w.log)).toEqual([])
+})
+
+test('two negative exists answers alone are not evidence of consumption: the claim defers', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX], failMove: true })
+  w.beforeMove(() => w.files.delete(`${INBOX}/a.json`))
+  await w.turn()
+  // The mover reported EPERM, not ENOENT, and processed/ does not hold the file.
+  expect(statuses(w.ledger())).toEqual(['deferred:claim-move'])
+})
+
+test('a file in processed/ is evidence of consumption', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX], failMove: true })
+  w.beforeMove(() => {
+    w.files.set(`${PROCESSED}/a.json`, w.files.get(`${INBOX}/a.json`)!)
+    w.files.delete(`${INBOX}/a.json`)
+  })
+  await w.turn()
+  expect(statuses(w.ledger())).toEqual(['dropped:consumed'])
+})
+
+test('a failed move whose source is gone and destination present counts as moved', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX], failMove: true })
+  w.beforeMove(() => {
+    w.files.set(`${CLAIMED}/a.json`, w.files.get(`${INBOX}/a.json`)!)
+    w.files.delete(`${INBOX}/a.json`)
+  })
+  await w.turn()
+  // (The finishing move fails in this world and adds a note line; the statuses before it are the point.)
+  expect(statuses(w.ledger()).slice(0, 2)).toEqual(['submitting', 'submitted'])
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('the status after a submit counts the remaining non-final items', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/b.json`]: ENVELOPE, [`${INBOX}/c.json`]: ENVELOPE } })
+  await w.turn()
+  expect(w.lastStatus()).toBe('status delivery: mod · 2 queued')
+})
+
+test('a seat the mod does not own gets its claimed files back in inbox/, three a tick', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, [OWNER]: __, ...rest } = READY
+  const files: Record<string, string> = { ...rest, [OWNER]: '{"owner":{"alpha":"supervisor"}}' }
+  for (const name of ['a', 'b', 'c', 'd']) files[`${CLAIMED}/${name}.json`] = ENVELOPE
+  const w = world(on, $, { files })
+  await w.turn()
+  expect([...w.files.keys()].filter(key => key.startsWith(`${INBOX}/`))).toHaveLength(3)
+  expect([...w.files.keys()].filter(key => key.startsWith(`${CLAIMED}/`))).toHaveLength(1)
+  await w.turn()
+  expect([...w.files.keys()].filter(key => key.startsWith(`${CLAIMED}/`))).toHaveLength(0)
+  expect(submits(w.log)).toEqual([])
+})
+
+test('a not-owned seat releases by ledger status: delivered to processed/, in flight stays, the rest to inbox/', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, [OWNER]: __, ...rest } = READY
+  const files: Record<string, string> = {
+    ...rest,
+    [OWNER]: '{"owner":{"alpha":"supervisor"}}',
+    [LOG]: `${SEED}${IMPORTED}${SWEPT('a.json', 'submitted')}${SWEPT('b.json', 'submitting')}${SWEPT('c.json', 'deferred:submit-rejected')}`,
+  }
+  for (const name of ['a', 'b', 'c']) files[`${CLAIMED}/${name}.json`] = ENVELOPE
+  const w = world(on, $, { files })
+  await w.turn()
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  expect(w.files.has(`${CLAIMED}/b.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/c.json`)).toBe(true)
+})
+
+test('the stray sweep writes its note lines in one append a tick', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, {
+    files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${CLAIMED}/b.json`]: ENVELOPE, [`${CLAIMED}/c.json`]: ENVELOPE, [LOG]: `${SEED}${IMPORTED}${SWEPT('a.json', 'submitted')}${SWEPT('b.json', 'submitted')}${SWEPT('c.json', 'submitted')}` },
+  })
+  await w.turn()
+  expect(w.sweeps()).toHaveLength(3)
+  expect(w.writes.count).toBe(1)
+})
+
+test('a blocked sweep move is retried every tick, its note written once, and it lands when the block clears', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const kept = envelope('beta', 'already delivered')
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${PROCESSED}/a.json`]: kept, [LOG]: `${SEED}${SWEPT('a.json', 'submitted')}` } })
+  await w.turn()
+  await w.turn()
+  expect(w.moves()).toHaveLength(0)
+  expect(w.ledger().filter(entry => String(entry.detail).includes('exists'))).toHaveLength(1)
+  // The block clears (the Room archived the old processed file).
+  w.files.delete(`${PROCESSED}/a.json`)
+  await w.turn()
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
+})
+
+test('a claim move that fails writes no claim line, submits nothing, and defers once, never to error', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, failMove: true })
+  for (let i = 0; i < 5; i++) await w.turn()
+  expect(submits(w.log)).toEqual([])
+  expect(statuses(w.ledger())).toEqual(['deferred:claim-move'])
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+})
+
+test('the claim rename never overwrites a claimed/ file that appeared meanwhile', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX] })
+  const held = envelope('beta', 'the held copy')
+  w.beforeMove(() => w.files.set(`${CLAIMED}/a.json`, held))
+  await w.turn()
+  expect(w.files.get(`${CLAIMED}/a.json`)).toBe(held)
+  expect(w.files.get(`${INBOX}/a.json`)).toBe(ENVELOPE)
+  expect(statuses(w.ledger())).toEqual(['deferred:claim-move'])
+  expect(submits(w.log)).toEqual([])
+})
+
+test('a dropped item whose claimed file is gone writes one absent note', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  w.files.delete(`${CLAIMED}/a.json`)
+  enter({ drop: 'a hook refused it' })
+  await w.clock.settle()
+  expect(statuses(w.ledger().filter(entry => !String(entry.detail).startsWith('note:')))).toEqual(['submitting', 'dropped'])
+  expect(w.ledger().filter(entry => String(entry.detail).includes('is absent'))).toHaveLength(1)
+})
+
+const SWEPT = (id: string, status: string) => line({ id: `room:alpha:${id}`, source: 'room', at: 'x', status, attempts: 1 })
+
+test('stray sweep: a file in claimed/ or inbox/ under a finished id goes to processed/, one note line each', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, {
+    files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${INBOX}/b.json`]: ENVELOPE, [LOG]: `${SEED}${SWEPT('a.json', 'submitted')}${SWEPT('b.json', 'submitted')}` },
+  })
+  await w.turn()
+  expect(submits(w.log)).toEqual([])
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  expect(w.files.has(`${PROCESSED}/b.json`)).toBe(true)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
+  expect(w.files.has(`${INBOX}/b.json`)).toBe(false)
+  expect(w.sweeps()).toHaveLength(2)
+  // Nothing left to sweep: no further notes.
+  await w.turn()
+  expect(w.sweeps()).toHaveLength(2)
+})
+
+test('stray sweep: a dropped file held in claimed/ goes back to inbox/ and is not delivered', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [LOG]: `${SEED}${SWEPT('a.json', 'dropped')}` } })
+  await w.turn()
+  await w.turn()
+  expect(submits(w.log)).toEqual([])
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
+  expect(w.sweeps()).toHaveLength(1)
+})
+
+test('stray sweep: error:* and skipped:* files held in claimed/ go back to inbox/, never to processed/', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, {
+    files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${CLAIMED}/b.json`]: ENVELOPE, [LOG]: `${SEED}${SWEPT('a.json', 'error:empty-body')}${SWEPT('b.json', 'skipped:control')}` },
+  })
+  await w.turn()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/b.json`)).toBe(true)
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(false)
+  expect(w.files.has(`${PROCESSED}/b.json`)).toBe(false)
+  expect(w.sweeps()).toHaveLength(2)
+  expect(submits(w.log)).toEqual([])
+})
+
+test('stray sweep never overwrites: an existing destination leaves the source and writes one note', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const kept = envelope('beta', 'already delivered')
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${PROCESSED}/a.json`]: kept, [LOG]: `${SEED}${SWEPT('a.json', 'submitted')}` } })
+  await w.turn()
+  await w.turn()
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(kept)
+  expect(w.files.get(`${CLAIMED}/a.json`)).toBe(ENVELOPE)
+  // Retried every tick without a spawn (the destination is checked first); only the note is written once.
+  expect(w.moves()).toHaveLength(0)
+  expect(w.ledger().filter(entry => String(entry.detail).includes('exists'))).toHaveLength(1)
+})
+
+test('a finishing move never overwrites a processed/ file of the same name', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const kept = envelope('beta', 'already delivered')
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${PROCESSED}/a.json`]: kept, [LOG]: `${SEED}${UNRESOLVED_A}` } })
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json delivered', ...RUN })
+  await w.clock.settle()
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(kept)
+  expect(w.files.get(`${CLAIMED}/a.json`)).toBe(ENVELOPE)
+  expect(w.ledger().filter(entry => String(entry.detail).includes('exists'))).toHaveLength(1)
+})
+
+test('stray sweep: an unresolved id keeps its claimed file', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [LOG]: `${SEED}${UNRESOLVED_A}` } })
+  await w.turn()
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  expect(w.moves()).toEqual([])
+})
+
+test('a claimed/ file with no ledger entry is queued and delivered', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE } })
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(1)
+  expect(w.moves()).toEqual([['node', '-e', MOVE, '--', `${CLAIMED}/a.json`, `${PROCESSED}/a.json`]])
+  expect(statuses(w.ledger())).toEqual(['submitting', 'submitted'])
+})
+
+test('a claimed/ file with a retryable entry is queued; one with a final entry is swept, not delivered', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const busy = line({ id: 'room:alpha:a.json', source: 'room', at: 'x', status: 'deferred:submit-rejected', attempts: 1 })
+  const done = line({ id: 'room:alpha:b.json', source: 'room', at: 'x', status: 'submitted', attempts: 1 })
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [`${CLAIMED}/b.json`]: ENVELOPE, [LOG]: `${SEED}${busy}${done}` } })
+  await w.turn()
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(1)
+  expect(w.ledger().map(entry => [entry.id, entry.status])).toEqual([
+    ['room:alpha:a.json', 'deferred:submit-rejected'],
+    ['room:alpha:b.json', 'submitted'],
+    ['room:alpha:a.json', 'submitting'],
+    ['room:alpha:a.json', 'submitted'],
+  ])
+  expect(w.files.has(`${PROCESSED}/b.json`)).toBe(true)
+  expect(w.sweeps()).toHaveLength(1)
 })
 
 test('a new session reads the log and does not resend', CONFIGURED, async ($, on) => {
@@ -848,12 +1225,33 @@ test('/delivery-reconcile whose log write fails changes nothing and says so', CO
   expect(again.text).toContain('reconciled:not-delivered')
 })
 
-test('/delivery-reconcile <id> delivered moves the Room file to processed/', CONFIGURED, async ($, on) => {
+test('/delivery-reconcile <id> delivered: claimed/ to processed/ only; a leftover inbox copy is the sweep\'s', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [LOG]: `${SEED}${UNRESOLVED_A}` } })
   const done = await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json delivered', ...RUN })
   expect(done.text).toContain('reconciled:delivered')
-  expect(w.moves()).toEqual([['node', '-e', RENAME, '--', `${INBOX}/a.json`, `${PROCESSED}/a.json`]])
+  // The reconcile's own move touches claimed/ only, and finds it absent: one note.
+  expect(w.moves()[0]).toEqual(['node', '-e', MOVE, '--', `${CLAIMED}/a.json`, `${PROCESSED}/a.json`])
+  const notes = w.ledger().filter(entry => String(entry.detail).includes('is absent'))
+  expect(notes).toHaveLength(1)
+  expect(notes[0]?.detail).toContain(`${CLAIMED}/a.json`)
+  // The next tick's sweep takes the inbox copy under the finished id.
+  await w.clock.settle()
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  expect(submits(w.log)).toEqual([])
+})
+
+test('/delivery-reconcile not-delivered leaves the file in claimed/ and the next tick sends it from there', CONFIGURED, async ($, on) => {
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${CLAIMED}/a.json`]: ENVELOPE, [LOG]: `${SEED}${UNRESOLVED_A}` } })
+  await w.turn()
+  expect(submits(w.log)).toEqual([])
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  await w.clock.settle()
+  expect(submits(w.log)).toHaveLength(1)
+  expect(statuses(w.ledger()).at(-1)).toBe('submitted')
+  // Never back through inbox/: the only moves are the final one into processed/.
+  expect(w.moves()).toEqual([['node', '-e', MOVE, '--', `${CLAIMED}/a.json`, `${PROCESSED}/a.json`]])
 })
 
 test('a .tmp left behind by a crash is ignored by the reader and replaced on the next write', CONFIGURED, async ($, on) => {
@@ -882,7 +1280,9 @@ test('a late settle in a module a hot reload replaced records nothing', CONFIGUR
   // nothing: the new module's reconcile owns it.
   expect(statuses(w.ledger())).toEqual(['submitting', 'submitting:unresolved'])
   expect(w.held('room:alpha:a.json')?.status).toBe('submitting:unresolved')
-  expect(w.moves()).toEqual([])
+  // Only the claim moved; the old module does not touch the file again.
+  expect(w.moves()).toHaveLength(1)
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
 })
 
 test('0.1.0 store ids missing from the log are imported once, then the store key is deleted', CONFIGURED, async ($, on) => {
@@ -1021,4 +1421,220 @@ test('a seed-only log with no store gets the marker after its first clean read, 
   expect(w.files.get(LOG)?.split('\n')[1]).toMatch(/^\d+ \{"id":"store-import","source":"store-import","at":"[^"]+","status":"done"\}$/)
   expect(w.storeCalls).toEqual(['get'])
   expect(submits(w.log)).toHaveLength(1)
+})
+
+// room_drain is a second consumer of inbox/<seat>/. The claim is a rename into
+// claimed/, so a file it already took is detected there, and a claimed file is
+// out of its sight for the whole wait.
+test('a Room file room_drain took before the claim is dropped:consumed, with no claim line, never submitted', CONFIGURED, async ($, on) => {
+  // The inbox folder stays, its only message is gone.
+  const w = world(on, $, { files: READY, dirs: [INBOX] })
+  w.beforeMove(() => {
+    w.files.set(`${PROCESSED}/a.json`, w.files.get(`${INBOX}/a.json`)!)
+    w.files.delete(`${INBOX}/a.json`)
+  })
+  await w.turn()
+  expect(statuses(w.ledger())).toEqual(['dropped:consumed'])
+  expect(w.ledger()[0]?.detail).toContain(`${INBOX}/a.json`)
+  expect(submits(w.log)).toEqual([])
+})
+
+test('a claim that finds the inbox file gone but claimed/ holding it is already ours: it goes on', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX] })
+  w.beforeMove(() => {
+    w.files.set(`${CLAIMED}/a.json`, w.files.get(`${INBOX}/a.json`)!)
+    w.files.delete(`${INBOX}/a.json`)
+  })
+  await w.turn()
+  expect(statuses(w.ledger())).toEqual(['submitting', 'submitted'])
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('an inbox folder removed after load defers the item, not counted as an attempt, never dropped:consumed', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX] })
+  w.beforeMove(() => {
+    w.files.delete(`${INBOX}/a.json`)
+    w.dirs.delete(INBOX)
+  })
+  await w.turn()
+  expect(submits(w.log)).toEqual([])
+  expect(statuses(w.ledger())).toEqual(['deferred:inbox-missing'])
+  expect(w.ledger()[0]?.attempts).toBeUndefined()
+})
+
+test('a claimed/ check that errors defers the claim, never submits', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, dirs: [INBOX], failMove: true, existsThrows: [`${CLAIMED}/a.json`] })
+  w.beforeMove(() => w.files.delete(`${INBOX}/a.json`))
+  await w.turn()
+  expect(submits(w.log)).toEqual([])
+  expect(statuses(w.ledger())).toEqual(['deferred:claim-move'])
+})
+
+test('a note takes the status the ledger holds when it is written, not the one it read earlier', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const first = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const second = new Promise<PromptSubmitResult>(() => {})
+  const w = world(on, $, { files: READY, queue: [first, second] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')).toMatchObject({ status: 'submitting', attempts: 2 })
+  // Attempt 2 settles between the late-start note's snapshot and its write.
+  w.onLogRead(() => w.setHeld('room:alpha:a.json', { status: 'submitted', at: 'x', attempts: 2 }))
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  const mine = w.ledger().filter(entry => entry.id === 'room:alpha:a.json')
+  expect(mine.at(-1)?.detail).toContain('late start from attempt 1')
+  expect(mine.at(-1)?.status).toBe('submitted')
+})
+
+test('a late start from an older attempt records nothing but one note line naming the attempt', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const first = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const second = new Promise<PromptSubmitResult>(() => {})
+  const w = world(on, $, { files: READY, queue: [first, second] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')).toMatchObject({ status: 'submitting', attempts: 2 })
+  const lines = w.ledger().length
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')).toMatchObject({ status: 'submitting', attempts: 2 })
+  const added = w.ledger().slice(lines)
+  expect(added).toHaveLength(1)
+  expect(added[0]).toMatchObject({ status: 'submitting', attempts: 2 })
+  expect(added[0]?.detail).toContain('late start from attempt 1')
+  expect(added[0]?.detail).toContain('check the transcript')
+})
+
+test('a late settle leaves one submitted line and one finishing move', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(statuses(w.ledger())).toEqual(['submitting', 'submitting:unresolved', 'submitted'])
+  expect(w.moves()).toHaveLength(2)
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('a late reject from attempt 1, after a reconcile and a re-claim, touches nothing of attempt 2', CONFIGURED, async ($, on) => {
+  let reject: () => void = () => {}
+  const first = new Promise<PromptSubmitResult>((_, fail) => {
+    reject = () => fail(new Error('late'))
+  })
+  const second = new Promise<PromptSubmitResult>(() => {})
+  const w = world(on, $, { files: READY, queue: [first, second] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  expect(statuses(w.ledger())).toEqual(['submitting', 'submitting:unresolved'])
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  await w.clock.settle()
+  // Attempt 2 holds the file in claimed/.
+  expect(w.held('room:alpha:a.json')).toMatchObject({ status: 'submitting', attempts: 2 })
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  const lines = w.ledger().length
+  const moves = w.moves().length
+  reject()
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')).toMatchObject({ status: 'submitting', attempts: 2 })
+  expect(w.files.has(`${CLAIMED}/a.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  expect(w.ledger()).toHaveLength(lines)
+  expect(w.moves()).toHaveLength(moves)
+})
+
+test('a timed-out submit whose unresolved line cannot be written still settles on the late answer', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  // The unresolved line is the next log write.
+  w.failNext(1)
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitted')
+  expect(statuses(w.ledger()).at(-1)).toBe('submitted')
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+})
+
+test('a start that lands after a reconcile is recorded submitted and says so', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  const done = await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  expect(done.text).toContain('reconciled:not-delivered')
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  const landed = w.ledger().filter(entry => entry.status === 'submitted')
+  expect(landed[0]?.detail).toBe('late start after reconcile')
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitted')
+})
+
+test('a late start after a reconcile and a deferral is recorded submitted, and the sweep takes the restored file', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  // A draft makes the tick the reconcile starts defer instead of re-claiming.
+  w.box.text = 'a draft'
+  await $.command.run({ command: 'delivery-reconcile', args: 'room:alpha:a.json', ...RUN })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('deferred:composer-busy')
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitted')
+  w.box.text = ''
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(1)
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+})
+
+// Regression cover: the unresolved hold already kept this true before 0.2.1.
+test('an unresolved item is not submitted again by later ticks, even after its file is gone and back', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [LOG]: `${SEED}${UNRESOLVED_A}` } })
+  for (let i = 0; i < 3; i++) await w.turn()
+  w.files.delete(`${INBOX}/a.json`)
+  await w.turn()
+  w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  await w.clock.advance(40 * 60_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toEqual([])
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitting:unresolved')
 })

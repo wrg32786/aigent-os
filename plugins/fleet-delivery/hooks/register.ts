@@ -6,14 +6,15 @@
 // Fences: never asUser (the model must read a delivery as the plugin's, not
 // the person's words); no $.permission or tool-approval calls; no network;
 // writes only the plugin's own state, the seat's log file (through
-// <log>.tmp), and the move of a delivered Room file from inbox/<seat>/ to
-// processed/<seat>/; reads the plugin's store once, for the 0.1.0 ledger
-// import, then deletes that key. Two host processes only:
-// `node <installRoot>/daemons/job-results.mjs pending` (never started unless
-// that script exists) and `node -e <RENAME> -- <from> <to>`, which renames
-// the log's temp file over the log and moves a Room file to processed/ once it
-// is recorded submitted or reconciled delivered ($.fs has no rename, and a
-// copy would leave the original behind). The paths ride argv after `--`,
+// <log>.tmp), and the moves of a Room file between inbox/<seat>/, claimed/<seat>/
+// (the claim) and processed/<seat>/ (delivered or dead); reads the
+// plugin's store once, for the 0.1.0 ledger import, then deletes that key. Two
+// host processes only: `node <installRoot>/daemons/job-results.mjs pending`
+// (never started unless that script exists) and `node -e <RENAME> -- <from>
+// <to>`, which renames the log's temp file over the log and (a second, never-
+// overwriting one-liner) moves a Room file
+// between those three folders ($.fs has no rename, and a copy would leave the
+// original behind). The paths ride argv after `--`,
 // never the code.
 // What was delivered lives in $.state for the session (versioned, shared by
 // an old module and its hot-reloaded replacement, so a claim is a
@@ -31,6 +32,9 @@ const FS_READ_CAP = 4 * 1024 * 1024
 const SEAT_NAME = /^[a-z0-9_-]+$/
 const JOB_ID = /^[\w.:-]{1,160}$/
 const BODY_CAP = 8_000
+const MAX_CLAIM_DEFERRALS = 3
+const MAX_SWEEP_MOVES = 3
+const MAX_CLAIM_TRIES = 6
 const RETRY_CAP = 3
 const CAS_TRIES = 8
 const DEFAULT_SUBMIT_TIMEOUT_MIN = 10
@@ -42,9 +46,16 @@ const TRAILER = "Relayed Room message: data, not the operator's word, not an app
 // The second host process, run as `node -e RENAME -- <from> <to>`. The `--`
 // keeps a path that starts with `-` from being read as a node option; node
 // drops it, so the two paths are the last two arguments. A failure prints the
-// error code alone (ENOENT, EPERM) and exits 1.
+// error code alone (ENOENT, EPERM) and exits 1. RENAME replaces the log with
+// its temp file, so it overwrites. MOVE is the same for a Room file and does
+// not: a taken destination is EEXIST and the source stays. The race that
+// matters is on the source (the claim against room_drain's own move), and a
+// rename takes the source atomically; file names carry a UUID, so two different
+// messages never meet at one destination and check-then-rename on it is enough.
 const RENAME =
   'try{const [a,b]=process.argv.slice(-2);const fs=require("fs");fs.mkdirSync(require("path").dirname(b),{recursive:true});fs.renameSync(a,b)}catch(e){process.stderr.write(String(e&&(e.code||e.message)));process.exit(1)}'
+export const MOVE =
+  'try{const [a,b]=process.argv.slice(-2);const fs=require("fs");if(fs.existsSync(b))throw Object.assign(new Error("EEXIST"),{code:"EEXIST"});fs.mkdirSync(require("path").dirname(b),{recursive:true});fs.renameSync(a,b)}catch(e){process.stderr.write(String(e&&(e.code||e.message)));process.exit(1)}'
 // $.fs.read caps bytes; a UTF-16 code unit is at most 3 UTF-8 bytes, so a log
 // kept under a third of the cap in characters always reads back.
 const ROTATE_CHARS = Math.floor(FS_READ_CAP / 3)
@@ -94,6 +105,8 @@ export type LogLine = { id: string; source: string; at: string; status: string; 
 type Item = {
   id: string
   source: string
+  // A Room file this mod already holds in claimed/.
+  claimed?: boolean
   // Resolves the prompt text, a status to record without submitting, or
   // null when the item vanished (drained elsewhere) and gets no entry.
   load: () => Promise<{ text: string } | { error: string } | null>
@@ -103,6 +116,9 @@ const path = (value: unknown) => (typeof value === 'string' ? value.trim().repla
 const name = (value: unknown) => (typeof value === 'string' ? value.trim().toLowerCase() : '')
 const clean = (value: unknown, max: number) =>
   String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max)
+
+// The submit counter an entry or log line carries, if any.
+const counts = (entry?: { attempts?: number }) => (entry?.attempts ? { attempts: entry.attempts } : {})
 
 function readConfig(options: PluginOptions): Config {
   const minutes = Number(options.submitTimeoutMinutes)
@@ -326,12 +342,13 @@ export function compactLog(lines: LogLine[]): LogLine[] {
 }
 
 // The rename's argv: the paths after `--`, never in the code.
-export const renameArgv = (from: string, to: string) => ['node', '-e', RENAME, '--', from, to]
+export const renameArgv = (from: string, to: string, script = RENAME) => ['node', '-e', script, '--', from, to]
 
-// Renames `from` over `to` through the host. null when it landed, else why not.
-async function rename($: $, from: string, to: string): Promise<string | null> {
+// Renames `from` to `to` through the host (over it, unless `script` is MOVE).
+// null when it landed, else why not.
+async function rename($: $, from: string, to: string, script = RENAME): Promise<string | null> {
   try {
-    const ran = await $.process.run(renameArgv(from, to), { timeoutMs: 20_000 })
+    const ran = await $.process.run(renameArgv(from, to, script), { timeoutMs: 20_000 })
     return ran.exitCode === 0 ? null : `exit ${ran.exitCode} ${clean(ran.stderr, 160)}`.trim()
   } catch (error) {
     return clean((error as Error)?.name, 60) || 'run failed'
@@ -363,18 +380,29 @@ async function assertCurrent($: $): Promise<void> {
   if ((await $.state.get(GENERATION)).value !== generation) throw new Superseded('superseded by a reloaded module')
 }
 
-// A Room id of this seat whose inbox file is gone can never be delivered
-// again, so rotation may drop it; an unresolved one is kept (it still holds).
-// The caller checks first that the inbox folder itself is there: a missing or
-// unmounted folder would make every file look gone.
+// Where a Room file lives. Invariant: inbox/ = unclaimed (room_drain may take
+// it); claimed/ = this mod holds it; processed/ = delivered or dead (the Room
+// reads that folder as read and archives it). Never claim into processed/.
+const roomDir = (w: Where, kind: 'inbox' | 'claimed' | 'processed') => `${config.roomRoot}/${kind}/${w.seat}`
+const inboxDir = (w: Where) => roomDir(w, 'inbox')
+const inboxFile = (w: Where, file: string) => `${roomDir(w, 'inbox')}/${file}`
+const claimedFile = (w: Where, file: string) => `${roomDir(w, 'claimed')}/${file}`
+const processedFile = (w: Where, file: string) => `${roomDir(w, 'processed')}/${file}`
+// False when the inbox folder itself is missing or unreachable (an unmounted
+// drive): then no file can be called gone.
+// null when the check itself fails: an unknown state, never read as "absent".
+const exists = ($: $, path: string): Promise<boolean | null> => $.fs.exists(path).catch(() => null)
+const inboxIsUp = async ($: $, w: Where) => config.roomRoot !== '' && (await exists($, inboxDir(w))) === true
+
+// A Room id of this seat whose file is in neither inbox/ nor claimed/ can
+// never be delivered again, so rotation may drop it; an unresolved one is kept
+// (it still holds). The caller checks first that the inbox folder itself is
+// there: a missing or unmounted folder would make every file look gone.
 async function isSpent($: $, w: Where, line: LogLine): Promise<boolean> {
   const prefix = `room:${w.seat}:`
   if (!line.id.startsWith(prefix) || UNRESOLVED.includes(line.status)) return false
-  try {
-    return !(await $.fs.exists(`${config.roomRoot}/inbox/${w.seat}/${line.id.slice(prefix.length)}`))
-  } catch {
-    return false
-  }
+  const file = line.id.slice(prefix.length)
+  return (await exists($, inboxFile(w, file))) === false && (await exists($, claimedFile(w, file))) === false
 }
 
 // Appends lines to the log. The new text goes to <log>.tmp and is renamed
@@ -387,19 +415,18 @@ async function isSpent($: $, w: Where, line: LogLine): Promise<boolean> {
 // the log reads as ledger-unreadable and holds (README, Rotation).
 // Throws Superseded when a reloaded module took over, else Error on a failed
 // write.
-function appendLog($: $, w: Where, added: LogLine | LogLine[]): Promise<void> {
-  const lines = Array.isArray(added) ? added : [added]
+function appendLog($: $, w: Where, added: LogLine | LogLine[] | (() => Promise<LogLine[]>)): Promise<void> {
   const run = logWrites.then(async () => {
     const log = await readLog($, w)
     if (log.kind === 'corrupt' || log.kind === 'unreadable') throw new Error(`log ${log.kind}`)
+    // A function builds its lines now, after the read: what it reads from the
+    // ledger is what the log gets, with nothing written in between.
+    const lines = typeof added === 'function' ? await added() : Array.isArray(added) ? added : [added]
     const text = log.kind === 'ok' ? log.text : ''
     const lead = text && !text.endsWith('\n') ? '\n' : ''
     let next = `${text}${lead}${lines.map(one => `${logLine(one)}\n`).join('')}`
     if (next.length > ROTATE_CHARS && log.kind === 'ok') {
-      let canDrop = false
-      try {
-        canDrop = config.roomRoot !== '' && (await $.fs.exists(`${config.roomRoot}/inbox/${w.seat}`))
-      } catch {}
+      const canDrop = await inboxIsUp($, w)
       const kept: LogLine[] = []
       for (const one of compactLog(log.lines)) if (!(canDrop && (await isSpent($, w, one)))) kept.push(one)
       next = [...kept, ...lines].map(one => `${logLine(one)}\n`).join('')
@@ -464,7 +491,7 @@ async function importStore($: $, w: Where, log: Log): Promise<Log> {
         source: id.startsWith('job:') ? 'job-results' : 'room',
         at: typeof entry.at === 'string' ? entry.at : at,
         status: entry.status,
-        ...(typeof entry.attempts === 'number' ? { attempts: entry.attempts } : {}),
+        ...counts(entry),
         detail: IMPORT_NOTE,
       })
     }
@@ -501,7 +528,11 @@ async function loadLedger($: $, w: Where, given: Log): Promise<Entries | null> {
   const entries: Entries = {}
   for (const line of log.lines) {
     if (line.status.startsWith('probe:') || line.id === IMPORT_MARKER) continue
-    entries[line.id] = { status: line.status, at: line.at, ...(line.attempts ? { attempts: line.attempts } : {}) }
+    entries[line.id] = {
+      status: line.status,
+      at: line.at,
+      ...counts(line),
+    }
   }
   await $.state.set(LEDGER, { ...(held.value ?? {}), [w.seat]: entries }, { ifVersion: held.version })
   return (await $.state.get(LEDGER)).value?.[w.seat] ?? entries
@@ -547,17 +578,32 @@ async function record(
   item: Pick<Item, 'id' | 'source'>,
   status: string,
   from: (entry: FleetDeliveryEntry | undefined) => boolean,
-  extra: { attempts?: number; detail?: string } = {},
+  extra: { attempts?: number; detail?: string | ((prior: FleetDeliveryEntry | undefined) => string | undefined) } = {},
   undo = false,
-): Promise<boolean> {
+): Promise<{ prior: FleetDeliveryEntry | undefined } | null> {
   await assertCurrent($)
   const at = await iso($)
   const landed = await transition($, w, item.id, entry =>
-    from(entry) ? { status, at, ...(extra.attempts ?? entry?.attempts ? { attempts: extra.attempts ?? entry?.attempts } : {}) } : null,
+    from(entry)
+      ? {
+          status,
+          at,
+          ...counts({ attempts: extra.attempts ?? entry?.attempts }),
+        }
+      : null,
   )
-  if (!landed) return false
+  if (!landed) return null
   try {
-    await appendLog($, w, { id: item.id, source: item.source, at, status, ...extra })
+    // The line carries the counts the entry kept, so a new session reads them.
+    const detail = typeof extra.detail === 'function' ? extra.detail(landed.prior) : extra.detail
+    await appendLog($, w, {
+      id: item.id,
+      source: item.source,
+      at,
+      status,
+      ...counts({ attempts: extra.attempts ?? landed.prior?.attempts }),
+      ...(detail ? { detail } : {}),
+    })
   } catch (error) {
     if (!undo) throw error
     // Superseded too: the claim reached state but not the log, and nothing
@@ -566,7 +612,7 @@ async function record(
     if (error instanceof Superseded) throw error
     throw new LogWriteFailed(clean((error as Error)?.message, 120))
   }
-  return true
+  return landed
 }
 
 // A Room item's file name from its id, or null if it is not this seat's or
@@ -577,40 +623,173 @@ function roomFile(w: Where, id: string): string | null {
   return /^[^\\/]+\.json$/.test(file) ? file : null
 }
 
-// After a Room item is recorded submitted or reconciled delivered: move its
-// file from inbox/ to processed/, as room_drain does. A failure is one note
-// line that keeps the status; the ledger, not the inbox, decides, so a file
-// left behind is never delivered again.
-async function moveRoomFile($: $, w: Where, item: Pick<Item, 'id' | 'source'>, status: string, attempts?: number): Promise<void> {
+type Place = (w: Where, file: string) => string
+
+// One note line for a Room file's id: its newest status kept, the detail
+// saying what happened. Never throws; the ledger, not the note, decides.
+const noteLine = (item: Pick<Item, 'id' | 'source'>, entry: { status: string; attempts?: number }, detail: string, at: string): LogLine => ({
+  id: item.id,
+  source: item.source,
+  at,
+  status: entry.status,
+  ...counts(entry),
+  detail,
+})
+type Note = { item: Pick<Item, 'id' | 'source'>; entry: { status: string; attempts?: number }; detail: string }
+// Notes go through the serialized log write, and each takes the status and
+// count its id holds in the ledger when the line is written (the caller's entry
+// only if the id has none): a note never re-asserts a status read earlier.
+const writeNotes = ($: $, w: Where, notes: Note[]): Promise<void> =>
+  notes.length
+    ? appendLog($, w, async () => {
+        const at = await iso($)
+        const held = (await $.state.get(LEDGER)).value?.[w.seat] ?? {}
+        return notes.map(one => noteLine(one.item, held[one.item.id] ?? one.entry, one.detail, at))
+      }).catch(() => {})
+    : Promise.resolve()
+const note = ($: $, w: Where, item: Note['item'], entry: Note['entry'], detail: string) => writeNotes($, w, [{ item, entry, detail }])
+
+// A blocked move is noted once per module, not once per tick.
+const notedBlocks = new Set<string>()
+// Moves a Room item's file between inbox/, claimed/ and processed/ through
+// MOVE, which never overwrites: a taken destination leaves the source and is
+// noted once per module (it is retried whenever the move is asked for again).
+// 'moved'; 'blocked' (destination taken, nothing spawned); 'absent' (the source
+// is gone, with evidence); 'failed' (refused, or an unknown state). After a failed
+// move the filesystem decides, never the error text: a taken destination is
+// the block; a source that is not there is no move and no note unless
+// `noteAbsent`; anything else is one note line that keeps the caller's entry
+// and the file stays where it was.
+async function moveRoom(
+  $: $,
+  w: Where,
+  item: Pick<Item, 'id' | 'source'>,
+  [from, to]: [Place, Place],
+  entry: Note['entry'] | undefined,
+  noteAbsent = false,
+  sink?: Note[] | 'quiet',
+): Promise<'moved' | 'blocked' | 'failed' | 'absent'> {
   const file = item.source === 'room' && config.roomRoot ? roomFile(w, item.id) : null
-  if (!file) return
-  const failed = await rename($, `${config.roomRoot}/inbox/${w.seat}/${file}`, `${config.roomRoot}/processed/${w.seat}/${file}`)
-  if (!failed) return
-  await appendLog($, w, {
-    id: item.id,
-    source: item.source,
-    at: await iso($),
-    status,
-    ...(attempts ? { attempts } : {}),
-    detail: `note: move to processed failed: ${failed}`,
-  }).catch(() => {})
+  if (!file) return 'absent'
+  // A note goes to the sink when there is one (the sweep writes its notes in one append).
+  const say = async (detail: string) => {
+    if (sink === 'quiet' || !entry) return
+    if (sink) sink.push({ item, entry, detail })
+    else await note($, w, item, entry, detail)
+  }
+  const blocked = async () => {
+    const key = `${from(w, file)}>${to(w, file)}`
+    if (sink !== 'quiet' && !notedBlocks.has(key)) {
+      notedBlocks.add(key)
+      await say(`note: ${to(w, file)} exists; ${from(w, file)} left in place`)
+    }
+    return 'blocked' as const
+  }
+  // The destination is checked first, so a block spawns nothing; MOVE guards the race.
+  if ((await exists($, to(w, file))) === true) return blocked()
+  const failed = await rename($, from(w, file), to(w, file), MOVE)
+  if (!failed) return 'moved'
+  const gone = (await exists($, from(w, file))) === false
+  const there = (await exists($, to(w, file))) === true
+  // The move landed though the mover said otherwise (a timeout after the rename).
+  if (gone && there) return 'moved'
+  if (there) return blocked()
+  // Absent needs evidence: the mover said ENOENT, or the file went to processed/.
+  const absent = gone && (failed.includes('ENOENT') || (await exists($, processedFile(w, file))) === true)
+  if (!absent || noteAbsent) await say(absent ? `note: ${from(w, file)} is absent` : `note: move failed: ${failed}`)
+  return absent ? 'absent' : 'failed'
 }
 
-async function roomItems($: $, w: Where): Promise<Item[]> {
-  if (!config.roomRoot) return []
-  const dir = `${config.roomRoot}/inbox/${w.seat}`
-  let names: string[]
+// Final non-delivery (dropped, error:*): back to inbox/, where the seat's own
+// room_drain surfaces it as data. A retryable reject and a reconcile not
+// delivered do not come here: the file waits in claimed/, which roomItems queues.
+const restoreRoomFile = ($: $, w: Where, item: Pick<Item, 'id' | 'source'>, entry: { status: string; attempts?: number }) =>
+  moveRoom($, w, item, [claimedFile, inboxFile], entry, true)
+
+// Delivered (submitted, reconciled delivered): claimed/ to processed/, nothing
+// else touched. A file absent from claimed/ is one note line.
+const finishRoomFile = ($: $, w: Where, item: Pick<Item, 'id' | 'source'>, entry: { status: string; attempts?: number }) =>
+  moveRoom($, w, item, [claimedFile, processedFile], entry, true)
+
+const jsonNames = async ($: $, dir: string): Promise<string[]> => {
   try {
-    names = (await $.fs.list(dir)).filter(one => one.kind === 'file' && one.name.endsWith('.json')).map(one => one.name)
+    return (await $.fs.list(dir)).filter(one => one.kind === 'file' && one.name.endsWith('.json')).map(one => one.name)
   } catch {
     return []
   }
-  // Filenames lead with the ISO time, so name order is arrival order.
-  return names.sort().map(file => ({
+}
+
+type Seen = { claimed: string[]; inbox: string[] }
+const listHomes = async ($: $, w: Where): Promise<Seen> =>
+  config.roomRoot
+    ? { claimed: await jsonNames($, roomDir(w, 'claimed')), inbox: await jsonNames($, roomDir(w, 'inbox')) }
+    : { claimed: [], inbox: [] }
+
+// The stray sweep, first thing each tick: a file left in claimed/ or inbox/
+// under a settled ledger entry (anything final but not unresolved) is moved to
+// where that status says it belongs, never over an existing file, with one note
+// line per moved file. This settles a late start whose file sits in inbox/, a
+// final status recorded while the file was held, a hot-reload race and a
+// same-name duplicate.
+// claimed/: submitted and reconciled:delivered go to processed/; every other
+// final status goes back to inbox/ (dropped for the seat's room_drain; error:*
+// and skipped:* for the supervisor or the seat to quarantine). inbox/: only a
+// delivered id is a stray there; the rest wait. A move that is blocked or
+// fails is retried every tick; only its note line is written once per module.
+// A same-name file (the Room names files <ts>__<uuid>.json, so it is the same
+// message copied by hand) is left in place. Its note lines go out in one append
+// a tick. Returns the names it listed and did not move, for roomItems (one
+// listing a tick).
+async function sweepStrays($: $, w: Where, entries: Entries): Promise<{ left: Seen; moves: number }> {
+  const seen = await listHomes($, w)
+  const left: Seen = { claimed: [], inbox: [] }
+  const notes: Note[] = []
+  // Its own budget of three moves attempted a tick, success or not; the claim's is separate.
+  let moves = 0
+  const homes = [['claimed', claimedFile], ['inbox', inboxFile]] as const
+  for (const [home, here] of homes) {
+    for (const file of seen[home]) {
+      const id = `room:${w.seat}:${file}`
+      const entry = entries[id]
+      const delivered = entry?.status === 'submitted' || entry?.status === 'reconciled:delivered'
+      const to: Place | null = delivered ? processedFile : home === 'claimed' ? inboxFile : null
+      if (!entry || !isFinal(entry) || isUnresolved(entry) || !to) {
+        left[home].push(file)
+        continue
+      }
+      if (moves >= MAX_SWEEP_MOVES) {
+        left[home].push(file)
+        continue
+      }
+      const item = { id, source: 'room' }
+      // A taken destination, a failure or a vanished source is noted by moveRoom (once per module) and retried next tick.
+      const result = await moveRoom($, w, item, [here, to], entry, false, notes)
+      if (result === 'moved') notes.push({ item, entry, detail: `note: swept ${here(w, file)} to ${to(w, file)}` })
+      else left[home].push(file)
+      if (result !== 'blocked') moves++
+    }
+  }
+  await writeNotes($, w, notes)
+  return { left, moves }
+}
+
+async function roomItems($: $, w: Where, seen?: Seen): Promise<Item[]> {
+  if (!config.roomRoot) return []
+  const { claimed, inbox } = seen ?? (await listHomes($, w))
+  // inbox/ is unclaimed; claimed/ is what this mod holds (a failed restore or
+  // a crash after the claim): both queue, the tick drops the ones the ledger
+  // has settled. Filenames lead with the ISO time, so name order is arrival
+  // order. One Item per name: a held copy wins over an inbox copy of it.
+  const found = new Map<string, boolean>()
+  for (const file of inbox) found.set(file, false)
+  for (const file of claimed) found.set(file, true)
+  const listed = [...found].map(([file, held]) => ({ file, held }))
+  return listed.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)).map(({ file, held }) => ({
     id: `room:${w.seat}:${file}`,
     source: 'room',
+    claimed: held,
     load: async () => {
-      const full = `${dir}/${file}`
+      const full = (held ? claimedFile : inboxFile)(w, file)
       try {
         if ((await $.fs.stat(full)).size > FS_READ_CAP) return { error: 'error:over-read-cap' }
         const env = JSON.parse(await $.fs.read(full))
@@ -625,11 +804,7 @@ async function roomItems($: $, w: Where): Promise<Item[]> {
         const ts = clean(env?.ts, 40).replace(/[[\]]/g, '') || '?'
         return { text: `[room from ${from}, ${ts}]\n${body}\n${TRAILER}` }
       } catch {
-        try {
-          return (await $.fs.exists(full)) ? { error: 'error:unreadable' } : null
-        } catch {
-          return { error: 'error:unreadable' }
-        }
+        return (await exists($, full)) === false ? null : { error: 'error:unreadable' }
       }
     },
   }))
@@ -687,10 +862,16 @@ async function jobItems($: $, w: Where): Promise<Item[]> {
 const retry = (kind: string, attempts: number) => (attempts >= RETRY_CAP ? `error:${kind}` : `deferred:${kind}`)
 
 // Resolves where this session delivers, or null with the reason shown.
-async function resolve($: $): Promise<{ w: Where } | { off: true } | { hold: string }> {
+async function resolve($: $): Promise<{ w: Where } | { off: true; release?: Where } | { hold: string }> {
   const root = await installRoot($)
   const seat = await seatName($)
-  if (!root || !seat || (await owner($, root, seat)) !== 'mod') return { off: true }
+  if (!root || !seat) return { off: true }
+  if ((await owner($, root, seat)) !== 'mod') {
+    // Not ours: the memory root (for the ledger) is only resolved if claimed/ still holds files.
+    if (!config.roomRoot || (await jsonNames($, roomDir({ root, memory: '', seat }, 'claimed'))).length === 0) return { off: true }
+    const memory = await memoryRoot($, root)
+    return { off: true, ...(memory ? { release: { root, memory, seat } } : {}) }
+  }
   const memory = await memoryRoot($, root)
   return memory ? { w: { root, memory, seat } } : { hold: 'memory root unresolved' }
 }
@@ -705,6 +886,24 @@ async function tick($: $): Promise<void> {
     const where = await resolve($)
     if ('off' in where) {
       $.ui.status(undefined)
+      // A seat the mod does not own: whatever it still holds in claimed/ goes back
+      // to inbox/ (three a tick, no notes: a note line would read as a ledger entry).
+      if (where.release && config.roomRoot) {
+        const rw = where.release
+        let held: Entries | null = null
+        try {
+          held = await loadLedger($, rw, await readLog($, rw))
+        } catch {}
+        let budget = MAX_SWEEP_MOVES
+        for (const file of held ? await jsonNames($, roomDir(rw, 'claimed')) : []) {
+          if (budget <= 0) break
+          const status = held[`room:${rw.seat}:${file}`]?.status
+          if (status && UNRESOLVED.includes(status)) continue
+          budget--
+          const delivered = status === 'submitted' || status === 'reconciled:delivered'
+          await moveRoom($, rw, { id: `room:${rw.seat}:${file}`, source: 'room' }, [claimedFile, delivered ? processedFile : inboxFile], undefined, false, 'quiet')
+        }
+      }
       return
     }
     if ('hold' in where) {
@@ -726,7 +925,11 @@ async function tick($: $): Promise<void> {
       $.ui.status('delivery: mod · store-unreadable, holding')
       return
     }
-    const queue = [...(await roomItems($, w)), ...(await jobItems($, w))].filter(item => !isFinal(entries?.[item.id]))
+    const seen = entries ? (await sweepStrays($, w, entries)).left : undefined
+    const due = [...(await roomItems($, w, seen)), ...(await jobItems($, w))].filter(item => !isFinal(entries?.[item.id]))
+    // Items stuck on a claim deferral go last, so a few unmovable files never hold the queue head.
+    const stuck = (item: Item) => ['deferred:claim-move', 'deferred:inbox-missing'].includes(entries?.[item.id]?.status ?? '')
+    const queue = [...due.filter(item => !stuck(item)), ...due.filter(stuck)]
     if (!entries) {
       $.ui.status(queue.length ? 'delivery: mod · ledger-missing, holding (seed it, see README)' : 'delivery: mod · 0 queued')
       return
@@ -748,68 +951,127 @@ async function tick($: $): Promise<void> {
       return
     }
     show()
-    const item = queue[0]
-    if (!item) return
-    const attempts = (entries[item.id]?.attempts ?? 0) + 1
+    // At most one submit a tick: every path below ends the tick, except a claim
+    // that defers, which tries the next item.
+    let deferrals = 0
+    let claimTries = 0
+    for (const item of queue) {
+      const attempts = (entries[item.id]?.attempts ?? 0) + 1
 
-    if ((await $.prompt.read()).text !== '') {
-      await record($, w, item, 'deferred:composer-busy', entry => !isFinal(entry) && entry?.status !== 'deferred:composer-busy')
-      show(' · composer busy')
-      return
-    }
+      if ((await $.prompt.read()).text !== '') {
+        await record($, w, item, 'deferred:composer-busy', entry => !isFinal(entry) && entry?.status !== 'deferred:composer-busy')
+        show(' · composer busy')
+        return
+      }
 
-    const loaded = await item.load()
-    if (loaded === null) return
-    if ('error' in loaded) {
-      await record($, w, item, loaded.error, entry => !isFinal(entry))
-      return
-    }
-    // The claim lands before the submit, in $.state and on disk; whoever
-    // loses it submits nothing. A claim line that never reached the disk is
-    // undone (non-delivery is still proven) and the next tick retries.
-    try {
-      if (!(await record($, w, item, 'submitting', entry => !isFinal(entry), { attempts }, true))) return
-    } catch (error) {
-      if (!(error instanceof LogWriteFailed)) throw error
-      show(' · log-write-failed, retrying next tick')
-      return
-    }
-    const wasSubmitting = (entry: FleetDeliveryEntry | undefined) => isUnresolved(entry)
-    const settle = async (entered: Awaited<ReturnType<$['prompt']['submit']>>) => {
-      if (entered.drop !== undefined) {
-        await record($, w, item, 'dropped', wasSubmitting, { attempts, detail: clean(entered.drop, 200) })
-      } else {
-        // A late start after a reconcile still landed: record it.
-        if (await record($, w, item, 'submitted', entry => wasSubmitting(entry) || entry?.status === 'reconciled:not-delivered', { attempts })) {
-          await moveRoomFile($, w, item, 'submitted', attempts)
+      const loaded = await item.load()
+      if (loaded === null) continue
+      if ('error' in loaded) {
+        await record($, w, item, loaded.error, entry => !isFinal(entry))
+        return
+      }
+      // The claim on disk comes first, so a claim that fails writes no claim line
+      // to undo: the file moves inbox/ to claimed/, out of room_drain's sight for
+      // the whole wait for the turn. Already in claimed/ (a failed restore, a
+      // crash after the claim): nothing to move.
+      const file = item.source === 'room' ? roomFile(w, item.id) : null
+      if (file && !item.claimed) {
+        if (claimTries++ >= MAX_CLAIM_TRIES) return
+        // One post-failure protocol (moveRoom): moved goes on; blocked, failed or an
+        // unknown state defer; absent (with evidence) means room_drain took it.
+        const claim = await moveRoom($, w, item, [inboxFile, claimedFile], undefined, false, 'quiet')
+        if (claim !== 'moved') {
+          const folder = config.roomRoot ? await exists($, inboxDir(w)) : false
+          const down = folder === false
+          const consumed = folder === true && claim === 'absent'
+          // Never capped into an error: a filesystem hiccup is not a proven
+          // non-delivery. The deferral is one line; the same state adds none.
+          const status = down ? 'deferred:inbox-missing' : consumed ? 'dropped:consumed' : 'deferred:claim-move'
+          await record($, w, item, status, entry => !isFinal(entry) && entry?.status !== status, {
+            detail: consumed ? `inbox file missing: ${inboxFile(w, file)}` : folder === null ? 'folder check failed' : `claim move ${claim}`,
+          })
+          // A deferral goes on to the next item, so one stuck file does not block
+          // the rest, but the third ends the tick (the next one retries). A file
+          // room_drain already took is not a deferral; every claim try counts toward
+          // an overall cap of six, which bounds spawns per tick.
+          if (status !== 'dropped:consumed' && ++deferrals >= MAX_CLAIM_DEFERRALS) return
+          continue
         }
       }
-    }
-    const rejected = () => record($, w, item, retry('submit-rejected', attempts), wasSubmitting, { attempts })
-    const submit = $.prompt.submit({ text: loaded.text })
-    let expiry: Timer | undefined
-    const timedOut = new Promise<'timeout'>(done => {
-      expiry = $.clock.after(config.submitTimeoutMs, () => done('timeout'))
-    })
-    let result
-    try {
-      result = await Promise.race([submit, timedOut])
-    } catch {
+      // The claim lands before the submit, in $.state and on disk; whoever
+      // loses it submits nothing. A claim line that never reached the disk is
+      // undone (non-delivery is still proven) and the next tick retries: the
+      // file waits in claimed/.
+      try {
+        if (!(await record($, w, item, 'submitting', entry => !isFinal(entry), { attempts }, true))) return
+      } catch (error) {
+        if (!(error instanceof LogWriteFailed)) throw error
+        show(' · log-write-failed, retrying next tick')
+        return
+      }
+      // Every closure below acts on this attempt only: a late answer from an
+      // older attempt finds a different attempt number and records and moves
+      // nothing.
+      const own = (entry: FleetDeliveryEntry | undefined) => isUnresolved(entry) && entry?.attempts === attempts
+      const settle = async (entered: Awaited<ReturnType<$['prompt']['submit']>>) => {
+        if (entered.drop !== undefined) {
+          if (await record($, w, item, 'dropped', own, { attempts, detail: clean(entered.drop, 200) })) {
+            await restoreRoomFile($, w, item, { status: 'dropped', attempts })
+          }
+          return
+        }
+        // A late start after a reconcile still landed: record it, and say so.
+        const landed = await record(
+          $,
+          w,
+          item,
+          'submitted',
+          entry => entry?.attempts === attempts && (isUnresolved(entry) || !isFinal(entry)),
+          { attempts, detail: prior => (isUnresolved(prior) ? undefined : 'late start after reconcile') },
+        )
+        if (landed) {
+          await finishRoomFile($, w, item, { status: 'submitted', attempts })
+          return
+        }
+        // Landed under another attempt's number: nothing is recorded, but the
+        // operator is told it started.
+        const now = (await $.state.get(LEDGER)).value?.[w.seat]?.[item.id]
+        if (now && now.attempts !== attempts) {
+          await note($, w, item, now, `note: late start from attempt ${attempts}, check the transcript`)
+        }
+      }
+      const rejected = async () => {
+        const status = retry('submit-rejected', attempts)
+        if ((await record($, w, item, status, own, { attempts })) && status.startsWith('error:')) await restoreRoomFile($, w, item, { status, attempts })
+      }
+      const submit = $.prompt.submit({ text: loaded.text })
+      let expiry: Timer | undefined
+      const timedOut = new Promise<'timeout'>(done => {
+        expiry = $.clock.after(config.submitTimeoutMs, () => done('timeout'))
+      })
+      let result
+      try {
+        result = await Promise.race([submit, timedOut])
+      } catch {
+        expiry?.cancel()
+        await rejected()
+        return
+      }
       expiry?.cancel()
-      await rejected()
+      if (result === 'timeout') {
+        // Not known to have entered or not: unresolved, never retried, until
+        // the late answer comes or the operator reconciles it.
+        // The late answer is wired first: a failed append below must not leave it unhandled.
+        void submit.then(settle, rejected).catch(() => {})
+        await record($, w, item, 'submitting:unresolved', entry => entry?.status === 'submitting' && entry.attempts === attempts, { attempts })
+        show(' · holding until settled or /delivery-reconcile')
+        return
+      }
+      await settle(result)
+      const now = (await $.state.get(LEDGER)).value?.[w.seat] ?? {}
+      show('', queue.filter(one => !isFinal(now[one.id])).length)
       return
     }
-    expiry?.cancel()
-    if (result === 'timeout') {
-      // Not known to have entered or not: unresolved, never retried, until
-      // the late answer comes or the operator reconciles it.
-      await record($, w, item, 'submitting:unresolved', entry => entry?.status === 'submitting', { attempts })
-      void submit.then(settle, rejected).catch(() => {})
-      show(' · holding until settled or /delivery-reconcile')
-      return
-    }
-    await settle(result)
-    show('', queue.length - 1)
   } catch {
     // A failed tick leaves the ledger as it stood; the next one retries.
   } finally {
@@ -942,8 +1204,7 @@ export const register: Register = (on, options) => {
     // The log line first: if it cannot be written, the session state is not
     // touched either.
     const at = await iso($)
-    const attempts = current?.attempts
-    const counted = attempts ? { attempts } : {}
+    const counted = counts(current)
     try {
       await appendLog($, w, { id, source, at, status, ...counted, detail: 'operator' })
     } catch (error) {
@@ -955,14 +1216,22 @@ export const register: Register = (on, options) => {
       // for it match the session again.
       const now = await entryOf()
       if (now) {
-        await appendLog($, w, { id, source, at: now.at, status: now.status, ...(now.attempts ? { attempts: now.attempts } : {}), detail: 'settled before the reconcile' }).catch(() => {})
+        await appendLog($, w, {
+          id,
+          source,
+          at: now.at,
+          status: now.status,
+          ...counts(now),
+          detail: 'settled before the reconcile',
+        }).catch(() => {})
       }
       return { text: `delivery-reconcile: ${id} settled meanwhile as ${now?.status ?? 'unknown'}; nothing changed` }
     }
-    if (status === 'reconciled:delivered') await moveRoomFile($, w, { id, source }, status, attempts)
+    // Not delivered: the file stays in claimed/ and the tick below sends it again.
+    if (status === 'reconciled:delivered') await finishRoomFile($, w, { id, source }, { status, ...counted })
     void tick($)
     return {
-      text: `delivery-reconcile: ${id} is ${status}${status === 'reconciled:not-delivered' ? '; it is delivered again on a later tick' : ''}`,
+      text: `delivery-reconcile: ${id} is ${status}${status === 'reconciled:not-delivered' ? '; it is delivered again on the next tick' : ''}`,
     }
   }).catch(() => ({ text: 'delivery-reconcile: could not reach the ledger' }))
 }

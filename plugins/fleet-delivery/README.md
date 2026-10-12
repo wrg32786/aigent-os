@@ -152,7 +152,10 @@ With no log, or a log with no seed line, delivery holds with `ledger-missing` wh
 | `submitted` | The submit resolved: its turn started | never |
 | `reconciled:not-delivered` | The operator checked the transcript and found it missing | yes |
 | `reconciled:delivered` | The operator checked the transcript and found it there | never |
-| `dropped` | A hook refused the prompt; `detail` says why | never |
+| `dropped` | A hook refused the prompt; `detail` says why. The file goes back to `inbox/`; the mod never submits it again | never |
+| `dropped:consumed` | The claim move found the Room file gone from `inbox/<seat>/` (`room_drain` took it); `detail` names the missing path. Nothing is submitted | never |
+| `deferred:inbox-missing` | The inbox folder was missing or unreachable at the claim; not counted as an attempt | yes |
+| `deferred:claim-move` | The claim move failed for another reason, or the folder check itself failed | yes, every tick, with one ledger line; never becomes an error |
 | `skipped:control` | Room control traffic, left for the supervisor | never |
 | `error:*` | `unreadable`, `over-read-cap`, `empty-body`, `bad-id`, or the reject cap reached | never |
 
@@ -160,21 +163,51 @@ Delivery is at most once: an item whose outcome is unknown is never sent again o
 
 ## /delivery-reconcile
 
-`/delivery-reconcile <id>` marks an unresolved item `reconciled:not-delivered`, and the next tick delivers it again. `/delivery-reconcile <id> delivered` marks it `reconciled:delivered`, and it is never sent again; a Room item's file then moves to `processed/<seat>/`. Either way, read the transcript first. An item that is not unresolved is left unchanged.
+`/delivery-reconcile <id>` marks an unresolved item `reconciled:not-delivered`, and the next tick delivers it again. `/delivery-reconcile <id> delivered` marks it `reconciled:delivered`, and it is never sent again; its file moves to `processed/<seat>/`; `reconciled:not-delivered` leaves it in `claimed/<seat>/`, where the next tick sends it again. Either way, read the transcript first. An item that is not unresolved is left unchanged.
 
 The reconcile line is written to the log first. If that write fails, the command says so and changes nothing: the item stays unresolved in the session too.
 
-## Delivered Room files move to processed/
+## Room files: inbox/, claimed/, processed/
 
-Once a Room item is recorded `submitted` or `reconciled:delivered`, the mod moves its file from `<roomRoot>/inbox/<seat>/<file>` to `<roomRoot>/processed/<seat>/<file>`, the same move `room_drain` makes. The mods API has no rename, so the mod runs a host process for it, the same one that replaces the log:
+`room_drain` and this mod are independent consumers of `<roomRoot>/inbox/<seat>/`, and a submit waits for the turn to end, during which the model may call `room_drain`. So the mod claims a file by moving it out of the inbox before it writes the `submitting` line and before the submit:
+
+- `<roomRoot>/inbox/<seat>/`: unclaimed. `room_drain` may take it.
+- `<roomRoot>/claimed/<seat>/`: this mod holds it. Created when missing. `room_drain` does not read this folder, and the Room's receipts and history do not list it yet (an agent-room follow-up), so an in-flight file reads as absent there for the length of the claim.
+- `<roomRoot>/processed/<seat>/`: delivered or dead. The Room reads this folder as read and archives it, so a file is never claimed into it.
+
+The mods API has no rename, so the mod runs a host process for each move, the same one that replaces the log:
 
 ```
 node -e '<rename one-liner>' -- <from> <to>
 ```
 
-The two paths ride as arguments after `--`, so a path that starts with `-` is never read as a node option, and they are never part of the code. The folder `processed/<seat>/` is created when missing. Nothing else is moved: a dropped, deferred, skipped or failed item stays in the inbox.
+The log's temp file is renamed over the log with one one-liner; Room files use a second that refuses to overwrite.
 
-A move that fails (the file is gone, the folder is locked, `node` cannot start) writes one extra line for that id with the same status, whose `detail` reads `note: move to processed failed: exit 1 <code>`, for example `ENOENT` or `EPERM`. The status does not change. The ledger, not the inbox, decides what was delivered, so a file left behind is never delivered again; the seat's next `room_drain` returns it as data, or it can be moved by hand.
+The two paths ride as arguments after `--`, so a path that starts with `-` is never read as a node option, and they are never part of the code.
+
+**Claim.** The claim move comes first, so a claim that fails leaves no claim line to undo:
+
+- The move fails and the check of the folders itself fails: `deferred:claim-move`; an unknown state never submits.
+- The move fails and the file is in neither `inbox/` nor `claimed/` (read from the folders, not from the error text): `room_drain` took it first. The item is recorded `dropped:consumed` and nothing is submitted. If `claimed/` holds it, the claim is already this mod's and delivery goes on.
+- Inbox folder missing or unreachable: `deferred:inbox-missing`, retried, and not counted as an attempt. The file is not called gone while its folder is.
+- Any other failure (locked folder, `node` cannot start): `deferred:claim-move`. Nothing is submitted, and the claim is retried every tick with no cap: a filesystem hiccup is not a proven non-delivery, so it is never turned into an error. The deferral is one ledger line, and the tick goes on to the next queued item, so one stuck file does not block the rest. Items stuck on a claim deferral sort after the rest, so they cannot hold the queue head. The third claim deferral in a tick ends it (the next tick retries), and the sweep has its own separate budget of three move attempts a tick, so a dead filesystem or host costs at most six spawns a tick. The same holds for `deferred:inbox-missing`. A file `room_drain` already took is `dropped:consumed`, not a deferral, though every claim try counts toward an overall cap of six a tick (recorded only on evidence: the mover reported the source missing, or the file is in `processed/`; two negative existence answers alone defer), which is dead rather than deferred and not counted.
+
+**After the submit:**
+
+- `submitted` and `reconciled:delivered`: the file moves from `claimed/` to `processed/`, and nothing else is touched. A move that fails writes one extra line for that id with the same status and a `detail` of `note: move failed: exit 1 <code>`; the file stays in `claimed/` and, the status being final, is never delivered again. A file that is not in `claimed/` is one note line naming the path (`is absent`).
+- `dropped` (a hook refused the prompt): the file moves back to `inbox/`. The status is final for the mod, so it is never submitted again; the seat's next `room_drain` returns it as data.
+- `deferred:submit-rejected` (a retryable reject): the file stays in `claimed/`, which each tick queues, and the retry submits it again.
+- `error:submit-rejected` (the third reject): the file moves back from `claimed/` to `inbox/`.
+- `reconciled:not-delivered`: the file stays in `claimed/`, which the next tick queues and sends again.
+- `submitting` and `submitting:unresolved`: the file stays in `claimed/` until the late answer or the reconcile.
+
+**Nothing is stranded.** Each tick queues the files in `inbox/` and the files in `claimed/` whose ledger entry is absent or retryable. And first thing each tick a stray sweep settles every file left in `claimed/` or `inbox/` under a finished ledger entry, with one note line per moved file (`detail` starts `note: swept`): in `claimed/`, `submitted` and `reconciled:delivered` go to `processed/` and every other final status (`dropped`, `error:*`, `skipped:*`) goes back to `inbox/`, for the seat's `room_drain` or the supervisor; in `inbox/`, only `submitted` and `reconciled:delivered` go to `processed/` (the rest, such as `skipped:control`, wait for the supervisor or the seat). A sweep move that is blocked or fails is retried every tick (a taken destination is checked first, so a block spawns nothing); only its note line is written once per loaded module. A same-name file anywhere (the Room names files `<time>__<uuid>.json`, so it is the same message copied by hand) is left in place with one note per loaded module, nothing else. No move ever overwrites: the move one-liner refuses an existing destination (`EEXIST`) and renames the source, which is atomic, so when the claim and another mover race for one inbox file exactly one wins and the other sees the source gone; the source stays on `EEXIST`, with one note line per loaded module (`detail` says the destination exists). A failed move back, a crash after the claim, a final status recorded while the file was held, a late start after a reconcile and a same-name duplicate of a finished id are all swept on the next tick.
+
+When the mod does not own the seat (the owner file says `supervisor`, or the seat is off), each tick moves up to three files out of `claimed/` by ledger status (delivered ones to `processed/`, in-flight `submitting` ones stay, the rest back to `inbox/`), with no note line, so nothing stays reachable only while the mod ticks.
+
+A `submitted` line with the detail `late start after reconcile` means the operator had reconciled the item as not delivered and its late start landed anyway (also after a tick had deferred it meanwhile). The sweep then moves the restored file to `processed/`. Check the transcript: it may have been delivered twice.
+
+Every late answer is bound to its own attempt. A late result from attempt 1 that arrives after a reconcile and a re-claim (attempt 2) records nothing and moves nothing. A late start from an older attempt writes one note line (the entry's status kept) saying `late start from attempt N, check the transcript`.
 
 ## /delivery-probe
 
@@ -193,20 +226,21 @@ The probe sends one harmless marker prompt and ignores the owner switch, the ref
 - Restarting a crashed seat stays with the supervisor.
 - Urgent mail keeps the cross-session SendMessage path.
 - Two sessions delivering for the same seat at once. The compare-and-set and the module generation cover an old and a new module in one session; the log is read and rewritten whole, so between processes the last writer wins. Run one session per seat.
-- The supervisor moving delivered files. The mod moves them itself and no longer relies on the supervisor for it. The supervisor's own reader for this log parses each line as plain JSON, so it cannot read the length-prefixed lines and has never moved a file on the mod's behalf.
+- Coordinating with the supervisor's own mover. There are three movers of Room files: this mod (claim, finish, sweep), the seat's `room_drain`, and the supervisor's `modOwnedTick`, which also moves a submitted inbox file to `processed/`. The mod never depends on the supervisor for it, and the sweep and the finishing move tolerate `ENOENT` from either of the others (a file already gone is no move and no error). The supervisor's reader for this log parses each line as plain JSON, so it cannot read the length-prefixed lines.
 
 ## Fences
 
 - Never `asUser`.
 - No `$.permission` calls and no tool-approval hooks.
 - No network access.
-- Writes only its own `$.state` values, the seat's log file (through `<log>.tmp`), and the move of a delivered Room file from `inbox/<seat>/` to `processed/<seat>/`.
+- Writes only its own `$.state` values, the seat's log file (through `<log>.tmp`), the moves of a Room file between `inbox/<seat>/`, `claimed/<seat>/` and `processed/<seat>/`.
 - Reads the plugin's store for the 0.1.0 import only until the seat's log carries the `store-import` marker, then deletes that seat's key. Nothing else touches the store.
-- No process other than these two: `node <installRoot>/daemons/job-results.mjs pending`, and `node -e <rename one-liner> -- <from> <to>`, which replaces the log with its temp file and moves a Room file once it is recorded `submitted` or `reconciled:delivered`.
+- No process other than these two: `node <installRoot>/daemons/job-results.mjs pending`, and `node -e <rename one-liner> -- <from> <to>` (the log's overwriting one-liner, and the never-overwriting one for Room files), which replaces the log with its temp file and moves a Room file between `inbox/`, `claimed/` and `processed/`.
 
 ## Develop
 
 ```
+node --test tests/move.test.mjs   # runs the never-overwriting move one-liner against real files
 claude plugin validate <this folder>
 claude plugin test <this folder>
 claude --plugin-dir <this folder>

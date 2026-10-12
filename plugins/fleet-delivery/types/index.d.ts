@@ -4,8 +4,10 @@
 // rebuilt from the seat's append-only log, newest line per id.
 
 export type FleetDeliveryEntry = {
-  // deferred:*, submitting, submitting:unresolved, submitted, dropped,
-  // skipped:control, error:*, reconciled:not-delivered, reconciled:delivered
+  // deferred:* (including deferred:claim-move, deferred:inbox-missing),
+  // submitting, submitting:unresolved, submitted, dropped, dropped:consumed,
+  // skipped:control, error:*,
+  // reconciled:not-delivered, reconciled:delivered
   status: string
   at: string
   attempts?: number
