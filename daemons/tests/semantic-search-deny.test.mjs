@@ -157,7 +157,9 @@ function staleIndex(deniedChunk) {
     notes: [
       // Scores 1.0 against the stub's query vector, so unfiltered it ranks first.
       { path: `${DENY_PREFIX}/term-sheet.md`, title: 'Acme term sheet', tags: [], chunk: deniedChunk, embedding: [1, 0, 0, 0], mtime: 0 },
-      { path: 'projects/public-roadmap/roadmap.md', title: 'Public roadmap', tags: [], chunk: PUBLIC, embedding: [0, 1, 0, 0], mtime: 0 },
+      // Cosine 0.6: below the denied row, above search-vault's 0.30 abstention
+      // floor, so an empty result here can only mean the filter over-removed.
+      { path: 'projects/public-roadmap/roadmap.md', title: 'Public roadmap', tags: [], chunk: PUBLIC, embedding: [0.6, 0.8, 0, 0], mtime: 0 },
     ],
   });
 }
