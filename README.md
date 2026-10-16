@@ -206,7 +206,8 @@ A neutral guide to what fits which need (descriptions checked Oct 2026):
 |---|---|
 | Built-in, zero setup | Claude Code's own auto-compaction, `/compact`, `/clear`, `CLAUDE.md` and auto memory |
 | Automatic capture of what your agent did, compressed and injected into later sessions | [thedotmack/claude-mem](https://github.com/thedotmack/claude-mem) |
-| Less context used by tool output | [mksglu/context-mode](https://github.com/mksglu/context-mode) |
+| Less context used by tool output (sandboxed MCP tools), plus session events kept in SQLite and searched back in after a compaction | [mksglu/context-mode](https://github.com/mksglu/context-mode) |
+| A long-term memory store shared by Claude Code and Codex: plain markdown files, a local ranked search index, and a background pass that consolidates memories | [tigerless-labs/agent-memory](https://github.com/tigerless-labs/agent-memory) |
 | A memory service that learns across agents | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) (aigent-OS has an opt-in [bridge](docs/memory-bridge.md)) |
 | Persistent teams of Claude Code, Codex and Pi agents | [mvschwarz/openrig](https://github.com/mvschwarz/openrig) |
 | One long-running Claude Code session that checkpoints, clears and resumes instead of compacting, with git-auditable memory | aigent-OS |
