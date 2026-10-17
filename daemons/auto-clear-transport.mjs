@@ -107,6 +107,216 @@ const REQUIRED_STATE_FIELDS = Object.freeze([
   'entered_at',
   'hold',
 ]);
+// ACK BOUNDARY (#90) — the one persisted fact the acknowledgement lifecycle
+// needs and did not have: WHERE in the transcript this cycle opened.
+//
+// The runner scans the transcript FORWARD for the capsule ack literal. Across
+// a relaunch it had no boundary of its own, so it borrowed the stop-writer
+// record's offset -- which stop-capsule-writer.mjs captures at Stop-hook time,
+// i.e. AFTER the ack it was being used to find. The ack was invisible and the
+// request was re-injected (#90 shape 1). Scanning BACKWARD or sweeping the
+// whole transcript instead would have revived exactly the stale ack #91 must
+// reject, so the fix is a boundary that is bound to the cycle it belongs to:
+// written once by _startPressure, nulled by every transition that ends or
+// replaces the cycle, and carrying its own session_id and cycle_id so a reader
+// can prove the evidence window is its own before reading a byte.
+//
+// NOT in REQUIRED_STATE_FIELDS, deliberately: a seat upgrading from a build
+// without this field has a persisted cycle with no boundary, and requiring it
+// would hold that cycle closed at cycle-state-field-missing with no recovery
+// branch -- an indefinite park on upgrade. Absent is the LEGACY case and the
+// reader names it (ack-boundary-legacy) and takes the re-request path.
+const ACK_BOUNDARY_FIELDS = Object.freeze([
+  'cycle_id',
+  'session_id',
+  'transcript_offset',
+  'opened_at',
+]);
+
+/**
+ * The shared contract for one cycle's acknowledgement boundary. Returns null
+ * when `state.ack_boundary` is a usable evidence window for exactly
+ * `sessionId` + `cycleId`, otherwise a named problem. Every rejection reason
+ * is greppable: ack-boundary-legacy (field absent, pre-upgrade cycle),
+ * ack-boundary-absent (the transport could not capture one), ack-boundary-
+ * malformed, ack-boundary-session-mismatch, ack-boundary-cycle-mismatch.
+ */
+export function capsuleAckBoundaryProblem(state, { sessionId, cycleId } = {}) {
+  if (!hasOwn(state, 'ack_boundary')) {
+    return { code: 'ack-boundary-legacy', detail: { cycle_id: cycleId ?? null } };
+  }
+  const boundary = state.ack_boundary;
+  if (boundary === null) {
+    return { code: 'ack-boundary-absent', detail: { cycle_id: cycleId ?? null } };
+  }
+  if (typeof boundary !== 'object' || Array.isArray(boundary)) {
+    return { code: 'ack-boundary-malformed', detail: 'root object missing' };
+  }
+  const absent = ACK_BOUNDARY_FIELDS.filter((field) => !hasOwn(boundary, field));
+  if (absent.length) {
+    return { code: 'ack-boundary-malformed', detail: { fields: absent } };
+  }
+  for (const field of ['cycle_id', 'session_id']) {
+    if (typeof boundary[field] !== 'string' || boundary[field].length === 0) {
+      return { code: 'ack-boundary-malformed', detail: { field } };
+    }
+  }
+  // STRICTLY POSITIVE, not merely non-negative (review of 78a2577, F2). Offset
+  // 0 opens the window on the WHOLE transcript, which is the stale-evidence
+  // shape #91 exists to reject: demonstrated by rewriting a persisted boundary
+  // to 0 with an ack line sitting before the cycle's start -- the pre-cycle ack
+  // was observed and a clear was written. _captureAckBoundary never emits a 0
+  // (it returns null for a zero-length transcript, so the reader names
+  // ack-boundary-absent and the capsule is re-requested), so the only way a 0
+  // reaches here is a write to the seat's own auto-clear-cycle.json. Refusing
+  // it is what makes "null, never 0" true on BOTH sides of the contract rather
+  // than only in the writer. The cost of the strictness is one re-requested
+  // capsule in the corner where a cycle genuinely opens on an empty transcript
+  // -- where, by definition, no ack can precede it anyway.
+  if (!Number.isSafeInteger(boundary.transcript_offset)
+    || boundary.transcript_offset <= 0) {
+    return { code: 'ack-boundary-malformed', detail: { field: 'transcript_offset' } };
+  }
+  if (typeof boundary.opened_at !== 'string'
+    || !Number.isFinite(Date.parse(boundary.opened_at))) {
+    return { code: 'ack-boundary-malformed', detail: { field: 'opened_at' } };
+  }
+  // Provenance, both halves. A boundary written by another session cannot
+  // locate anything in THIS session's transcript, and a boundary left over
+  // from an earlier cycle is the stale-evidence window #91 is about.
+  if (typeof sessionId !== 'string' || boundary.session_id !== sessionId) {
+    return {
+      code: 'ack-boundary-session-mismatch',
+      detail: { expected: sessionId ?? null, observed: boundary.session_id },
+    };
+  }
+  if (typeof cycleId !== 'string' || boundary.cycle_id !== cycleId) {
+    return {
+      code: 'ack-boundary-cycle-mismatch',
+      detail: { expected: cycleId ?? null, observed: boundary.cycle_id },
+    };
+  }
+  return null;
+}
+
+// ── ACK CLASSIFICATION (#90/#91 re-review 5556245936, S1) ────────────────────
+// THE DEFECT THIS CLOSES, and the false assumption it rested on. The first
+// repair for R1 kept the retired-request ledger in memory only, justified by
+// the claim that a pre-relaunch answer is excluded anyway by "the next cycle's
+// forward-only EOF boundary". THAT CLAIM IS FALSE, and the non-author reviewer
+// isolated it with a matched control: #90 restores an EXISTING cycle, not
+// necessarily a new one at EOF. A genuinely new cycle does capture its boundary
+// at the transcript's end (_captureAckBoundary, and the control confirms such a
+// cycle rejects the old answer), but a RESTORE reopens the cycle's ORIGINAL
+// persisted boundary -- which predates an answer that arrived later in that
+// cycle's life.
+//
+// So the measured sequence needs no SIGKILL, no orphan, no post-relaunch write
+// and no change of session identity: A requested, A abandoned, B opened and
+// requested, A completed and was CORRECTLY consumed as retired (authorized(B)
+// false), then an ORDERLY relaunch. The new process loses the ledger and the
+// cursor progress, reopens B's original boundary from before A's answer, reads
+// A again and labels it B -- authorized(B) true, from 317, requests 0.
+//
+// THE PRINCIPLE: evidence that was rejected before an orderly shutdown must not
+// become authorization afterward. Two facts are enough to keep it, and both
+// live in the EXISTING durable cycle record rather than in a new file:
+//
+//   `classified_through`  a MONOTONE transcript offset. Bytes below it have
+//                         already been classified as NOT this cycle's own
+//                         answer -- a retired request's late answer that was
+//                         consumed, or a literal refused as already spent. A
+//                         restore reopens the window at
+//                         max(boundary.transcript_offset, classified_through),
+//                         so a rejected record is never re-read as evidence.
+//   `debts_outstanding`   how many retired requests were still owed an answer.
+//                         A restore REBUILDS the ledger with that many debts,
+//                         so an answer landing after the relaunch still
+//                         discharges the oldest outstanding request instead of
+//                         authorizing the restored cycle.
+//
+// Neither is the whole ledger: no cycle ids, no cursors, no per-request state.
+// Two numbers, cycle-bound and session-bound, nulled with the cycle like the
+// boundary beside them. ABSENT is the honest legacy / nothing-classified case
+// and means "use the boundary alone". MALFORMED is refused: it is a record that
+// claims to carry an exclusion and cannot, so the reader treats it as an
+// ambiguity and takes the existing safe re-request path rather than silently
+// dropping the exclusion it was supposed to carry.
+const ACK_CLASSIFICATION_FIELDS = Object.freeze([
+  'cycle_id',
+  'session_id',
+  'classified_through',
+  'debts_outstanding',
+  // ARITHMETIC, NOT A BOOLEAN (re-review 5558958106, T1). `hadAck` -- "an
+  // answer was seen" -- was treated as "every possible answer was discharged",
+  // and it is not: the per-process request latch lets a RESTORED cycle issue a
+  // SECOND request, so one observed answer can leave another still coming.
+  // These two counters make the question arithmetic: a cycle's outstanding
+  // answers are `requests_issued - answers_settled`, and that is exactly how
+  // many debts its abandonment must carry forward. Durable because the second
+  // request is issued by a different process from the first.
+  'requests_issued',
+  'answers_settled',
+  'updated_at',
+]);
+
+/**
+ * Returns null when `state.ack_classification` is absent (nothing classified
+ * for this cycle -- use the boundary alone), `{ ok: true, record }` when it is
+ * usable for exactly `sessionId` + `cycleId`, or `{ ok: false, code, detail }`
+ * naming why it cannot be used. Reasons are greppable:
+ * ack-classification-malformed, ack-classification-session-mismatch,
+ * ack-classification-cycle-mismatch.
+ */
+export function capsuleAckClassification(state, { sessionId, cycleId } = {}) {
+  if (!hasOwn(state, 'ack_classification') || state.ack_classification === null) {
+    return null;
+  }
+  const record = state.ack_classification;
+  if (typeof record !== 'object' || Array.isArray(record)) {
+    return { ok: false, code: 'ack-classification-malformed', detail: 'root object missing' };
+  }
+  const absent = ACK_CLASSIFICATION_FIELDS.filter((field) => !hasOwn(record, field));
+  if (absent.length) {
+    return { ok: false, code: 'ack-classification-malformed', detail: { fields: absent } };
+  }
+  for (const field of ['cycle_id', 'session_id']) {
+    if (typeof record[field] !== 'string' || record[field].length === 0) {
+      return { ok: false, code: 'ack-classification-malformed', detail: { field } };
+    }
+  }
+  // Zero IS valid here, unlike the boundary: "nothing classified yet, and this
+  // many debts outstanding" is a meaningful thing for the runner to record.
+  if (!Number.isSafeInteger(record.classified_through) || record.classified_through < 0) {
+    return { ok: false, code: 'ack-classification-malformed', detail: { field: 'classified_through' } };
+  }
+  if (!Number.isSafeInteger(record.debts_outstanding) || record.debts_outstanding < 0) {
+    return { ok: false, code: 'ack-classification-malformed', detail: { field: 'debts_outstanding' } };
+  }
+  for (const field of ['requests_issued', 'answers_settled']) {
+    if (!Number.isSafeInteger(record[field]) || record[field] < 0) {
+      return { ok: false, code: 'ack-classification-malformed', detail: { field } };
+    }
+  }
+  if (typeof record.updated_at !== 'string' || !Number.isFinite(Date.parse(record.updated_at))) {
+    return { ok: false, code: 'ack-classification-malformed', detail: { field: 'updated_at' } };
+  }
+  if (typeof sessionId !== 'string' || record.session_id !== sessionId) {
+    return {
+      ok: false,
+      code: 'ack-classification-session-mismatch',
+      detail: { expected: sessionId ?? null, observed: record.session_id },
+    };
+  }
+  if (typeof cycleId !== 'string' || record.cycle_id !== cycleId) {
+    return {
+      ok: false,
+      code: 'ack-classification-cycle-mismatch',
+      detail: { expected: cycleId ?? null, observed: record.cycle_id },
+    };
+  }
+  return { ok: true, record: clone(record) };
+}
 
 function hasOwn(value, field) {
   return value !== null
@@ -532,6 +742,9 @@ function initialState(sessionId, enteredAt) {
     clear_intent: null,
     entered_at: enteredAt,
     hold: null,
+    // No cycle, so no acknowledgement window belongs to anything (#90/#91).
+    ack_boundary: null,
+    ack_classification: null,
   };
 }
 
@@ -693,6 +906,9 @@ export class AutoClearTransport {
     // current cycle. Substitutes for telemetry FRESHNESS (the seat just spoke;
     // it is provably alive) — never for pct, threshold, or checkpoint binding.
     this._capsuleAckMs = null;
+    // The cycle that ack belongs to. An ack is evidence about one cycle; a
+    // bare timestamp was evidence about nothing in particular (#91).
+    this._capsuleAckCycleId = null;
     this.pressureFreshnessMs = pressureFreshnessMs;
     this.selectCapsuleFn = selectCapsuleFn;
     this.readPressureFn = readPressureFn;
@@ -826,8 +1042,141 @@ export class AutoClearTransport {
     return { ok: true, receipt };
   }
 
-  noteCapsuleAck() {
+  // IDENTITY-BOUND (#91). The ack substitutes for telemetry freshness for the
+  // cycle that earned it and for no other. The caller may name the cycle it
+  // observed the ack for; omitting it binds to the cycle the core is in right
+  // now (the only cycle a caller without an opinion can mean).
+  noteCapsuleAck(detail = {}) {
+    // Tolerant of the pre-fix call shape (no argument) and of anything that is
+    // not an options object: a caller with no opinion means the live cycle.
+    const cycleId = detail && typeof detail === 'object' && !Array.isArray(detail)
+      ? detail.cycleId
+      : undefined;
+    const bound = typeof cycleId === 'string' ? cycleId : this.state?.cycle_id ?? null;
+    if (typeof cycleId === 'string' && cycleId !== this.state?.cycle_id) {
+      // A late ack from an abandoned or replaced request. Recorded as the
+      // caller's cycle, never as the live one: _ackFreshForCycle then refuses
+      // it, and a transition into a NEW cycle cannot adopt it either.
+      this.log(`capsule ack ignored for freshness: cycle ${cycleId} is not the live cycle ${this.state?.cycle_id ?? 'null'}`);
+    }
+    this._capsuleAckCycleId = bound;
     this._capsuleAckMs = clockMs(this.now);
+  }
+
+  /**
+   * Record, in the cycle's own durable record, how far the runner has
+   * classified its acknowledgement evidence and how many retired requests are
+   * still owed an answer (#90/#91 re-review 5556245936, S1). See the
+   * ACK CLASSIFICATION note above for why these two numbers and no more.
+   *
+   * CYCLE-BOUND and MONOTONE, enforced here rather than trusted from the
+   * caller: a record for a cycle the transport is no longer in is refused, and
+   * `classified_through` can only ever move forward. A caller that tries to
+   * rewind it -- a stale tick, a re-entrant write, a confused restore -- cannot
+   * un-exclude evidence that was already rejected, which is the whole point of
+   * persisting it. Returns the stored record, or null when nothing was written.
+   */
+  noteAckClassification(detail = {}) {
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+    const {
+      cycleId, classifiedThrough, debtsOutstanding, requestsIssued, answersSettled,
+    } = detail;
+    if (typeof cycleId !== 'string' || cycleId.length === 0) return null;
+    if (this.state?.cycle_id !== cycleId) {
+      this.log(`ack classification ignored: cycle ${cycleId} is not the live cycle ${this.state?.cycle_id ?? 'null'}`);
+      return null;
+    }
+    for (const value of [classifiedThrough, debtsOutstanding, requestsIssued, answersSettled]) {
+      if (!Number.isSafeInteger(value) || value < 0) return null;
+    }
+    const current = hasOwn(this.state, 'ack_classification')
+      && this.state.ack_classification !== null
+      && typeof this.state.ack_classification === 'object'
+      && !Array.isArray(this.state.ack_classification)
+      && this.state.ack_classification.cycle_id === cycleId
+      && Number.isSafeInteger(this.state.ack_classification.classified_through)
+      ? this.state.ack_classification
+      : null;
+    // All three of these are MONOTONE counters. The frontier may not rewind
+    // (that would un-exclude rejected evidence) and neither may the request or
+    // answer tallies: a stale tick, a re-entrant write or a confused restore
+    // must not be able to lower the number of answers a cycle is still owed.
+    const monotone = (field, next) => (
+      current === null || !Number.isSafeInteger(current[field])
+        ? next
+        : Math.max(current[field], next));
+    const through = monotone('classified_through', classifiedThrough);
+    const issued = monotone('requests_issued', requestsIssued);
+    const settled = monotone('answers_settled', answersSettled);
+    // Nothing to say: same frontier, same debt, same tallies. This keeps the
+    // record off the per-tick write path -- only a real state change reaches
+    // the disk.
+    if (current !== null
+      && current.classified_through === through
+      && current.debts_outstanding === debtsOutstanding
+      && current.requests_issued === issued
+      && current.answers_settled === settled) {
+      return clone(current);
+    }
+    const record = {
+      cycle_id: cycleId,
+      session_id: this.sessionId,
+      classified_through: through,
+      debts_outstanding: debtsOutstanding,
+      requests_issued: issued,
+      answers_settled: settled,
+      updated_at: clockIso(this.now),
+    };
+    this._atomicWrite({ ...this.state, ack_classification: record });
+    return clone(record);
+  }
+
+  // The ack relaxes checkpoint freshness only while it still belongs to the
+  // cycle being judged. Clearing a timestamp was never enough: every path that
+  // ends a cycle had to remember to clear it, and _gatePressure did not.
+  _ackFreshForCycle() {
+    return this._capsuleAckMs !== null
+      && this._capsuleAckCycleId !== null
+      && this._capsuleAckCycleId === this.state?.cycle_id;
+  }
+
+  // The transcript offset at which THIS cycle opened: the forward-only
+  // acknowledgement window for the cycle, persisted so a relaunch recovers it
+  // instead of borrowing the stop-writer offset that sits past the ack (#90).
+  // Unresolvable, unreadable OR ZERO-LENGTH transcript -> null, never 0: offset
+  // 0 would open the window on the whole transcript and could revive an ack
+  // from an earlier cycle, which is the defect on the other side of this pair
+  // (#91). A zero-length transcript is the only case that can produce a
+  // genuine 0, and nothing can precede byte 0 anyway, so refusing to persist it
+  // costs one re-requested capsule and makes "null, never 0" a property of the
+  // WRITER as well as of the reader (capsuleAckBoundaryProblem refuses a 0 it
+  // is handed; review of 78a2577, F2).
+  // Null is the visible, safe case: the reader names ack-boundary-absent and
+  // the runner re-requests the capsule.
+  _captureAckBoundary(cycleId) {
+    let offset = null;
+    try {
+      const transcript = transcriptPathFor({
+        cwd: this.cwd,
+        sessionId: this.sessionId,
+        homeDir: this.homeDir,
+        env: this.env,
+      });
+      if (transcript) {
+        const size = this.fs.statSync(transcript).size;
+        if (Number.isSafeInteger(size) && size > 0) offset = size;
+      }
+    } catch { offset = null; }
+    if (offset === null) {
+      this.log(`ack-boundary-absent: cycle ${cycleId} opened with no readable transcript offset; the capsule will be re-requested`);
+      return null;
+    }
+    return {
+      cycle_id: cycleId,
+      session_id: this.sessionId,
+      transcript_offset: offset,
+      opened_at: clockIso(this.now),
+    };
   }
 
   _pressureObservable() {
@@ -892,7 +1241,7 @@ export class AutoClearTransport {
       memRoot: this.memRoot,
       sessionId: this.state.session_id,
       cwd: this.cwd,
-      ackFresh: this._capsuleAckMs !== null,
+      ackFresh: this._ackFreshForCycle(),
       homeDir: this.homeDir,
       // The runner's environment, so a seat launched with CLAUDE_CONFIG_DIR
       // is judged against the transcript Claude Code actually writes.
@@ -909,7 +1258,7 @@ export class AutoClearTransport {
   }
 
   _startPressure(observation) {
-    this._capsuleAckMs = null; // a new cycle needs its own ack
+    this._abandonCycleAck('new-cycle'); // a new cycle needs its own ack
     const boot = this._readBootReceipt();
     if (!boot.ok) return this._holdResult(boot.code, boot.detail, 'idle');
     if (boot.receipt.session_id !== this.sessionId) {
@@ -934,12 +1283,42 @@ export class AutoClearTransport {
       session_id: this.sessionId,
       boot_sequence_at_start: boot.receipt.boot_sequence,
       clear_intent: null,
+      // The cycle's own acknowledgement window opens HERE, at this cycle's
+      // start -- the one place a boundary can be captured that is provably
+      // before any ack the cycle can earn and provably after every ack an
+      // earlier cycle earned.
+      ack_boundary: this._captureAckBoundary(cycleId),
+      // A NEW cycle has classified nothing yet. The runner writes this record
+      // itself, through noteAckClassification, as it classifies (#90/#91
+      // re-review 5556245936, S1).
+      ack_classification: null,
     });
     return resultFor(next, {
       transitioned: true,
       status: 'pressure',
       observable: clone(observation),
     });
+  }
+
+  // THE SHARED ABANDONMENT POINT (#91). Every transition that ends or replaces
+  // a cycle calls this, so neither half of the acknowledgement evidence -- the
+  // transport's freshness substitute nor the persisted window -- can outlive
+  // the cycle it was collected for. The persisted half is nulled by the caller
+  // (it rides the same atomic state write); this clears the in-memory half.
+  _abandonCycleAck(reason) {
+    if (this._capsuleAckMs !== null) {
+      this.log(`capsule ack discarded (${reason}): it belonged to cycle ${this._capsuleAckCycleId ?? 'null'}`);
+    }
+    this._capsuleAckMs = null;
+    this._capsuleAckCycleId = null;
+  }
+
+  // Cycle-terminal bookkeeping for the transitions that KEEP the cycle_id
+  // (clear-verified, released): the cycle is over, so its acknowledgement
+  // window closes with it and cannot be re-opened by a later reader.
+  _endCycleAck(reason) {
+    this._abandonCycleAck(reason);
+    return { ack_boundary: null, ack_classification: null };
   }
 
   _resumeStateFromHold() {
@@ -952,19 +1331,38 @@ export class AutoClearTransport {
     return readKillSwitch({ memRoot: this.memRoot, env: this.env, fsImpl: this.fs });
   }
 
+  // THE WIDE ABANDONMENT (#91). Reached from `pressure`, `checkpoint-requested`
+  // AND `checkpoint-confirmed`: any below-threshold reading drops the cycle
+  // back to idle. It used to log nothing and tell nobody, so an acknowledgement
+  // already collected for the dropped cycle stayed latched in the runner and
+  // authorized the NEXT cycle's clear with no capsule in between (measured: one
+  // capsule request across two distinct cycles, then a /clear on the first
+  // cycle's ack). The abandonment is now named and both halves of the evidence
+  // die with the cycle.
+  //
+  // A HOLD is NOT an abandonment: `!pressure.ok` returns a hold that keeps the
+  // same cycle_id, so same-cycle evidence survives it untouched.
   _gatePressure(resumeState) {
     const pressure = this._pressureObservable();
     if (!pressure.ok) return this._holdResult(pressure.code, pressure.detail, resumeState);
     if (pressure.observation.pct < this.pressureThresholdPct) {
+      const abandoned = this.state.cycle_id;
+      this._abandonCycleAck(`below-pressure from ${resumeState}`);
       const next = this._transition('idle', {
         cycle_id: null,
         session_id: this.sessionId,
         boot_sequence_at_start: null,
         clear_intent: null,
+        ack_boundary: null,
+        ack_classification: null,
       });
+      this.log(`cycle-abandoned-below-pressure cycle=${abandoned ?? 'null'} from=${resumeState} pct=${pressure.observation.pct} threshold=${this.pressureThresholdPct}`);
       return resultFor(next, {
         transitioned: true,
         status: 'below-pressure',
+        // Named so the runner (and an operator reading the events) can see
+        // WHICH cycle was abandoned, not merely that the state is idle again.
+        abandoned_cycle_id: abandoned ?? null,
         observable: clone(pressure.observation),
       });
     }
@@ -1035,11 +1433,14 @@ export class AutoClearTransport {
         && bootNow.receipt.session_id === this.sessionId
         && (!Number.isSafeInteger(this.state.boot_sequence_at_start)
           || bootNow.receipt.boot_sequence > this.state.boot_sequence_at_start)) {
+        this._abandonCycleAck('inherited-cycle-superseded');
         const next = this._transition('idle', {
           cycle_id: null,
           session_id: this.sessionId,
           boot_sequence_at_start: null,
           clear_intent: null,
+          ack_boundary: null,
+          ack_classification: null,
         });
         return resultFor(next, { transitioned: true, status: 'inherited-cycle-superseded' });
       }
@@ -1058,7 +1459,7 @@ export class AutoClearTransport {
     }
 
     if (this.state.state === 'clear-verified') {
-      const next = this._transition('released');
+      const next = this._transition('released', this._endCycleAck('clear-verified-released'));
       return resultFor(next, { transitioned: true, status: 'released' });
     }
 
@@ -1066,11 +1467,14 @@ export class AutoClearTransport {
       if (this.state.session_id !== this.sessionId) {
         const boot = this._readBootReceipt();
         if (boot.ok && boot.receipt.session_id === this.sessionId) {
+          this._abandonCycleAck('new-session-idle');
           const next = this._transition('idle', {
             cycle_id: null,
             session_id: this.sessionId,
             boot_sequence_at_start: null,
             clear_intent: null,
+            ack_boundary: null,
+            ack_classification: null,
           });
           return resultFor(next, { transitioned: true, status: 'new-session-idle' });
         }
@@ -1094,6 +1498,7 @@ export class AutoClearTransport {
         && Number.isSafeInteger(this.state.boot_sequence_at_start)
         && boot.receipt.boot_sequence > this.state.boot_sequence_at_start) {
         this.log(`clear-ambiguous released: same session at boot ${boot.receipt.boot_sequence} proves the clear never landed`);
+        this._abandonCycleAck('clear-ambiguous-released');
         const next = this._atomicWrite({
           ...initialState(this.sessionId, clockIso(this.now)),
           boot_sequence_at_start: boot.receipt.boot_sequence,
@@ -1165,11 +1570,14 @@ export class AutoClearTransport {
         && (this.state.boot_sequence_at_start === null
           || boot.receipt.boot_sequence > this.state.boot_sequence_at_start)) {
         this.sessionId = boot.receipt.session_id;
+        this._abandonCycleAck('telemetry-recovered-session-rebound');
         const next = this._transition('idle', {
           cycle_id: null,
           boot_sequence_at_start: null,
           clear_intent: null,
           session_id: this.sessionId,
+          ack_boundary: null,
+          ack_classification: null,
         });
         return resultFor(next, { transitioned: true, status: 'telemetry-recovered' });
       }
@@ -1188,11 +1596,14 @@ export class AutoClearTransport {
       }
       if (resumeState === 'idle') {
         if (pressure.observation.pct < this.pressureThresholdPct) {
+          this._abandonCycleAck('telemetry-recovered-below-pressure');
           const next = this._transition('idle', {
             cycle_id: null,
             boot_sequence_at_start: null,
             clear_intent: null,
             session_id: this.sessionId,
+            ack_boundary: null,
+            ack_classification: null,
           });
           return resultFor(next, { transitioned: true, status: 'telemetry-recovered' });
         }
@@ -1244,11 +1655,14 @@ export class AutoClearTransport {
       const pressure = this._pressureObservable();
       if (!pressure.ok) return this._holdResult(pressure.code, pressure.detail, 'idle');
       if (pressure.observation.pct < this.pressureThresholdPct) {
+        this._abandonCycleAck('boot-receipt-recovered-below-pressure');
         const next = this._transition('idle', {
           cycle_id: null,
           session_id: this.sessionId,
           boot_sequence_at_start: null,
           clear_intent: null,
+          ack_boundary: null,
+          ack_classification: null,
         });
         return resultFor(next, {
           transitioned: true,
@@ -1383,12 +1797,22 @@ export class AutoClearTransport {
       );
     }
     if (pressure.observation.pct < this.pressureThresholdPct) {
+      // THE NARROW ABANDONMENT (#91): the authorization the runner was holding
+      // is withdrawn and the cycle is dropped, inside the call the runner made
+      // to claim it. Both halves of the acknowledgement evidence die here too;
+      // the runner's half is invalidated by cycle identity at its own
+      // lifecycle boundary, not by this catch site.
+      const abandoned = this.state.cycle_id;
+      this._abandonCycleAck('below-pressure at clear submission');
       this._transition('idle', {
         cycle_id: null,
         session_id: this.sessionId,
         boot_sequence_at_start: null,
         clear_intent: null,
+        ack_boundary: null,
+        ack_classification: null,
       });
+      this.log(`cycle-abandoned-below-pressure cycle=${abandoned ?? 'null'} from=clear-submission pct=${pressure.observation.pct} threshold=${this.pressureThresholdPct}`);
       throw new TransitionRefusedError(
         'ECLEAR_PRESSURE_DROPPED',
         'clear refused because the current pressure observable is below threshold',
@@ -1511,7 +1935,7 @@ export class AutoClearTransport {
 
     if (this.state.state === 'HOLD:clear-ambiguous'
       || !['clear-submitted', 'clear-verified'].includes(this.state.state)) {
-      const next = this._transition('released');
+      const next = this._transition('released', this._endCycleAck('clear-observed'));
       this._inheritedIntent = false;
       return resultFor(next, {
         transitioned: true,
@@ -1520,7 +1944,7 @@ export class AutoClearTransport {
       });
     }
     if (this.state.state === 'clear-verified') {
-      const next = this._transition('released');
+      const next = this._transition('released', this._endCycleAck('clear-observed'));
       this._inheritedIntent = false;
       return resultFor(next, {
         transitioned: true,
@@ -1529,7 +1953,7 @@ export class AutoClearTransport {
       });
     }
 
-    const next = this._transition('clear-verified');
+    const next = this._transition('clear-verified', this._endCycleAck('clear-verified'));
     this._inheritedIntent = false;
     return resultFor(next, {
       transitioned: true,
