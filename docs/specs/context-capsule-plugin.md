@@ -22,7 +22,7 @@ Plugin name (permanent slug, pick carefully): `context-capsule` (or `auto-refres
 It ships:
 - **Skills:** `context-capsule` (write a resume-ready capsule) and `resume` (load the newest valid capsule and act on waiting_on). Copied from aigent-os skills/, stripped of aigent-os-specific paths.
 - **Hooks** (`hooks/hooks.json`, using `${CLAUDE_PLUGIN_ROOT}` for script paths):
-  - `PreCompact`: flush or nudge a capsule before auto-compact eats the context (port of precompact-flush.mjs).
+  - `PreCompact`: saves no context. It leaves a marker when no valid capsule exists (port of precompact-flush.mjs, minus the transcript flush); PreCompact output never reaches the model. After compaction, SessionStart says no capsule existed and asks for `/capsule`.
   - `SessionStart` (matcher `clear` and `compact`): inject the newest capsule pointer so the fresh session picks up where it left off (port of resume-verb.mjs boot path).
 - **Commands:** `/capsule` (write one now), `/refresh` (write capsule, then tell the user to run `/clear`; the SessionStart hook does the rest), `/autorefresh-setup` (checks settings, explains `idleCompaction: false`, and prints how to install and run the aigent-os pty runner for fully hands-off refresh).
 - **Node scripts** in `scripts/`, plain ESM, zero npm deps. No node-pty.
@@ -73,7 +73,7 @@ Capsule location: default `${CLAUDE_PLUGIN_DATA}` or `<project>/.claude/capsules
 - Fresh machine, no aigent-os: `/plugin marketplace add wrg32786/aigent-os` then `/plugin install context-capsule@aigent-os` works with no npm install and no build step.
 - `/capsule` writes a capsule with the expected frontmatter to the configured dir.
 - `/refresh` then `/clear`: the new session's first turn names the capsule and continues the waiting_on item, no user re-explaining.
-- Auto-compact path: PreCompact fires, a capsule exists before compaction, and the post-compact SessionStart points to it.
+- Auto-compact path: if a capsule was written before compaction, the post-compact SessionStart points to it; if not, it says so plainly.
 - Corrupt or stale capsule: resume refuses it with a clear message instead of loading garbage.
 - With full aigent-os installed: no double capsules, no double resume injection.
 - Scripts run on macOS and Linux with Node 18+; Windows behavior documented (works or clearly unsupported).
