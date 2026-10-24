@@ -1,0 +1,23 @@
+{
+  "name": "context-capsule",
+  "version": "0.1.0",
+  "description": "Write a resume-ready capsule of your session, then /clear or auto-compact and pick up exactly where you left off. Manual-trigger refresh: PreCompact nudge, SessionStart pointer on clear and compact, /capsule, /refresh and /resume. Zero dependencies, no network.",
+  "author": { "name": "wrg32786" },
+  "homepage": "https://github.com/wrg32786/aigent-os/tree/master/plugins/context-capsule",
+  "repository": "https://github.com/wrg32786/aigent-os",
+  "license": "MIT",
+  "userConfig": {
+    "capsuleDir": {
+      "type": "string",
+      "title": "Capsule directory",
+      "description": "Folder where capsules are written and read. Relative paths resolve against the project. Empty: <project>/.claude/capsules/.",
+      "default": ""
+    },
+    "maxAgeDays": {
+      "type": "number",
+      "title": "Stale limit (days)",
+      "description": "Capsules older than this are refused at resume instead of loaded.",
+      "default": 14
+    }
+  }
+}
