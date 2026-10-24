@@ -14,11 +14,10 @@
 //   node capsule-lib.mjs validate <file>
 //   node capsule-lib.mjs newest                   print the newest valid capsule path
 
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync, lstatSync, realpathSync, linkSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
 
 export const REQUIRED_FIELDS = Object.freeze(['id', 'objective', 'waiting_on', 'next_valid_action']);
 export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
@@ -231,32 +230,11 @@ export function detectAigentOs(payload = {}) {
   return { detected: false, why: '' };
 }
 
-// ---------- storage containment ----------
-
-// A capsule or marker is only touched when it is a regular file (not a link) whose real path
-// sits inside the capsule directory's real path. Anything else is treated as not ours.
-export function isContainedFile(dir, file) {
-  try {
-    const st = lstatSync(file);
-    if (st.isSymbolicLink() || !st.isFile()) return false;
-    const root = realpathSync(dir);
-    const rel = path.relative(root, realpathSync(file));
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-  } catch { return false; }
-}
-
 // ---------- selection (port of selectCapsule, without the reuse tier) ----------
 
 // Returns { capsule, rejected: [{name, reason, detail?}] }. capsule = newest valid
 // active capsule by created_at. Corrupt, spent, incomplete or stale capsules are
 // listed in `rejected` with a reason; none is ever loaded.
-// Same-second saves are <stamp>.md (1st), <stamp>-2.md, ...; later saves have the higher number.
-// Plain name order is wrong here because '-' sorts before '.'.
-function saveOrder(name) {
-  const m = name.match(/^.*-\d{6}(?:-(\d+))?\.md$/);
-  return m ? (m[1] ? Number(m[1]) : 1) : 0;
-}
-
 export function selectCapsule(dir, { maxAgeDays = DEFAULT_MAX_AGE_DAYS, now = Date.now() } = {}) {
   const rejected = [];
   const note = (name, reason, detail) => rejected.push({ name, reason, ...(detail ? { detail } : {}) });
@@ -264,23 +242,13 @@ export function selectCapsule(dir, { maxAgeDays = DEFAULT_MAX_AGE_DAYS, now = Da
   let entries;
   try { entries = readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.md')); } catch { return { capsule: null, rejected, missingDir: true }; }
   let best = null;
-  let newestResumed = -Infinity; // an adopted continuation: nothing older may be auto-injected behind it
-  const actives = [];
   for (const name of entries) {
     const full = path.join(dir, name);
-    if (!isContainedFile(dir, full)) { note(name, 'unsafe-path', 'link or outside the capsule directory'); continue; }
     let doc;
     try { doc = readFileSync(full, 'utf8'); } catch { note(name, 'unreadable'); continue; }
     if (!hasFrontmatter(doc)) { note(name, 'no-frontmatter'); continue; }
     const status = scalar(doc, 'status');
-    if (status && CONSUMED_STATUSES.has(status)) {
-      note(name, 'already-consumed', status);
-      if (status === 'resumed') {
-        const t = Date.parse(String(scalar(doc, 'created_at')));
-        if (Number.isFinite(t) && t > newestResumed) newestResumed = t;
-      }
-      continue;
-    }
+    if (status && CONSUMED_STATUSES.has(status)) { note(name, 'already-consumed', status); continue; }
     if (status !== 'active') { note(name, 'status-not-active', status || '(absent)'); continue; }
     const createdRaw = scalar(doc, 'created_at');
     const created = Date.parse(String(createdRaw));
@@ -289,11 +257,9 @@ export function selectCapsule(dir, { maxAgeDays = DEFAULT_MAX_AGE_DAYS, now = Da
     if (problems.length) { note(name, 'invalid', problems[0]); continue; }
     const ageDays = (now - created) / 86400000;
     if (ageDays > maxAgeDays) { note(name, 'stale', `${Math.round(ageDays)}d old, limit ${maxAgeDays}d`); continue; }
-    actives.push({ path: full, name, id: fields.id, created, createdRaw, objective: fields.objective, waiting_on: fields.waiting_on, next_valid_action: fields.next_valid_action });
-  }
-  for (const c of actives) {
-    if (c.created <= newestResumed) { note(c.name, 'already-consumed', 'older than an already resumed capsule'); continue; }
-    if (!best || c.created > best.created || (c.created === best.created && saveOrder(c.name) > saveOrder(best.name))) best = c;
+    if (!best || created > best.created) {
+      best = { path: full, name, id: fields.id, created, createdRaw, objective: fields.objective, waiting_on: fields.waiting_on, next_valid_action: fields.next_valid_action };
+    }
   }
   return { capsule: best, rejected };
 }
@@ -314,23 +280,13 @@ export const MARKER_NAME = '.precompact-marker.json';
 
 export function writeMarker(dir, info) {
   mkdirSync(dir, { recursive: true });
-  const p = path.join(dir, MARKER_NAME);
-  let present = true;
-  try { lstatSync(p); } catch { present = false; }
-  if (present && !isContainedFile(dir, p)) return false; // a link or odd entry: never write through it
-  const tmp = `${p}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ at: new Date().toISOString(), ...info }), { flag: 'wx' });
-  renameSync(tmp, p);
-  return true;
+  writeFileSync(path.join(dir, MARKER_NAME), JSON.stringify({ at: new Date().toISOString(), ...info }));
 }
 
 // Returns the parsed marker or null; always removes it.
 export function takeMarker(dir) {
   const p = path.join(dir, MARKER_NAME);
-  let st;
-  try { st = lstatSync(p); } catch { return null; }
-  if (!st.isFile() || st.isSymbolicLink()) { try { rmSync(p); } catch { /* best effort */ } return null; } // drop the link itself, never its target
-  if (!isContainedFile(dir, p)) return null;
+  if (!existsSync(p)) return null;
   let m = null;
   try { m = JSON.parse(readFileSync(p, 'utf8')); } catch { m = {}; }
   try { rmSync(p); } catch { /* best effort */ }
@@ -360,15 +316,12 @@ export function rejectionLines(rejected, maxGroups = 4) {
 // ---------- consume (port of markCapsuleConsumed) ----------
 
 export function markCapsuleConsumed(file) {
-  if (!isContainedFile(path.dirname(file), file)) return false;
   const doc = readFileSync(file, 'utf8');
   const m = doc.match(FRONTMATTER);
   if (!m) return false;
   const marked = m[0].replace(/(^|\n)(status:[ \t]*)(['"]?)active\3[ \t]*(?=\r?(?:\n|$))/, (_x, b, p) => `${b}${p}resumed`);
   if (marked === m[0]) return false;
-  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(tmp, marked + doc.slice(m[0].length), { flag: 'wx' });
-  renameSync(tmp, file); // replaces the entry itself, never writes through it
+  writeFileSync(file, marked + doc.slice(m[0].length));
   return true;
 }
 
@@ -416,39 +369,20 @@ ${sections}
 }
 
 // Writes a validated capsule into dir (created if missing). Throws on invalid input.
-// Filesystems without hard links (FAT, exFAT, some network and bind mounts) fail link with these codes.
-const NO_LINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'ENOSYS']);
-
-export function writeCapsule(dir, { objective, waitingOn, nextAction, slug, trigger, body, now = new Date(), link = linkSync }) {
-  for (const [k, v] of [['objective', objective], ['waiting-on', waitingOn], ['next-action', nextAction]]) {
-    if (typeof v !== 'string') throw new Error(`refusing to write an invalid capsule: --${k} is required`);
-  }
+export function writeCapsule(dir, { objective, waitingOn, nextAction, slug, trigger, body, now = new Date() }) {
   const p2 = (n) => String(n).padStart(2, '0');
   const date = `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`;
   const stamp = `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`;
-  const base = `${date}-${slugify(slug || objective)}-${stamp}`;
-  const text0 = buildCapsule({ id: base, objective, waitingOn, nextAction, trigger, body, now });
-  const { problems } = validateCapsuleText(text0);
+  const id = `${date}-${slugify(slug || objective)}-${stamp}`;
+  const text = buildCapsule({ id, objective, waitingOn, nextAction, trigger, body, now });
+  const { problems } = validateCapsuleText(text);
   if (problems.length) throw new Error(`refusing to write an invalid capsule: ${problems.join('; ')}`);
   mkdirSync(dir, { recursive: true });
-  const tmp = path.join(dir, `.${base}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
-  try {
-    // Publish without replacing: link fails with EEXIST if the name is taken, so a same-second
-    // save gets a -2, -3 ... suffix instead of overwriting the earlier capsule.
-    for (let n = 1; n < 1000; n += 1) {
-      const id = n === 1 ? base : `${base}-${n}`;
-      const file = path.join(dir, `${id}.md`);
-      const text = n === 1 ? text0 : buildCapsule({ id, objective, waitingOn, nextAction, trigger, body, now });
-      writeFileSync(tmp, text, { flag: 'w' });
-      try { link(tmp, file); return { id, path: file }; } catch (e) {
-        if (e.code === 'EEXIST') continue;
-        if (!NO_LINK.has(e.code)) throw e;
-        // No hard links here: exclusive create still never replaces an existing capsule.
-        try { writeFileSync(file, text, { flag: 'wx' }); return { id, path: file }; } catch (e2) { if (e2.code !== 'EEXIST') throw e2; }
-      }
-    }
-    throw new Error('could not find a free capsule name');
-  } finally { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } }
+  const file = path.join(dir, `${id}.md`);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, text);
+  renameSync(tmp, file);
+  return { id, path: file };
 }
 
 // ---------- hook helpers ----------
@@ -459,22 +393,12 @@ export function readPayload() {
 
 // ---------- CLI ----------
 
-// Returns the value, undefined when the flag is absent. A flag with no value, or whose value is
-// another flag, throws so a bad call never turns into a capsule.
 function flag(args, name) {
   const i = args.indexOf(`--${name}`);
-  if (i < 0) return undefined;
-  const v = args[i + 1];
-  if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value`);
-  return v;
+  return i >= 0 ? args[i + 1] : undefined;
 }
 
 function cli(argv) {
-  try { return cli2(argv); } catch (e) { process.stderr.write(`${e.message}
-`); return 1; }
-}
-
-function cli2(argv) {
   const [cmd, ...rest] = argv;
   const dir = () => capsuleDir({}, flag(rest, 'dir'));
   if (cmd === 'dir') { process.stdout.write(`${dir()}\n`); return 0; }
