@@ -81,6 +81,7 @@
       "daemons/caddy.sh",
       "daemons/userpromptsubmit-journal.mjs",
       "daemons/precompact-flush.mjs",
+      "daemons/pre-permission-interlock.mjs",
       "daemons/ctx-refresh-sensor.mjs",
       "daemons/model-tier-guard.mjs",
       "daemons/gateguard.mjs",
