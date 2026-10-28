@@ -359,7 +359,7 @@ test('raising a required hook timeout remains COMPLIANT', () => {
       command.includes('sessionstart-reinject.mjs')
     ));
     assert.ok(hook, 'fixture includes the required SessionStart hook');
-    hook.timeout += 1000;
+    hook.timeout += 1;
     writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
 
     const { verdict, status, output } = attest(root);
@@ -381,7 +381,7 @@ test('lowering a required hook timeout attests NONCOMPLIANT', () => {
       command.includes('sessionstart-reinject.mjs')
     ));
     assert.ok(hook, 'fixture includes the required SessionStart hook');
-    hook.timeout -= 1000;
+    hook.timeout -= 1;
     writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
 
     const { verdict, status, output } = attest(root);
@@ -391,6 +391,76 @@ test('lowering a required hook timeout attests NONCOMPLIANT', () => {
       output,
     );
     assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout/);
+  });
+});
+
+// -- Hook timeout unit: the band is independent of the template ---------------
+//
+// Claude Code reads a hook's "timeout" in seconds and caps it at 600 s. A
+// template once shipped millisecond values (3000 where 3 s was meant); every
+// install rendered from it matched it exactly, so the template-versus-install
+// comparison attested COMPLIANT while every hook timeout was effectively
+// disabled. These two cases are the oracle that would have caught that: a
+// bound that derives from the host contract, not from the template.
+
+function requiredHook(parsed) {
+  const group = parsed.hooks.SessionStart.find(({ matcher, hooks }) => (
+    matcher === ''
+    && hooks.some(({ command }) => command.includes('sessionstart-reinject.mjs'))
+  ));
+  const hook = group?.hooks.find(({ command }) => command.includes('sessionstart-reinject.mjs'));
+  assert.ok(hook, 'fixture includes the required SessionStart hook');
+  return hook;
+}
+
+test('every shipped template hook timeout is a number of seconds inside [1, 120]', () => {
+  const manifest = readManifest();
+  const template = JSON.parse(readFileSync(
+    path.join(REPO, ...manifest.required_settings.template.split('/')),
+    'utf8',
+  ));
+  const timeouts = Object.values(template.hooks)
+    .flat()
+    .flatMap(({ hooks }) => hooks)
+    .map(({ command, timeout }) => ({ command, timeout }));
+  assert.ok(timeouts.length > 0, 'template declares hooks');
+  for (const { command, timeout } of timeouts) {
+    assert.equal(typeof timeout, 'number', `${command}: timeout must be a number`);
+    assert.ok(Number.isInteger(timeout) && timeout >= 1 && timeout <= 120,
+      `${command}: timeout ${timeout} is outside [1, 120] seconds -- a millisecond value?`);
+  }
+});
+
+test('a template and install that agree on a millisecond timeout attest NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const templatePath = path.join(root, ...manifest.required_settings.template.split('/'));
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    for (const file of [templatePath, settingsPath]) {
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      requiredHook(parsed).timeout = 3000;
+      writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+    }
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings template hook timeout out of band \[1, 120\] s: .*sessionstart-reinject\.mjs.*: 3000/);
+    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000/);
+  });
+});
+
+test('an installed timeout above the band attests NONCOMPLIANT even though it exceeds the template', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    requiredHook(parsed).timeout = 3000;
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000/);
+    assert.doesNotMatch(output, /settings template hook timeout out of band/);
   });
 });
 

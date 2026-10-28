@@ -37,7 +37,7 @@ Rotation: past `LIFECYCLE_JOURNAL_MAX_BYTES` (default 16 MiB) the file rolls to 
 
 Both flush legs run the SAME worker the Stop hook uses (`stop-capsule-writer.mjs --worker`) synchronously, and parse its machine-readable `SWE_OUTCOME:<class>` line. Exit-0 alone is never treated as "flushed": `noop:no-delta`, `noop:lock-defer`, and `noop:no-transcript` all exit 0 and mean different things. The worker's per-session lock serializes these legs against any in-flight Stop write; a lock loss at PreCompact means the Stop side is already carrying the delta, while a lock loss at SessionEnd is logged distinctly (there is no next turn to retry; the concurrent detached Stop worker has to survive process teardown, which is unconfirmed on Windows).
 
-Timeout budgets are layered deliberately: the SessionEnd leg gives the worker 5000ms inside an outer hook timeout of 8000ms; the PreCompact leg gives it 6000ms inside 10000ms. Node cold-start is ~1.6s idle and worse under AV/disk load; an outer timeout that guillotines the inner worker converts healthy-but-slow flushes into false failures.
+Timeout budgets are layered deliberately: the SessionEnd leg gives the worker 5000ms inside an outer hook timeout of 8 s; the PreCompact leg gives it 6000ms inside 10 s. The hook `timeout` field in `.claude/settings.json` is read by Claude Code in seconds (an earlier template wrote 8000 and 10000, which the host read as hours); the worker budgets inside the daemons stay in milliseconds. Node cold-start is ~1.6s idle and worse under AV/disk load; an outer timeout that guillotines the inner worker converts healthy-but-slow flushes into false failures.
 
 ## Operator sovereignty (fail-soft default)
 
