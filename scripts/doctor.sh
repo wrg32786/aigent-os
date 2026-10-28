@@ -374,7 +374,7 @@ def command_matches(actual, expected_commands):
     )
 
 
-# Independent of the template. Claude Code reads a hook's "timeout" in SECONDS
+# Independent of the template. Claude Code reads the hook "timeout" field in SECONDS
 # and caps it at 600 s. A value outside this band is not a deliberate budget;
 # it is the millisecond mistake the template itself once shipped (3000 where
 # 3 s was meant). Comparing the install against the template cannot see that
