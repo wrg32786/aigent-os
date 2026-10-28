@@ -444,8 +444,8 @@ test('a template and install that agree on a millisecond timeout attest NONCOMPL
 
     const { verdict, status, output } = attest(root);
     assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
-    assert.match(output, /settings template hook timeout out of band \[1, 120\] s: .*sessionstart-reinject\.mjs.*: 3000/);
-    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000/);
+    assert.match(output, /settings template hook timeout out of band \[1, 120\] s: .*sessionstart-reinject\.mjs.*: 3000\b/);
+    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000\b/);
   });
 });
 
@@ -459,7 +459,7 @@ test('an installed timeout above the band attests NONCOMPLIANT even though it ex
 
     const { verdict, status, output } = attest(root);
     assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
-    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000/);
+    assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout out of band \[1, 120\] s, got 3000\b/);
     assert.doesNotMatch(output, /settings template hook timeout out of band/);
   });
 });

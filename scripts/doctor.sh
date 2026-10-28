@@ -434,13 +434,13 @@ if template_document is not MISSING:
 
     expected_hooks = []
     for event, matcher, hook_type, command, timeout in hook_records(template_document):
-        if not isinstance(command, str):
-            continue
         if timeout_out_of_band(timeout):
             findings.append(
                 "settings template hook timeout out of band [%s, %s] s: %s: %s"
-                % (HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MAX_S, command, shown(timeout))
+                % (HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MAX_S, shown(command), shown(timeout))
             )
+        if not isinstance(command, str):
+            continue
         for relative in required_commands:
             if relative in command:
                 expected_hooks.append(

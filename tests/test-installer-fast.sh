@@ -729,7 +729,7 @@ const fs = require("fs");
 const [settings, template, operator] = process.argv.slice(2);
 const hooks = (file) => Object.entries(JSON.parse(fs.readFileSync(file, "utf8")).hooks || {})
   .flatMap(([event, groups]) => groups.flatMap((g) => (g.hooks || []).map((h) => [event, h.command || "", h.timeout])));
-const script = (c) => c.replace(/\/g, "/").split("/").pop().split('"')[0].split(" ")[0];
+const script = (c) => c.replace(/\\/g, "/").split("/").pop().split('"')[0].split(" ")[0];
 const want = new Map();
 for (const [event, command, timeout] of hooks(template)) {
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120) throw new Error(`template ${event} ${command} timeout ${timeout} is not seconds in [1, 120]`);
