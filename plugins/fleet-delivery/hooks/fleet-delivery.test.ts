@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, PromptSubmitResult } from 'claude-code'
 
-import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, unwrapPeer } from './register'
+import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, unwrapPeer, NATIVE_VERSION } from './register'
 
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
@@ -146,6 +146,11 @@ function seat(on: On, world: World = {}) {
     return text === undefined ? { deny: 'ENOENT' } : { value: text }
   })
   on('fs.write', ($, e) => {
+    // The seat's native marker in the Room (0.4.0): a plain write, never counted as a log write.
+    if (/\/state\/native\/[a-z0-9_-]+\.json$/.test(norm(e.path))) {
+      files.set(norm(e.path), e.text)
+      return { value: undefined }
+    }
     // Only the log's temp file: the log itself is replaced by a rename.
     expect(norm(e.path)).toMatch(/\/runtime\/mod-delivery-ledger\.[a-z0-9_-]+\.jsonl\.tmp$/)
     if (failWrites > 0) {
@@ -1839,12 +1844,22 @@ const SENT_FILE = roomFileName(SENT_TS, 'm9')
 const POINTER = pointerText('beta', 'alpha', SENT_FILE)
 // The engine's own shape, measured on a live session 2026-10-29: the envelope, not the bare text.
 const wrap = (text: string) => `<cross-session-message from="uds:\\\\.\\pipe\\LOCAL\\cc-msg-x" from-name="beta" from-mode="prompting">\n${text}\n</cross-session-message>\n`
-const peer = (text: string) => ({ origin: { kind: 'peer' as const }, text: wrap(text) })
-const queued = (on: On) => on('session.receive', ($, e) => ({ text: e.text }))
 const A_POINTER = pointerText('alpha', 'beta', 'a.json')
+const marker = (seat: string, at = '2026-10-07T18:25:00.000Z', version = NATIVE_VERSION, owner = 'mod') =>
+  JSON.stringify({ seat, owner, version, at })
+const BETA_MARKER = `${ROOM}/state/native/beta.json`
+const ALPHA_MARKER = `${ROOM}/state/native/alpha.json`
+// A pointer arriving as the prompt the engine makes of it.
+const asPeerPrompt = (text: string) => ({ ...RUN, origin: { kind: 'peer' as const }, text: wrap(text) })
 
-test('room_send also queues a pointer natively: the file name, never the body; the tool answer is returned at once', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+test('the tick publishes this seat\'s native marker: mod-owned, this version, now', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toEqual({ seat: 'alpha', owner: 'mod', version: NATIVE_VERSION, at: '2026-10-07T18:30:00.000Z' })
+})
+
+test('room_send also queues a pointer to a seat with a fresh marker: the file name, never the body; the tool answer returns at once', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
   const sends: string[] = []
   on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
   on('session.send', ($, e) => {
@@ -1861,25 +1876,60 @@ test('room_send also queues a pointer natively: the file name, never the body; t
   expect(roomFileName(SENT_TS, 'm9')).toBe('2026-10-07T18-00-00-000Z__m9.json')
 })
 
-test('a refused or unsettled pointer send is logged; the tool answer is untouched', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
-  let answer: () => unknown = () => ({ isDelivered: false as const, reason: 'no session named beta' })
+test('the address is the one the Room published to, not the request\'s spelling', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
+  const sends: string[] = []
   on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
-  on('session.send', () => answer())
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'gamma', body: 'hi' })
+  await w.clock.settle()
+  expect(sends).toEqual(['beta'])
+})
+
+test('no marker, a stale marker, an older mod or a supervisor-owned recipient: nothing is announced, the file waits for its tick', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  const sends: string[] = []
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  const announce = async () => {
+    await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
+    await w.clock.settle()
+  }
+  await announce()
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (no native marker); beta/${SENT_FILE} waits for its tick`)
+  w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:00:00.000Z'))
+  await announce()
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker stale); beta/${SENT_FILE} waits for its tick`)
+  w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', '0.3.0'))
+  await announce()
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker from mod 0.3.0); beta/${SENT_FILE} waits for its tick`)
+  w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', NATIVE_VERSION, 'supervisor'))
+  await announce()
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick`)
+  expect(sends).toEqual([])
+})
+
+test('a refused pointer send is logged; the tool answer is untouched', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  on('session.send', () => ({ isDelivered: false as const, reason: 'no session named beta' }))
   await w.turn()
   const answered = await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   expect('text' in answered && answered.text).toBe(SENT)
   await w.clock.settle()
   expect(w.log).toContain(`log fleet-delivery: pointer undelivered (no session named beta); beta/${SENT_FILE} waits for its tick`)
-  answer = () => new Promise<never>(() => {})
-  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi again' })
-  await w.clock.advance(15_001)
-  await w.clock.settle()
-  expect(w.log.some(entry => entry.startsWith('log fleet-delivery: pointer still unsettled after 15000 ms'))).toBe(true)
 })
 
-test('after one real pointer, a control body, a bad name, a non-seat address, a malformed file name, a refused room_send and an unowned seat send nothing', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+test('after one real pointer, a control body, a non-seat address, a malformed file name, a refused room_send and an unowned seat announce nothing', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
   const sends: string[] = []
   let answer: { result: string; text: string } | { deny: string } = { result: SENT, text: SENT }
   on('tool.call', { tool: ROOM_SEND_TOOL }, () => answer)
@@ -1892,7 +1942,6 @@ test('after one real pointer, a control body, a bad name, a non-seat address, a 
   await w.clock.settle()
   expect(sends).toEqual(['beta'])
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'ROOM-LIFECYCLE capsule-done x' })
-  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta seat', body: 'hi' })
   answer = { result: sentAnswer('broadcast'), text: sentAnswer('broadcast') }
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'broadcast', body: 'hi all' })
   answer = { result: sentAnswer('beta').replace('"m9"', '"m 9/x"'), text: sentAnswer('beta').replace('"m9"', '"m 9/x"') }
@@ -1909,11 +1958,10 @@ test('after one real pointer, a control body, a bad name, a non-seat address, a 
   expect(w.log).toContain(`log fleet-delivery: this seat is not owned by the mod; beta/${SENT_FILE} is left to the Room`)
 })
 
-test('a pointer for this seat passes through when delivery is open; the Room file is untouched and the tick still delivers it if the model does not drain', CONFIGURED, async ($, on) => {
+test('a pointer for this seat enters as a prompt when delivery is open; the Room file is untouched and the tick still delivers it if the model does not drain', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY })
-  queued(on)
-  const received = await $.session.receive(peer(A_POINTER))
-  expect('text' in received && received.text).toBe(wrap(A_POINTER))
+  const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in entered && entered.drop).toBeFalsy()
   expect(unwrapPeer(wrap(A_POINTER))).toBe(A_POINTER)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.ledger()).toEqual([])
@@ -1921,31 +1969,30 @@ test('a pointer for this seat passes through when delivery is open; the Room fil
   await w.turn()
   await w.clock.advance(31_000)
   await w.clock.settle()
-  expect(submits(w.log)).toHaveLength(1)
+  expect(submits(w.log).filter(line => !line.includes('Room mail for'))).toHaveLength(1)
 })
 
-test('a pointer is consumed while the refresh cycle is not idle, and while the supervisor holds the seat', CONFIGURED, async ($, on) => {
+test('a pointer is dropped at the moment it becomes a prompt while the refresh cycle is not idle, and while the supervisor holds the seat', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
-  queued(on)
-  const received = await $.session.receive(peer(A_POINTER))
-  expect('consumed' in received && received.consumed).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:a.json is dropped, the file waits for the tick')
+  const held = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in held && held.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:a.json is dropped, the file waits for the tick')
   w.files.set(CYCLE, IDLE)
   w.files.set(`${ROOM}/state/holds/alpha.json`, JSON.stringify({ ts: '2026-10-07T18:29:00.000Z', phase: 'resume' }))
-  const held = await $.session.receive(peer(A_POINTER))
-  expect('consumed' in held && String(held.consumed).startsWith('fleet-delivery: delivery held (supervisor-hold)')).toBe(true)
+  const frozen = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in frozen && String(frozen.drop).startsWith('fleet-delivery: delivery held (supervisor-hold)')).toBe(true)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(submits(w.log)).toEqual([])
 })
 
-test('a pointer for another seat, a delivery for a subagent, an unowned seat, and ordinary peer mail pass through', CONFIGURED, async ($, on) => {
+test('a pointer for another seat, a subagent\'s prompt, an unowned seat, and ordinary peer mail enter untouched even under a hold', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
-  queued(on)
-  const other = await $.session.receive(peer(pointerText('gamma', 'beta', 'a.json')))
-  expect('text' in other && other.text).toBe(wrap(pointerText('gamma', 'beta', 'a.json')))
-  const sub = await $.session.receive({ ...peer(A_POINTER), agentId: 'agent-1' })
-  expect('text' in sub && sub.text).toBe(wrap(A_POINTER))
-  const plain = await $.session.receive(peer('just a peer message'))
-  expect('text' in plain && plain.text).toBe(wrap('just a peer message'))
+  const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
+  expect('drop' in other && other.drop).toBeFalsy()
+  const sub = await $.prompt.submit({ ...asPeerPrompt(A_POINTER), agentId: 'agent-1' })
+  expect('drop' in sub && sub.drop).toBeFalsy()
+  const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
+  expect('drop' in plain && plain.drop).toBeFalsy()
   w.files.delete(OWNER)
-  const unowned = await $.session.receive(peer(A_POINTER))
-  expect('text' in unowned && unowned.text).toBe(wrap(A_POINTER))
+  const unowned = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in unowned && unowned.drop).toBeFalsy()
 })

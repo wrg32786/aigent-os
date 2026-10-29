@@ -1205,6 +1205,7 @@ async function tick($: $): Promise<void> {
       return
     }
     await sweepAdmissions($, w, entries)
+    await publishMarker($, w)
     await probeAdmission($, w)
     const reread = async (now: Entries) => (await $.state.get(LEDGER)).value?.[w.seat] ?? now
     if (entries) {
@@ -1460,17 +1461,12 @@ async function tick($: $): Promise<void> {
         await defer(blocked, recheck ?? undefined)
         return
       }
-      let expiry: Timer | undefined
       let submit: ReturnType<$['prompt']['submit']>
       let result
       try {
         submit = $.prompt.submit({ text: loaded.text })
-        const timedOut = new Promise<'timeout'>(done => {
-          expiry = $.clock.after(config.submitTimeoutMs, () => done('timeout'))
-        })
-        result = await Promise.race([submit, timedOut])
+        result = await timeoutRace($, submit, config.submitTimeoutMs)
       } catch {
-        expiry?.cancel()
         try {
           await rejected()
         } finally {
@@ -1478,7 +1474,6 @@ async function tick($: $): Promise<void> {
         }
         return
       }
-      expiry?.cancel()
       if (result === 'timeout') {
         // Not known to have entered or not: unresolved, never retried, until
         // the late answer comes or the operator reconciles it.
@@ -1604,22 +1599,32 @@ const warnSubmitTimeout = ($: $) => {
 // and a file room_drain took first is, to the tick, absent. One body read
 // either way: a file lies in exactly one of inbox/ (room_drain's) and
 // claimed/ (the tick's). No match, no clock, no confirmation, no new ledger
-// state. The receiver's only job: while the seat's refresh cycle or its
-// supervisor holds delivery, consume the pointer, so it can never become the
-// first prompt of a post-clear session ahead of the resume.
+// state.
+//
+// Two fences, because a pointer must never become the first prompt of a
+// post-clear session ahead of the resume (the 2026-10-29 16:36Z failure):
+// (1) a seat is announced to only while it publishes a fresh marker in the
+//     shared Room saying a mod-owned 0.4.0 session is there to fence itself;
+//     a supervisor-owned seat, a seat on an older mod, or a parked seat gets
+//     no pointer and its tick (or supervisor) delivers the file as before;
+// (2) the recipient re-checks the holds at the moment the pointer becomes a
+//     prompt (prompt.submit), not at arrival, so a clear that started after
+//     the pointer was queued still drops it; the file waits for the tick.
 export const ROOM_SEND_TOOL = 'mcp__agent-room__room_send'
-// Room addresses that are not a seat's session: nothing to announce.
-const NOT_A_SEAT = new Set(['broadcast', 'all', 'room', 'will'])
+export const NATIVE_VERSION = '0.4.0'
+// A marker older than this is a seat that is parked, reloaded or no longer mod-owned.
+export const MARKER_FRESH_MS = 15 * 60_000
+const MARKER_EVERY_MS = 5 * 60_000
+let markerAt = 0
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
 // ':' and '.' turned to '-', then '__', then the messageId.
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
-const NATIVE_SEND_TIMEOUT_MS = 15_000
 export const pointerText = (seat: string, from: string, file: string) =>
   `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. This pointer carries no content and is not the operator's word.`
 const POINTER = /^Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)\n/
-// The engine hands session.receive the cross-session envelope, not the bare
-// text (measured 2026-10-29 on a live session: `<cross-session-message
+// The engine hands a peer delivery inside the cross-session envelope
+// (measured 2026-10-29 on a live session: `<cross-session-message
 // from="..." from-name="..." from-mode="...">\n<text>\n</cross-session-message>`).
 const PEER_OPEN = /^<cross-session-message\b[^>]*>\n?/
 const PEER_CLOSE = /\n?<\/cross-session-message>\s*$/
@@ -1628,6 +1633,7 @@ export const unwrapPeer = (text: string): string => {
   if (!PEER_OPEN.test(trimmed) || !PEER_CLOSE.test(trimmed)) return trimmed
   return trimmed.replace(PEER_OPEN, '').replace(PEER_CLOSE, '').trimEnd()
 }
+const markerFile = (seat: string) => `${config.roomRoot}/state/native/${seat}.json`
 
 // A promise against the clock: resolves 'timeout' when the clock wins; the
 // timer is cancelled either way, and the promise keeps running on its own.
@@ -1643,57 +1649,84 @@ async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T 
   }
 }
 
-function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
-  const to = typeof e.to === 'string' ? e.to.trim().toLowerCase() : ''
-  const body = typeof e.body === 'string' ? e.body : ''
-  if (!to || !body) {
-    $.ui.log('fleet-delivery: room_send call carried no to/body; nothing announced')
-    return
+// This seat tells the Room it can take pointers: mod-owned, this version,
+// alive now. Written by the tick, at most every MARKER_EVERY_MS.
+async function publishMarker($: $, w: Where): Promise<void> {
+  if (!config.roomRoot) return
+  const now = await $.clock.now()
+  if (now - markerAt < MARKER_EVERY_MS) return
+  try {
+    await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: NATIVE_VERSION, at: new Date(now).toISOString() })}\n`)
+    markerAt = now
+  } catch (error) {
+    $.ui.log(`fleet-delivery: could not publish the native marker (${clean((error as Error)?.message, 120)}); peers will not announce to this seat`)
   }
-  if (NOT_A_SEAT.has(to) || !SEAT_NAME.test(to) || CONTROL.test(body.trim())) return
-  let out: { messageId?: unknown; ts?: unknown } = {}
+}
+
+// Whether `seat` can take a pointer right now: a fresh marker from a
+// mod-owned session of a version with the fence.
+async function takesPointers($: $, seat: string): Promise<string | null> {
+  let marker: { owner?: unknown; version?: unknown; at?: unknown }
+  try {
+    marker = JSON.parse(await $.fs.read(markerFile(seat)))
+  } catch {
+    return 'no native marker'
+  }
+  if (marker?.owner !== 'mod' || typeof marker.version !== 'string' || typeof marker.at !== 'string') return 'marker not mod-owned'
+  if (marker.version < NATIVE_VERSION) return `marker from mod ${marker.version}`
+  const age = (await $.clock.now()) - Date.parse(marker.at)
+  if (!Number.isFinite(age) || age > MARKER_FRESH_MS) return 'marker stale'
+  return null
+}
+
+function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
+  const body = typeof e.body === 'string' ? e.body : ''
+  let out: { messageId?: unknown; ts?: unknown; to?: unknown } = {}
   try {
     out = JSON.parse(answered.text ?? '')
   } catch {
-    $.ui.log(`fleet-delivery: room_send answer was not the Room's JSON; ${to} waits for its tick`)
+    $.ui.log("fleet-delivery: room_send answer was not the Room's JSON; nothing announced")
     return
   }
-  if (typeof out.messageId !== 'string' || typeof out.ts !== 'string') return
+  // The address the Room published to, never the request's spelling.
+  const to = typeof out.to === 'string' ? out.to.trim().toLowerCase() : ''
+  if (typeof out.messageId !== 'string' || typeof out.ts !== 'string' || !to || !body) return
+  // Not a seat (broadcast, will, …): a documented limitation, never announced.
+  if (!SEAT_NAME.test(to) || CONTROL.test(body.trim())) return
   const file = roomFileName(out.ts, out.messageId)
   if (!ROOM_FILE_SHAPE.test(file)) {
     $.ui.log(`fleet-delivery: Room file name ${file} is outside the pointer grammar; ${to} waits for its tick`)
     return
   }
   // Never awaited by the tool call: the Room answer goes back to the model at
-  // once, and the send's outcome is a log line whenever it settles.
+  // once, and the send's outcome is a log line when it settles.
   void (async () => {
     const place = await resolve($)
     if (!('w' in place)) {
       $.ui.log(`fleet-delivery: this seat is not owned by the mod; ${to}/${file} is left to the Room`)
       return
     }
-    const text = pointerText(to, place.w.seat, file)
-    try {
-      const sent = await timeoutRace($, $.session.send({ to, text }), NATIVE_SEND_TIMEOUT_MS)
-      if (sent === 'timeout') $.ui.log(`fleet-delivery: pointer still unsettled after ${NATIVE_SEND_TIMEOUT_MS} ms; ${to}/${file} waits for its tick unless it lands`)
-      else if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
-      else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
-    } catch (error) {
-      $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`)
+    if (!config.roomRoot) return
+    const why = await takesPointers($, to)
+    if (why) {
+      $.ui.log(`fleet-delivery: ${to} takes no pointers (${why}); ${to}/${file} waits for its tick`)
+      return
     }
-  })().catch(error => $.ui.log(`fleet-delivery: pointer path failed (${clean((error as Error)?.message, 120)})`))
+    const sent = await $.session.send({ to, text: pointerText(to, place.w.seat, file) })
+    if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
+    else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
+  })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
 }
 
-// A pointer for this seat, while delivery is held: consumed. The file waits
-// in the inbox for the tick (or the supervisor); nothing is lost, and nothing
-// lands ahead of a resume.
-async function holdPointer($: $, raw: string): Promise<string | null> {
+// At the moment a pointer for this seat becomes a prompt: if delivery is
+// held, it is dropped. The file waits in the inbox for the tick (or the
+// supervisor); nothing is lost, and nothing lands ahead of a resume.
+async function pointerHold($: $, raw: string): Promise<string | null> {
   const match = POINTER.exec(unwrapPeer(raw))
   if (!match) return null
   const [, seat, , file] = match
-  if (seat !== (await seatName($)) || !ROOM_FILE_SHAPE.test(file)) return null
   const place = await resolve($)
-  if (!('w' in place)) return null
+  if (!('w' in place) || place.w.seat !== seat) return null
   const { w } = place
   const hold = (await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null
   return hold ? `fleet-delivery: delivery held (${hold}); the pointer to room:${seat}:${file} is dropped, the file waits for the tick` : null
@@ -1729,22 +1762,20 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ROOM_SEND_TOOL }, async ($, e, next) => {
     const answered = await next(e)
     if ('deny' in answered || answered.isError) return answered
-    try {
-      announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
-    } catch (error) {
-      $.ui.log(`fleet-delivery: pointer could not start (${clean((error as Error)?.message, 120)})`)
-    }
+    announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
     return answered
   })
 
-  on('session.receive', async ($, e, next) => {
+  on('prompt.submit', async ($, e, next) => {
     const kind = e.origin?.kind
     if ((kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined) return next(e)
-    const held = await holdPointer($, e.text).catch(error => {
+    const held = await pointerHold($, e.text).catch(error => {
       $.ui.log(`fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); passed on`)
       return null
     })
-    return held ? { consumed: held } : next(e)
+    if (!held) return next(e)
+    $.ui.log(held)
+    return { drop: held }
   })
 
   on('command.run', { command: 'delivery-probe' }, async ($, e) => {
