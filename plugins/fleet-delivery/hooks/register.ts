@@ -1599,18 +1599,22 @@ const warnSubmitTimeout = ($: $) => {
 // arrival (session.receive, which the engine raises before it queues the
 // delivery) the recipient's mod only verifies the text against the file it
 // names, hands the model the text rebuilt from that file, and records
-// deferred:native-queued; the file stays where it is. At the next turn end
-// the transcript is read, and only a user row carrying the tag settles the
-// file: delivered:native, moved to processed/. A copy the engine dropped (a
-// clear, an exit) never confirms, and past the window the prompt-box path
-// delivers the file as before. While the seat's refresh cycle or supervisor
-// holds, the native copy is consumed instead, so it can never become the
-// first prompt of a post-clear session ahead of the resume.
+// deferred:native-queued; the file stays where it is. At each turn end the
+// transcript is read, and only a user row carrying the tag settles the file:
+// delivered:native, moved to processed/. A copy the engine dropped (a clear,
+// an exit) never confirms, and past the window, never while a turn runs, the
+// prompt-box path delivers the file as before. While the seat's refresh
+// cycle or supervisor holds, or the supervisor owns the seat, the native
+// copy is consumed instead, so it can never become the first prompt of a
+// post-clear session ahead of the resume.
 export const ROOM_SEND_TOOL = 'mcp__agent-room__room_send'
 export const NATIVE_QUEUED = 'deferred:native-queued'
 // How long a natively queued copy may wait for its transcript row before the
-// prompt-box path takes the file.
+// prompt-box path takes the file. Never expires while a turn runs.
 export const NATIVE_CONFIRM_MS = 5 * 60_000
+// How far back a turn end looks for a Room file's row, and how many rows.
+const CONFIRM_LOOKBACK_MS = 60 * 60_000
+const CONFIRM_ROWS = 300
 // Room addresses that are not a seat's session: nothing to send natively.
 const NOT_A_SEAT = new Set(['broadcast', 'all', 'room', 'will'])
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
@@ -1619,18 +1623,33 @@ export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:
 // What a Room file name may look like in the tag; anything else is never sent
 // natively, so the receiver can never be asked to settle a path.
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
-// The tag the receiver matches: the last line of the text, trailing whitespace ignored.
+// The tag the receiver matches: the last line of the sender's text.
 const NATIVE_TAG = /\n\[room-file ([a-z0-9_-]+)\/([A-Za-z0-9_-]+\.json)\]$/
 const TAG_WORD = '[room-file '
 const NATIVE_SEND_TIMEOUT_MS = 15_000
+// The engine hands session.receive the cross-session envelope, not the bare
+// text (measured 2026-10-29 on a live session: `<cross-session-message
+// from="..." from-name="..." from-mode="...">\n<text>\n</cross-session-message>`).
+const PEER_OPEN = /^<cross-session-message\b[^>]*>\n?/
+const PEER_CLOSE = /\n?<\/cross-session-message>\s*$/
+export const unwrapPeer = (text: string): string => {
+  const trimmed = text.trim()
+  if (!PEER_OPEN.test(trimmed) || !PEER_CLOSE.test(trimmed)) return trimmed
+  return trimmed.replace(PEER_OPEN, '').replace(PEER_CLOSE, '').trimEnd()
+}
+const cutMarker = (file: string) => `more characters in ${file}]`
+// Idempotent: a body already cut for this file is returned as it is.
 export const capBody = (body: string, file: string) =>
-  body.length > BODY_CAP ? `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} more characters in ${file}]` : body
+  body.length > BODY_CAP && !body.endsWith(cutMarker(file))
+    ? `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} ${cutMarker(file)}`
+    : body
 export const frameRoom = (from: string, ts: string, body: string) => `[room from ${from}, ${ts}]\n${body}\n${TRAILER}`
 export const nativeTag = (seat: string, file: string) => `[room-file ${seat}/${file}]`
 export const nativeText = (from: string, to: string, ts: string, body: string, file: string) =>
   `${frameRoom(from, ts, capBody(body, file))}\n${nativeTag(to, file)}`
+let inTurn = false
 const nativeFresh = (entry: FleetDeliveryEntry | undefined, now: number) =>
-  entry?.status === NATIVE_QUEUED && now - Date.parse(entry.at) < NATIVE_CONFIRM_MS
+  entry?.status === NATIVE_QUEUED && (inTurn || now - Date.parse(entry.at) < NATIVE_CONFIRM_MS)
 
 // A Room envelope as both paths read it: the capped body, the sender, the time.
 export function parseEnvelope(raw: string, file: string): { from: string; ts: string; body: string; priority: unknown } | { error: 'error:empty-body' } {
@@ -1696,9 +1715,10 @@ function sendNative($: $, e: Record<string, unknown>, answered: { text?: string 
   })().catch(error => $.ui.log(`fleet-delivery: native send path failed (${clean((error as Error)?.message, 120)})`))
 }
 
-// The Room file the tag names, wherever it lies.
-async function readRoomFile($: $, w: Where, file: string): Promise<ReturnType<typeof parseEnvelope> | null> {
-  for (const where of [inboxFile, claimedFile, processedFile]) {
+// The Room file the tag names, wherever it lies, and where.
+type RoomPlace = 'inbox' | 'claimed' | 'processed'
+async function readRoomFile($: $, w: Where, file: string): Promise<{ env: ReturnType<typeof parseEnvelope>; at: RoomPlace } | null> {
+  for (const [at, where] of [['inbox', inboxFile], ['claimed', claimedFile], ['processed', processedFile]] as const) {
     let raw: string
     try {
       raw = await $.fs.read(where(w, file))
@@ -1706,7 +1726,7 @@ async function readRoomFile($: $, w: Where, file: string): Promise<ReturnType<ty
       continue
     }
     try {
-      return parseEnvelope(raw, file)
+      return { env: parseEnvelope(raw, file), at }
     } catch {
       return null
     }
@@ -1722,38 +1742,48 @@ async function currentEntries($: $, w: Where): Promise<Entries | null> {
 }
 
 type Received = { consumed: string } | { text: string } | { pass: true }
-async function receiveNative($: $, text: string): Promise<Received> {
+async function receiveNative($: $, raw: string): Promise<Received> {
   if (!config.roomRoot) return { pass: true }
-  const trimmed = text.trimEnd()
-  const tag = NATIVE_TAG.exec(trimmed)
+  const text = unwrapPeer(raw)
+  const tag = NATIVE_TAG.exec(text)
   if (!tag) {
-    if (trimmed.includes(TAG_WORD)) $.ui.log('fleet-delivery: a peer message carried a room-file tag that did not parse; passed on as ordinary mail')
+    if (text.includes(TAG_WORD)) $.ui.log('fleet-delivery: a peer message carried a room-file tag that did not parse; passed on as ordinary mail')
     return { pass: true }
   }
-  const place = await resolve($)
-  if (!('w' in place)) return { pass: true }
-  const { w } = place
   const [, seat, file] = tag
-  if (seat !== w.seat || !ROOM_FILE_SHAPE.test(file)) return { pass: true }
-  const item = { id: `room:${w.seat}:${file}`, source: 'room' }
-  const env = await readRoomFile($, w, file)
-  if (env === null || 'error' in env) {
+  const mine = await seatName($)
+  if (seat !== mine || !ROOM_FILE_SHAPE.test(file)) return { pass: true }
+  const item = { id: `room:${seat}:${file}`, source: 'room' }
+  const place = await resolve($)
+  // A seat the supervisor owns is delivered by the supervisor: the native copy
+  // of a file that really sits here would be read twice.
+  if (!('w' in place)) {
+    const here = config.roomRoot && (await readRoomFile($, { root: '', memory: '', seat }, file)) !== null
+    return here ? { consumed: `fleet-delivery: this seat is not owned by the mod; ${item.id} is delivered by its supervisor` } : { pass: true }
+  }
+  const { w } = place
+  const found = await readRoomFile($, w, file)
+  if (found === null || 'error' in found.env) {
     $.ui.log(`fleet-delivery: a peer message named ${item.id} but no readable Room file is here; passed on as ordinary mail`)
     return { pass: true }
   }
+  const { env } = found
   // The body and the tag must be the file's; the header line is the sender's
   // own spelling and is not compared (the rebuilt text carries the file's).
   const tail = `\n${env.body}\n${TRAILER}\n${nativeTag(w.seat, file)}`
-  if (!trimmed.endsWith(tail) || trimmed.indexOf('\n') !== trimmed.length - tail.length) {
+  if (!text.endsWith(tail) || text.indexOf('\n') !== text.length - tail.length) {
     $.ui.log(`fleet-delivery: a peer message named ${item.id} but did not match it; passed on as ordinary mail, the Room file is left for the tick`)
     return { pass: true }
   }
-  const rebuilt = `${frameRoom(env.from, env.ts, env.body)}\n${nativeTag(w.seat, file)}`
+  const rebuilt = nativeText(env.from, w.seat, env.ts, env.body, file)
   await claimGeneration($)
   const entries = await currentEntries($, w)
   if (!entries) return { consumed: `fleet-delivery: the ledger is not seeded; ${item.id} waits for the tick` }
   const current = entries[item.id]
   if (isDelivered(current)) return { consumed: 'fleet-delivery: this Room file was already delivered' }
+  // Only processed/ holds it: this seat has read it already (room_drain, or a
+  // delivery whose ledger line is older than the log).
+  if (found.at === 'processed') return { consumed: `fleet-delivery: ${item.id} is already in processed/` }
   // The refresh cycle and the supervisor hold the native copy exactly as they
   // hold the prompt box: it must never become the first prompt after a clear.
   const hold = (await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null
@@ -1768,30 +1798,39 @@ async function receiveNative($: $, text: string): Promise<Received> {
   return landed ? { text: rebuilt } : { pass: true }
 }
 
-// At a turn end: every natively queued file whose tag a user row of the
-// transcript now carries is read, and only then delivered. Nothing else moves.
+// At a turn end: every undelivered Room file whose tag a recent user row of
+// the transcript carries has been read, whatever its status says, and is
+// delivered now. Keyed off the transcript, never off a status; bounded to
+// recent entries and recent rows.
 async function confirmNative($: $): Promise<void> {
   if (!config.roomRoot) return
   const place = await resolve($)
   if (!('w' in place)) return
   const { w } = place
-  const entries = (await $.state.get(LEDGER)).value?.[w.seat]
+  // The ledger as the tick reads it: the session's, else the log's.
+  let entries: Entries | null = null
+  try {
+    entries = await currentEntries($, w)
+  } catch {
+    return
+  }
   if (!entries) return
-  const pending = Object.entries(entries).filter(([, entry]) => entry.status === NATIVE_QUEUED || isUnresolved(entry))
+  const now = await $.clock.now()
+  const pending = Object.entries(entries).filter(([id, entry]) =>
+    roomFile(w, id) !== null && !isDelivered(entry) && entry.status !== 'skipped:control' && now - Date.parse(entry.at) <= CONFIRM_LOOKBACK_MS)
   if (!pending.length) return
   const rows = await $.session.messages()
   const seen = new Set<string>()
-  for (let i = rows.length - 1; i >= 0 && seen.size < pending.length; i--) {
+  for (let i = rows.length - 1; i >= Math.max(0, rows.length - CONFIRM_ROWS) && seen.size < pending.length; i--) {
     const row = rows[i]
     if (row.role !== 'user') continue
     for (const [id] of pending) {
-      const file = roomFile(w, id)
-      if (file && row.text.includes(nativeTag(w.seat, file))) seen.add(id)
+      if (row.text.includes(nativeTag(w.seat, roomFile(w, id)!))) seen.add(id)
     }
   }
   for (const id of seen) {
     const item = { id, source: 'room' }
-    const landed = await record($, w, item, 'delivered:native', prior => prior?.status === NATIVE_QUEUED || isUnresolved(prior), { detail: 'transcript row' })
+    const landed = await record($, w, item, 'delivered:native', prior => !isDelivered(prior), { detail: 'transcript row' })
     if (!landed) continue
     const entry = { status: 'delivered:native' }
     let moved = await moveRoom($, w, item, [inboxFile, processedFile], entry, false, 'quiet')
@@ -1819,8 +1858,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) inTurn = true
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
+      inTurn = false
       warnSubmitTimeout($)
       await ensureTicking($)
       await confirmNative($).catch(error => $.ui.log(`fleet-delivery: native confirmation failed (${clean((error as Error)?.message, 120)})`))
@@ -1835,7 +1880,9 @@ export const register: Register = (on, options) => {
     if ('deny' in answered || answered.isError) return answered
     try {
       sendNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
-    } catch {}
+    } catch (error) {
+      $.ui.log(`fleet-delivery: native send could not start (${clean((error as Error)?.message, 120)})`)
+    }
     return answered
   })
 
