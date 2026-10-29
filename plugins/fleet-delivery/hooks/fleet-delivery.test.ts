@@ -2061,7 +2061,7 @@ test('a file at submitting through the prompt box is passed on with a note; a la
   ])
   rows.push(asPeerRow(A_NATIVE))
   await w.turn()
-  expect(statuses(w.ledger()).at(-1)).toBe('delivered:native')
+  expect(w.ledger().at(-1)).toMatchObject({ status: 'delivered:native', detail: 'transcript row (over an in-flight submit)' })
   expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
@@ -2079,7 +2079,7 @@ test('a file at submitting:unresolved through the prompt box is passed on with a
   ])
   rows.push(asPeerRow(A_NATIVE))
   await w.turn()
-  expect(statuses(w.ledger()).at(-1)).toBe('delivered:native')
+  expect(w.ledger().at(-1)).toMatchObject({ status: 'delivered:native', detail: 'transcript row (over an in-flight submit)' })
   expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
@@ -2218,10 +2218,15 @@ test('a native-queued file never expires while a turn runs, and its row confirms
   expect(submits(w.log)).toEqual([])
 })
 
-test('a row in the transcript settles a file whatever its status says: a later deferral does not reopen a read', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { ...READY, [LOG]: ledgerWith('deferred:refresh-hold') } })
+test('a row in the transcript settles a handed file whatever its status says: a later deferral does not reopen a read', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
   queued(on)
-  transcript(on, [asPeerRow(A_NATIVE)])
+  const rows: { role: 'user' | 'assistant'; text: string }[] = []
+  transcript(on, rows)
+  await $.session.receive(peer(A_NATIVE))
+  // A later deferral written over native-queued by some other path.
+  w.setHeld('room:alpha:a.json', { status: 'deferred:refresh-hold', at: '2026-10-07T18:31:00.000Z', attempts: 1 })
+  rows.push(asPeerRow(A_NATIVE))
   await w.turn()
   expect(statuses(w.ledger()).at(-1)).toBe('delivered:native')
   expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
@@ -2231,4 +2236,32 @@ test('a row in the transcript settles a file whatever its status says: a later d
 test('capBody is idempotent, so a capped body reframed once more is unchanged', CONFIGURED, async () => {
   const once = capBody('y'.repeat(9_000), 'f.json')
   expect(capBody(once, 'f.json')).toBe(once)
+})
+
+test('a timer tick confirms from the transcript before it queues, so the gap after a turn end cannot submit a confirmed file', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const rows: { role: 'user' | 'assistant'; text: string }[] = []
+  transcript(on, rows)
+  await $.session.receive(peer(A_NATIVE))
+  await w.turn()
+  rows.push(asPeerRow(A_NATIVE))
+  // No turn end: only the timer runs, past the confirmation window.
+  await w.clock.advance(6 * 60_000)
+  await w.clock.settle()
+  expect(statuses(w.ledger())).toEqual([NATIVE_QUEUED, 'delivered:native'])
+  expect(submits(w.log)).toEqual([])
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
+})
+
+test('with nothing handed, a turn end reads no transcript', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  let reads = 0
+  on('session.messages', () => {
+    reads++
+    return { value: [] }
+  })
+  await w.turn()
+  await w.turn()
+  expect(reads).toBe(0)
 })
