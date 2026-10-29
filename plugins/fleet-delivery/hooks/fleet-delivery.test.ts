@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, PromptSubmitResult } from 'claude-code'
 
-import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, unwrapPeer, NATIVE_VERSION } from './register'
+import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, unwrapPeer, NATIVE_VERSION, versionAtLeast } from './register'
 
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
@@ -263,7 +263,7 @@ function seat(on: On, world: World = {}) {
       expect(e.argv.slice(0, 2)).toEqual(['node', '-e'])
       expect(e.argv[3]).toBe('--')
       expect(e.argv).toHaveLength(5)
-      expect(norm(e.argv[4]!)).toMatch(/^C:\/example\/room\/state\/admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)$/)
+      expect(norm(e.argv[4]!)).toMatch(/^C:\/example\/room\/state\/(?:admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)|native\/[a-z0-9_-]+\.json)$/)
       files.delete(norm(e.argv[4]!))
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -1984,15 +1984,67 @@ test('a pointer is dropped at the moment it becomes a prompt while the refresh c
   expect(submits(w.log)).toEqual([])
 })
 
-test('a pointer for another seat, a subagent\'s prompt, an unowned seat, and ordinary peer mail enter untouched even under a hold', CONFIGURED, async ($, on) => {
+test('under a hold the fence fails closed: a pointer for another seat, a peer prompt merely naming Room mail or room_drain, and a pointer to a seat the mod no longer owns are all dropped; a subagent prompt and plain peer mail enter', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
-  expect('drop' in other && other.drop).toBeFalsy()
+  expect('drop' in other && other.drop).toContain('delivery held (cycle checkpoint-requested)')
+  const words = await $.prompt.submit(asPeerPrompt('hey alpha, please call room_drain when you can'))
+  expect('drop' in words && words.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); a peer prompt naming Room mail is dropped')
   const sub = await $.prompt.submit({ ...asPeerPrompt(A_POINTER), agentId: 'agent-1' })
   expect('drop' in sub && sub.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
   expect('drop' in plain && plain.drop).toBeFalsy()
+  // Owner flipped to the supervisor while the marker is still fresh: the hold still drops it.
   w.files.delete(OWNER)
   const unowned = await $.prompt.submit(asPeerPrompt(A_POINTER))
-  expect('drop' in unowned && unowned.drop).toBeFalsy()
+  expect('drop' in unowned && unowned.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:a.json is dropped, the file waits for the tick')
+  // The holds unreadable: dropped, never passed on.
+  w.files.set(CYCLE, 'not json')
+  const broken = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in broken && broken.drop).toContain('delivery held (refresh-state-unreadable)')
+})
+
+test('the marker is retired when the mod no longer owns the seat; it comes back with ownership', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  await w.turn()
+  expect(w.files.has(ALPHA_MARKER)).toBe(true)
+  w.files.delete(OWNER)
+  await w.turn()
+  expect(w.files.has(ALPHA_MARKER)).toBe(false)
+  expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(true)
+  w.files.set(OWNER, MOD)
+  await w.turn()
+  expect(w.files.has(ALPHA_MARKER)).toBe(true)
+})
+
+test('the marker is refreshed from the timer every 5 min, with no turn and no tick needed, and the version gate compares numerically', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').at).toBe('2026-10-07T18:30:00.000Z')
+  await w.clock.advance(5 * 60_000 + 1_000)
+  await w.clock.settle()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').at).toBe('2026-10-07T18:35:00.000Z')
+  expect(versionAtLeast('0.10.0', NATIVE_VERSION)).toBe(true)
+  expect(versionAtLeast('1.0.0', NATIVE_VERSION)).toBe(true)
+  expect(versionAtLeast('0.3.9', NATIVE_VERSION)).toBe(false)
+  expect(versionAtLeast('0.4', NATIVE_VERSION)).toBe(false)
+  expect(versionAtLeast('x.y.z', NATIVE_VERSION)).toBe(false)
+})
+
+test('a room_send the Room published to will or broadcast is never announced and logs nothing', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [`${ROOM}/state/native/will.json`]: marker('will') } })
+  const sends: string[] = []
+  let answer = { result: sentAnswer('will'), text: sentAnswer('will') }
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => answer)
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'will', body: 'hi will' })
+  answer = { result: sentAnswer('broadcast'), text: sentAnswer('broadcast') }
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'broadcast', body: 'hi all' })
+  await w.clock.settle()
+  expect(sends).toEqual([])
+  expect(w.log.filter(entry => entry.includes('takes no pointers') || entry.includes('pointer'))).toEqual([])
 })
