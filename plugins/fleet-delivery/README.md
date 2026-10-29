@@ -92,6 +92,18 @@ Before each submit, in order:
 
 Every submit is the plugin's, never `asUser`: the model reads it as "The fleet-delivery plugin sent a message", never as the operator's own words.
 
+## Native transport (0.4.0)
+
+The prompt box was the transport, and every wedge the fleet hit lived there: a draft in the box deferred the item, a supervisor hold froze it, a claim with no submit in flight held everything behind it, and a message typed during a clear landed ahead of the resume. From 0.4.0 the Room file stays the record and the engine's own cross-session channel carries the message.
+
+**Sending.** When the seat's model calls `room_send`, the mod lets the Room server publish the file as before, then hands the same message to the recipient session with `$.session.send` (the SendMessage tool's own call and delivery): a turn of its own when the recipient is idle, read inside its running turn otherwise, never typed into any prompt box. The text is the Room framing the composer path uses, plus one trailing tag naming the Room file: `[room-file <seat>/<ts>__<messageId>.json]`. The recipient name is `room_send`'s `to` as spelled; the engine resolves it against the live sessions ignoring letter case. Control bodies (`ROOM-LIFECYCLE …`, bare control verbs) and refused or errored `room_send` calls are never sent natively. The send's outcome is a `$.ui.log` line (`native sent …`, `native undelivered (<reason>) …`); the ledger is the recipient's.
+
+**Receiving.** When a delivery carrying that tag reaches a session (`session.receive`, origin `peer` or `peer-send-message`), the recipient's mod settles the Room file: inbox/ (or claimed/) to processed/, and `delivered:native` in the ledger, so its tick never submits that file through the prompt box. A file the ledger already holds final is answered `consumed`, so the model never reads one message twice. A file mid-submit through the prompt box (`submitting`, `submitting:unresolved`) is left to that submit's own outcome; both copies land once and the ledger keeps the submit's verdict. A tag for another seat, or any delivery without the tag, passes through untouched.
+
+**Fallback.** When the native send is refused (no session of that name is registered: not launched yet, parked, or its `~/.claude/sessions/<pid>.json` descriptor missing), the Room file waits in the recipient's inbox and the tick delivers it as before, holds and all. The prompt-box path is the fallback, not the default, and the refresh handshake, the supervisor hold and the unresolved-claim rule keep governing that path only. Senders without a session (the supervisor's own lifecycle legs, job results, crons that write Room files directly) always take the fallback.
+
+**Verified on a disposable seat (2026-10-29):** an idle session takes a native message as its own turn within 5 s; a message sent during a running turn is read inside that turn; a message sent after a seat's capsule-done ack was read as a turn in the live session before any clear (the engine delivered it; the probe's supervisor could not exercise the clear itself, so delivery across the clear boundary is not proven here); a name sent as `Probe-Seat` reached the session registered as `probe-seat`; a session cannot send to itself (so the receiver's mod cannot self-deliver; the sender's mod does the native send).
+
 ## The ledger and the log
 
 **What was delivered** lives in two places, neither of them the plugin's store:
@@ -234,7 +246,7 @@ The probe sends one harmless marker prompt and ignores the owner switch, the ref
 
 - The refresh handshake (capsule, clear, resume) stays with the supervisor; the mod only waits it out.
 - Restarting a crashed seat stays with the supervisor.
-- Urgent mail keeps the cross-session SendMessage path.
+- Senders without a session (supervisor lifecycle legs, job results, cron-written Room files) take the prompt-box path; only `room_send` from a seat's model goes native.
 - Two sessions delivering for the same seat at once. The compare-and-set and the module generation cover an old and a new module in one session; the log is read and rewritten whole, so between processes the last writer wins. Run one session per seat.
 - Coordinating with the supervisor's own mover. There are three movers of Room files: this mod (claim, finish, sweep), the seat's `room_drain`, and the supervisor's `modOwnedTick`, which also moves a submitted inbox file to `processed/`. The mod never depends on the supervisor for it, and the sweep and the finishing move tolerate `ENOENT` from either of the others (a file already gone is no move and no error). The supervisor's reader for this log parses each line as plain JSON, so it cannot read the length-prefixed lines.
 

@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, PromptSubmitResult } from 'claude-code'
 
-import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv } from './register'
+import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, nativeText, roomFileName } from './register'
 
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
@@ -1829,4 +1829,97 @@ test('a submit timeout above 10 logs the unresolved lifecycle warning once at st
   await w.turn()
   await w.turn()
   expect(w.log.filter(line => line.startsWith('log ') && line.includes('an unresolved submit defers lifecycle transitions'))).toHaveLength(1)
+})
+
+
+// -- Native transport (0.4.0) -------------------------------------------------
+// room_send's own answer, as the Room server returns it.
+const SENT_TS = '2026-10-07T18:00:00.000Z'
+const SENT = JSON.stringify({ messageId: 'm9', contextId: 'c1', to: 'beta', status: 'published', ts: SENT_TS })
+const SENT_FILE = roomFileName(SENT_TS, 'm9')
+const NATIVE = `[room from alpha, ${SENT_TS}]\nhi beta\n${TRAILER}\n[room-file beta/${SENT_FILE}]`
+const peer = (text: string) => ({ origin: { kind: 'peer-send-message' as const }, text })
+// Beneath the plugin, the engine queues the delivery: the test answers with the text as it arrived.
+const queued = (on: On) => on('session.receive', ($, e) => ({ text: e.text }))
+
+test('room_send also sends the message natively, framed and tagged with the Room file', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  const sends: string[] = []
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  on('session.send', ($, e) => {
+    sends.push(`${e.to}|${e.text}`)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  const answered = await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi beta' })
+  expect('deny' in answered).toBe(false)
+  expect(sends).toEqual([`beta|${NATIVE}`])
+  expect(w.log).toContain(`log fleet-delivery: native sent beta/${SENT_FILE}`)
+  expect(roomFileName(SENT_TS, 'm9')).toBe('2026-10-07T18-00-00-000Z__m9.json')
+})
+
+test('a refused native send is logged and leaves the Room file to the recipient; the tool answer is untouched', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  on('session.send', () => ({ isDelivered: false as const, reason: 'no session named beta' }))
+  await w.turn()
+  const answered = await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi beta' })
+  expect('text' in answered && answered.text).toBe(SENT)
+  expect(w.log).toContain(`log fleet-delivery: native undelivered (no session named beta); beta/${SENT_FILE} waits for the recipient's tick`)
+})
+
+test('a control body, a refused room_send and a bad recipient name are never sent natively', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  const sends: string[] = []
+  let answer: { result: string; text: string } | { deny: string } = { result: SENT, text: SENT }
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => answer)
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'ROOM-LIFECYCLE capsule-done x' })
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'Beta Seat', body: 'hi' })
+  answer = { deny: 'room is closed' }
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
+  expect(sends).toEqual([])
+})
+
+test('a native delivery settles its Room file: moved to processed/, delivered:native, never submitted by the tick', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const text = nativeText('beta', 'alpha', '2026-10-07T18:00:00.000Z', 'hello from beta', 'a.json')
+  // No turn first: the tick would deliver a.json through the prompt box before the native copy lands.
+  const received = await $.session.receive(peer(text))
+  expect('consumed' in received && received.consumed).toBeFalsy()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
+  expect(w.ledger().map(entry => [entry.id, entry.status])).toEqual([['room:alpha:a.json', 'delivered:native']])
+  await w.turn()
+  await w.turn()
+  await w.clock.advance(31_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toEqual([])
+})
+
+test('a native delivery of a file the ledger already settled is consumed, not read twice', CONFIGURED, async ($, on) => {
+  const w = world(on, $, {
+    files: READY,
+    store: { 'ledger:alpha': { 'room:alpha:a.json': { status: 'submitted', at: 'x', attempts: 1 } } },
+  })
+  queued(on)
+  await w.turn()
+  const received = await $.session.receive(peer(nativeText('beta', 'alpha', '2026-10-07T18:00:00.000Z', 'hello from beta', 'a.json')))
+  expect('consumed' in received && received.consumed).toBe('fleet-delivery: this Room file was already delivered')
+})
+
+test('a native delivery tagged for another seat, or an ordinary peer message, passes through untouched', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const other = await $.session.receive(peer(nativeText('beta', 'gamma', '2026-10-07T18:00:00.000Z', 'hello', 'a.json')))
+  const plain = await $.session.receive(peer('just a peer message'))
+  expect('consumed' in other && other.consumed).toBeFalsy()
+  expect('consumed' in plain && plain.consumed).toBeFalsy()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.ledger()).toEqual([])
 })
