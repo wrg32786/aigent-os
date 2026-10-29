@@ -2265,3 +2265,92 @@ test('with nothing handed, a turn end reads no transcript', CONFIGURED, async ($
   await w.turn()
   expect(reads).toBe(0)
 })
+
+const filler = (n: number) => Array.from({ length: n }, (_, i) => ({ role: 'user' as const, text: `[{"tool_use_id":"t${i}","type":"tool_result","content":"ok"}]` }))
+
+test('a tool-heavy turn cannot push the tag out of reach: the confirmation scans from the hand point', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const rows: { role: 'user' | 'assistant'; text: string }[] = filler(500)
+  transcript(on, rows)
+  await $.session.receive(peer(A_NATIVE))
+  rows.push(asPeerRow(A_NATIVE), ...filler(400))
+  await w.turn()
+  expect(statuses(w.ledger())).toEqual([NATIVE_QUEUED, 'delivered:native'])
+  expect(submits(w.log)).toEqual([])
+})
+
+test('the confirmation window runs from the end of the handing turn, not from the hand', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  transcript(on, [])
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  await $.turn.start({ turnId: 't2', text: 'working' })
+  await $.session.receive(peer(A_NATIVE))
+  await w.clock.advance(4 * 60_000)
+  await w.turn()
+  // 8 min after the hand, 4 min after the turn ended: still fresh.
+  await w.clock.advance(4 * 60_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toEqual([])
+  // 6 min after the turn ended: the prompt box takes it.
+  await w.clock.advance(2 * 60_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('a turn the engine never ended is stale after the submit timeout: the window runs out', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  transcript(on, [])
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  await $.turn.start({ turnId: 't3', text: 'working' })
+  await $.session.receive(peer(A_NATIVE))
+  // Still inside the submit timeout: the turn counts as running, nothing expires.
+  await w.clock.advance(9 * 60_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toEqual([])
+  // Past it: the turn is treated as over, and the window has long run out.
+  await w.clock.advance(2 * 60_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toHaveLength(1)
+})
+
+test('a failure after the match consumes the copy instead of handing it on unrecorded', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, failWrites: 3 })
+  queued(on)
+  const received = await $.session.receive(peer(A_NATIVE))
+  expect('consumed' in received && String(received.consumed).startsWith('fleet-delivery: room:alpha:a.json could not be recorded (')).toBe(true)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+})
+
+test('a tagged control line is consumed and its file left to the supervisor', CONFIGURED, async ($, on) => {
+  const control = JSON.stringify({ messageId: 'c1', from: 'alpha-supervisor', to: 'alpha', parts: [{ text: 'ROOM-LIFECYCLE capsule-done x' }], ts: '2026-10-07T18:00:00.000Z' })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/c.json`]: control } })
+  queued(on)
+  const received = await $.session.receive(peer(nativeText('alpha-supervisor', 'alpha', '2026-10-07T18:00:00.000Z', 'ROOM-LIFECYCLE capsule-done x', 'c.json')))
+  expect('consumed' in received && received.consumed).toBe('fleet-delivery: room:alpha:c.json is a Room control line; left to the supervisor')
+  expect(w.files.has(`${INBOX}/c.json`)).toBe(true)
+  expect(w.ledger()).toEqual([])
+})
+
+test('urgent mail passes a fresh capsule-phase supervisor hold natively, as it does through the prompt box, and not a resume-phase one', CONFIGURED, async ($, on) => {
+  const urgent = JSON.stringify({ messageId: 'u1', from: 'beta', to: 'alpha', priority: 'urgent', parts: [{ text: 'now please' }], ts: '2026-10-07T18:00:00.000Z' })
+  const text = nativeText('beta', 'alpha', '2026-10-07T18:00:00.000Z', 'now please', 'u.json')
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/u.json`]: urgent, [`${ROOM}/state/holds/alpha.json`]: JSON.stringify({ ts: '2026-10-07T18:29:00.000Z', phase: 'capsule' }) } })
+  queued(on)
+  transcript(on, [])
+  const received = await $.session.receive(peer(text))
+  expect('text' in received && received.text).toBe(text)
+  expect(statuses(w.ledger())).toEqual([NATIVE_QUEUED])
+})
+
+test('urgent mail is held natively by a resume-phase supervisor hold', CONFIGURED, async ($, on) => {
+  const urgent = JSON.stringify({ messageId: 'u1', from: 'beta', to: 'alpha', priority: 'urgent', parts: [{ text: 'now please' }], ts: '2026-10-07T18:00:00.000Z' })
+  const text = nativeText('beta', 'alpha', '2026-10-07T18:00:00.000Z', 'now please', 'u.json')
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/u.json`]: urgent, [`${ROOM}/state/holds/alpha.json`]: JSON.stringify({ ts: '2026-10-07T18:29:00.000Z', phase: 'resume' }) } })
+  queued(on)
+  const received = await $.session.receive(peer(text))
+  expect('consumed' in received && String(received.consumed).startsWith('fleet-delivery: delivery held (supervisor-hold)')).toBe(true)
+  expect(w.ledger()).toEqual([])
+})

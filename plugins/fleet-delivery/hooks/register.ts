@@ -353,6 +353,20 @@ type Loaded = { text: string; lifecycle?: true; urgent?: true }
 const passesFreeze = (freeze: Freeze, loaded: Loaded) =>
   freeze.reason === 'supervisor-hold' && (loaded.lifecycle === true || (loaded.urgent === true && freeze.preSubmit))
 
+// A promise against the clock: resolves 'timeout' when the clock wins; the
+// timer is cancelled either way, and the promise keeps running on its own.
+async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  let expiry: Timer | undefined
+  const timedOut = new Promise<'timeout'>(done => {
+    expiry = $.clock.after(ms, () => done('timeout'))
+  })
+  try {
+    return await Promise.race([pending, timedOut])
+  } finally {
+    expiry?.cancel()
+  }
+}
+
 async function hasJobScript($: $, w: Where): Promise<boolean> {
   if (jobScript === 'unchecked') {
     try {
@@ -1213,7 +1227,7 @@ async function tick($: $): Promise<void> {
       if (await settleStale($, w, entries, released.alive)) entries = await reread(entries)
     }
     if (entries && (await confirmNative($, w, entries))) entries = await reread(entries)
-    const turnActive = (await $.state.get(TURN)).value != null
+    const turn = await turnState($)
     const seen = entries ? (await sweepStrays($, w, entries)).left : undefined
     const due = [...(await roomItems($, w, seen)), ...(await jobItems($, w))].filter(item => !isFinal(entries?.[item.id]))
     // Items stuck on a claim deferral go last, so a few unmovable files never hold the queue head.
@@ -1222,7 +1236,7 @@ async function tick($: $): Promise<void> {
     // A natively queued item waits for its transcript confirmation; past the
     // window it is an ordinary deferred item and the prompt box delivers it.
     const tickNow = await $.clock.now()
-    queue = queue.filter(item => !nativeFresh(entries?.[item.id], tickNow, turnActive))
+    queue = queue.filter(item => !nativeFresh(entries?.[item.id], tickNow, turn))
     if (!entries) {
       $.ui.status(queue.length ? 'delivery: mod · ledger-missing, holding (seed it, see README)' : 'delivery: mod · 0 queued')
       return
@@ -1466,17 +1480,12 @@ async function tick($: $): Promise<void> {
         await defer(blocked, recheck ?? undefined)
         return
       }
-      let expiry: Timer | undefined
       let submit: ReturnType<$['prompt']['submit']>
       let result
       try {
         submit = $.prompt.submit({ text: loaded.text })
-        const timedOut = new Promise<'timeout'>(done => {
-          expiry = $.clock.after(config.submitTimeoutMs, () => done('timeout'))
-        })
-        result = await Promise.race([submit, timedOut])
+        result = await timeoutRace($, submit, config.submitTimeoutMs)
       } catch {
-        expiry?.cancel()
         try {
           await rejected()
         } finally {
@@ -1484,7 +1493,6 @@ async function tick($: $): Promise<void> {
         }
         return
       }
-      expiry?.cancel()
       if (result === 'timeout') {
         // Not known to have entered or not: unresolved, never retried, until
         // the late answer comes or the operator reconciles it.
@@ -1614,6 +1622,8 @@ const warnSubmitTimeout = ($: $) => {
 // copy is consumed instead, so it can never become the first prompt of a
 // post-clear session ahead of the resume.
 export const ROOM_SEND_TOOL = 'mcp__agent-room__room_send'
+type TurnState = { running: { id: string; at: number } | null; endedAt: number }
+type NativePending = { at: string; from: number }
 export const NATIVE_QUEUED = 'deferred:native-queued'
 // How long a natively queued copy may wait for its transcript row before the
 // prompt-box path takes the file. Never expires while a turn runs.
@@ -1654,16 +1664,37 @@ export const frameRoom = (from: string, ts: string, body: string) => `[room from
 export const nativeTag = (seat: string, file: string) => `[room-file ${seat}/${file}]`
 export const nativeText = (from: string, to: string, ts: string, body: string, file: string) =>
   `${frameRoom(from, ts, capBody(body, file))}\n${nativeTag(to, file)}`
-const nativeFresh = (entry: FleetDeliveryEntry | undefined, now: number, turnActive: boolean) =>
-  entry?.status === NATIVE_QUEUED && (turnActive || now - Date.parse(entry.at) < NATIVE_CONFIRM_MS)
+// The turn as the host holds it: running (and not stale: a turn the engine
+// never finished or aborted past the submit timeout is treated as over), and
+// when the last one ended.
+type TurnView = { running: boolean; endedAt: number }
+async function turnState($: $): Promise<TurnView> {
+  const held = (await $.state.get(TURN)).value
+  const now = await $.clock.now()
+  const running = held?.running != null && now - held.running.at <= config.submitTimeoutMs
+  return { running, endedAt: held?.endedAt ?? 0 }
+}
+async function setTurn($: $, update: (prior: TurnState) => TurnState): Promise<void> {
+  for (let i = 0; i < CAS_TRIES; i++) {
+    const held = await $.state.get(TURN)
+    const next = update(held.value ?? { running: null, endedAt: 0 })
+    if ((await $.state.set(TURN, next, { ifVersion: held.version })).isSet) return
+  }
+}
+// Fresh: the window runs from the END of the turn the copy was handed in, or
+// from the hand itself when no turn ended since; never expires while a turn runs.
+const nativeFresh = (entry: FleetDeliveryEntry | undefined, now: number, turn: TurnView) =>
+  entry?.status === NATIVE_QUEUED && (turn.running || now - Math.max(Date.parse(entry.at), turn.endedAt) < NATIVE_CONFIRM_MS)
 
-// The set of ids whose native copy the model was handed, kept by the host.
-async function notePending($: $, id: string | null, drop: string[] = []): Promise<void> {
+// The set of ids whose native copy the model was handed, kept by the host:
+// when, and how long the transcript was at that moment, so the confirmation
+// scans forward from there and no tool-heavy turn can push the row out of reach.
+async function notePending($: $, id: string | null, from = 0, drop: string[] = []): Promise<void> {
   for (let i = 0; i < CAS_TRIES; i++) {
     const held = await $.state.get(NATIVE_PENDING)
-    const next: Record<string, string> = { ...(held.value ?? {}) }
+    const next: Record<string, NativePending> = { ...(held.value ?? {}) }
     for (const gone of drop) delete next[gone]
-    if (id) next[id] = await iso($)
+    if (id) next[id] = { at: await iso($), from }
     if ((await $.state.set(NATIVE_PENDING, next, { ifVersion: held.version })).isSet) return
   }
   throw new Error('native-pending contended')
@@ -1716,18 +1747,12 @@ function sendNative($: $, e: Record<string, unknown>, answered: { text?: string 
       return
     }
     const text = nativeText(place.w.seat, to, out.ts as string, body, file)
-    let expiry: Timer | undefined
-    const timedOut = new Promise<'timeout'>(done => {
-      expiry = $.clock.after(NATIVE_SEND_TIMEOUT_MS, () => done('timeout'))
-    })
     try {
-      const sent = await Promise.race([$.session.send({ to, text }), timedOut])
-      expiry?.cancel()
+      const sent = await timeoutRace($, $.session.send({ to, text }), NATIVE_SEND_TIMEOUT_MS)
       if (sent === 'timeout') $.ui.log(`fleet-delivery: native send still unsettled after ${NATIVE_SEND_TIMEOUT_MS} ms; ${to}/${file} waits for the recipient's tick unless it lands`)
       else if (sent.isDelivered) $.ui.log(`fleet-delivery: native queued ${to}/${file} (read is confirmed by the recipient's transcript, not here)`)
       else $.ui.log(`fleet-delivery: native undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for the recipient's tick`)
     } catch (error) {
-      expiry?.cancel()
       $.ui.log(`fleet-delivery: native send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for the recipient's tick`)
     }
   })().catch(error => $.ui.log(`fleet-delivery: native send path failed (${clean((error as Error)?.message, 120)})`))
@@ -1752,16 +1777,11 @@ async function readRoomFile($: $, w: Where, file: string): Promise<{ env: Return
   return null
 }
 
-// The ledger as the session holds it, else as the log holds it (the seed rule applies).
-async function currentEntries($: $, w: Where): Promise<Entries | null> {
-  const held = (await $.state.get(LEDGER)).value?.[w.seat]
-  if (held) return held
-  return loadLedger($, w, await readLog($, w))
-}
+// The ledger exactly as the tick reads it.
+const currentEntries = async ($: $, w: Where): Promise<Entries | null> => loadLedger($, w, await readLog($, w))
 
 type Received = { consumed: string } | { text: string } | { pass: true }
 async function receiveNative($: $, raw: string): Promise<Received> {
-  if (!config.roomRoot) return { pass: true }
   const text = unwrapPeer(raw)
   const tag = NATIVE_TAG.exec(text)
   if (!tag) {
@@ -1793,31 +1813,50 @@ async function receiveNative($: $, raw: string): Promise<Received> {
     $.ui.log(`fleet-delivery: a peer message named ${item.id} but did not match it; passed on as ordinary mail, the Room file is left for the tick`)
     return { pass: true }
   }
+  // A control line is the supervisor's, never the model's, and its file must
+  // stay where the supervisor looks for it.
+  if (CONTROL.test(env.body.trim())) return { consumed: `fleet-delivery: ${item.id} is a Room control line; left to the supervisor` }
   const rebuilt = nativeText(env.from, w.seat, env.ts, env.body, file)
-  await claimGeneration($)
-  const entries = await currentEntries($, w)
-  if (!entries) return { consumed: `fleet-delivery: the ledger is not seeded; ${item.id} waits for the tick` }
-  const current = entries[item.id]
-  if (isDelivered(current)) return { consumed: 'fleet-delivery: this Room file was already delivered' }
-  // Only processed/ holds it: this seat has read it already (room_drain, or a
-  // delivery whose ledger line is older than the log).
-  if (found.at === 'processed') return { consumed: `fleet-delivery: ${item.id} is already in processed/` }
-  // The refresh cycle and the supervisor hold the native copy exactly as they
-  // hold the prompt box: it must never become the first prompt after a clear.
-  const hold = (await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null
-  if (hold) return { consumed: `fleet-delivery: delivery held (${hold}); ${item.id} waits for the tick` }
-  if (isUnresolved(current)) {
-    // Mid-submit through the prompt box: that submit's outcome owns the ledger.
-    // The note keeps the record honest for a later reconcile.
-    await note($, w, item, current!, 'note: the native copy was read while this submit was in flight')
-    await notePending($, item.id)
+  // From here the file is this seat's to settle: a failure must not hand the
+  // copy on unrecorded, or the tick delivers it a second time.
+  try {
+    await claimGeneration($, true)
+    const entries = await currentEntries($, w)
+    if (!entries) return { consumed: `fleet-delivery: the ledger is not seeded; ${item.id} waits for the tick` }
+    const current = entries[item.id]
+    if (isDelivered(current)) return { consumed: 'fleet-delivery: this Room file was already delivered' }
+    // Only processed/ holds it: this seat has read it already (room_drain, or a
+    // delivery whose ledger line is older than the log).
+    if (found.at === 'processed') return { consumed: `fleet-delivery: ${item.id} is already in processed/` }
+    // The refresh cycle and the supervisor hold the native copy exactly as they
+    // hold the prompt box: it must never become the first prompt after a clear.
+    // Urgent mail passes a fresh capsule-phase hold, as it does on that path.
+    const cycle = await cycleHold($, w)
+    if (cycle) return { consumed: `fleet-delivery: delivery held (${cycle}); ${item.id} waits for the tick` }
+    const freeze = await supervisorHold($, w)
+    if (freeze && !passesFreeze(freeze, { text: rebuilt, ...(env.priority === 'urgent' ? { urgent: true as const } : {}) })) {
+      return { consumed: `fleet-delivery: delivery held (${freeze.reason}); ${item.id} waits for the tick` }
+    }
+    // Where the transcript stands now: the confirmation scans forward from here.
+    let from = 0
+    try {
+      from = (await $.session.messages()).length
+    } catch {}
+    if (isUnresolved(current)) {
+      // Mid-submit through the prompt box: that submit's outcome owns the ledger.
+      // The note keeps the record honest for a later reconcile.
+      await note($, w, item, current!, 'note: the native copy was read while this submit was in flight')
+      await notePending($, item.id, from)
+      return { text: rebuilt }
+    }
+    const landed = await record($, w, item, NATIVE_QUEUED, prior => !isUnresolved(prior) && !isDelivered(prior))
+    // Another path took the file between the read and the write: it delivers.
+    if (!landed) return { consumed: `fleet-delivery: ${item.id} was claimed by another path meanwhile` }
+    await notePending($, item.id, from)
     return { text: rebuilt }
+  } catch (error) {
+    return { consumed: `fleet-delivery: ${item.id} could not be recorded (${clean((error as Error)?.message, 120)}); it waits for the tick` }
   }
-  const landed = await record($, w, item, NATIVE_QUEUED, prior => !isUnresolved(prior) && !isDelivered(prior))
-  // Another path took the file between the read and the write: it delivers.
-  if (!landed) return { consumed: `fleet-delivery: ${item.id} was claimed by another path meanwhile` }
-  await notePending($, item.id)
-  return { text: rebuilt }
 }
 
 // From the tick, before anything is queued: every Room file whose native copy
@@ -1831,27 +1870,36 @@ async function confirmNative($: $, w: Where, entries: Entries): Promise<boolean>
   const pendingMap = (await $.state.get(NATIVE_PENDING)).value ?? {}
   const now = await $.clock.now()
   const drop: string[] = []
-  const ids = new Set<string>()
-  for (const [id, at] of Object.entries(pendingMap)) {
+  // id -> the tag to look for, and the transcript index to scan from.
+  const wanted = new Map<string, { tag: string; from: number }>()
+  for (const [id, pending] of Object.entries(pendingMap)) {
     const entry = entries[id]
-    if (isDelivered(entry) || roomFile(w, id) === null) drop.push(id)
-    else if (entry?.status !== NATIVE_QUEUED && now - Date.parse(at) > CONFIRM_LOOKBACK_MS) drop.push(id)
-    else ids.add(id)
+    const file = roomFile(w, id)
+    if (isDelivered(entry) || file === null) drop.push(id)
+    else if (entry?.status !== NATIVE_QUEUED && now - Date.parse(pending.at) > CONFIRM_LOOKBACK_MS) drop.push(id)
+    else wanted.set(id, { tag: nativeTag(w.seat, file), from: pending.from })
   }
   for (const [id, entry] of Object.entries(entries)) {
-    if (entry.status === NATIVE_QUEUED && roomFile(w, id) !== null) ids.add(id)
+    const file = roomFile(w, id)
+    if (entry.status === NATIVE_QUEUED && file !== null && !wanted.has(id)) wanted.set(id, { tag: nativeTag(w.seat, file), from: 0 })
   }
-  if (!ids.size) {
-    if (drop.length) await notePending($, null, drop)
+  if (!wanted.size) {
+    if (drop.length) await notePending($, null, 0, drop)
     return false
   }
   const rows = await $.session.messages()
+  // Scan from the earliest hand point (a few rows earlier, for the row the
+  // engine was writing at that moment); the newest 4096 rows are what the
+  // engine answers, so a from past the end means scan everything.
+  let first = Math.min(...[...wanted.values()].map(one => one.from))
+  if (first > rows.length) first = 0
+  first = Math.max(0, first - 2)
   const seen = new Set<string>()
-  for (let i = rows.length - 1; i >= Math.max(0, rows.length - CONFIRM_ROWS) && seen.size < ids.size; i--) {
+  for (let i = rows.length - 1; i >= first && seen.size < wanted.size; i--) {
     const row = rows[i]
     if (row.role !== 'user') continue
-    for (const id of ids) {
-      if (row.text.includes(nativeTag(w.seat, roomFile(w, id)!))) seen.add(id)
+    for (const [id, { tag }] of wanted) {
+      if (!seen.has(id) && row.text.includes(tag)) seen.add(id)
     }
   }
   let changed = false
@@ -1870,7 +1918,7 @@ async function confirmNative($: $, w: Where, entries: Entries): Promise<boolean>
       $.ui.log(`fleet-delivery: ${id} is delivered:native but its file could not be moved (${moved}); the sweep settles it`)
     }
   }
-  if (drop.length) await notePending($, null, drop)
+  if (drop.length) await notePending($, null, 0, drop)
   return changed
 }
 
@@ -1893,16 +1941,24 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const held = await $.state.get(TURN)
-      await $.state.set(TURN, { id: e.turnId, at: await $.clock.now() }, { ifVersion: held.version }).catch(() => {})
+      const at = await $.clock.now()
+      await setTurn($, prior => ({ ...prior, running: { id: e.turnId, at } })).catch(() => {})
+    }
+    return next(e)
+  })
+
+  on('turn.abort', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const at = await $.clock.now()
+      await setTurn($, prior => ({ running: null, endedAt: at })).catch(() => {})
     }
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const held = await $.state.get(TURN)
-      await $.state.set(TURN, null, { ifVersion: held.version }).catch(() => {})
+      const at = await $.clock.now()
+      await setTurn($, prior => ({ running: null, endedAt: at })).catch(() => {})
       warnSubmitTimeout($)
       await ensureTicking($)
       // The tick confirms native reads from the transcript before it queues anything.
@@ -1933,7 +1989,11 @@ export const register: Register = (on, options) => {
       return { pass: true as const }
     })
     if ('consumed' in verdict) return { consumed: verdict.consumed }
-    if ('text' in verdict) return next({ ...e, text: verdict.text })
+    if ('text' in verdict) {
+      // A handed copy needs the tick running to be confirmed or to expire.
+      await ensureTicking($)
+      return next({ ...e, text: verdict.text })
+    }
     return next(e)
   })
 

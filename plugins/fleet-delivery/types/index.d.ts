@@ -28,10 +28,11 @@ declare module 'claude-code' {
     'fleet-delivery': {
       ledger: FleetDeliveryLedger
       generation: number
-      // The running main turn, or null between turns; a hot reload mid-turn keeps it.
-      turn: { id: string; at: number } | null
-      // Room file id -> when its native copy was handed to the model; cleared once the transcript confirms the read.
-      'native-pending': Record<string, string>
+      // The running main turn (null between turns) and when the last one ended; a hot reload mid-turn keeps it.
+      turn: { running: { id: string; at: number } | null; endedAt: number }
+      // Room file id -> when its native copy was handed to the model and how long the transcript was then;
+      // cleared once the transcript confirms the read.
+      'native-pending': Record<string, { at: string; from: number }>
     }
   }
 }
