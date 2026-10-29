@@ -359,7 +359,7 @@ test('raising a required hook timeout remains COMPLIANT', () => {
       command.includes('sessionstart-reinject.mjs')
     ));
     assert.ok(hook, 'fixture includes the required SessionStart hook');
-    hook.timeout += 1000;
+    hook.timeout += 1;
     writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
 
     const { verdict, status, output } = attest(root);
@@ -381,7 +381,7 @@ test('lowering a required hook timeout attests NONCOMPLIANT', () => {
       command.includes('sessionstart-reinject.mjs')
     ));
     assert.ok(hook, 'fixture includes the required SessionStart hook');
-    hook.timeout -= 1000;
+    hook.timeout -= 1;
     writeFileSync(settings, `${JSON.stringify(parsed, null, 2)}\n`);
 
     const { verdict, status, output } = attest(root);
@@ -391,6 +391,159 @@ test('lowering a required hook timeout attests NONCOMPLIANT', () => {
       output,
     );
     assert.match(output, /settings hook .*sessionstart-reinject\.mjs.*timeout/);
+  });
+});
+
+// -- Hook timeout unit: the band is independent of the template ---------------
+//
+// Claude Code reads a hook's "timeout" in seconds and caps it at 600 s. A
+// template once shipped millisecond values (3000 where 3 s was meant); every
+// install rendered from it matched it exactly, so the template-versus-install
+// comparison attested COMPLIANT while every hook timeout was effectively
+// disabled. These two cases are the oracle that would have caught that: a
+// bound that derives from the host contract, not from the template.
+
+function requiredHook(parsed) {
+  const group = parsed.hooks.SessionStart.find(({ matcher, hooks }) => (
+    matcher === ''
+    && hooks.some(({ command }) => command.includes('sessionstart-reinject.mjs'))
+  ));
+  const hook = group?.hooks.find(({ command }) => command.includes('sessionstart-reinject.mjs'));
+  assert.ok(hook, 'fixture includes the required SessionStart hook');
+  return hook;
+}
+
+test('every shipped template hook timeout is a number of seconds inside [1, 120]', () => {
+  const manifest = readManifest();
+  const template = JSON.parse(readFileSync(
+    path.join(REPO, ...manifest.required_settings.template.split('/')),
+    'utf8',
+  ));
+  const timeouts = Object.values(template.hooks)
+    .flat()
+    .flatMap(({ hooks }) => hooks)
+    .map(({ command, timeout }) => ({ command, timeout }));
+  assert.ok(timeouts.length > 0, 'template declares hooks');
+  for (const { command, timeout } of timeouts) {
+    assert.equal(typeof timeout, 'number', `${command}: timeout must be a number`);
+    assert.ok(Number.isInteger(timeout) && timeout >= 1 && timeout <= 120,
+      `${command}: timeout ${timeout} is outside [1, 120] seconds -- a millisecond value?`);
+  }
+});
+
+test('a template and install that agree on a millisecond timeout attest NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const templatePath = path.join(root, ...manifest.required_settings.template.split('/'));
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    for (const file of [templatePath, settingsPath]) {
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      requiredHook(parsed).timeout = 3000;
+      writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+    }
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings template hook timeout out of band \[1, 120\] s: .*sessionstart-reinject\.mjs.*: 3000\b/);
+    assert.match(output, /settings hook timeout out of band \[1, 120\] s under event 'SessionStart' matcher '': .*sessionstart-reinject\.mjs.*: 3000\b/);
+  });
+});
+
+test('an installed timeout above the band attests NONCOMPLIANT even though it exceeds the template', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    requiredHook(parsed).timeout = 3000;
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings hook timeout out of band \[1, 120\] s under event 'SessionStart' matcher '': .*sessionstart-reinject\.mjs.*: 3000\b/);
+    assert.doesNotMatch(output, /settings template hook timeout out of band/);
+  });
+});
+
+function pushDuplicate(parsed, hook) {
+  parsed.hooks.SessionStart.push({ matcher: '', hooks: [{ ...hook }] });
+}
+
+test('a duplicate wiring of a required hook with a millisecond timeout attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    // The exact template hook stays, so best-match selection is satisfied; the
+    // duplicate carries the old unit.
+    pushDuplicate(parsed, { ...requiredHook(parsed), timeout: 3000 });
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings hook timeout out of band \[1, 120\] s under event 'SessionStart' matcher '': .*sessionstart-reinject\.mjs.*: 3000\b/);
+  });
+});
+
+test('the interlock is a required hook, and its installed timeout is bounded', () => {
+  const manifest = readManifest();
+  assert.ok(manifest.required_settings.hook_commands.includes('daemons/pre-permission-interlock.mjs'));
+  withInstall((root) => {
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const group = parsed.hooks.PreToolUse.find(({ hooks }) => hooks.some(({ command }) => command.includes('pre-permission-interlock.mjs')));
+    const hook = group.hooks.find(({ command }) => command.includes('pre-permission-interlock.mjs'));
+    hook.timeout = 8000;
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings hook timeout out of band \[1, 120\] s under event 'PreToolUse' matcher '': .*pre-permission-interlock\.mjs.*: 8000\b/);
+  });
+});
+
+test('an installed interlock hook that is missing attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    for (const event of ['PreToolUse', 'PostToolUse', 'Stop']) {
+      for (const group of parsed.hooks[event]) {
+        group.hooks = group.hooks.filter(({ command }) => !command.includes('pre-permission-interlock.mjs'));
+      }
+    }
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings hook daemons\/pre-permission-interlock\.mjs not wired under event 'PreToolUse'/);
+  });
+});
+
+test('a fractional installed timeout attests NONCOMPLIANT: the host contract is whole seconds', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const settingsPath = path.join(root, ...manifest.required_settings.path.split('/'));
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    requiredHook(parsed).timeout = 5.5;
+    writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /timeout out of band \[1, 120\] s under event 'SessionStart' matcher '': .*sessionstart-reinject\.mjs.*: 5\.5\b/);
+  });
+});
+
+test('a template hook with no timeout attests NONCOMPLIANT', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const templatePath = path.join(root, ...manifest.required_settings.template.split('/'));
+    const parsed = JSON.parse(readFileSync(templatePath, 'utf8'));
+    delete requiredHook(parsed).timeout;
+    writeFileSync(templatePath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    const { verdict, status, output } = attest(root);
+    assert.deepEqual({ verdict, status }, { verdict: 'NONCOMPLIANT', status: 1 }, output);
+    assert.match(output, /settings template hook timeout missing: .*sessionstart-reinject\.mjs/);
   });
 });
 
@@ -574,10 +727,10 @@ const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 test('v8 manifest identity pins the recut population', () => {
   const manifest = readManifest();
   assert.equal(manifest.schema, 'FleetBaselineManifest/v8');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-10-26-df744d60');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-10-28-8b4a7bbd');
   assert.equal(
     manifest.public_product_commit,
-    'df744d606d79711bbeb9c6a82e6a6b67e88a5ab5',
+    '8b4a7bbd1c174f80c6b0b0e1b8ee967458222450',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),

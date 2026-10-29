@@ -16,7 +16,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/sessionstart-reinject.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       },
@@ -26,7 +26,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/resume-verb.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       }
@@ -38,12 +38,12 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/daemons/caddy.sh\"",
-            "timeout": 2000
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/userpromptsubmit-journal.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       }
@@ -55,7 +55,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/precompact-flush.mjs\"",
-            "timeout": 10000
+            "timeout": 10
           }
         ]
       }
@@ -67,12 +67,12 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/pre-permission-interlock.mjs\" PreToolUse",
-            "timeout": 8000
+            "timeout": 8
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/ctx-refresh-sensor.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       },
@@ -82,7 +82,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/model-tier-guard.mjs\"",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       },
@@ -92,7 +92,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/gateguard.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       },
@@ -102,7 +102,7 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/memory-budget-guard.mjs\"",
-            "timeout": 3000
+            "timeout": 5
           }
         ]
       }
@@ -114,12 +114,12 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/pre-permission-interlock.mjs\" PostToolUse",
-            "timeout": 8000
+            "timeout": 8
           },
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/suggest-compact.sh\"",
-            "timeout": 1000
+            "timeout": 5
           }
         ]
       },
@@ -129,7 +129,7 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/auto-capture.sh\"",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       },
@@ -139,7 +139,7 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/security-scan.sh\"",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       },
@@ -149,7 +149,7 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/daemons/caddy-detect-new-skill.sh\"",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       }
@@ -161,17 +161,17 @@
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/pre-permission-interlock.mjs\" Stop",
-            "timeout": 8000
+            "timeout": 8
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/stop-capsule-writer.mjs\"",
-            "timeout": 2000
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/discipline-check.mjs\"",
-            "timeout": 2000
+            "timeout": 5
           }
         ]
       }
@@ -183,17 +183,17 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/session-capture-summary.sh\"",
-            "timeout": 3000
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/log-token-usage.sh\"",
-            "timeout": 5000
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/sessionend-flush.mjs\"",
-            "timeout": 8000
+            "timeout": 8
           }
         ]
       }

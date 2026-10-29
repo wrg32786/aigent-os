@@ -374,6 +374,26 @@ def command_matches(actual, expected_commands):
     )
 
 
+# Independent of the template. Claude Code reads the hook "timeout" field in SECONDS
+# and caps it at 600 s. A value outside this band is not a deliberate budget;
+# it is the millisecond mistake the template itself once shipped (3000 where
+# 3 s was meant). Comparing the install against the template cannot see that
+# mistake because both documents are wrong together, so this bound is applied
+# to the template and to the install alike and derives from neither.
+HOOK_TIMEOUT_MIN_S = 1
+HOOK_TIMEOUT_MAX_S = 120
+
+
+def timeout_out_of_band(value):
+    # The host contract is whole seconds: a bool, a float or a non-number is
+    # never a deliberate budget. MISSING is reported separately.
+    if value is MISSING:
+        return False
+    if isinstance(value, bool) or not isinstance(value, int):
+        return True
+    return value < HOOK_TIMEOUT_MIN_S or value > HOOK_TIMEOUT_MAX_S
+
+
 def timeout_is_insufficient(actual, required):
     if required is MISSING:
         return False
@@ -415,9 +435,25 @@ if template_document is not MISSING:
         )
 
     expected_hooks = []
+    product_scripts = []
     for event, matcher, hook_type, command, timeout in hook_records(template_document):
+        if timeout is MISSING:
+            findings.append(
+                "settings template hook timeout missing: %s" % shown(command)
+            )
+        elif timeout_out_of_band(timeout):
+            findings.append(
+                "settings template hook timeout out of band [%s, %s] s: %s: %s"
+                % (HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MAX_S, shown(command), shown(timeout))
+            )
         if not isinstance(command, str):
             continue
+        # dir/basename of every script the template wires, so the install-side
+        # band check below covers every product hook, not only hook_commands.
+        for token in re.findall(r"[^\s\x22]+\.(?:mjs|cjs|js|sh|py)", command):
+            parts = [part for part in re.split(r"[\\/]+", token) if part]
+            if len(parts) >= 2:
+                product_scripts.append("/".join(parts[-2:]))
         for relative in required_commands:
             if relative in command:
                 expected_hooks.append(
@@ -510,6 +546,29 @@ if template_document is not MISSING:
                 "settings hook %s differs: %s"
                 % (relative, "; ".join(differences))
             )
+
+        # Every installed record that runs a product script is bounded, not
+        # only the best match per required command: a duplicate wiring of the
+        # same hook, or a product hook absent from hook_commands, otherwise
+        # keeps a millisecond timeout and still attests COMPLIANT.
+        for event, matcher, hook_type, command, timeout in installed_hooks:
+            if not isinstance(command, str):
+                continue
+            normalized = normalized_command(command).replace("\\", "/")
+            if not any(script in normalized for script in product_scripts):
+                continue
+            if timeout_out_of_band(timeout):
+                findings.append(
+                    "settings hook timeout out of band [%s, %s] s under event %s matcher %s: %s: %s"
+                    % (
+                        HOOK_TIMEOUT_MIN_S,
+                        HOOK_TIMEOUT_MAX_S,
+                        shown(event),
+                        shown(matcher),
+                        command,
+                        shown(timeout),
+                    )
+                )
 
 # The managed launcher expectation is enforced through required_files. This
 # check guards the manifest itself: a declared launcher path that nothing

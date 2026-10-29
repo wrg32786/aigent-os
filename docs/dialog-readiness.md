@@ -828,7 +828,7 @@ is named.
 | `GATE_STALE_MS` | 5000 ms | when a gate may be stolen on age alone |
 | `PENDING_MAX` | 64 | entries in the pending map |
 | runner gate attempts | 2 | the runner never *waits*; one attempt, one steal, one retry |
-| hook `timeout` in the template | 8000 ms | well above the sum, because a hook the **host** times out is a fail-open |
+| hook `timeout` in the template | 8 s | the host reads this field in **seconds** (an earlier cut wrote 8000, read as 8000 seconds, about 2.2 hours, effectively unbounded); 8 s is well above the sum, because a hook the **host** times out is a fail-open |
 
 **There are two independent bounds on the gate wait, and the second is not
 belt-and-braces.** A deadline alone makes "no unbounded hook wait" contingent on

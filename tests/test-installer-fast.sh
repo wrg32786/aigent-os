@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-TOTAL=21
+TOTAL=22
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -682,5 +682,96 @@ printf '%s\n' "$BROKEN_OUT" | grep -q 'MEMORY-ROOT: .*must not contain a \.\. se
 test ! -e "$BROKEN_ROOT_TARGET/vault"
 test ! -e "$BROKEN_ROOT_TARGET/system"
 printf '[21/%d] declared memory root: one tree created and seeded, default untouched, broken declaration refused\n' "$TOTAL"
+
+# ── 22. Hook timeouts are seconds, through BOTH settings merge paths ─────────
+# Claude Code reads a hook's "timeout" in seconds (cap 600 s). The template once
+# shipped millisecond values, every install matched it, and doctor's
+# template-versus-install comparison could not see it. This scenario uses the
+# REAL product template (not the fixture's stub) and asserts the installed
+# values from the host contract, not from the template: fresh install (no
+# settings.json -> copy path) and reinstall over an existing settings.json
+# (merge path) must both produce the template's second values for product
+# hooks, and the merge must leave an unrelated operator-owned hook alone.
+assert_hook_timeouts() {
+  # $1 settings.json  $2 template  $3 operator hook script (or empty)
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$1" "$2" "$3" <<'PY'
+import json, sys
+settings, template, operator = sys.argv[1:4]
+def hooks(path):
+    doc = json.load(open(path, encoding="utf-8"))
+    for event, groups in doc.get("hooks", {}).items():
+        for group in groups:
+            for hook in group.get("hooks", []):
+                yield event, hook.get("command", ""), hook.get("timeout")
+def script(command):
+    return command.replace("\\", "/").split("/")[-1].split('"')[0].split(" ")[0]
+want = {}
+for event, command, timeout in hooks(template):
+    want[(event, script(command))] = timeout
+    assert isinstance(timeout, int) and not isinstance(timeout, bool) and 1 <= timeout <= 120, \
+        "template %s %s timeout %r is not seconds in [1, 120]" % (event, command, timeout)
+seen = {}
+for event, command, timeout in hooks(settings):
+    key = (event, script(command))
+    if operator and operator in command:
+        assert timeout == 300, "operator hook timeout changed: %r" % timeout
+        continue
+    assert key in want, "unexpected hook in install: %s %s" % key
+    assert timeout == want[key], "%s %s: installed %r, template %r" % (event, key[1], timeout, want[key])
+    seen[key] = seen.get(key, 0) + 1
+assert set(seen) == set(want), "missing hooks: %s" % sorted(set(want) - set(seen))
+assert all(n == 1 for n in seen.values()), "duplicated hooks after merge: %s" % [k for k, n in seen.items() if n > 1]
+PY
+  else
+    node - "$1" "$2" "$3" <<'JS'
+const fs = require("fs");
+const [settings, template, operator] = process.argv.slice(2);
+const hooks = (file) => Object.entries(JSON.parse(fs.readFileSync(file, "utf8")).hooks || {})
+  .flatMap(([event, groups]) => groups.flatMap((g) => (g.hooks || []).map((h) => [event, h.command || "", h.timeout])));
+const script = (c) => c.replace(/\\/g, "/").split("/").pop().split('"')[0].split(" ")[0];
+const want = new Map();
+for (const [event, command, timeout] of hooks(template)) {
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120) throw new Error(`template ${event} ${command} timeout ${timeout} is not seconds in [1, 120]`);
+  want.set(`${event}\t${script(command)}`, timeout);
+}
+const seen = new Map();
+for (const [event, command, timeout] of hooks(settings)) {
+  if (operator && command.includes(operator)) { if (timeout !== 300) throw new Error(`operator hook timeout changed: ${timeout}`); continue; }
+  const key = `${event}\t${script(command)}`;
+  if (!want.has(key)) throw new Error(`unexpected hook in install: ${key}`);
+  if (timeout !== want.get(key)) throw new Error(`${key}: installed ${timeout}, template ${want.get(key)}`);
+  seen.set(key, (seen.get(key) || 0) + 1);
+}
+for (const key of want.keys()) if (!seen.has(key)) throw new Error(`missing hook: ${key}`);
+for (const [key, n] of seen) if (n !== 1) throw new Error(`duplicated hook after merge: ${key}`);
+JS
+  fi
+}
+
+REAL_TMPL_SOURCE="$WORK/real-template-source"
+make_fixture "$REAL_TMPL_SOURCE"
+cp "$ROOT/.claude/settings.json.template" "$REAL_TMPL_SOURCE/.claude/settings.json.template"
+
+# Fresh install: settings.json absent, so install.sh takes the copy path.
+FRESH_TARGET="$WORK/timeouts-fresh"
+(cd "$REAL_TMPL_SOURCE" && bash install.sh --target "$FRESH_TARGET" --no-deps >/dev/null)
+json_valid "$FRESH_TARGET/.claude/settings.json"
+assert_hook_timeouts "$FRESH_TARGET/.claude/settings.json" "$ROOT/.claude/settings.json.template" ""
+
+# Reinstall: an existing settings.json rendered from the millisecond-era
+# template (same product hook, old root, timeout 3000) plus an operator-owned
+# hook the product does not ship. install.sh takes the merge path.
+MERGE_TIMEOUT_TARGET="$WORK/timeouts-merge"
+mkdir -p "$MERGE_TIMEOUT_TARGET/.claude"
+cat > "$MERGE_TIMEOUT_TARGET/.claude/settings.json" <<'JSON'
+{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"node \"/old/root/daemons/sessionstart-reinject.mjs\"","timeout":3000},{"type":"command","command":"node \"/opt/operator/hooks/operator-own.mjs\"","timeout":300}]}]}}
+JSON
+(cd "$REAL_TMPL_SOURCE" && bash install.sh --target "$MERGE_TIMEOUT_TARGET" --no-deps >/dev/null)
+json_valid "$MERGE_TIMEOUT_TARGET/.claude/settings.json"
+assert_hook_timeouts "$MERGE_TIMEOUT_TARGET/.claude/settings.json" "$ROOT/.claude/settings.json.template" "operator-own.mjs"
+grep -F '"timeout": 3000' "$MERGE_TIMEOUT_TARGET/.claude/settings.json" >/dev/null \
+  && fail "merge kept the millisecond-era product hook timeout"
+printf '[22/%d] hook timeouts are seconds through fresh and merge installs; operator hook untouched\n' "$TOTAL"
 
 printf 'fast installer suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"
