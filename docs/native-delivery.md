@@ -4,7 +4,7 @@
 
 ## The problem it removes
 
-Seat-to-seat mail in the fleet was a Room file (the record) delivered by typing it into the recipient's prompt box (the transport). Every stall seen on the live seats in October 2026 was a transport stall, never a record stall:
+Seat-to-seat mail in the fleet was a Room file (the record) delivered by typing it into the recipient's prompt box (the transport). Every stall seen on the live seats in October 2026 was a stall of that transport or of the claim state that guards it, never of the record itself:
 
 | ledger state | what it meant |
 |---|---|
@@ -17,8 +17,8 @@ Seat-to-seat mail in the fleet was a Room file (the record) delivered by typing 
 ## The design
 
 1. **Record unchanged.** `room_send` still writes the envelope file into `<roomRoot>/inbox/<seat>/`; the per-seat ledger (`<memoryRoot>/runtime/mod-delivery-ledger.<seat>.jsonl`) and the inbox/claimed/processed folders keep their meaning. Read receipts, replay and audit stay file-based.
-2. **Transport: the engine's cross-session channel.** The sender's mod hooks `tool.call` for `mcp__agent-room__room_send`; after the Room server answers, it calls `$.session.send({ to, text })`. The engine queues it inside the recipient's session: a turn of its own when idle, delivered into the running turn otherwise. No composer, no idle requirement, no hold.
-3. **Settlement on arrival.** The recipient's mod hooks `session.receive`; a delivery carrying `[room-file <seat>/<file>]` settles that Room file (inbox or claimed to processed; ledger `delivered:native`). A file the ledger already holds final is answered `consumed`. A file mid-submit through the prompt box is left to that submit.
+2. **Transport: the engine's cross-session channel.** The sender's mod hooks `tool.call` for `mcp__agent-room__room_send`; after the Room server answers, it calls `$.session.send({ to, text })`. The engine queues it inside the recipient's session: a turn of its own when idle, delivered into the running turn otherwise. No composer and no idle requirement for those two cases; the clear window is the one case still to be measured (see Residue).
+3. **Settlement on arrival.** The recipient's mod hooks `session.receive`; a delivery ending in `[room-file <seat>/<file>]` whose body matches that Room file is settled: `delivered:native` recorded first through the ledger's compare-and-set (the same lock the tick's claim takes), then the file moved inbox or claimed to processed. A file already delivered is answered `consumed`; a file mid-submit through the prompt box is passed on and left to that submit; a dropped or errored file is settled here; an unseeded ledger holds. A tag without a matching file body is passed on untouched and logged.
 4. **Fallback: the prompt box.** A refused native send (no registered session of that name) leaves the file in the inbox; the tick delivers it as before, under all the existing holds. Senders without a session (supervisor lifecycle legs, job results, cron writers) always use the fallback.
 
 ## What was measured on a disposable seat (2026-10-29, supervisor topology, own Room dir)
@@ -42,4 +42,5 @@ Seat-to-seat mail in the fleet was a Room file (the record) delivered by typing 
 ## Residue, stated plainly
 
 - A message that reaches the engine while a clear is executing: not measured. The probe's supervisor never issued its clear, so this change proves delivery to idle sessions, into running turns, and after a capsule ack, but not across the clear boundary itself. The first field evidence comes from the staged rollout: one message sent to a seat during its refresh cycle, read from the new session's transcript. Until then the fallback path's behaviour is the known one.
-- The native text is the recipient's model's to read; the mod never puts it in the operator's words (the engine frames it as a peer message, `origin.plugin` naming fleet-delivery).
+- The native text is the recipient's model's to read; the engine frames it as a peer message, never as the operator's words. The receiver does not trust any sender-asserted origin field; the guard is the body match against the Room file.
+- The sender lowercases `to`; the engine ignores case when resolving a name, so `DaVinci` and `davinci` reach the same session.

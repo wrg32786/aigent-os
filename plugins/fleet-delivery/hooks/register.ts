@@ -1071,7 +1071,7 @@ async function roomItems($: $, w: Where, seen?: Seen): Promise<Item[]> {
           .join('\n')
         if (!body) return { error: 'error:empty-body' }
         if (CONTROL.test(body.trim())) return { error: 'skipped:control' }
-        if (body.length > BODY_CAP) body = `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} more characters in ${file}]`
+        body = capBody(body, file)
         const from = typeof env?.from === 'string' && SEAT_NAME.test(env.from) ? env.from : '?'
         const ts = clean(env?.ts, 40).replace(/[[\]]/g, '') || '?'
         // Sender and wording together: neither alone makes a lifecycle leg.
@@ -1596,76 +1596,139 @@ const warnSubmitTimeout = ($: $) => {
 // queued inside the engine, a turn of its own when the seat is idle, read
 // inside the running turn otherwise, never typed into the prompt box. The
 // Room file stays the record: the recipient's mod sees the native delivery
-// arrive (session.receive), finishes the file into processed/ and records
-// delivered:native, so its tick never submits that file through the
-// composer. When the native send is refused (no session of that name, not
-// registered yet), the file waits in the inbox and the tick delivers it as
-// before: the composer path is the fallback, not the default.
+// arrive (session.receive), records delivered:native FIRST (the ledger's
+// compare-and-set is the lock against its own tick), then finishes the file
+// into processed/. When the native send is refused (no session of that name,
+// not registered yet), the file waits in the inbox and the tick delivers it
+// as before: the composer path is the fallback, not the default.
 export const ROOM_SEND_TOOL = 'mcp__agent-room__room_send'
-// The tag the receiver matches: the recipient seat and the Room file name.
-const NATIVE_TAG = /\[room-file ([a-z0-9_-]+)\/([^\s\]\\/]+\.json)\]\s*$/
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
 // ':' and '.' turned to '-', then '__', then the messageId.
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
+// What a Room file name may look like in the tag; anything else is never sent
+// natively, so the receiver can never be asked to settle a path.
+const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
+// The tag the receiver matches, at the very end of the text.
+const NATIVE_TAG = /\n\[room-file ([a-z0-9_-]+)\/([A-Za-z0-9_-]+\.json)\]$/
+export const capBody = (body: string, file: string) =>
+  body.length > BODY_CAP ? `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} more characters in ${file}]` : body
 export const nativeText = (from: string, to: string, ts: string, body: string, file: string) =>
-  `[room from ${from}, ${ts}]\n${body}\n${TRAILER}\n[room-file ${to}/${file}]`
+  `[room from ${from}, ${ts}]\n${capBody(body, file)}\n${TRAILER}\n[room-file ${to}/${file}]`
+// The body as the native text carries it, between the first line and the trailer.
+const nativeBody = (text: string): string | null => {
+  const head = text.indexOf('\n')
+  const tail = text.lastIndexOf(`\n${TRAILER}\n[room-file `)
+  return head < 0 || tail < 0 || tail < head ? null : text.slice(head + 1, tail)
+}
+// Delivered-class finals: the model has read this file, so a second copy is consumed.
+const isDelivered = (entry: FleetDeliveryEntry | undefined) =>
+  entry !== undefined && ['submitted', 'reconciled:delivered', 'delivered:native'].includes(entry.status)
+const NATIVE_SEND_TIMEOUT_MS = 15_000
 
-async function sendNative($: $, e: Record<string, unknown>, answered: { text?: string }): Promise<void> {
-  const to = typeof e.to === 'string' ? e.to.trim() : ''
+function sendNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
+  const to = typeof e.to === 'string' ? e.to.trim().toLowerCase() : ''
   const body = typeof e.body === 'string' ? e.body : ''
-  if (!SEAT_NAME.test(to) || !body || CONTROL.test(body.trim())) return
+  if (!to || !body) {
+    $.ui.log('fleet-delivery: room_send call carried no to/body; nothing sent natively')
+    return
+  }
+  if (!SEAT_NAME.test(to) || CONTROL.test(body.trim())) return
   let out: { messageId?: unknown; ts?: unknown } = {}
   try {
     out = JSON.parse(answered.text ?? '')
   } catch {
+    $.ui.log(`fleet-delivery: room_send answer was not the Room's JSON; ${to} waits for the recipient's tick`)
     return
   }
   if (typeof out.messageId !== 'string' || typeof out.ts !== 'string') return
-  const from = (await seatName($).catch(() => null)) ?? '?'
   const file = roomFileName(out.ts, out.messageId)
-  try {
-    const sent = await $.session.send({ to, text: nativeText(from, to, out.ts, body, file) })
-    $.ui.log(
-      sent.isDelivered
-        ? `fleet-delivery: native sent ${to}/${file}`
-        : `fleet-delivery: native undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for the recipient's tick`,
-    )
-  } catch (error) {
-    $.ui.log(`fleet-delivery: native send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for the recipient's tick`)
+  if (!ROOM_FILE_SHAPE.test(file)) {
+    $.ui.log(`fleet-delivery: Room file name ${file} is outside the tag grammar; ${to} waits for the recipient's tick`)
+    return
   }
+  // Never awaited by the tool call: the Room answer goes back to the model at
+  // once, and the send's outcome is a log line whenever it settles.
+  void (async () => {
+    const from = (await seatName($).catch(() => null)) ?? '?'
+    const text = nativeText(from, to, out.ts as string, body, file)
+    let expiry: Timer | undefined
+    const timedOut = new Promise<'timeout'>(done => {
+      expiry = $.clock.after(NATIVE_SEND_TIMEOUT_MS, () => done('timeout'))
+    })
+    try {
+      const sent = await Promise.race([$.session.send({ to, text }), timedOut])
+      expiry?.cancel()
+      if (sent === 'timeout') $.ui.log(`fleet-delivery: native send still unsettled after ${NATIVE_SEND_TIMEOUT_MS} ms; ${to}/${file} waits for the recipient's tick unless it lands`)
+      else if (sent.isDelivered) $.ui.log(`fleet-delivery: native sent ${to}/${file}`)
+      else $.ui.log(`fleet-delivery: native undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for the recipient's tick`)
+    } catch (error) {
+      expiry?.cancel()
+      $.ui.log(`fleet-delivery: native send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for the recipient's tick`)
+    }
+  })()
 }
 
-// The native delivery arrived: the Room file is settled here so the tick
-// never submits it again. Absent file (room_drain got there first) still
-// counts as delivered: the text is in front of the model either way.
+// The native delivery arrived. Settled only when the text matches the Room
+// file it names (the body as the file carries it): a peer that merely writes
+// the tag cannot make this seat drop a real message. Order: the ledger first,
+// through its compare-and-set, then the file; the tick's own reservation
+// takes the same lock, so exactly one of the two paths owns the file.
 async function receiveNative($: $, text: string): Promise<'consumed' | 'pass'> {
+  if (!config.roomRoot) return 'pass'
   const tag = NATIVE_TAG.exec(text)
   if (!tag) return 'pass'
   const place = await resolve($)
   if (!('w' in place)) return 'pass'
   const { w } = place
   const [, seat, file] = tag
-  if (seat !== w.seat || !/^[^\\/]+\.json$/.test(file)) return 'pass'
+  if (seat !== w.seat || !ROOM_FILE_SHAPE.test(file)) return 'pass'
   const item = { id: `room:${w.seat}:${file}`, source: 'room' }
-  // The ledger as the tick reads it (the log when the session holds none yet).
+  await claimGeneration($)
+  // The ledger as the tick reads it; an unseeded ledger holds delivery, here too.
   let entries: Entries | null = null
   try {
     entries = await loadLedger($, w, await readLog($, w))
   } catch {
-    entries = (await $.state.get(LEDGER)).value?.[w.seat] ?? null
+    return 'pass'
   }
-  const current = entries?.[item.id]
-  if (isFinal(current)) return 'consumed'
-  // The composer path is mid-submit for this file: both land once; its own
-  // outcome settles the ledger, and the duplicate is the lesser harm.
+  if (!entries) return 'pass'
+  const current = entries[item.id]
+  if (isDelivered(current)) return 'consumed'
+  // Mid-submit through the prompt box: that submit's outcome owns the ledger.
   if (isUnresolved(current)) return 'pass'
-  // The ledger write needs this module's generation, as a command does.
-  await claimGeneration($)
+  // The file must carry the body this text carries.
+  const expected = nativeBody(text)
+  if (expected === null) return 'pass'
+  let actual: string | null = null
+  for (const where of [inboxFile, claimedFile]) {
+    try {
+      const env = JSON.parse(await $.fs.read(where(w, file)))
+      actual = capBody(
+        (Array.isArray(env?.parts) ? env.parts : [])
+          .map((part: { text?: unknown }) => (typeof part?.text === 'string' ? part.text : ''))
+          .filter(Boolean)
+          .join('\n'),
+        file,
+      )
+      break
+    } catch {}
+  }
+  if (actual === null) {
+    // Drained elsewhere already (room_drain) or never written here: nothing to settle.
+    return 'pass'
+  }
+  if (actual !== expected) {
+    $.ui.log(`fleet-delivery: a peer message named ${item.id} but did not match it; the Room file is left for the tick`)
+    return 'pass'
+  }
+  const landed = await record($, w, item, 'delivered:native', prior => !isUnresolved(prior) && !isDelivered(prior)).catch(() => null)
+  if (!landed) return 'pass'
   const entry = { status: 'delivered:native' }
-  const moved = await moveRoom($, w, item, [inboxFile, processedFile], entry, false, 'quiet')
-  if (moved === 'absent') await moveRoom($, w, item, [claimedFile, processedFile], entry, false, 'quiet')
-  const landed = await record($, w, item, 'delivered:native', prior => !isFinal(prior) && !isUnresolved(prior)).catch(() => null)
-  if (!landed) $.ui.log(`fleet-delivery: native delivery of ${item.id} settled the file but not the ledger`)
+  let moved = await moveRoom($, w, item, [inboxFile, processedFile], entry, false, 'quiet')
+  if (moved === 'absent') moved = await moveRoom($, w, item, [claimedFile, processedFile], entry, false, 'quiet')
+  if (moved !== 'moved' && moved !== 'absent') {
+    $.ui.log(`fleet-delivery: ${item.id} is delivered:native but its file could not be moved (${moved}); the sweep settles it`)
+  }
   return 'pass'
 }
 
@@ -1699,7 +1762,9 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ROOM_SEND_TOOL }, async ($, e, next) => {
     const answered = await next(e)
     if ('deny' in answered || answered.isError) return answered
-    await sendNative($, e as unknown as Record<string, unknown>, answered as { text?: string }).catch(() => {})
+    try {
+      sendNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
+    } catch {}
     return answered
   })
 
