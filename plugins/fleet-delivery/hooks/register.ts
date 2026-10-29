@@ -97,10 +97,6 @@ const LEDGER = { plugin: 'fleet-delivery', key: 'ledger' } as const
 // Bumped by each module (a hot reload's replacement included) on its first
 // tick or command; only the newest module writes the log.
 const GENERATION = { plugin: 'fleet-delivery', key: 'generation' } as const
-// The running turn, held by the host so a hot reload mid-turn keeps it.
-const TURN = { plugin: 'fleet-delivery', key: 'turn' } as const
-// Room files whose native copy this session handed to the model and has not yet seen in the transcript.
-const NATIVE_PENDING = { plugin: 'fleet-delivery', key: 'native-pending' } as const
 const IMPORT_NOTE = 'imported from the 0.1.0 store'
 // The log line that ends the store dependency: once present, never read again.
 const IMPORT_MARKER = 'store-import'
@@ -187,9 +183,6 @@ const iso = async ($: $) => new Date(await $.clock.now()).toISOString()
 // other status is final, the unresolved ones included.
 export const isFinal = (entry: FleetDeliveryEntry | undefined) =>
   entry !== undefined && !entry.status.startsWith('deferred:') && entry.status !== 'reconciled:not-delivered'
-// Delivered-class finals: the model has read the file, so it belongs in processed/.
-export const DELIVERED = ['submitted', 'reconciled:delivered', 'delivered:native']
-export const isDelivered = (entry: FleetDeliveryEntry | undefined) => entry !== undefined && DELIVERED.includes(entry.status)
 const isUnresolved = (entry: FleetDeliveryEntry | undefined) => entry !== undefined && UNRESOLVED.includes(entry.status)
 
 async function installRoot($: $): Promise<string> {
@@ -352,20 +345,6 @@ type Loaded = { text: string; lifecycle?: true; urgent?: true }
 // urgent mail passes it only before the clear is submitted. Everything else waits.
 const passesFreeze = (freeze: Freeze, loaded: Loaded) =>
   freeze.reason === 'supervisor-hold' && (loaded.lifecycle === true || (loaded.urgent === true && freeze.preSubmit))
-
-// A promise against the clock: resolves 'timeout' when the clock wins; the
-// timer is cancelled either way, and the promise keeps running on its own.
-async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T | 'timeout'> {
-  let expiry: Timer | undefined
-  const timedOut = new Promise<'timeout'>(done => {
-    expiry = $.clock.after(ms, () => done('timeout'))
-  })
-  try {
-    return await Promise.race([pending, timedOut])
-  } finally {
-    expiry?.cancel()
-  }
-}
 
 async function hasJobScript($: $, w: Where): Promise<boolean> {
   if (jobScript === 'unchecked') {
@@ -1044,7 +1023,7 @@ async function sweepStrays($: $, w: Where, entries: Entries): Promise<{ left: Se
     for (const file of seen[home]) {
       const id = `room:${w.seat}:${file}`
       const entry = entries[id]
-      const delivered = isDelivered(entry)
+      const delivered = entry?.status === 'submitted' || entry?.status === 'reconciled:delivered'
       const to: Place | null = delivered ? processedFile : home === 'claimed' ? inboxFile : null
       if (!entry || !isFinal(entry) || isUnresolved(entry) || !to) {
         left[home].push(file)
@@ -1085,15 +1064,22 @@ async function roomItems($: $, w: Where, seen?: Seen): Promise<Item[]> {
       const full = (held ? claimedFile : inboxFile)(w, file)
       try {
         if ((await $.fs.stat(full)).size > FS_READ_CAP) return { error: 'error:over-read-cap' }
-        const env = parseEnvelope(await $.fs.read(full), file)
-        if ('error' in env) return env
-        if (CONTROL.test(env.body.trim())) return { error: 'skipped:control' }
+        const env = JSON.parse(await $.fs.read(full))
+        let body = (Array.isArray(env?.parts) ? env.parts : [])
+          .map((part: { text?: unknown }) => (typeof part?.text === 'string' ? part.text : ''))
+          .filter(Boolean)
+          .join('\n')
+        if (!body) return { error: 'error:empty-body' }
+        if (CONTROL.test(body.trim())) return { error: 'skipped:control' }
+        if (body.length > BODY_CAP) body = `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} more characters in ${file}]`
+        const from = typeof env?.from === 'string' && SEAT_NAME.test(env.from) ? env.from : '?'
+        const ts = clean(env?.ts, 40).replace(/[[\]]/g, '') || '?'
         // Sender and wording together: neither alone makes a lifecycle leg.
-        const lifecycle = env.from === `${w.seat}-supervisor` && LIFECYCLE_LEG.test(env.body.trim())
+        const lifecycle = from === `${w.seat}-supervisor` && LIFECYCLE_LEG.test(body.trim())
         return {
-          text: frameRoom(env.from, env.ts, env.body),
+          text: `[room from ${from}, ${ts}]\n${body}\n${TRAILER}`,
           ...(lifecycle ? { lifecycle: true as const } : {}),
-          ...(env.priority === 'urgent' ? { urgent: true as const } : {}),
+          ...(env?.priority === 'urgent' ? { urgent: true as const } : {}),
         }
       } catch {
         return (await exists($, full)) === false ? null : { error: 'error:unreadable' }
@@ -1190,10 +1176,10 @@ async function tick($: $): Promise<void> {
         let budget = MAX_SWEEP_MOVES
         for (const file of held ? await jsonNames($, roomDir(rw, 'claimed')) : []) {
           if (budget <= 0) break
-          const entry = held[`room:${rw.seat}:${file}`]
-          if (isUnresolved(entry)) continue
+          const status = held[`room:${rw.seat}:${file}`]?.status
+          if (status && UNRESOLVED.includes(status)) continue
           budget--
-          const delivered = isDelivered(entry)
+          const delivered = status === 'submitted' || status === 'reconciled:delivered'
           await moveRoom($, rw, { id: `room:${rw.seat}:${file}`, source: 'room' }, [claimedFile, delivered ? processedFile : inboxFile], undefined, false, 'quiet')
         }
       }
@@ -1226,17 +1212,11 @@ async function tick($: $): Promise<void> {
       if (released.changed) entries = await reread(entries)
       if (await settleStale($, w, entries, released.alive)) entries = await reread(entries)
     }
-    if (entries && (await confirmNative($, w, entries))) entries = await reread(entries)
-    const turn = await turnState($)
     const seen = entries ? (await sweepStrays($, w, entries)).left : undefined
     const due = [...(await roomItems($, w, seen)), ...(await jobItems($, w))].filter(item => !isFinal(entries?.[item.id]))
     // Items stuck on a claim deferral go last, so a few unmovable files never hold the queue head.
     const stuck = (item: Item) => ['deferred:claim-move', 'deferred:inbox-missing'].includes(entries?.[item.id]?.status ?? '')
     let queue = [...due.filter(item => !stuck(item)), ...due.filter(stuck)]
-    // A natively queued item waits for its transcript confirmation; past the
-    // window it is an ordinary deferred item and the prompt box delivers it.
-    const tickNow = await $.clock.now()
-    queue = queue.filter(item => !nativeFresh(entries?.[item.id], tickNow, turn))
     if (!entries) {
       $.ui.status(queue.length ? 'delivery: mod · ledger-missing, holding (seed it, see README)' : 'delivery: mod · 0 queued')
       return
@@ -1480,12 +1460,17 @@ async function tick($: $): Promise<void> {
         await defer(blocked, recheck ?? undefined)
         return
       }
+      let expiry: Timer | undefined
       let submit: ReturnType<$['prompt']['submit']>
       let result
       try {
         submit = $.prompt.submit({ text: loaded.text })
-        result = await timeoutRace($, submit, config.submitTimeoutMs)
+        const timedOut = new Promise<'timeout'>(done => {
+          expiry = $.clock.after(config.submitTimeoutMs, () => done('timeout'))
+        })
+        result = await Promise.race([submit, timedOut])
       } catch {
+        expiry?.cancel()
         try {
           await rejected()
         } finally {
@@ -1493,6 +1478,7 @@ async function tick($: $): Promise<void> {
         }
         return
       }
+      expiry?.cancel()
       if (result === 'timeout') {
         // Not known to have entered or not: unresolved, never retried, until
         // the late answer comes or the operator reconciles it.
@@ -1604,46 +1590,34 @@ const warnSubmitTimeout = ($: $) => {
   $.ui.log('fleet-delivery: warning: submitTimeoutMinutes exceeds 10; an unresolved submit defers lifecycle transitions until its own promise settles or its owning process ends.')
 }
 
-// -- Native transport (0.4.0) -------------------------------------------------
-// A Room message a seat sends with room_send is ALSO handed to the recipient
-// session through the engine's own cross-session channel ($.session.send):
-// queued inside the engine, a turn of its own when the seat is idle, read
-// inside the running turn otherwise, never typed into the prompt box. The
-// Room file stays the record, and "delivered" keeps its meaning, READ: at
-// arrival (session.receive, which the engine raises before it queues the
-// delivery) the recipient's mod only verifies the text against the file it
-// names, hands the model the text rebuilt from that file, and records
-// deferred:native-queued; the file stays where it is. At each turn end the
-// transcript is read, and only a user row carrying the tag settles the file:
-// delivered:native, moved to processed/. A copy the engine dropped (a clear,
-// an exit) never confirms, and past the window, never while a turn runs, the
-// prompt-box path delivers the file as before. While the seat's refresh
-// cycle or supervisor holds, or the supervisor owns the seat, the native
-// copy is consumed instead, so it can never become the first prompt of a
-// post-clear session ahead of the resume.
+// -- Native pointer (0.4.0) ---------------------------------------------------
+// A Room message a seat sends with room_send is ALSO announced to the
+// recipient session through the engine's own cross-session channel
+// ($.session.send, the SendMessage tool's own delivery): a short POINTER
+// naming the Room file, never its content. The engine queues it inside the
+// recipient: a turn of its own when the seat is idle, read inside the
+// running turn otherwise, never typed into any prompt box. The recipient's
+// model reads the mail with room_drain, the Room's own consumer, which moves
+// the file inbox/ -> processed/ as read; this mod writes nothing for it.
+// The tick stays exactly what it is today, the fallback: a file the model did
+// not drain is delivered through the prompt box under every existing hold,
+// and a file room_drain took first is, to the tick, absent. One body read
+// either way: a file lies in exactly one of inbox/ (room_drain's) and
+// claimed/ (the tick's). No match, no clock, no confirmation, no new ledger
+// state. The receiver's only job: while the seat's refresh cycle or its
+// supervisor holds delivery, consume the pointer, so it can never become the
+// first prompt of a post-clear session ahead of the resume.
 export const ROOM_SEND_TOOL = 'mcp__agent-room__room_send'
-type TurnState = { running: { id: string; at: number } | null; endedAt: number }
-type NativePending = { at: string; from: number }
-export const NATIVE_QUEUED = 'deferred:native-queued'
-// How long a natively queued copy may wait for its transcript row before the
-// prompt-box path takes the file. Never expires while a turn runs.
-export const NATIVE_CONFIRM_MS = 5 * 60_000
-// How long a handed copy stays in the pending set once its status moved on,
-// and how many transcript rows a confirmation reads.
-const CONFIRM_LOOKBACK_MS = 60 * 60_000
-const CONFIRM_ROWS = 300
-// Room addresses that are not a seat's session: nothing to send natively.
+// Room addresses that are not a seat's session: nothing to announce.
 const NOT_A_SEAT = new Set(['broadcast', 'all', 'room', 'will'])
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
 // ':' and '.' turned to '-', then '__', then the messageId.
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
-// What a Room file name may look like in the tag; anything else is never sent
-// natively, so the receiver can never be asked to settle a path.
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
-// The tag the receiver matches: the last line of the sender's text.
-const NATIVE_TAG = /\n\[room-file ([a-z0-9_-]+)\/([A-Za-z0-9_-]+\.json)\]$/
-const TAG_WORD = '[room-file '
 const NATIVE_SEND_TIMEOUT_MS = 15_000
+export const pointerText = (seat: string, from: string, file: string) =>
+  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. This pointer carries no content and is not the operator's word.`
+const POINTER = /^Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)\n/
 // The engine hands session.receive the cross-session envelope, not the bare
 // text (measured 2026-10-29 on a live session: `<cross-session-message
 // from="..." from-name="..." from-mode="...">\n<text>\n</cross-session-message>`).
@@ -1654,73 +1628,26 @@ export const unwrapPeer = (text: string): string => {
   if (!PEER_OPEN.test(trimmed) || !PEER_CLOSE.test(trimmed)) return trimmed
   return trimmed.replace(PEER_OPEN, '').replace(PEER_CLOSE, '').trimEnd()
 }
-const cutMarker = (file: string) => `more characters in ${file}]`
-// Idempotent: a body already cut for this file is returned as it is.
-export const capBody = (body: string, file: string) =>
-  body.length > BODY_CAP && !body.endsWith(cutMarker(file))
-    ? `${body.slice(0, BODY_CAP)}\n[cut: ${body.length - BODY_CAP} ${cutMarker(file)}`
-    : body
-export const frameRoom = (from: string, ts: string, body: string) => `[room from ${from}, ${ts}]\n${body}\n${TRAILER}`
-export const nativeTag = (seat: string, file: string) => `[room-file ${seat}/${file}]`
-export const nativeText = (from: string, to: string, ts: string, body: string, file: string) =>
-  `${frameRoom(from, ts, capBody(body, file))}\n${nativeTag(to, file)}`
-// The turn as the host holds it: running (and not stale: a turn the engine
-// never finished or aborted past the submit timeout is treated as over), and
-// when the last one ended.
-type TurnView = { running: boolean; endedAt: number }
-async function turnState($: $): Promise<TurnView> {
-  const held = (await $.state.get(TURN)).value
-  const now = await $.clock.now()
-  const running = held?.running != null && now - held.running.at <= config.submitTimeoutMs
-  return { running, endedAt: held?.endedAt ?? 0 }
-}
-async function setTurn($: $, update: (prior: TurnState) => TurnState): Promise<void> {
-  for (let i = 0; i < CAS_TRIES; i++) {
-    const held = await $.state.get(TURN)
-    const next = update(held.value ?? { running: null, endedAt: 0 })
-    if ((await $.state.set(TURN, next, { ifVersion: held.version })).isSet) return
-  }
-}
-// Fresh: the window runs from the END of the turn the copy was handed in, or
-// from the hand itself when no turn ended since; never expires while a turn runs.
-const nativeFresh = (entry: FleetDeliveryEntry | undefined, now: number, turn: TurnView) =>
-  entry?.status === NATIVE_QUEUED && (turn.running || now - Math.max(Date.parse(entry.at), turn.endedAt) < NATIVE_CONFIRM_MS)
 
-// The set of ids whose native copy the model was handed, kept by the host:
-// when, and how long the transcript was at that moment, so the confirmation
-// scans forward from there and no tool-heavy turn can push the row out of reach.
-async function notePending($: $, id: string | null, from = 0, drop: string[] = []): Promise<void> {
-  for (let i = 0; i < CAS_TRIES; i++) {
-    const held = await $.state.get(NATIVE_PENDING)
-    const next: Record<string, NativePending> = { ...(held.value ?? {}) }
-    for (const gone of drop) delete next[gone]
-    if (id) next[id] = { at: await iso($), from }
-    if ((await $.state.set(NATIVE_PENDING, next, { ifVersion: held.version })).isSet) return
-  }
-  throw new Error('native-pending contended')
-}
-
-// A Room envelope as both paths read it: the capped body, the sender, the time.
-export function parseEnvelope(raw: string, file: string): { from: string; ts: string; body: string; priority: unknown } | { error: 'error:empty-body' } {
-  const env = JSON.parse(raw)
-  const joined = (Array.isArray(env?.parts) ? env.parts : [])
-    .map((part: { text?: unknown }) => (typeof part?.text === 'string' ? part.text : ''))
-    .filter(Boolean)
-    .join('\n')
-  if (!joined) return { error: 'error:empty-body' }
-  return {
-    body: capBody(joined, file),
-    from: typeof env?.from === 'string' && SEAT_NAME.test(env.from) ? env.from : '?',
-    ts: clean(env?.ts, 40).replace(/[[\]]/g, '') || '?',
-    priority: env?.priority,
+// A promise against the clock: resolves 'timeout' when the clock wins; the
+// timer is cancelled either way, and the promise keeps running on its own.
+async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  let expiry: Timer | undefined
+  const timedOut = new Promise<'timeout'>(done => {
+    expiry = $.clock.after(ms, () => done('timeout'))
+  })
+  try {
+    return await Promise.race([pending, timedOut])
+  } finally {
+    expiry?.cancel()
   }
 }
 
-function sendNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
+function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
   const to = typeof e.to === 'string' ? e.to.trim().toLowerCase() : ''
   const body = typeof e.body === 'string' ? e.body : ''
   if (!to || !body) {
-    $.ui.log('fleet-delivery: room_send call carried no to/body; nothing sent natively')
+    $.ui.log('fleet-delivery: room_send call carried no to/body; nothing announced')
     return
   }
   if (NOT_A_SEAT.has(to) || !SEAT_NAME.test(to) || CONTROL.test(body.trim())) return
@@ -1728,198 +1655,48 @@ function sendNative($: $, e: Record<string, unknown>, answered: { text?: string 
   try {
     out = JSON.parse(answered.text ?? '')
   } catch {
-    $.ui.log(`fleet-delivery: room_send answer was not the Room's JSON; ${to} waits for the recipient's tick`)
+    $.ui.log(`fleet-delivery: room_send answer was not the Room's JSON; ${to} waits for its tick`)
     return
   }
   if (typeof out.messageId !== 'string' || typeof out.ts !== 'string') return
   const file = roomFileName(out.ts, out.messageId)
   if (!ROOM_FILE_SHAPE.test(file)) {
-    $.ui.log(`fleet-delivery: Room file name ${file} is outside the tag grammar; ${to} waits for the recipient's tick`)
+    $.ui.log(`fleet-delivery: Room file name ${file} is outside the pointer grammar; ${to} waits for its tick`)
     return
   }
   // Never awaited by the tool call: the Room answer goes back to the model at
   // once, and the send's outcome is a log line whenever it settles.
   void (async () => {
-    // The owner switch gates this path as it gates the tick.
     const place = await resolve($)
     if (!('w' in place)) {
       $.ui.log(`fleet-delivery: this seat is not owned by the mod; ${to}/${file} is left to the Room`)
       return
     }
-    const text = nativeText(place.w.seat, to, out.ts as string, body, file)
+    const text = pointerText(to, place.w.seat, file)
     try {
       const sent = await timeoutRace($, $.session.send({ to, text }), NATIVE_SEND_TIMEOUT_MS)
-      if (sent === 'timeout') $.ui.log(`fleet-delivery: native send still unsettled after ${NATIVE_SEND_TIMEOUT_MS} ms; ${to}/${file} waits for the recipient's tick unless it lands`)
-      else if (sent.isDelivered) $.ui.log(`fleet-delivery: native queued ${to}/${file} (read is confirmed by the recipient's transcript, not here)`)
-      else $.ui.log(`fleet-delivery: native undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for the recipient's tick`)
+      if (sent === 'timeout') $.ui.log(`fleet-delivery: pointer still unsettled after ${NATIVE_SEND_TIMEOUT_MS} ms; ${to}/${file} waits for its tick unless it lands`)
+      else if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
+      else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
     } catch (error) {
-      $.ui.log(`fleet-delivery: native send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for the recipient's tick`)
+      $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`)
     }
-  })().catch(error => $.ui.log(`fleet-delivery: native send path failed (${clean((error as Error)?.message, 120)})`))
+  })().catch(error => $.ui.log(`fleet-delivery: pointer path failed (${clean((error as Error)?.message, 120)})`))
 }
 
-// The Room file the tag names, wherever it lies, and where.
-type RoomPlace = 'inbox' | 'claimed' | 'processed'
-async function readRoomFile($: $, w: Where, file: string): Promise<{ env: ReturnType<typeof parseEnvelope>; at: RoomPlace } | null> {
-  for (const [at, where] of [['inbox', inboxFile], ['claimed', claimedFile], ['processed', processedFile]] as const) {
-    let raw: string
-    try {
-      raw = await $.fs.read(where(w, file))
-    } catch {
-      continue
-    }
-    try {
-      return { env: parseEnvelope(raw, file), at }
-    } catch {
-      return null
-    }
-  }
-  return null
-}
-
-// The ledger exactly as the tick reads it.
-const currentEntries = async ($: $, w: Where): Promise<Entries | null> => loadLedger($, w, await readLog($, w))
-
-type Received = { consumed: string } | { text: string } | { pass: true }
-async function receiveNative($: $, raw: string): Promise<Received> {
-  const text = unwrapPeer(raw)
-  const tag = NATIVE_TAG.exec(text)
-  if (!tag) {
-    if (text.includes(TAG_WORD)) $.ui.log('fleet-delivery: a peer message carried a room-file tag that did not parse; passed on as ordinary mail')
-    return { pass: true }
-  }
-  const [, seat, file] = tag
-  const mine = await seatName($)
-  if (seat !== mine || !ROOM_FILE_SHAPE.test(file)) return { pass: true }
-  const item = { id: `room:${seat}:${file}`, source: 'room' }
+// A pointer for this seat, while delivery is held: consumed. The file waits
+// in the inbox for the tick (or the supervisor); nothing is lost, and nothing
+// lands ahead of a resume.
+async function holdPointer($: $, raw: string): Promise<string | null> {
+  const match = POINTER.exec(unwrapPeer(raw))
+  if (!match) return null
+  const [, seat, , file] = match
+  if (seat !== (await seatName($)) || !ROOM_FILE_SHAPE.test(file)) return null
   const place = await resolve($)
-  // A seat the supervisor owns is delivered by the supervisor: the native copy
-  // of a file that really sits here would be read twice.
-  if (!('w' in place)) {
-    const here = config.roomRoot && (await readRoomFile($, { root: '', memory: '', seat }, file)) !== null
-    return here ? { consumed: `fleet-delivery: this seat is not owned by the mod; ${item.id} is delivered by its supervisor` } : { pass: true }
-  }
+  if (!('w' in place)) return null
   const { w } = place
-  const found = await readRoomFile($, w, file)
-  if (found === null || 'error' in found.env) {
-    $.ui.log(`fleet-delivery: a peer message named ${item.id} but no readable Room file is here; passed on as ordinary mail`)
-    return { pass: true }
-  }
-  const { env } = found
-  // The body and the tag must be the file's; the header line is the sender's
-  // own spelling and is not compared (the rebuilt text carries the file's).
-  const tail = `\n${env.body}\n${TRAILER}\n${nativeTag(w.seat, file)}`
-  if (!text.endsWith(tail) || text.indexOf('\n') !== text.length - tail.length) {
-    $.ui.log(`fleet-delivery: a peer message named ${item.id} but did not match it; passed on as ordinary mail, the Room file is left for the tick`)
-    return { pass: true }
-  }
-  // A control line is the supervisor's, never the model's, and its file must
-  // stay where the supervisor looks for it.
-  if (CONTROL.test(env.body.trim())) return { consumed: `fleet-delivery: ${item.id} is a Room control line; left to the supervisor` }
-  const rebuilt = nativeText(env.from, w.seat, env.ts, env.body, file)
-  // From here the file is this seat's to settle: a failure must not hand the
-  // copy on unrecorded, or the tick delivers it a second time.
-  try {
-    await claimGeneration($, true)
-    const entries = await currentEntries($, w)
-    if (!entries) return { consumed: `fleet-delivery: the ledger is not seeded; ${item.id} waits for the tick` }
-    const current = entries[item.id]
-    if (isDelivered(current)) return { consumed: 'fleet-delivery: this Room file was already delivered' }
-    // Only processed/ holds it: this seat has read it already (room_drain, or a
-    // delivery whose ledger line is older than the log).
-    if (found.at === 'processed') return { consumed: `fleet-delivery: ${item.id} is already in processed/` }
-    // The refresh cycle and the supervisor hold the native copy exactly as they
-    // hold the prompt box: it must never become the first prompt after a clear.
-    // Urgent mail passes a fresh capsule-phase hold, as it does on that path.
-    const cycle = await cycleHold($, w)
-    if (cycle) return { consumed: `fleet-delivery: delivery held (${cycle}); ${item.id} waits for the tick` }
-    const freeze = await supervisorHold($, w)
-    if (freeze && !passesFreeze(freeze, { text: rebuilt, ...(env.priority === 'urgent' ? { urgent: true as const } : {}) })) {
-      return { consumed: `fleet-delivery: delivery held (${freeze.reason}); ${item.id} waits for the tick` }
-    }
-    // Where the transcript stands now: the confirmation scans forward from here.
-    let from = 0
-    try {
-      from = (await $.session.messages()).length
-    } catch {}
-    if (isUnresolved(current)) {
-      // Mid-submit through the prompt box: that submit's outcome owns the ledger.
-      // The note keeps the record honest for a later reconcile.
-      await note($, w, item, current!, 'note: the native copy was read while this submit was in flight')
-      await notePending($, item.id, from)
-      return { text: rebuilt }
-    }
-    const landed = await record($, w, item, NATIVE_QUEUED, prior => !isUnresolved(prior) && !isDelivered(prior))
-    // Another path took the file between the read and the write: it delivers.
-    if (!landed) return { consumed: `fleet-delivery: ${item.id} was claimed by another path meanwhile` }
-    await notePending($, item.id, from)
-    return { text: rebuilt }
-  } catch (error) {
-    return { consumed: `fleet-delivery: ${item.id} could not be recorded (${clean((error as Error)?.message, 120)}); it waits for the tick` }
-  }
-}
-
-// From the tick, before anything is queued: every Room file whose native copy
-// this session handed to the model (the pending set), plus every file still
-// at native-queued, is looked for in the recent transcript; a user row
-// carrying the tag means read, whatever the status says now, and the file is
-// delivered. Returns whether the ledger changed. Bounded: no pending ids, no
-// transcript read.
-async function confirmNative($: $, w: Where, entries: Entries): Promise<boolean> {
-  if (!config.roomRoot) return false
-  const pendingMap = (await $.state.get(NATIVE_PENDING)).value ?? {}
-  const now = await $.clock.now()
-  const drop: string[] = []
-  // id -> the tag to look for, and the transcript index to scan from.
-  const wanted = new Map<string, { tag: string; from: number }>()
-  for (const [id, pending] of Object.entries(pendingMap)) {
-    const entry = entries[id]
-    const file = roomFile(w, id)
-    if (isDelivered(entry) || file === null) drop.push(id)
-    else if (entry?.status !== NATIVE_QUEUED && now - Date.parse(pending.at) > CONFIRM_LOOKBACK_MS) drop.push(id)
-    else wanted.set(id, { tag: nativeTag(w.seat, file), from: pending.from })
-  }
-  for (const [id, entry] of Object.entries(entries)) {
-    const file = roomFile(w, id)
-    if (entry.status === NATIVE_QUEUED && file !== null && !wanted.has(id)) wanted.set(id, { tag: nativeTag(w.seat, file), from: 0 })
-  }
-  if (!wanted.size) {
-    if (drop.length) await notePending($, null, 0, drop)
-    return false
-  }
-  const rows = await $.session.messages()
-  // Scan from the earliest hand point (a few rows earlier, for the row the
-  // engine was writing at that moment); the newest 4096 rows are what the
-  // engine answers, so a from past the end means scan everything.
-  let first = Math.min(...[...wanted.values()].map(one => one.from))
-  if (first > rows.length) first = 0
-  first = Math.max(0, first - 2)
-  const seen = new Set<string>()
-  for (let i = rows.length - 1; i >= first && seen.size < wanted.size; i--) {
-    const row = rows[i]
-    if (row.role !== 'user') continue
-    for (const [id, { tag }] of wanted) {
-      if (!seen.has(id) && row.text.includes(tag)) seen.add(id)
-    }
-  }
-  let changed = false
-  for (const id of seen) {
-    const item = { id, source: 'room' }
-    const prior = entries[id]
-    const detail = isUnresolved(prior) ? 'transcript row (over an in-flight submit)' : 'transcript row'
-    const landed = await record($, w, item, 'delivered:native', before => !isDelivered(before), { detail })
-    if (!landed) continue
-    changed = true
-    drop.push(id)
-    const entry = { status: 'delivered:native' }
-    let moved = await moveRoom($, w, item, [inboxFile, processedFile], entry, false, 'quiet')
-    if (moved === 'absent') moved = await moveRoom($, w, item, [claimedFile, processedFile], entry, false, 'quiet')
-    if (moved !== 'moved' && moved !== 'absent') {
-      $.ui.log(`fleet-delivery: ${id} is delivered:native but its file could not be moved (${moved}); the sweep settles it`)
-    }
-  }
-  if (drop.length) await notePending($, null, 0, drop)
-  return changed
+  const hold = (await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null
+  return hold ? `fleet-delivery: delivery held (${hold}); the pointer to room:${seat}:${file} is dropped, the file waits for the tick` : null
 }
 
 export const register: Register = (on, options) => {
@@ -1939,29 +1716,10 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) {
-      const at = await $.clock.now()
-      await setTurn($, prior => ({ ...prior, running: { id: e.turnId, at } })).catch(() => {})
-    }
-    return next(e)
-  })
-
-  on('turn.abort', async ($, e, next) => {
-    if (e.agentId === undefined) {
-      const at = await $.clock.now()
-      await setTurn($, prior => ({ running: null, endedAt: at })).catch(() => {})
-    }
-    return next(e)
-  })
-
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      const at = await $.clock.now()
-      await setTurn($, prior => ({ running: null, endedAt: at })).catch(() => {})
       warnSubmitTimeout($)
       await ensureTicking($)
-      // The tick confirms native reads from the transcript before it queues anything.
       void tick($)
     }
     return next(e)
@@ -1972,29 +1730,21 @@ export const register: Register = (on, options) => {
     const answered = await next(e)
     if ('deny' in answered || answered.isError) return answered
     try {
-      sendNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
+      announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
     } catch (error) {
-      $.ui.log(`fleet-delivery: native send could not start (${clean((error as Error)?.message, 120)})`)
+      $.ui.log(`fleet-delivery: pointer could not start (${clean((error as Error)?.message, 120)})`)
     }
     return answered
   })
 
   on('session.receive', async ($, e, next) => {
     const kind = e.origin?.kind
-    if (kind !== 'peer' && kind !== 'peer-send-message') return next(e)
-    // A subagent's delivery is not the seat's model reading the file.
-    if (e.agentId !== undefined) return next(e)
-    const verdict: Received = await receiveNative($, e.text).catch(error => {
-      $.ui.log(`fleet-delivery: native receive failed (${clean((error as Error)?.message, 120)}); passed on as ordinary mail`)
-      return { pass: true as const }
+    if ((kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined) return next(e)
+    const held = await holdPointer($, e.text).catch(error => {
+      $.ui.log(`fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); passed on`)
+      return null
     })
-    if ('consumed' in verdict) return { consumed: verdict.consumed }
-    if ('text' in verdict) {
-      // A handed copy needs the tick running to be confirmed or to expire.
-      await ensureTicking($)
-      return next({ ...e, text: verdict.text })
-    }
-    return next(e)
+    return held ? { consumed: held } : next(e)
   })
 
   on('command.run', { command: 'delivery-probe' }, async ($, e) => {
