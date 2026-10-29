@@ -1940,27 +1940,30 @@ test('a native delivery settles its Room file: ledger delivered:native, moved to
 })
 
 test('a native delivery of a file the ledger holds submitted is consumed, not read twice', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { ...READY, [LOG]: ledgerWith('submitted') } })
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${PROCESSED}/a.json`]: ENVELOPE, [LOG]: ledgerWith('submitted') } })
   queued(on)
   const received = await $.session.receive(peer(A_NATIVE))
   expect('consumed' in received && received.consumed).toBe('fleet-delivery: this Room file was already delivered')
-  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
 test('a native delivery of a file the ledger holds reconciled:delivered is consumed, not read twice', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { ...READY, [LOG]: ledgerWith('reconciled:delivered') } })
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${PROCESSED}/a.json`]: ENVELOPE, [LOG]: ledgerWith('reconciled:delivered') } })
   queued(on)
   const received = await $.session.receive(peer(A_NATIVE))
   expect('consumed' in received && received.consumed).toBe('fleet-delivery: this Room file was already delivered')
-  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
 test('a native delivery of a file the ledger holds delivered:native is consumed, not read twice', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { ...READY, [LOG]: ledgerWith('delivered:native') } })
+  const { [`${INBOX}/a.json`]: _, ...rest } = READY
+  const w = world(on, $, { files: { ...rest, [`${PROCESSED}/a.json`]: ENVELOPE, [LOG]: ledgerWith('delivered:native') } })
   queued(on)
   const received = await $.session.receive(peer(A_NATIVE))
   expect('consumed' in received && received.consumed).toBe('fleet-delivery: this Room file was already delivered')
-  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
 
 test('a file at submitting through the prompt box is left to that submit: passed on, nothing moved, nothing recorded', CONFIGURED, async ($, on) => {
@@ -1969,7 +1972,10 @@ test('a file at submitting through the prompt box is left to that submit: passed
   const received = await $.session.receive(peer(A_NATIVE))
   expect('text' in received && received.text).toBe(A_NATIVE)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
-  expect(w.ledger().map(entry => entry.status)).toEqual(['submitting'])
+  expect(w.ledger().map(entry => [entry.status, entry.detail])).toEqual([
+    ['submitting', undefined],
+    ['submitting', 'note: the native copy was read while this submit was in flight'],
+  ])
 })
 
 test('a file at submitting:unresolved through the prompt box is left to that submit: passed on, nothing moved, nothing recorded', CONFIGURED, async ($, on) => {
@@ -1978,7 +1984,10 @@ test('a file at submitting:unresolved through the prompt box is left to that sub
   const received = await $.session.receive(peer(A_NATIVE))
   expect('text' in received && received.text).toBe(A_NATIVE)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
-  expect(w.ledger().map(entry => entry.status)).toEqual(['submitting:unresolved'])
+  expect(w.ledger().map(entry => [entry.status, entry.detail])).toEqual([
+    ['submitting:unresolved', undefined],
+    ['submitting:unresolved', 'note: the native copy was read while this submit was in flight'],
+  ])
 })
 
 test('a file the prompt box gave up on (dropped) is settled by the native delivery', CONFIGURED, async ($, on) => {
@@ -2007,7 +2016,7 @@ test('a peer text that names a Room file but does not match its body settles not
   expect('text' in received && received.text).toBe(forged)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.ledger()).toEqual([])
-  expect(w.log).toContain('log fleet-delivery: a peer message named room:alpha:a.json but did not match it; the Room file is left for the tick')
+  expect(w.log).toContain('log fleet-delivery: a peer message named room:alpha:a.json but did not match it; passed on as ordinary mail, the Room file is left for the tick')
 })
 
 test('an unseeded ledger holds native settlement too: passed on, file untouched', CONFIGURED, async ($, on) => {
@@ -2029,4 +2038,60 @@ test('a native delivery tagged for another seat, a tag not at the end, or an ord
   }
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.ledger()).toEqual([])
+})
+
+test('a trailing newline after the tag still settles; a tag that does not parse is logged and passed on', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const received = await $.session.receive(peer(`${A_NATIVE}\n`))
+  expect('text' in received && received.text).toBe(A_NATIVE)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
+  const odd = await $.session.receive(peer('hello\n[room-file alpha/../../x.json]'))
+  expect('text' in odd && odd.text).toBe('hello\n[room-file alpha/../../x.json]')
+  expect(w.log).toContain('log fleet-delivery: a peer message carried a room-file tag that did not parse; passed on as ordinary mail')
+})
+
+test('the model reads the text built from the Room file, not the sender bytes', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  // Same body, same tag, but the sender spelled the header differently: the file decides.
+  const received = await $.session.receive(peer(A_NATIVE.replace('[room from beta, ', '[room from beta,  ')))
+  expect('text' in received && received.text).toBe(A_NATIVE.replace('[room from beta, ', '[room from beta,  '))
+  // A header mismatch is a mismatch: nothing settled.
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+})
+
+test('a delivery addressed to a subagent settles nothing', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  queued(on)
+  const received = await $.session.receive({ ...peer(A_NATIVE), agentId: 'agent-1' })
+  expect('text' in received && received.text).toBe(A_NATIVE)
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.ledger()).toEqual([])
+})
+
+test('a room_send to broadcast or will is never sent natively', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  const sends: string[] = []
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: sentAnswer('broadcast'), text: sentAnswer('broadcast') }))
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'broadcast', body: 'hi all' })
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'will', body: 'hi' })
+  await w.clock.settle()
+  expect(sends).toEqual([])
+})
+
+test('a delivered:native file whose move failed is finished by the sweep, never swept back to inbox/', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [LOG]: ledgerWith('delivered:native') } })
+  await w.turn()
+  await w.turn()
+  await w.clock.advance(31_000)
+  await w.clock.settle()
+  expect(submits(w.log)).toEqual([])
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  expect(w.files.get(`${PROCESSED}/a.json`)).toBe(ENVELOPE)
 })
