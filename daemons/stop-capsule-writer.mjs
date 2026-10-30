@@ -35,7 +35,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  inert, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
+  capsuleRowKey, doneRowPriority, DONE_LIMITS, DONE_TAG, locateCapsuleSection, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
@@ -234,12 +234,6 @@ try {
   const claimedRows = new Set();
   const utterances = [];
   let latestRequest = null;
-  let lastAssistantText = null;
-
-  // Persisted capsule bullets are a precursor to later orientation. Reuse the
-  // render boundary for its complete control collapse and announced bound, then
-  // store the decoded single-line value in the existing capsule schema.
-  const storedData = (value, maximum = 240) => JSON.parse(inert(value, maximum));
 
   // Speaker-aware classification. A close-time sweep can grep [OPERATOR] for
   // unbanked human directives, so [OPERATOR] must be PRECISE — over-tagging agent
@@ -327,9 +321,21 @@ try {
     if (!bare || isBareAttachment(bare)) return { who: 'ATTACHMENT', human: false, t };
     return { who: 'OPERATOR', human: true, t: bare };
   };
-  const tagUtterance = (cl) => {
-    if (utterances.length >= 12) return; // bound a paste-bomb turn
-    utterances.push(`[${cl.who}] ${storedData(cl.t, 240)}`);
+  const tagUtterance = (cl, messageId) => {
+    const row = `[${cl.who}] ${storedData(cl.t, 240)}`;
+    const key = capsuleRowKey(row);
+    // Deduplicate before the cap so repeats cannot evict distinct speech.
+    // Keep the latest occurrence in capture order, matching the stored rows.
+    const prior = utterances.findIndex((utterance) => capsuleRowKey(utterance.row) === key);
+    if (prior !== -1) utterances.splice(prior, 1);
+    utterances.push({ row, messageId });
+    // Protect only the latest assistant row; older claims yield to operators.
+    if (utterances.length > DONE_LIMITS.delta) {
+      const latestAssistant = utterances.findLastIndex(({ row }) => DONE_TAG.exec(row)?.[1] === 'ASSISTANT');
+      const priorities = utterances.map(({ row }, index) =>
+        index === latestAssistant ? Infinity : doneRowPriority(row));
+      utterances.splice(priorities.indexOf(Math.min(...priorities)), 1);
+    }
   };
 
   // Harness wrapper blocks pollute the objective if left in (reminders are
@@ -382,14 +388,15 @@ try {
     if (!ev || typeof ev !== 'object' || Array.isArray(ev)) continue;
 
     if (ev.type === 'user' && !ev.isMeta) {
+      const speech = ev.isSidechain !== true;
       const c = ev.message?.content;
-      if (typeof c === 'string') {
+      if (typeof c === 'string' && speech) {
         const clean = stripMeta(c);
         if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
-          if (b.type === 'text' && typeof b.text === 'string' && b.text) {
+          if (speech && b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
             if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
           }
@@ -407,12 +414,19 @@ try {
         }
       }
     } else if (ev.type === 'assistant') {
+      const speech = ev.isSidechain !== true;
       const content = ev.message?.content;
       if (!Array.isArray(content)) continue;
+      // ID-less events are distinct messages, but their own blocks still coalesce.
+      const messageId = typeof ev.message.id === 'string' && ev.message.id.trim()
+        ? ev.message.id : ev;
       for (const b of content) {
         if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
-        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-          lastAssistantText = storedData(b.text, 240);
+        if (speech && b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          // Replace only an earlier text block belonging to this same message.
+          const prior = utterances.findIndex((utterance) => utterance.messageId === messageId);
+          if (prior !== -1) utterances.splice(prior, 1);
+          tagUtterance({ who: 'ASSISTANT', t: b.text }, messageId);
         }
         if (b.type !== 'tool_use') continue;
         const input = b.input ?? {};
@@ -433,8 +447,8 @@ try {
 
   const deltaSig = sha12(JSON.stringify({
     r: latestRequest, fr: [...filesRead].sort(), fm: [...filesModified].sort(),
-    e: errors, c: [...claimedRows].sort(), a: lastAssistantText?.slice(0, 200) ?? null,
-    u: utterances,
+    e: errors, c: [...claimedRows].sort(),
+    u: utterances.map(({ row }) => row),
   }));
   // SHA-256 dedup: identical delta (a pure-conversation turn) → advance the
   // offset, skip the write.
@@ -571,46 +585,54 @@ ${ANCHORS.rows}
     )
     : skeleton();
 
-  // A bullet minus its `- ` prefix and volatile HH:MM stamp — dedup must not be
-  // defeated by re-processing a span at a different wall-clock minute (a
-  // timestamped duplicate could otherwise reappear after an offset reset).
-  const normalize = (b) => b.trim().replace(/^- /, '').replace(/^\d{2}:\d{2} /, '');
-
-  function mergeUnder(anchor, bullets) {
+  // The shared row key ignores list markers and volatile HH:MM stamps, so
+  // replaying a span at another wall-clock minute cannot duplicate its rows.
+  function mergeUnder(anchor, bullets, keyFn = capsuleRowKey) {
     if (!bullets.length) return;
-    const idx = doc.indexOf(anchor);
-    if (idx === -1) {
+    const section = locateCapsuleSection(doc, anchor);
+    if (!section) {
       // Hand-edited capsule without anchors: leaving it alone is right, but the
       // offset still advances — these bullets never land anywhere else, so the
       // drop must be visible.
       logErr(root, `anchor ${anchor} missing in ${path.basename(capPath)} — ${bullets.length} bullet(s) NOT merged (hand-edited capsule?)`);
       return;
     }
-    const insertAt = idx + anchor.length;
-    const sectionEnd = (() => {
-      const rest = doc.indexOf('\n## ', insertAt);
-      return rest === -1 ? doc.length : rest;
-    })();
+    const insertAt = section.anchorAt + anchor.length;
+    if (!section.hasHeading) {
+      logErr(root, `anchor ${anchor} has no section heading in ${path.basename(capPath)} — merging under anchor`);
+    }
+    const existing = doc.slice(section.start, section.end).split('\n')
+      .filter((row) => row.trim() && row.trim() !== anchor);
     const existingNorm = new Set(
-      doc.slice(insertAt, sectionEnd).split('\n').map(normalize).filter(Boolean),
+      existing.map(keyFn).filter(Boolean),
     );
-    const fresh = bullets.filter((b) => !existingNorm.has(normalize(b)));
+    const fresh = bullets.filter((bullet) => {
+      const key = keyFn(bullet);
+      if (existingNorm.has(key)) return false;
+      existingNorm.add(key);
+      return true;
+    });
     if (!fresh.length) return;
     doc = doc.slice(0, insertAt) + '\n' + fresh.join('\n') + doc.slice(insertAt);
   }
 
+  // Legacy untagged rows are assistant claims. Preserve outer speaker tags:
+  // an assistant quoting a tag must never suppress that speaker's own row.
+  const doneKey = (row) => {
+    const key = capsuleRowKey(row);
+    return !key || DONE_TAG.test(key)
+      ? key : `[ASSISTANT] ${key}`;
+  };
   const ts = new Date().toISOString().slice(11, 16);
   // Speaker-tagged utterances land under Done — a sweep can grep `[OPERATOR]` there.
-  mergeUnder(ANCHORS.done, utterances.map((u) => `- ${ts} ${u}`));
+  // Autosaves store accepted speech newest-first; readers preserve file order.
+  mergeUnder(ANCHORS.done, utterances.slice().reverse().map(({ row }) => `- ${ts} ${row}`), doneKey);
   mergeUnder(ANCHORS.files, [
     ...[...filesModified].map((f) => `- MODIFIED ${f}`),
     ...[...filesRead].filter((f) => !filesModified.has(f)).map((f) => `- read ${f}`),
   ]);
   mergeUnder(ANCHORS.errors, errors.map((e) => `- ${ts} ${e} → (unresolved at capture; check next Done bullet)`));
   mergeUnder(ANCHORS.rows, [...claimedRows].map((r) => `- ${r} (claimed this session — re-verify against memory at reinject)`));
-  if (lastAssistantText) {
-    mergeUnder(ANCHORS.done, [`- ${ts} ${lastAssistantText}`]);
-  }
 
   // Refresh live frontmatter fields. objective moves only on a real operator
   // utterance (apart from healing the legacy placeholder), while next_valid_action

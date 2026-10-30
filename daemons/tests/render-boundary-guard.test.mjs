@@ -1296,6 +1296,12 @@ const JS_SAFE_READER_ALLOWLIST = [
   {
     file: 'daemons/lifecycle-common.mjs',
     accessor: 'collapseLineBreaking',
+    needle: 'collapseLineBreaking(row)',
+    reason: 'capsule deduplication keys use the same collapsed controls as stored rows; rendered rows still pass through inert',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
+    accessor: 'collapseLineBreaking',
     needle: "collapseLineBreaking(value ?? '')",
     reason: 'inert immediately bounds and JSON-quotes the collapsed value at the rendering boundary',
   },

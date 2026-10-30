@@ -36,17 +36,36 @@ const SESSIONSTART = path.join(REPO_ROOT, 'daemons', 'sessionstart-reinject.mjs'
 const SYSTEM_CHECK = path.join('daemons', 'system-check.sh');
 const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const NON_PHYSICAL_LINE_BREAKING = /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/;
+const PYTHON = ['python3', 'python'].find((bin) => spawnSync(bin, ['--version'], { encoding: 'utf8', windowsHide: true }).status === 0);
+const PYTHON_SKIP = !PYTHON && 'platform-only: neither python3 nor python is available';
+
+test('R15.4: shared heading scans cannot carry a cursor across readers', () => {
+  const source = '## Done\nclaim\n## Blocked\nsecret';
+  const pattern = frontmatterReader.HEADING_SCAN;
+  try {
+    assert.equal(pattern.exec(source)?.[2], 'Done');
+    assert.equal(pattern.exec(source)?.[2], 'Done');
+    pattern.lastIndex = source.length;
+    assert.equal(unsafeRawBodySection(source, 'Done', 'test independent heading scan'), 'claim');
+    assert.equal(pattern.global, false);
+  } finally {
+    pattern.lastIndex = 0;
+  }
+});
 
 test('the JavaScript reader exports no undeclared raw access path', () => {
   assert.deepEqual(Object.keys(frontmatterReader).sort(), [
+    'HEADING_SCAN',
     'bodySection',
     'capsuleValue',
     'collapseLineBreaking',
+    'documentBodyStart',
     'frontmatterList',
     'hasFrontmatter',
     'scalar',
     'scalarHasUnsupportedInlineComment',
     'scalarIsUnquotedYamlNull',
+    'sectionBounds',
     'unsafeRawBodySection',
     'unsafeRawCapsuleValue',
     'unsafeRawDocumentBody',
@@ -57,6 +76,54 @@ test('the JavaScript reader exports no undeclared raw access path', () => {
     Object.keys(frontmatterReader).some((name) => /raw/i.test(name) && !name.startsWith('unsafeRaw')),
     false,
   );
+  // The shared bounds helper exposes offsets only, never raw document content.
+  const source = '## Done\nclaim\n## Blocked\nsecret';
+  const heading = [...source.matchAll(new RegExp(frontmatterReader.HEADING_SCAN, 'g'))][0];
+  assert.equal(frontmatterReader.sectionBounds(source, heading), 14);
+  const frontmatter = '\uFEFF---\r\n# decoy\r\n---\r\n';
+  assert.equal(frontmatterReader.documentBodyStart(frontmatter + source), frontmatter.length);
+  assert.equal(frontmatterReader.documentBodyStart(source), 0);
+});
+
+test('R12.2: JavaScript and Python keep subheadings inside level-two sections', { skip: PYTHON_SKIP }, () => {
+  const doc = "## Done (don't redo)\n- first\n### 2026-10-29\n- nested\u2028# still content\n## Blocked\n- outside\n";
+  const expected = '- first\n### 2026-10-29\n- nested\u2028# still content';
+  assert.equal(unsafeRawBodySection(doc, "Done (don't redo)", 'test section grammar'), expected);
+  const script = `import runpy, sys\nr = runpy.run_path(sys.argv[1])\nassert r['unsafeRawBodySection'](sys.argv[2], "Done (don't redo)", 'test section grammar') == sys.argv[3]\n`;
+  const result = spawnSync(PYTHON, ['-I', '-c', script,
+    path.join(REPO_ROOT, 'daemons', 'render_boundary.py'), doc, expected], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('R12.2: default JavaScript body readers retain a Pending-Gates sub-block', () => {
+  const doc = '## Pending-Gates\n- original gate\n### Sub-block\n- separate gate\n## Next\n';
+  assert.equal(unsafeRawBodySection(doc, 'Pending-Gates', 'test default grammar'), '- original gate\n### Sub-block\n- separate gate');
+  assert.equal(bodySection(doc, 'Pending-Gates'), '- original gate ### Sub-block - separate gate');
+  assert.equal(frontmatterReader.capsuleValue(doc, 'Pending-Gates'), '- original gate ### Sub-block - separate gate');
+});
+
+test('R12.2: default Python body readers retain a Pending-Gates sub-block', { skip: PYTHON_SKIP }, () => {
+  const doc = '## Pending-Gates\n- original gate\n### Sub-block\n- separate gate\n## Next\n';
+  const script = `import runpy, sys\nr = runpy.run_path(sys.argv[1])\nassert r['unsafeRawBodySection'](sys.argv[2], 'Pending-Gates', 'test default grammar') == '- original gate\\n### Sub-block\\n- separate gate'\nassert r['capsule_value'](sys.argv[2], 'Pending-Gates') == '- original gate ### Sub-block - separate gate'\n`;
+  const result = spawnSync(PYTHON, ['-I', '-c', script, path.join(REPO_ROOT, 'daemons', 'render_boundary.py'), doc], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('R12.2: JS and Python derive boundaries from each matched heading level', { skip: PYTHON_SKIP }, () => {
+  const fixtures = [];
+  for (let level = 1; level <= 6; level++) {
+    for (const key of ["Done (don't redo)", 'Pending-Gates']) {
+      const hashes = '#'.repeat(level);
+      const expected = `- first\r\n${hashes}# Sub-block\r\n- nested`;
+      const doc = `---\r\n${hashes} ${key}\r\n- frontmatter decoy\r\n---\r\n${hashes} ${key}\r\n${expected}\r\n${hashes} Next\r\n- outside`;
+      assert.equal(unsafeRawBodySection(doc, key, 'test heading-relative grammar'), expected);
+      fixtures.push({ key, doc, expected });
+    }
+  }
+  const script = `import json, runpy, sys\nr = runpy.run_path(sys.argv[1])\nfor f in json.loads(sys.argv[2]):\n assert r['unsafeRawBodySection'](f['doc'], f['key'], 'test heading-relative grammar') == f['expected']\n`;
+  const result = spawnSync(PYTHON, ['-I', '-c', script,
+    path.join(REPO_ROOT, 'daemons', 'render_boundary.py'), JSON.stringify(fixtures)], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('safe scalar and body readers remove the complete line-breaking set', () => {
