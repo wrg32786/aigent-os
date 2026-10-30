@@ -3,9 +3,12 @@ import type { On, PromptSubmitResult } from 'claude-code'
 
 import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, findPointer, FENCE_VERSION, versionAtLeast } from './register'
 
-// Example install; no real machine's paths or seats.
-const ROOT = 'C:/example/aigent'
-const ROOM = 'C:/example/room'
+// Example install; no real machine's paths or seats. POSIX-absolute so the
+// engine passes the paths to the harness unchanged on every platform (a
+// drive-letter path is relative on Linux and gets resolved against the plugin
+// folder).
+const ROOT = '/example/aigent'
+const ROOM = '/example/room'
 // ROOT has no vault/memory, so its memory root is ROOT/memory.
 const LOG = `${ROOT}/memory/runtime/mod-delivery-ledger.alpha.jsonl`
 const OWNER = `${ROOT}/.aigent/delivery-owner.json`
@@ -17,7 +20,9 @@ const PROCESSED = `${ROOM}/processed/alpha`
 const CLAIMED = `${ROOM}/claimed/alpha`
 const RENAME =
   'try{const [a,b]=process.argv.slice(-2);const fs=require("fs");fs.mkdirSync(require("path").dirname(b),{recursive:true});fs.renameSync(a,b)}catch(e){process.stderr.write(String(e&&(e.code||e.message)));process.exit(1)}'
-const norm = (path: string) => path.replace(/\\/g, '/')
+// Backslashes to slashes and a Windows drive letter dropped, so one set of
+// POSIX constants compares equal to what the engine hands the hooks on every platform.
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
 
 const CONFIGURED = { options: { installRoot: ROOT, roomRoot: ROOM, seat: 'alpha' } }
 const WITH_JOBS = { options: { ...CONFIGURED.options, jobSeat: 'alpha' } }
@@ -123,7 +128,7 @@ function seat(on: On, world: World = {}) {
   const box = { text: world.draft ?? '' }
   const clock = mock.clock(on, { now: Date.parse('2026-10-07T18:30:00Z') })
   mock.env(on, world.env ?? {})
-  on('session.root', () => ({ value: world.sessionRoot ?? 'C:/example/alpha' }))
+  on('session.root', () => ({ value: world.sessionRoot ?? '/example/alpha' }))
   // A folder exists when some file lies under it.
   const dirs = new Set(world.dirs ?? [])
   const isDir = (path: string) => dirs.has(path) || [...files.keys()].some(key => key.startsWith(`${path}/`))
@@ -265,7 +270,7 @@ function seat(on: On, world: World = {}) {
       expect(e.argv.slice(0, 2)).toEqual(['node', '-e'])
       expect(e.argv[3]).toBe('--')
       expect(e.argv).toHaveLength(5)
-      expect(norm(e.argv[4]!)).toMatch(/^C:\/example\/room\/state\/admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)$/)
+      expect(norm(e.argv[4]!)).toMatch(/^\/example\/room\/state\/admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)$/)
       files.delete(norm(e.argv[4]!))
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -491,7 +496,7 @@ test('a retryable reject leaves the file in claimed/ and retries it; the final r
   expect(statuses(w.ledger()).at(-1)).toBe('error:submit-rejected')
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.files.has(`${CLAIMED}/a.json`)).toBe(false)
-  expect(w.moves().map(argv => argv[5])).toEqual([`${CLAIMED}/a.json`, `${INBOX}/a.json`])
+  expect(w.moves().map(argv => norm(argv[5]!))).toEqual([`${CLAIMED}/a.json`, `${INBOX}/a.json`])
 })
 
 test('a claim deferral goes on to the next item, which is delivered the same tick', CONFIGURED, async ($, on) => {
@@ -1164,7 +1169,7 @@ test('a control verb followed by text is delivered; the bare verb is skipped:con
 })
 
 test('installRoot "session" reads the session root, and the seat drops a trailing -vault', { options: { installRoot: 'session', roomRoot: ROOM } }, async ($, on) => {
-  const home = 'C:/example/beta-vault'
+  const home = '/example/beta-vault'
   const runtime = `${home}/vault/memory/runtime`
   const w = world(on, $, {
     sessionRoot: home,
@@ -1187,9 +1192,9 @@ test('the seat comes from AIGENT_SEAT before SEAT', { options: { installRoot: RO
 })
 
 test('AIGENT_STATE_HOME_DIR diverts the memory root, not the owner switch', CONFIGURED, async ($, on) => {
-  const home = 'C:/example/state-home/vault/memory/runtime'
+  const home = '/example/state-home/vault/memory/runtime'
   const w = world(on, $, {
-    env: { AIGENT_STATE_HOME_DIR: 'C:/example/state-home' },
+    env: { AIGENT_STATE_HOME_DIR: '/example/state-home' },
     files: { [OWNER]: MOD, [`${home}/mod-delivery-ledger.alpha.jsonl`]: SEED, [`${home}/auto-clear-cycle.json`]: IDLE, [`${INBOX}/a.json`]: ENVELOPE },
   })
   await w.turn()
@@ -1259,7 +1264,7 @@ test('a failed claim write submits nothing, says log-write-failed, and the next 
   expect(w.lastStatus()).toContain('log-write-failed')
   expect(w.lastStatus()).not.toContain('unresolved')
   expect(w.ledger()).toEqual([])
-  const ticket = w.runs.find(argv => argv[2] === WRITE && argv[5] !== '')![4]!
+  const ticket = norm(w.runs.find(argv => argv[2] === WRITE && argv[5] !== '')![4]!)
   expect(ticket).toMatch(/\/state\/admit\/alpha\/a\.json\.[^.]+\.json$/)
   expect(w.files.has(ticket)).toBe(false)
   expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ticket)).toBe(true)
