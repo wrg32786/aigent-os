@@ -8,7 +8,6 @@ from typing import Any
 
 
 __all__ = [
-    "HEADING_SCAN",
     "body_section",
     "capsule_value",
     "collapse_data",
@@ -105,7 +104,7 @@ def scalar(text: str, key: str) -> str | None:
     return collapse_line_breaking(value) if value is not None else None
 
 
-HEADING_SCAN = re.compile(r"(?:^|\r?\n)(#{1,6})[ \t]+([^\r\n]*)")
+_HEADING_SCAN = re.compile(r"(?:^|\r?\n)(#{1,6})[ \t]+([^\r\n]*)")
 
 
 def _section_bounds(source: str, heading: re.Match) -> int:
@@ -124,7 +123,7 @@ def unsafeRawBodySection(text: str, key, reason: str) -> str | None:
     source = str(text)
     frontmatter = _FRONTMATTER.match(source)
     body = source[frontmatter.end() :] if frontmatter else source
-    for heading in HEADING_SCAN.finditer(body):
+    for heading in _HEADING_SCAN.finditer(body):
         if matches(heading.group(2).strip()):
             return body[heading.end():_section_bounds(body, heading)].strip() or None
     return None
