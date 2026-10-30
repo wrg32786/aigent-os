@@ -1792,7 +1792,14 @@ const AUTOMATIC_ENTER_DEFERRAL_LIMIT = 150;
 //
 // An unlisted boundary is STRICT. A new write site therefore gets the
 // fail-closed answer by default rather than inheriting the exemption.
-const ABSENT_TRANSCRIPT_READY_AT = Object.freeze(new Set(['wake-enter-retry']));
+// The boundaries entitled to read an ABSENT or EMPTY transcript as "no records,
+// so no dialog": the post-clear wake family, which runs before the new
+// session's first record exists. Every other boundary (capsule request, its
+// Enter, the clear, a control) fires for a session under context pressure,
+// which provably has records; absence or emptiness there says the reader is
+// not looking at the live transcript (#110, #111). A frozen array, not a frozen
+// Set: freezing a Set does not stop `.add()`.
+const ABSENT_TRANSCRIPT_READY_AT = Object.freeze(['wake-enter-retry']);
 
 // ─── THE BOUNDED PRE-PERMISSION INTERLOCK (#104, after #110) ─────────────────
 // #110 gated every automatic write on the transcript. MEASURED on 2.1.310 (run
@@ -4668,6 +4675,11 @@ export class ManagedPtyRunner {
       watch.degraded = { code: 'tool-call-transcript-unreadable', detail: errorText(error) };
       return watch;
     }
+    // The file an ABSENT watch was waiting for is here: re-baseline from it.
+    // `absent` was a bind-time snapshot; left standing, every strict boundary
+    // would refuse `tool-call-transcript-absent` after a post-clear rebind until
+    // an unrelated large append happened to re-baseline (#125 review).
+    if (watch.absent === true) return this._noteToolCallWatch();
     // Replaced in place by something that is not a file: re-baseline, which
     // names it rather than reading on against a cursor that indexes nothing.
     if (!stat.isFile()) return this._noteToolCallWatch();
@@ -5301,14 +5313,16 @@ export class ManagedPtyRunner {
   // residual (2), for the numbers and the supported mechanism that would close
   // it causally.
   //
-  // AN EMPTY TRANSCRIPT IS READY; AN ABSENT ONE DEPENDS ON THE BOUNDARY, and
-  // the difference is evidence rather than taste. A zero-length file says the
-  // host has written no records, and a tool permission dialog cannot exist
-  // without a `tool_use`
-  // record -- so "no calls outstanding" is the true answer, and refusing it
-  // would only cost liveness. A path that will not resolve, or a file that will
-  // not stat, says nothing at all, and absence of evidence must not read as
-  // evidence of absence: those are named NOT-READY. The one exposure both share
+  // AN EMPTY OR ABSENT TRANSCRIPT IS AN ANSWER ONLY AT THE BOUNDARIES ENTITLED
+  // TO IT (ABSENT_TRANSCRIPT_READY_AT, #110/#111). At the post-clear wake no
+  // records yet is the truth, and a tool permission dialog cannot exist without
+  // a `tool_use` record, so "no calls outstanding" is right there and refusing
+  // it would only cost liveness. At a capsule, clear or control boundary the
+  // session has records, so an empty or missing file means the reader is not
+  // looking at the live transcript: named NOT-READY. A path that will not
+  // resolve, or a file that will not stat, says nothing at all, and absence of
+  // evidence must not read as evidence of absence: those are named NOT-READY
+  // everywhere. The one exposure both share
   // is a wrong `sessionId`, which would point the reader at some other seat's
   // file; that is the same exposure the ack scan already carries and it is
   // bounded by the same boot/session binding guard (_bootBindingProblem).
@@ -5329,11 +5343,19 @@ export class ManagedPtyRunner {
     // records, so no dialog"; the capsule-request and clear boundaries may not,
     // because their session provably has a transcript and absence there means
     // the path mis-resolved. An unrecognised boundary is strict.
-    if (watch.absent === true && !ABSENT_TRANSCRIPT_READY_AT.has(where)) {
+    // ONE LIVE PREDICATE: the transcript holds no records, whether the file is
+    // absent (#110) or zero-length (#111). The session asking for a capsule, a
+    // clear or a control is under pressure and has records; no records there
+    // means the reader is not looking at its live transcript (a stale
+    // resolution, a fresh --continue onto the wrong id). The wake family keeps
+    // its exemption: there, no records yet is the truth. The two reasons stay
+    // distinct in the detail so a log reader can tell which it saw.
+    const noRecords = watch.absent === true || watch.endSeen === 0;
+    if (noRecords && !ABSENT_TRANSCRIPT_READY_AT.includes(where)) {
       return {
         ready: false,
         code: 'runner-tool-call-readiness-unknown',
-        detail: { reason: 'tool-call-transcript-absent', at: where ?? null },
+        detail: { reason: watch.absent === true ? 'tool-call-transcript-absent' : 'tool-call-transcript-empty', at: where ?? null },
       };
     }
     if (watch.degraded !== null) {
@@ -7784,6 +7806,30 @@ export function resolvePtyCommand({
   };
 }
 
+// Issue #98. A parent that is itself a Claude Code session exports
+// CLAUDE_CODE_CHILD_SESSION=1, and a `claude` spawned with it inherited keeps
+// its transcript OFF: no records, no sessions/<pid>.json descriptor. Every
+// transcript-reading guard in this runner (checkpoint freshness, the ack
+// restore scan, the ack reader, dialog readiness) then reads a file that exists,
+// parses and never grows, and the failure presents as a park, not a
+// misconfiguration; a later --continue resumes from the frozen file and drops
+// the unpersisted work. The runner is the one boundary every launch passes
+// (shortcut, direct, unmanaged fallback), so the child's environment is built
+// here: the marker removed and persistence asked for through the host's own
+// opt-in (CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, read by the installed 2.1.314
+// binary). Only the child's copy changes; the runner's own `env`, the operator's
+// shell and the global settings are untouched. The launcher's direct branches
+// (--no-deps, node missing) exec claude without this runner and carry the same
+// two lines themselves (launcher/aigent.ps1, launcher/aigent.sh).
+export function childEnvironment(env = process.env) {
+  const child = { ...env };
+  delete child.CLAUDE_CODE_CHILD_SESSION;
+  // A default, never an override: an operator who set the opt-in explicitly
+  // (to any value) keeps their word.
+  child.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE ??= '1';
+  return child;
+}
+
 export function runUnmanaged({
   command = 'claude',
   args = [],
@@ -7793,11 +7839,12 @@ export function runUnmanaged({
   fsImpl = fs,
   spawnSyncFn = spawnSync,
 } = {}) {
+  const childEnv = childEnvironment(env);
   const resolved = resolvePtyCommand({
     command,
     args,
     platform,
-    env,
+    env: childEnv,
     fsImpl,
   });
   const windowsVerbatimArguments = platform === 'win32'
@@ -7807,7 +7854,7 @@ export function runUnmanaged({
     : resolved.args;
   const result = spawnSyncFn(resolved.command, spawnArgs, {
     cwd,
-    env: resolved.env || env,
+    env: resolved.env || childEnv,
     stdio: 'inherit',
     shell: false,
     ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
@@ -8061,13 +8108,16 @@ export function runPtySession({
       exitCode: 1,
     };
   }
+  // The child's environment (#98), built once here; `env` itself stays the
+  // runner's and is still read for AIGENT_* configuration above and below.
+  const childEnv = childEnvironment(env);
   let resolved;
   try {
     resolved = resolvePtyCommand({
       command,
       args: childArgs,
       platform,
-      env,
+      env: childEnv,
       fsImpl,
     });
   } catch (error) {
@@ -8092,7 +8142,7 @@ export function runPtySession({
         ? stdout.rows
         : 24,
       cwd,
-      env: resolved.env || env,
+      env: resolved.env || childEnv,
     });
   } catch (error) {
     try { releaseRunnerLockFn(lockHandle, { fsImpl }); } catch { /* reclaimable */ }
