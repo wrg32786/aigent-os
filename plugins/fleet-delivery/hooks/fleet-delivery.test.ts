@@ -1939,7 +1939,7 @@ test('a refused pointer send is logged; the tool answer is untouched', CONFIGURE
   expect(w.log).toContain(`log fleet-delivery: pointer undelivered (no session named beta); beta/${SENT_FILE} waits for its tick`)
 })
 
-test('after one real pointer, a control body, a non-seat address, a malformed file name, a refused room_send and an unowned seat announce nothing', CONFIGURED, async ($, on) => {
+test('after one real pointer, a control body, a non-seat address, a malformed file name and a refused room_send announce nothing; an unowned sender still announces', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
   const sends: string[] = []
   let answer: { result: string; text: string } | { deny: string } = { result: SENT, text: SENT }
@@ -1961,12 +1961,12 @@ test('after one real pointer, a control body, a non-seat address, a malformed fi
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
   expect(sends).toEqual(['beta-sid'])
+  // The sender's own owner has no bearing: an unowned sender still announces to a fenced recipient.
   w.files.delete(OWNER)
   answer = { result: SENT, text: SENT }
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
-  expect(sends).toEqual(['beta-sid'])
-  expect(w.log).toContain(`log fleet-delivery: this seat is not owned by the mod; beta/${SENT_FILE} is left to the Room`)
+  expect(sends).toEqual(['beta-sid', 'beta-sid'])
 })
 
 test('a pointer for this seat enters as a prompt when delivery is open; the Room file is untouched and the tick still delivers it if the model does not drain', CONFIGURED, async ($, on) => {
@@ -2005,6 +2005,13 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   expect('drop' in sub && sub.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
   expect('drop' in plain && plain.drop).toBeFalsy()
+  // The SendMessage route, in both spellings the engine has for it: still dropped.
+  const sendMessageKind = await $.prompt.submit({ ...RUN, origin: { kind: 'peer-send-message' } as never, text: wrap(A_POINTER) })
+  expect('drop' in sendMessageKind && sendMessageKind.drop).toContain('delivery held (cycle checkpoint-requested)')
+  const notification = await $.prompt.submit({ ...RUN, origin: { kind: 'task-notification', subkind: 'peer-send-message' } as never, text: wrap(A_POINTER) })
+  expect('drop' in notification && notification.drop).toContain('delivery held (cycle checkpoint-requested)')
+  const otherNotification = await $.prompt.submit({ ...RUN, origin: { kind: 'task-notification' } as never, text: wrap(A_POINTER) })
+  expect('drop' in otherNotification && otherNotification.drop).toBeFalsy()
   // CRLF and a pointer line after other text: still a pointer, still dropped.
   const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\nfrom beta:\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
   expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
@@ -2047,7 +2054,7 @@ test('the marker is retired (owner: retired, one write, no process) under a refr
   expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(false)
 })
 
-test('a marker another session stamped is never retired, and the live seat re-publishes at once when its own marker stops reading as its own', CONFIGURED, async ($, on) => {
+test('a marker another session stamped is never retired nor overwritten while fresh; the live seat re-publishes at once when its own marker stops reading as its own or the foreign one ages out', CONFIGURED, async ($, on) => {
   const foreign = JSON.stringify({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:29:30.000Z', stamp: 'courier-1' })
   const w = world(on, $, { files: { ...READY, [ALPHA_MARKER]: foreign, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   await w.turn()
@@ -2055,9 +2062,16 @@ test('a marker another session stamped is never retired, and the live seat re-pu
   w.files.delete(OWNER)
   await w.turn()
   expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
-  // Holds clear, owner back: ours replaces the foreign marker.
+  // Holds clear, owner back, but the foreign marker is fresh: never overwritten, logged once.
   w.files.set(OWNER, MOD)
   w.files.set(CYCLE, IDLE)
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
+  expect(w.log.filter(entry => entry.includes('another session holds this seat'))).toHaveLength(1)
+  // The foreign marker ages out: ours replaces it.
+  w.files.set(ALPHA_MARKER, JSON.stringify({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:00:00.000Z', stamp: 'courier-1' }))
   await w.turn()
   const mine = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
   expect(mine.owner).toBe('mod')
@@ -2179,4 +2193,16 @@ test('a pointer a later hook drops does not hold the tick off its file', CONFIGU
   await w.clock.advance(31_000)
   await w.clock.settle()
   expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+})
+
+test('claim-before-pointer: a pointer whose file is no longer in the inbox (claimed by the tick or already read) is dropped; one whose file waits enters', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [`${CLAIMED}/c.json`]: ENVELOPE } })
+  await w.turn()
+  w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  const waiting = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in waiting && waiting.drop).toBeFalsy()
+  const claimed = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'c.json')))
+  expect('drop' in claimed && claimed.drop).toBe('fleet-delivery: c.json is no longer in the inbox (claimed by the tick or already read); the pointer to room:alpha:c.json is dropped')
+  const gone = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'z.json')))
+  expect('drop' in gone && gone.drop).toContain('z.json is no longer in the inbox')
 })

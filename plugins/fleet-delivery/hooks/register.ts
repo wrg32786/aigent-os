@@ -1192,6 +1192,11 @@ async function tick($: $): Promise<void> {
     }
     const { w } = where
     await claimGeneration($, true)
+    // The holds, read once a tick: the marker follows them before any ledger
+    // early return, and the delivery branches below reuse them.
+    const hold = await cycleHold($, w)
+    const freeze = hold ? null : await supervisorHold($, w)
+    await settleMarker($, w, hold ?? freeze?.reason ?? null)
     const log = await readLog($, w)
     if (log.kind === 'corrupt' || log.kind === 'unreadable') {
       $.ui.status(`delivery: mod · ledger-${log.kind}, holding`)
@@ -1227,18 +1232,14 @@ async function tick($: $): Promise<void> {
     const show = (extra = '', queued = queue.length) =>
       $.ui.status(`delivery: mod · ${queued} queued${unresolved ? ` · ${unresolved} unresolved` : ''}${extra}${heldNote}`)
 
-    const hold = await cycleHold($, w)
     if (hold) {
-      await retireMarker($, w.seat)
       for (const item of queue) {
         await record($, w, item, 'deferred:refresh-hold', entry => !isFinal(entry) && entry?.status !== 'deferred:refresh-hold', { detail: hold })
       }
       show(` · refresh hold (${hold})`)
       return
     }
-    const freeze = await supervisorHold($, w)
     const frozen = freeze?.reason ?? null
-    await settleMarker($, w, frozen)
     if (frozen) {
       const live: Item[] = []
       let deferred = 0
@@ -1642,6 +1643,7 @@ const MARKER_EVERY_MS = 5 * 60_000
 let markerAt = 0
 let markerCheckedAt = 0
 let markerWarned = false
+let markerYielded = false
 // Marker writes run one after another: a retire asked for during a publish
 // waits for that write and then overwrites it, never skips.
 let markerWrite: Promise<void> = Promise.resolve()
@@ -1658,6 +1660,13 @@ const markerStamp = `${Date.now().toString(36)}-${Math.random().toString(36).sli
 // tick claims the file; pruned by turn count.
 let turnCount = 0
 const pointed = new Map<string, number>()
+// A peer delivery, however the engine spells it: the plugin route (`peer`),
+// the SendMessage tool's own kind, and the build that frames a SendMessage
+// delivery as a task notification with that subkind.
+const isPeerOrigin = (origin: unknown): boolean => {
+  const o = origin as { kind?: unknown; subkind?: unknown } | undefined
+  return o?.kind === 'peer' || o?.kind === 'peer-send-message' || (o?.kind === 'task-notification' && o.subkind === 'peer-send-message')
+}
 // Room addresses that are not one session's seat: never announced (a documented limitation).
 const NOT_A_SEAT = /^(?:broadcast|will)$/
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
@@ -1725,6 +1734,15 @@ async function publishMarker($: $, w: Where): Promise<void> {
     if (!sessionId) return
     const current = await readMarker($, w.seat)
     if (ours(current) && current?.owner === 'mod' && current?.sessionId === sessionId && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
+    // Another live session's fresh marker (a courier in the seat folder, or the
+    // seat's own earlier process): never overwritten, or pointers would flap
+    // between the two and the courier's model would drain the seat's inbox.
+    if (!ours(current) && current?.owner === 'mod' && typeof current.stamp === 'string' && typeof current.at === 'string' && now - Date.parse(current.at) <= MARKER_FRESH_MS) {
+      if (!markerYielded) $.ui.log(`fleet-delivery: another session holds this seat's native marker (stamp ${clean(current.stamp, 20)}); pointers go to it until it retires or its marker ages out`)
+      markerYielded = true
+      return
+    }
+    markerYielded = false
     try {
       await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: FENCE_VERSION, at: new Date(now).toISOString(), stamp: markerStamp, sessionId })}\n`)
       markerAt = now
@@ -1822,21 +1840,15 @@ function announceNative($: $, e: Record<string, unknown>, answered: { text?: str
   // once, and the send's outcome is a log line when it settles.
   if (!config.roomRoot) return
   void (async () => {
-    const place = await resolve($)
-    if ('hold' in place) {
-      $.ui.log(`fleet-delivery: this seat is holding (${place.hold}); ${to}/${file} is left to the Room`)
-      return
-    }
-    if (!('w' in place)) {
-      $.ui.log(`fleet-delivery: this seat is not owned by the mod; ${to}/${file} is left to the Room`)
-      return
-    }
+    // The sender's own owner and holds have no bearing on the recipient: only
+    // the recipient's marker decides.
+    const from = (await seatName($)) ?? '?'
     const take = await takesPointers($, to)
     if ('why' in take) {
       $.ui.log(`fleet-delivery: ${to} takes no pointers (${take.why}); ${to}/${file} waits for its tick`)
       return
     }
-    const sent = await $.session.send({ to: { sessionId: take.sessionId }, text: pointerText(to, place.w.seat, file) })
+    const sent = await $.session.send({ to: { sessionId: take.sessionId }, text: pointerText(to, from, file) })
     if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
     else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
   })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
@@ -1858,7 +1870,14 @@ async function pointerHold($: $, match: RegExpExecArray): Promise<string | null>
     const memory = root ? await memoryRoot($, root) : null
     const w: Where = { root, memory: memory ?? '', seat }
     const hold = memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved'
-    return hold ? `fleet-delivery: delivery held (${hold}); ${dropped}` : null
+    if (hold) return `fleet-delivery: delivery held (${hold}); ${dropped}`
+    // Claim-before-pointer: the tick claimed (or the drain already read) the
+    // file before the pointer landed; a drain would return nothing and the
+    // model would act twice. The ledger and the tick own it now.
+    if (match[1] === seat && config.roomRoot && !(await $.fs.exists(inboxFile(w, match[3])))) {
+      return `fleet-delivery: ${match[3]} is no longer in the inbox (claimed by the tick or already read); the pointer to room:${seat}:${match[3]} is dropped`
+    }
+    return null
   } catch (error) {
     return `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); ${dropped}`
   }
@@ -1906,8 +1925,7 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    const kind = e.origin?.kind
-    if (!config.installRoot || (kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined || typeof e.text !== 'string') return next(e)
+    if (!config.installRoot || !isPeerOrigin(e.origin) || e.agentId !== undefined || typeof e.text !== 'string') return next(e)
     const match = findPointer(e.text)
     if (!match) return next(e)
     const held = await pointerHold($, match)
@@ -1924,7 +1942,17 @@ export const register: Register = (on, options) => {
     // this fence fails closed instead: a pointer whose check did not finish is
     // dropped (the file waits for the tick). A prompt the hook had already
     // passed on is replayed, not dropped.
-    if (next.called) return next(e)
+    // `Caught.called`: next(e) then resolves to what the hook's last call settled
+    // to, nothing beneath running again (claude-code.d.ts, Caught). Replay it and
+    // record the pointer as read exactly as the hook would have.
+    if (next.called) {
+      return (async () => {
+        const entered = await next(e)
+        const match = typeof e.text === 'string' ? findPointer(e.text) : null
+        if (match && !(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnCount)
+        return entered
+      })()
+    }
     const drop = 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick'
     $.ui.log(drop)
     return { drop }
