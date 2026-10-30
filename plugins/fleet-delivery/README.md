@@ -92,6 +92,10 @@ Before each submit, in order:
 
 Every submit is the plugin's, never `asUser`: the model reads it as "The fleet-delivery plugin sent a message", never as the operator's own words.
 
+## Native pointer (0.4.0)
+
+A `room_send` also hands the recipient session a pointer (`Room mail for <seat> from <sender>: <file>`, never the body) through the engine's own cross-session channel; the recipient's model reads with `room_drain`, the Room's existing consumer, and the Room file stays the record. A seat is announced to only while its own mod publishes a fresh, mod-owned, unheld marker at `<roomRoot>/state/native/<seat>.json`; under a hold, off the mod's ownership, or at session end the marker is retired, so the sender falls back to the tick on its own. As a safety net, the receiver judges a peer prompt carrying a pointer line by its own Room, not by the framing: a line naming this seat whose file is unread in its inbox is the pointer, dropped under a hold (the file waits for the tick) and otherwise admitted, its file left to the turn that reads it; a file the tick is claiming or has claimed makes the pointer the tick's, dropped; a bare pointer with no file behind it still meets the holds; a quoted pointer line whose file is already read is ordinary mail and is never touched. The design, its fences, what was measured and the rollout are in [docs/native-delivery.md](../../docs/native-delivery.md), the one place that owns them.
+
 ## The ledger and the log
 
 **What was delivered** lives in two places, neither of them the plugin's store:
@@ -234,7 +238,7 @@ The probe sends one harmless marker prompt and ignores the owner switch, the ref
 
 - The refresh handshake (capsule, clear, resume) stays with the supervisor; the mod only waits it out.
 - Restarting a crashed seat stays with the supervisor.
-- Urgent mail keeps the cross-session SendMessage path.
+- The body never travels natively: only a pointer does, and `room_drain` reads the file. Senders without a session take the prompt-box path.
 - Two sessions delivering for the same seat at once. The compare-and-set and the module generation cover an old and a new module in one session; the log is read and rewritten whole, so between processes the last writer wins. Run one session per seat.
 - Coordinating with the supervisor's own mover. There are three movers of Room files: this mod (claim, finish, sweep), the seat's `room_drain`, and the supervisor's `modOwnedTick`, which also moves a submitted inbox file to `processed/`. The mod never depends on the supervisor for it, and the sweep and the finishing move tolerate `ENOENT` from either of the others (a file already gone is no move and no error). The supervisor's reader for this log parses each line as plain JSON, so it cannot read the length-prefixed lines.
 
