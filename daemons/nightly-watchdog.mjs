@@ -27,6 +27,16 @@ export function defaultNightlyRoot() {
   return resolveDefaultNightlyRoot();
 }
 
+// A protocol id ends in `-<legs>L-<checkpoints>C` (close-parity-v2-7L-11C,
+// metis-local-v1-7L-7C). The product's own protocol names its checkpoints; a
+// seat-local protocol declares only how many there are, and its rows name
+// them. Null when the id does not declare a shape: nothing can be checked.
+export function parseNightlyProtocol(protocol) {
+  const match = /-(\d+)L-(\d+)C$/i.exec(String(protocol ?? ''));
+  if (!match) return null;
+  return { legs: Number(match[1]), checkpoints: Number(match[2]) };
+}
+
 export function assessNightlyCompletion({
   file,
   date,
@@ -67,6 +77,7 @@ export function assessNightlyCompletion({
   const next = headers.find((header) => header.index > selected.index);
   const block = searchable.slice(selected.index, next?.index ?? searchable.length);
   const protocol = block.match(/^protocol:[ \t]*(\S+)[ \t]*$/mi)?.[1] || null;
+  const declared = parseNightlyProtocol(protocol);
   const status = block.match(/^status:[ \t]*(PASS|FAIL)[ \t]*$/mi)?.[1] || null;
   const completedAt = block.match(/^completed_at:[ \t]*(\S+)[ \t]*$/mi)?.[1] || null;
   const recordedZone = block.match(/^time_zone:[ \t]*(\S+)[ \t]*$/mi)?.[1] || null;
@@ -79,23 +90,33 @@ export function assessNightlyCompletion({
   const recorded = new Set(
     checkpointRows.map((entry) => entry[1].toLowerCase()),
   );
-  const missing = NIGHTLY_CHECKPOINTS.filter(
-    (checkpoint) => !recorded.has(checkpoint),
-  );
-  const duplicates = NIGHTLY_CHECKPOINTS.filter(
+  // The product's protocol names its checkpoints, so a missing one is named.
+  // A seat-local protocol declares a count, so a shortfall is counted: absent
+  // rows are absent, never read as skipped. Either way 7 of 7 passes and 6 of 7
+  // does not.
+  const ours = protocol === NIGHTLY_PROTOCOL;
+  const expectedCount = ours ? NIGHTLY_CHECKPOINTS.length : (declared?.checkpoints ?? 0);
+  const missing = ours
+    ? NIGHTLY_CHECKPOINTS.filter((checkpoint) => !recorded.has(checkpoint))
+    : (recorded.size < expectedCount ? [`${recorded.size} of ${expectedCount} recorded`] : []);
+  const names = [...recorded];
+  const duplicates = names.filter(
     (checkpoint) => checkpointRows
       .filter((entry) => entry[1].toLowerCase() === checkpoint)
       .length > 1,
   );
-  const unknown = checkpointRows
-    .map((entry) => entry[1].toLowerCase())
-    .filter((checkpoint) => !NIGHTLY_CHECKPOINTS.includes(checkpoint));
+  const unknown = ours
+    ? names.filter((checkpoint) => !NIGHTLY_CHECKPOINTS.includes(checkpoint))
+    : (recorded.size > expectedCount ? [`${recorded.size} recorded, ${expectedCount} declared`] : []);
   const failedRows = checkpointRows.filter(
     (entry) => entry[2].toUpperCase() === 'FAIL' || Number(entry[3]) !== 0,
   );
+  // Only the product's protocol declares which checkpoints may be skipped; a
+  // seat-local protocol's skips are its own, still receipted below.
   const illegalSkips = checkpointRows
     .filter((entry) => (
-      entry[2].toUpperCase() === 'SKIPPED'
+      ours
+      && entry[2].toUpperCase() === 'SKIPPED'
       && !NIGHTLY_SKIPPABLE_CHECKPOINTS.includes(entry[1].toLowerCase())
     ))
     .map((entry) => entry[1].toLowerCase());
@@ -119,9 +140,9 @@ export function assessNightlyCompletion({
   // NO_FIRE. A block in THIS protocol with broken structure stays `incomplete`
   // (an abandoned night) and one that reports FAIL stays `failed`.
   const anyEvidence = protocol !== null || status !== null || looseRows.length > 0;
-  if (!anyEvidence || (protocol !== null && protocol !== NIGHTLY_PROTOCOL)) {
+  if (!anyEvidence || (protocol !== null && declared === null)) {
     const detail = anyEvidence
-      ? `evidence block under ${date} is in protocol ${protocol}, not ${NIGHTLY_PROTOCOL}; the run is recorded but cannot be verified`
+      ? `evidence block under ${date} declares protocol ${protocol}, which names no shape (-<L>L-<C>C); the run is recorded but cannot be verified`
       : `no machine-readable evidence block under ${date}; the run is recorded but cannot be verified`;
     return {
       ok: false,
@@ -140,12 +161,13 @@ export function assessNightlyCompletion({
   if (looseRows.length !== checkpointRows.length) {
     invalid.push(`unparseable_rows=${looseRows.length - checkpointRows.length}`);
   }
-  if (protocol !== NIGHTLY_PROTOCOL) invalid.push(`protocol=${protocol || 'missing'}`);
+  if (protocol === null) invalid.push('protocol=missing');
   if (!status) invalid.push('terminal status');
   if (!completedAt || !Number.isFinite(Date.parse(completedAt))) invalid.push('completed_at');
-  if (!recordedZone) {
-    invalid.push('time_zone');
-  } else {
+  // A hand-authored block may omit time_zone / cutoff_hour: it then means the
+  // defaults (nightly-paths DEFAULT_*), the same ones the watchdog itself runs
+  // under, and is never failed for their absence. Present, they must agree.
+  if (recordedZone) {
     try {
       const normalized = normalizeTimeZone(recordedZone);
       if (timeZone && normalized !== normalizeTimeZone(timeZone)) {
@@ -155,9 +177,7 @@ export function assessNightlyCompletion({
       invalid.push(`time_zone=${recordedZone}`);
     }
   }
-  if (recordedCutoff === null) {
-    invalid.push('cutoff_hour');
-  } else {
+  if (recordedCutoff !== null) {
     try {
       const normalized = normalizeCutoffHour(recordedCutoff);
       if (cutoffHour !== undefined
@@ -171,6 +191,7 @@ export function assessNightlyCompletion({
   if (missing.length) invalid.push(`checkpoints=${missing.join(',')}`);
   if (duplicates.length) invalid.push(`duplicate_checkpoints=${duplicates.join(',')}`);
   if (unknown.length) invalid.push(`unknown_checkpoints=${unknown.join(',')}`);
+  if (declared && Number.isFinite(declared.legs) && declared.legs <= 0) invalid.push(`legs=${declared.legs}`);
   if (illegalSkips.length) invalid.push(`illegal_skips=${illegalSkips.join(',')}`);
   if (unreceipted.length) invalid.push(`validator_receipts=${unreceipted.join(',')}`);
   // A block that claims PASS while carrying failed rows is lying about itself —
@@ -191,11 +212,11 @@ export function assessNightlyCompletion({
   if (!structurallyComplete) {
     detail = `incomplete evidence block: ${invalid.join('; ')}`;
   } else if (failedTerminal) {
-    detail = `complete ${NIGHTLY_PROTOCOL} evidence block, terminal status=FAIL`
+    detail = `complete ${protocol} evidence block, terminal status=FAIL`
       + ` — fired and failed: ${failedCheckpoints.length ? failedCheckpoints.join(', ') : 'no failed checkpoint rows'}`;
   } else {
-    detail = `completed ${NIGHTLY_PROTOCOL} evidence block`
-      + ` with ${NIGHTLY_CHECKPOINTS.length}/${NIGHTLY_CHECKPOINTS.length} checkpoints`;
+    detail = `completed ${protocol} evidence block`
+      + ` with ${recorded.size}/${expectedCount} checkpoints`;
   }
   return {
     ok: structurallyComplete && !failedTerminal,

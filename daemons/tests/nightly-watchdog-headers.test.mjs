@@ -12,7 +12,7 @@ import test from 'node:test';
 import { newestDatedHeader } from '../nightly-freshness.mjs';
 import { NIGHTLY_CHECKPOINTS, NIGHTLY_PROTOCOL } from '../nightly-pass.mjs';
 import { readNightlyAlertEvents } from '../nightly-alerts.mjs';
-import { WATCHDOG_ALERT_CODES, assessNightlyCompletion, runNightlyWatchdog } from '../nightly-watchdog.mjs';
+import { WATCHDOG_ALERT_CODES, assessNightlyCompletion, parseNightlyProtocol, runNightlyWatchdog } from '../nightly-watchdog.mjs';
 
 const PASS_DATE = '2026-03-10';
 // 2026-03-10 23:30 in Los Angeles: past the 04:00 cutoff, so the expected night is PASS_DATE.
@@ -109,15 +109,77 @@ test('#122 a journal-shape run with no machine-readable evidence is UNVERIFIED: 
   assert.equal(raised(root, 'NIGHTLY:PASS_FAILED').length, 0);
 });
 
-test('#122 a seat-local protocol with full structure is UNVERIFIED too: this reader cannot vouch for a format it does not know', async () => {
-  const foreign = productBlock(PASS_DATE, { header: `## Nightly Pass -- ${PASS_DATE}` }).replace(`protocol: ${NIGHTLY_PROTOCOL}`, 'protocol: metis-local-v1-7L-7C');
-  const root = fixture(foreign);
-  const result = await run(root);
-  assert.equal(result.ok, false);
-  assert.equal(result.freshness.code, 'unverified');
-  assert.match(result.freshness.detail, /protocol metis-local-v1-7L-7C, not close-parity/);
-  assert.equal(raised(root, 'NIGHTLY:UNVERIFIED').length, 1);
-  assert.equal(raised(root, 'NIGHTLY:NO_FIRE').length, 0);
+// A seat-local protocol, shaped like the metis vault's own: seven receipted rows,
+// its own names, the id declaring the count.
+const METIS_ROWS = ['dream', 'reconcile', 'sweep-now', 'digest', 'system-check', 'ledger-review', 'vault-sync'];
+function metisBlock(date, { rows = METIS_ROWS, header = `## Nightly Pass -- ${date}`, zone = true } = {}) {
+  return [
+    header,
+    'Legs run: 7/7 | Legs skipped: 0',
+    '',
+    'protocol: metis-local-v1-7L-7C',
+    'status: PASS',
+    `completed_at: ${date}T11:10:00Z`,
+    ...(zone ? [`time_zone: ${TIME_ZONE}`, `cutoff_hour: ${CUTOFF_HOUR}`] : []),
+    '',
+    ...rows.map((row) => `- ${row}: status=PASS exit=0 validator=scripts/${row}.py`),
+    '',
+  ].join('\n');
+}
+
+test('#122 the protocol id declares the shape: metis-local-v1-7L-7C with seven receipted rows is GREEN; six of seven is incomplete; an id with no shape is unverified', async () => {
+  assert.deepEqual(parseNightlyProtocol('metis-local-v1-7L-7C'), { legs: 7, checkpoints: 7 });
+  assert.deepEqual(parseNightlyProtocol(NIGHTLY_PROTOCOL), { legs: 7, checkpoints: 11 });
+  assert.equal(parseNightlyProtocol('journal'), null);
+  const green = fixture(metisBlock(PASS_DATE));
+  const ok = await run(green);
+  assert.equal(ok.ok, true, ok.freshness.detail);
+  assert.match(ok.completion.detail, /completed metis-local-v1-7L-7C evidence block with 7\/7 checkpoints/);
+  assert.equal(raised(green, 'NIGHTLY:NO_FIRE').length, 0);
+  // Metis's falsifier: delete ONE row and the same block must read incomplete; a reader that stopped checking would still say green.
+  const sixOfSeven = fixture(metisBlock(PASS_DATE, { rows: METIS_ROWS.filter((row) => row !== 'digest') }));
+  const short = await run(sixOfSeven);
+  assert.equal(short.ok, false);
+  assert.equal(short.freshness.code, 'incomplete');
+  assert.match(short.freshness.detail, /checkpoints=6 of 7 recorded/);
+  assert.equal(raised(sixOfSeven, 'NIGHTLY:NO_FIRE').length, 1, 'an abandoned seat-local pass is still a no-fire');
+  // Eight rows against a seven-count declaration is wrong the other way.
+  const eight = fixture(metisBlock(PASS_DATE, { rows: [...METIS_ROWS, 'extra'] }));
+  const over = await run(eight);
+  assert.equal(over.freshness.code, 'incomplete');
+  assert.match(over.freshness.detail, /unknown_checkpoints=8 recorded, 7 declared/);
+  // An id that declares no shape cannot be checked: unverified, not a no-fire.
+  const shapeless = fixture(metisBlock(PASS_DATE).replace('protocol: metis-local-v1-7L-7C', 'protocol: journal'));
+  const unverified = await run(shapeless);
+  assert.equal(unverified.freshness.code, 'unverified');
+  assert.match(unverified.freshness.detail, /names no shape/);
+  assert.equal(raised(shapeless, 'NIGHTLY:UNVERIFIED').length, 1);
+  assert.equal(raised(shapeless, 'NIGHTLY:NO_FIRE').length, 0);
+});
+
+test('#122 a block without time_zone / cutoff_hour means the defaults and is GREEN; a present value still has to agree', async () => {
+  const plain = fixture(metisBlock(PASS_DATE, { zone: false }));
+  const ok = await run(plain);
+  assert.equal(ok.ok, true, ok.freshness.detail);
+  const wrongZone = fixture(metisBlock(PASS_DATE).replace(`time_zone: ${TIME_ZONE}`, 'time_zone: Europe/Berlin'));
+  const red = await run(wrongZone);
+  assert.equal(red.freshness.code, 'incomplete');
+  assert.match(red.freshness.detail, /time_zone=Europe\/Berlin/);
+});
+
+test('#122 a later green resolves every earlier active alert of the code, whatever night it was scoped to, and the announcer no longer shows them', async () => {
+  const root = fixture(`## Nightly Pass -- 2026-03-08\nprotocol: ${NIGHTLY_PROTOCOL}\n`);
+  const stale = await run(root);
+  assert.equal(stale.ok, false);
+  const before = readNightlyAlertEvents(root).events.filter((event) => event.event === 'raised').map((event) => event.alert_id);
+  assert.ok(before.length >= 1);
+  writeFileSync(path.join(root, 'vault', 'memory', 'runtime', 'NIGHTLY_LOG.md'), metisBlock(PASS_DATE), 'utf8');
+  const green = await run(root);
+  assert.equal(green.ok, true, green.freshness.detail);
+  assert.ok(green.resolved >= 1);
+  const { readActiveNightlyAlerts } = await import('../nightly-alerts.mjs');
+  assert.deepEqual(readActiveNightlyAlerts(root).alerts, [], 'the original lines stand; a later resolved record per alert_id is what the announcer reads');
+  for (const id of before) assert.ok(readNightlyAlertEvents(root).events.some((event) => event.alert_id === id && event.event === 'resolved'), id);
 });
 
 test('#122 healthy control: a full block in this protocol is GREEN and resolves a standing UNVERIFIED alert', async () => {
