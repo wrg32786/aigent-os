@@ -55,7 +55,7 @@ jobs:
           bash tests/test-caddy-detect-new-skill.sh
           node evals/run-evals.mjs
 
-      - name: fleet-delivery mod: engine typings, validate, plugin test
+      - name: fleet-delivery mod (engine typings, validate, plugin test)
         shell: bash
         run: |
           set -euo pipefail
