@@ -35,10 +35,17 @@ set -euo pipefail
 ROOT=""
 FIX=0
 ATTEST=0
+# --component <name>: one optional component's state (absent, unloadable,
+# functioning) on one line, exit 0 only for functioning. The same classifier
+# --attest uses; install.sh calls this after its dependency step (issue #107).
+COMPONENT=""
+COMPONENT_NEXT=0
 for arg in "$@"; do
+  if [ "$COMPONENT_NEXT" -eq 1 ]; then COMPONENT="$arg"; COMPONENT_NEXT=0; ATTEST=1; continue; fi
   case "$arg" in
     --fix) FIX=1 ;;
     --attest) ATTEST=1 ;;
+    --component) COMPONENT_NEXT=1 ;;
     -*) ;;  # ignore unknown flags
     *) [ -z "$ROOT" ] && ROOT="$arg" ;;
   esac
@@ -75,15 +82,17 @@ if [ "$ATTEST" -eq 1 ]; then
     esac
   }
 
-  echo ""
-  echo "  aigent-OS Baseline Attestation"
-  echo "  ----------------------------------------"
+  if [ -z "$COMPONENT" ]; then
+    echo ""
+    echo "  aigent-OS Baseline Attestation"
+    echo "  ----------------------------------------"
+  fi
 
   if [ -z "$ROOT" ]; then
     echo "  [detail] aigent-OS root not found -- pass the path as an argument or set AIGENT_ROOT"
     attest_verdict UNKNOWN
   fi
-  echo "  root:     $ROOT"
+  [ -z "$COMPONENT" ] && echo "  root:     $ROOT"
 
   MANIFEST="$ROOT/scripts/fleet-baseline-manifest.json"
   if [ ! -f "$MANIFEST" ]; then
@@ -112,7 +121,7 @@ if [ "$ATTEST" -eq 1 ]; then
   export AIGENT_DOCTOR_MEMORY_REL AIGENT_DOCTOR_MEMORY_ERROR
 
   ATTEST_RC=0
-  ATTEST_OUT="$(python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
+  ATTEST_OUT="$(AIGENT_DOCTOR_COMPONENT="$COMPONENT" python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
 import hashlib
 import json
 import os
@@ -600,9 +609,58 @@ if auto_refresh["expected"] == "enabled":
             )
     print("runner-required:%s" % under_root(manifest["managed_runner"]["dependency_root"]))
 
+# Optional components: absent, present-but-unloadable, or functioning (issue
+# #107). Presence of the node_modules directory proved nothing: a tree whose
+# package holds only a stale .cache attested like a working one. Loadability is
+# judged from files alone -- the owning package.json's declared dependencies,
+# each dependency's own package.json and the entry file it names -- so nothing
+# is executed and nothing is downloaded by this read-only instrument.
+def optional_component_state(spec):
+    base = under_root(spec["path"])
+    if not os.path.isdir(base):
+        return "absent", spec["path"]
+    owner = os.path.join(os.path.dirname(base), "package.json")
+    if not os.path.isfile(owner):
+        return "functioning", "no owning package.json, nothing declared"
+    try:
+        with open(owner, encoding="utf-8") as fh:
+            deps = sorted((json.load(fh).get("dependencies") or {}).keys())
+    except (OSError, ValueError) as error:
+        return "unloadable", "owning package.json unreadable: %s" % error
+    if not deps:
+        return "functioning", "no declared dependencies"
+    for dep in deps:
+        pkg_dir = os.path.join(base, *dep.split("/"))
+        pkg_json = os.path.join(pkg_dir, "package.json")
+        if not os.path.isfile(pkg_json):
+            seen = ", ".join(sorted(os.listdir(pkg_dir))[:4]) if os.path.isdir(pkg_dir) else "no directory"
+            return "unloadable", "%s has no package.json (%s)" % (dep, seen)
+        try:
+            with open(pkg_json, encoding="utf-8") as fh:
+                entry = json.load(fh).get("main") or "index.js"
+        except (OSError, ValueError) as error:
+            return "unloadable", "%s package.json unreadable: %s" % (dep, error)
+        if not os.path.isfile(os.path.join(pkg_dir, *str(entry).split("/"))):
+            return "unloadable", "%s entry %s missing" % (dep, entry)
+    return "functioning", "%d declared dependenc%s present with entry files" % (len(deps), "y" if len(deps) == 1 else "ies")
+
+
+component_probe = os.environ.get("AIGENT_DOCTOR_COMPONENT", "")
+if component_probe:
+    spec = manifest["optional_components"].get(component_probe)
+    if spec is None:
+        print("component:unknown:%s is not an optional component in the manifest" % component_probe)
+    else:
+        state, why = optional_component_state(spec)
+        print("component:%s:%s" % (state, why))
+    sys.exit(0)
+
 for name, spec in manifest["optional_components"].items():
-    if not os.path.exists(under_root(spec["path"])):
-        findings.append("optional %s absent: %s" % (name, spec["path"]))
+    state, why = optional_component_state(spec)
+    if state == "absent":
+        findings.append("optional %s absent: %s" % (name, why))
+    elif state == "unloadable":
+        findings.append("optional %s present but unloadable: %s" % (name, why))
 
 for finding in findings:
     print("finding:%s" % finding)
@@ -624,7 +682,12 @@ ATTESTPY
     # as unavailable on every Windows install.
     line="${line%$'\r'}"
     case "$line" in
-      info:*)            echo "  ${line#info:}" ;;
+      component:*)
+        COMPONENT_STATE="${line#component:}"; COMPONENT_WHY="${COMPONENT_STATE#*:}"; COMPONENT_STATE="${COMPONENT_STATE%%:*}"
+        echo "COMPONENT $COMPONENT: $COMPONENT_STATE -- $COMPONENT_WHY"
+        case "$COMPONENT_STATE" in functioning) exit 0 ;; unloadable) exit 1 ;; absent) exit 2 ;; *) exit 3 ;; esac
+        ;;
+      info:*)            [ -z "$COMPONENT" ] && echo "  ${line#info:}" ;;
       runner-required:*) RUNNER_ROOT="${line#runner-required:}" ;;
       finding:*)         ATTEST_FINDINGS+=("${line#finding:}") ;;
       unmeasurable:*)    ATTEST_UNMEASURABLE="${line#unmeasurable:}" ;;
@@ -653,8 +716,9 @@ createRequire(process.argv[1])("node-pty");
 
   # A DEGRADED-class finding must never pull the verdict back UP from
   # NONCOMPLIANT, so DEGRADED is only ever reached from COMPLIANT. Two classes
-  # map here: an absent optional component, and a core-required path the
-  # operator declared and then let drift (see the attest python above).
+  # map here: an absent or present-but-unloadable optional component, and a
+  # core-required path the operator declared and then let drift (see the attest
+  # python above).
   TERMINAL="COMPLIANT"
   if [ "${#ATTEST_FINDINGS[@]}" -gt 0 ]; then
     for finding in "${ATTEST_FINDINGS[@]}"; do

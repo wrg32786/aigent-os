@@ -695,6 +695,71 @@ test('an absent optional component attests DEGRADED, everything else exact', () 
   });
 });
 
+// Issue #107: presence is not loadability. The node_modules directory existing
+// proved nothing; a package holding only a stale .cache attested like a working one.
+function declareSemanticDependency(root, manifest) {
+  const nodeModules = path.join(root, ...manifest.optional_components.semantic_search.path.split('/'));
+  writeFileSync(
+    path.join(path.dirname(nodeModules), 'package.json'),
+    '{"name":"semantic-search","version":"1.0.0","type":"module","dependencies":{"@xenova/transformers":"^2.17.2"}}\n',
+  );
+  return path.join(nodeModules, '@xenova', 'transformers');
+}
+
+test('#107 a present-but-unloadable optional component attests DEGRADED and is named as unloadable, not absent', () => {
+  withInstall((root) => {
+    const pkg = declareSemanticDependency(root, readManifest());
+    // The measured specimen: only a stale cache directory where the package should be.
+    mkdirSync(path.join(pkg, '.cache'), { recursive: true });
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'DEGRADED', output);
+    assert.equal(status, 0);
+    assert.match(output, /optional semantic_search present but unloadable: @xenova\/transformers has no package\.json \(\.cache\)/);
+    assert.doesNotMatch(output, /optional semantic_search absent/);
+  });
+});
+
+test('#107 a dependency whose package.json names an entry file that is missing is unloadable; with the entry file it is functioning (COMPLIANT)', () => {
+  withInstall((root) => {
+    const pkg = declareSemanticDependency(root, readManifest());
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, 'package.json'), '{"name":"@xenova/transformers","version":"2.17.2","main":"./src/transformers.js"}\n');
+    const broken = attest(root);
+    assert.equal(broken.verdict, 'DEGRADED', broken.output);
+    assert.match(broken.output, /unloadable: @xenova\/transformers entry \.\/src\/transformers\.js missing/);
+    mkdirSync(path.join(pkg, 'src'), { recursive: true });
+    writeFileSync(path.join(pkg, 'src', 'transformers.js'), 'export const ok = true;\n');
+    const fixed = attest(root);
+    assert.equal(fixed.verdict, 'COMPLIANT', fixed.output);
+    assert.doesNotMatch(fixed.output, /optional semantic_search/);
+  });
+});
+
+test('#107 --component semantic_search answers one line and exits by state: functioning 0, unloadable 1, absent 2', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const probe = () => {
+      const result = spawnSync('bash', [DOCTOR, root, '--component', 'semantic_search'], { encoding: 'utf8' });
+      return { status: result.status, line: `${result.stdout}`.trim() };
+    };
+    const pkg = declareSemanticDependency(root, manifest);
+    mkdirSync(path.join(pkg, '.cache'), { recursive: true });
+    const unloadable = probe();
+    assert.equal(unloadable.status, 1, unloadable.line);
+    assert.match(unloadable.line, /^COMPONENT semantic_search: unloadable -- @xenova\/transformers has no package\.json/);
+    assert.equal(unloadable.line.split('\n').length, 1, 'one line, nothing else, so install.sh can print it');
+    writeFileSync(path.join(pkg, 'package.json'), '{"name":"@xenova/transformers","version":"2.17.2","main":"index.js"}\n');
+    writeFileSync(path.join(pkg, 'index.js'), 'export const ok = true;\n');
+    const functioning = probe();
+    assert.equal(functioning.status, 0, functioning.line);
+    assert.match(functioning.line, /^COMPONENT semantic_search: functioning -- 1 declared dependency present/);
+    rmSync(path.join(root, ...manifest.optional_components.semantic_search.path.split('/')), { recursive: true, force: true });
+    const absent = probe();
+    assert.equal(absent.status, 2, absent.line);
+    assert.match(absent.line, /^COMPONENT semantic_search: absent -- daemons\/semantic-search\/node_modules/);
+  });
+});
+
 // An optional absence must never pull a broken install back up to DEGRADED.
 test('an optional absence alongside a required failure stays NONCOMPLIANT', () => {
   withInstall((root) => {

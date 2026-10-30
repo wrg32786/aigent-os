@@ -1551,7 +1551,18 @@ else
         || fail "node-pty failed to build. Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
     fi
     popd >/dev/null
-    printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+    if [[ "$DEP_DIR" == "semantic-search" ]]; then
+      # Installed is not loadable (issue #107): a tree whose package holds only a
+      # stale .cache used to pass here and attest COMPLIANT. One bounded,
+      # read-only check, shared with doctor.sh --attest, decides.
+      if PROBE="$(bash "$TARGET/scripts/doctor.sh" "$TARGET" --component semantic_search 2>/dev/null)"; then
+        printf '  [ok] %s dependencies installed and loadable\n' "$DEP_DIR"
+      else
+        printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun npm install in daemons/%s\n' "$DEP_DIR" "${PROBE#*-- }" "$DEP_DIR"
+      fi
+    else
+      printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
+    fi
   done
 
   if ! node -e '
