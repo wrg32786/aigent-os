@@ -3961,6 +3961,8 @@ test('#98 the child never inherits CLAUDE_CODE_CHILD_SESSION: the managed spawn 
   assert.equal(seen[0].env.KEEP, 'me');
   // The pure function, for the launcher scripts' sake: same answer, same shape.
   assert.deepEqual(childEnvironment({ CLAUDE_CODE_CHILD_SESSION: '1', A: 'b' }), { A: 'b', CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1' });
+  // An operator's explicit opt-in value is a word kept, never overridden.
+  assert.equal(childEnvironment({ CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '0' }).CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, '0');
 });
 
 test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarmed', () => {
@@ -11744,6 +11746,22 @@ dialogCase('D9b (#111) a ZERO-LENGTH transcript is not-ready at the capsule, cle
   fs.appendFileSync(harness.fixture.transcriptPath, JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } }) + '\n');
   assert.equal(harness.runner._automaticWriteReadiness('capsule-request').ready, true,
     'growth is read by the same catch-up pass; no rebind needed');
+});
+
+dialogCase('D9c an ABSENT transcript that then appears is read: the first record makes the strict boundary ready, no large append needed', (harness) => {
+  atRequestEdge(harness);
+  fs.rmSync(harness.fixture.transcriptPath);
+  harness.runner.toolCallWatch = null;
+  const absent = harness.runner._automaticWriteReadiness('capsule-request');
+  assert.equal(absent.ready, false);
+  assert.equal(absent.detail?.reason, 'tool-call-transcript-absent');
+  // The post-clear session writes its first record (a few hundred bytes, far
+  // below any re-baseline jump). The watch must not keep saying "absent".
+  fs.writeFileSync(harness.fixture.transcriptPath, JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } }) + '\n');
+  const after = harness.runner._automaticWriteReadiness('capsule-request');
+  assert.equal(after.ready, true,
+    'MUST be red on 836a886f: `absent` was a bind-time snapshot never cleared, so every strict boundary refused until an unrelated >1 MiB jump re-baselined');
+  assert.equal(harness.runner.toolCallWatch?.absent, undefined);
 });
 
 dialogCase('D10 an unanchored baseline refuses: a call beyond the bounded tail is never assumed away', (harness) => {

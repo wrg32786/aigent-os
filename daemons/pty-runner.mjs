@@ -4675,6 +4675,11 @@ export class ManagedPtyRunner {
       watch.degraded = { code: 'tool-call-transcript-unreadable', detail: errorText(error) };
       return watch;
     }
+    // The file an ABSENT watch was waiting for is here: re-baseline from it.
+    // `absent` was a bind-time snapshot; left standing, every strict boundary
+    // would refuse `tool-call-transcript-absent` after a post-clear rebind until
+    // an unrelated large append happened to re-baseline (#125 review).
+    if (watch.absent === true) return this._noteToolCallWatch();
     // Replaced in place by something that is not a file: re-baseline, which
     // names it rather than reading on against a cursor that indexes nothing.
     if (!stat.isFile()) return this._noteToolCallWatch();
@@ -5338,23 +5343,19 @@ export class ManagedPtyRunner {
     // records, so no dialog"; the capsule-request and clear boundaries may not,
     // because their session provably has a transcript and absence there means
     // the path mis-resolved. An unrecognised boundary is strict.
-    if (watch.absent === true && !ABSENT_TRANSCRIPT_READY_AT.includes(where)) {
+    // ONE LIVE PREDICATE: the transcript holds no records, whether the file is
+    // absent (#110) or zero-length (#111). The session asking for a capsule, a
+    // clear or a control is under pressure and has records; no records there
+    // means the reader is not looking at its live transcript (a stale
+    // resolution, a fresh --continue onto the wrong id). The wake family keeps
+    // its exemption: there, no records yet is the truth. The two reasons stay
+    // distinct in the detail so a log reader can tell which it saw.
+    const noRecords = watch.absent === true || watch.endSeen === 0;
+    if (noRecords && !ABSENT_TRANSCRIPT_READY_AT.includes(where)) {
       return {
         ready: false,
         code: 'runner-tool-call-readiness-unknown',
-        detail: { reason: 'tool-call-transcript-absent', at: where ?? null },
-      };
-    }
-    // #111: a zero-length transcript at a strict boundary is the same anomaly
-    // one step weaker. The session asking for a capsule, a clear or a control is
-    // under pressure and has records; a file with none is not its live
-    // transcript (a stale resolution, a fresh --continue onto the wrong id). The
-    // wake family keeps its exemption: there, no records yet is the truth.
-    if (watch.absent !== true && watch.endSeen === 0 && !ABSENT_TRANSCRIPT_READY_AT.includes(where)) {
-      return {
-        ready: false,
-        code: 'runner-tool-call-readiness-unknown',
-        detail: { reason: 'tool-call-transcript-empty', at: where ?? null },
+        detail: { reason: watch.absent === true ? 'tool-call-transcript-absent' : 'tool-call-transcript-empty', at: where ?? null },
       };
     }
     if (watch.degraded !== null) {
@@ -7817,11 +7818,15 @@ export function resolvePtyCommand({
 // here: the marker removed and persistence asked for through the host's own
 // opt-in (CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, read by the installed 2.1.314
 // binary). Only the child's copy changes; the runner's own `env`, the operator's
-// shell and the global settings are untouched.
+// shell and the global settings are untouched. The launcher's direct branches
+// (--no-deps, node missing) exec claude without this runner and carry the same
+// two lines themselves (launcher/aigent.ps1, launcher/aigent.sh).
 export function childEnvironment(env = process.env) {
   const child = { ...env };
   delete child.CLAUDE_CODE_CHILD_SESSION;
-  child.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = '1';
+  // A default, never an override: an operator who set the opt-in explicitly
+  // (to any value) keeps their word.
+  child.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE ??= '1';
   return child;
 }
 

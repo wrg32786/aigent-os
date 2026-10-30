@@ -981,7 +981,7 @@ fi
 # no transcript. The managed runner now scrubs it at spawn; an older runner, or
 # a bare `claude` started by hand from this shell, does not.
 if [ -n "${CLAUDE_CODE_CHILD_SESSION:-}" ]; then
-  warn "CLAUDE_CODE_CHILD_SESSION is set in this shell -- a seat started from here by hand would record no transcript (the managed runner scrubs it since the #98 fix)"
+  warn "CLAUDE_CODE_CHILD_SESSION is set in this shell -- a bare claude started from here by hand would record no transcript (the managed runner and the aigent launcher scrub it since the #98 fix)"
 else
   pass "launch shell carries no CLAUDE_CODE_CHILD_SESSION marker"
 fi
