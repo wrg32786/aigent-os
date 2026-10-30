@@ -1513,8 +1513,10 @@ async function ensureTicking($: $): Promise<void> {
       void $.clock.now().then(now => {
         lastTickAt = now
       })
+      // isTicking is set before tick's first await: read it before the call.
+      const blocked = isTicking
       void tick($)
-      void refreshMarker($).catch(() => {})
+      if (blocked) void refreshMarker($).catch(() => {})
     })
   } catch {
     timer = undefined
@@ -1629,6 +1631,10 @@ let markerWarned = false
 let markerWrite: Promise<void> = Promise.resolve()
 const serialMarker = (job: () => Promise<void>) => (markerWrite = markerWrite.then(job, job))
 let markerState: 'unknown' | 'published' | 'retired' = 'unknown'
+// Stamped into the marker so a second mod-owned session in the same seat
+// folder (a `claude -p` courier) cannot retire the live seat's marker, and
+// the live seat re-publishes at once when the file stops reading as its own.
+const markerStamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 // Room addresses that are not one session's seat: never announced (a documented limitation).
 const NOT_A_SEAT = /^(?:broadcast|will)$/
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
@@ -1636,7 +1642,7 @@ const NOT_A_SEAT = /^(?:broadcast|will)$/
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
 export const pointerText = (seat: string, from: string, file: string) =>
-  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. This pointer carries no content and is not the operator's word.`
+  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. The drain collapses same-sender, same-thread messages: if ${file} is not among the items it returns, read it with room_history. This pointer carries no content and is not the operator's word.`
 // A pointer line anywhere in the peer text, CRLF or LF, whatever the engine
 // wraps it in: the fence must not depend on the envelope's exact shape.
 const POINTER = /^[ \t]*Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)[ \t]*$/m
@@ -1669,14 +1675,26 @@ async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T 
 // version, alive now, and not held. Published only while both holds are
 // clear, so a held seat is never announced to and the sender falls back to
 // the tick on its own; the receiver's prompt-time drop is the safety net.
-// Rewritten at most every MARKER_EVERY_MS while published.
+// Rewritten every MARKER_EVERY_MS while the file still reads as ours, at
+// once when it does not (another session's stamp, a retirement, a torn
+// read): the file, not process memory, says whose the marker is.
+type Marker = { owner?: unknown; version?: unknown; at?: unknown; stamp?: unknown }
+async function readMarker($: $, seat: string): Promise<Marker | null> {
+  try {
+    return JSON.parse(await $.fs.read(markerFile(seat))) as Marker
+  } catch {
+    return null
+  }
+}
+const ours = (marker: Marker | null) => marker?.stamp === markerStamp
 async function publishMarker($: $, w: Where): Promise<void> {
   if (!config.roomRoot) return
   await serialMarker(async () => {
     const now = await $.clock.now()
-    if (markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
+    const current = await readMarker($, w.seat)
+    if (ours(current) && current?.owner === 'mod' && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
     try {
-      await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: FENCE_VERSION, at: new Date(now).toISOString() })}\n`)
+      await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: FENCE_VERSION, at: new Date(now).toISOString(), stamp: markerStamp })}\n`)
       markerAt = now
       markerState = 'published'
       markerWarned = false
@@ -1689,20 +1707,23 @@ async function publishMarker($: $, w: Where): Promise<void> {
 
 // Retired by overwriting: {owner: 'retired'} fails the sender's mod-owned
 // check at once, needs no process, and is one write a session.end hook can
-// afford. Only a marker this module published is retired: a second session
-// resolving to the same seat (a `claude -p` courier, a scratch window in the
-// seat folder) must not take the live seat's marker down on its exit. One
-// write per retirement: under a hold, when the mod no longer owns the seat,
-// and when the session ends.
+// afford. Only a marker that reads back with this module's stamp is
+// retired: a second session resolving to the same seat must not take the
+// live seat's marker down on its exit. One write per retirement: under a
+// hold, when the mod no longer owns the seat, and when the session ends.
 async function retireMarker($: $, seat?: string | null): Promise<void> {
   markerAt = 0
   if (!config.roomRoot) return
   await serialMarker(async () => {
-    if (markerState !== 'published') return
     seat ??= await seatName($)
     if (!seat) return
+    const current = await readMarker($, seat)
+    if (!ours(current) || current?.owner === 'retired') {
+      if (markerState === 'published') markerState = 'retired'
+      return
+    }
     try {
-      await $.fs.write(markerFile(seat), `${JSON.stringify({ seat, owner: 'retired', version: FENCE_VERSION, at: await iso($) })}\n`)
+      await $.fs.write(markerFile(seat), `${JSON.stringify({ seat, owner: 'retired', version: FENCE_VERSION, at: await iso($), stamp: markerStamp })}\n`)
       markerState = 'retired'
     } catch {}
   })
@@ -1714,13 +1735,14 @@ async function settleMarker($: $, w: Where, hold: string | null): Promise<void> 
   else await publishMarker($, w)
 }
 
-// From the tick's timer, only while a tick is blocked (a long submit must
-// not age the marker out, and a hold that begins meanwhile must retire it);
-// an unblocked tick settles the marker itself. While published it looks
-// every tick; retired or unknown, every MARKER_EVERY_MS, so an off seat does
-// not re-resolve its owner and memory root every 30 s.
+// From the tick's timer, only when the timer found a tick already in flight
+// (a long submit must not age the marker out, and a hold that begins
+// meanwhile must retire it); an unblocked tick settles the marker itself.
+// While published it looks every tick; retired or unknown, every
+// MARKER_EVERY_MS, so an off seat does not re-resolve its owner and memory
+// root every 30 s.
 async function refreshMarker($: $): Promise<void> {
-  if (!config.installRoot || !config.roomRoot || !isTicking) return
+  if (!config.installRoot || !config.roomRoot) return
   const now = await $.clock.now()
   if (markerState !== 'published' && now - markerCheckedAt < MARKER_EVERY_MS) return
   markerCheckedAt = now

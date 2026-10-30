@@ -1855,7 +1855,9 @@ const asPeerPrompt = (text: string) => ({ ...RUN, origin: { kind: 'peer' as cons
 test('the tick publishes this seat\'s native marker: mod-owned, this version, now', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY })
   await w.turn()
-  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toEqual({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:30:00.000Z' })
+  const { stamp, ...published } = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
+  expect(typeof stamp).toBe('string')
+  expect(published).toEqual({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:30:00.000Z' })
 })
 
 test('room_send also queues a pointer to a seat with a fresh marker: the file name, never the body; the tool answer returns at once', CONFIGURED, async ($, on) => {
@@ -2036,14 +2038,31 @@ test('the marker is retired (owner: retired, one write, no process) under a refr
   expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(false)
 })
 
-test('a marker this module did not publish is never retired: a second session in the seat folder cannot take the live seat down', CONFIGURED, async ($, on) => {
-  const live = marker('alpha', '2026-10-07T18:29:30.000Z')
-  const w = world(on, $, { files: { ...READY, [ALPHA_MARKER]: live, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
+test('a marker another session stamped is never retired, and the live seat re-publishes at once when its own marker stops reading as its own', CONFIGURED, async ($, on) => {
+  const foreign = JSON.stringify({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:29:30.000Z', stamp: 'courier-1' })
+  const w = world(on, $, { files: { ...READY, [ALPHA_MARKER]: foreign, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   await w.turn()
-  expect(w.files.get(ALPHA_MARKER)).toBe(live)
+  expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
   w.files.delete(OWNER)
   await w.turn()
-  expect(w.files.get(ALPHA_MARKER)).toBe(live)
+  expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
+  // Holds clear, owner back: ours replaces the foreign marker.
+  w.files.set(OWNER, MOD)
+  w.files.set(CYCLE, IDLE)
+  await w.turn()
+  const mine = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
+  expect(mine.owner).toBe('mod')
+  expect(mine.stamp).not.toBe('courier-1')
+  // A courier publishes over it and retires on its exit: the live seat re-publishes on its next tick, throttle or not.
+  w.files.set(ALPHA_MARKER, JSON.stringify({ seat: 'alpha', owner: 'retired', version: FENCE_VERSION, at: '2026-10-07T18:31:00.000Z', stamp: 'courier-1' }))
+  await w.turn()
+  const again = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
+  expect(again.owner).toBe('mod')
+  expect(again.stamp).toBe(mine.stamp)
+  // Our own fresh marker is left alone within the throttle.
+  const kept = w.files.get(ALPHA_MARKER)
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(kept)
 })
 
 test('a retired marker is not announced to; a hold that begins while the tick is away is caught by the timer', CONFIGURED, async ($, on) => {
