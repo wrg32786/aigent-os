@@ -36,8 +36,9 @@ test('missing shared redactor fails closed for every captured value with one std
 });
 
 const redactionCases = require('../daemons/tests/helpers/redaction-cases.cjs');
-for (const { name, input, command, secret } of Object.values(redactionCases).flat()) {
+for (const { name, input, command, secret, unchanged } of Object.values(redactionCases).flat()) {
   test(`redacts credential pattern: ${name}`, () => {
+    if (unchanged) { assert.equal(redact(input), input); return; }
     for (const value of new Set([input ?? command, input?.replace(secret, `"${secret}"`) ?? command, command])) {
       const output = redact(value);
       assert.ok(!output.includes(secret), output);

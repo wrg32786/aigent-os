@@ -13,6 +13,77 @@ import { createHash } from 'node:crypto';
 import * as plugin from '../../plugins/context-capsule/scripts/capsule-sections.mjs';
 import * as resume from '../resume-verb.mjs';
 
+test('shell targets contain only recognized actions and credential-free origins', (t) => {
+  const cases = [
+    ['curl -X POST https://hooks.slack.com/services/T123/B456/webhooksecret', 'curl POST https://hooks.slack.com'],
+    ['curl -d hello https://api.telegram.org/bot123:telegramsecret/sendMessage', 'curl https://api.telegram.org'],
+    ['git push https://ghs_x@github.com/o/r', 'git push https://github.com'],
+    ['GH_TOKEN=ghs_abc gh pr merge 12', 'gh pr merge'],
+    ['aws ssm put-parameter --value s3cr3t', 'aws ssm put-parameter'],
+    ['gh secret set A -bs3cr3t', 'gh secret set'],
+    ['vercel deploy --auth-token=abc', 'vercel deploy'],
+    ['git push ssh://alice:private@example.test:2222/repo?key=private#private', 'git push ssh://example.test:2222'],
+  ];
+  const rows = effectRows(fixture(t).write(cases.map(([command], i) => call(`safe-${i}`, 'Bash', { command })))).map(fields);
+  assert.deepEqual(rows.map(({ target }) => target), cases.map(([, target]) => target));
+  assert.doesNotMatch(JSON.stringify(rows), /webhooksecret|telegramsecret|ghs_|s3cr3t|abc|alice|private/);
+});
+
+test('live hook redacts prefixed credentials and token shapes and result IDs lose userinfo', (t) => {
+  const { redact } = createRequire(import.meta.url)('../../hooks/tool-tracker.js');
+  const corpus = createRequire(import.meta.url)('./helpers/redaction-cases.cjs');
+  for (const { input, secret, unchanged } of corpus.prefixedCredentials) {
+    if (unchanged) assert.equal(redact(input), input);
+    else {
+      assert.ok(!redact(input).includes(secret), input);
+      assert.ok(!redact(input.replace(secret, `"${secret}"`)).includes(secret), input);
+    }
+  }
+  const rows = effectRows(fixture(t).write(['alice:private', 'ghs_x'].flatMap((auth, i) =>
+    [call(`url-${i}`), result(`url-${i}`, JSON.stringify({ id: `https://${auth}@github.com/o/r?token=private#issuecomment-123` }))]))).map(fields);
+  assert.deepEqual(rows.map(({ id }) => id), Array(2).fill('https://github.com/o/r#issuecomment-123'));
+});
+
+test('uncertain outcomes stay unknown and the specified shell spellings record effects', (t) => {
+  const interrupted = ['timeout', 'timed out', 'interrupted', 'aborted', 'cancelled', 'connection closed', 'ECONNRESET'];
+  const payloads = ['failed', 'failure', 'error', 'declined', 'rejected', 'canceled'].map((status) => ({ status }));
+  payloads.push({ errors: ['denied'] }, { errors: { message: 'denied' } }, { errors: 'denied' }, { isError: true });
+  const events = interrupted.flatMap((text, i) => [call(`interrupted-${i}`), result(`interrupted-${i}`, `${text} {"id":"msg_01"}`, true)])
+    .concat(payloads.flatMap((payload, i) => [call(`unclean-${i}`), result(`unclean-${i}`, JSON.stringify({ id: 'msg_01', ...payload }))]));
+  const rows = effectRows(fixture(t).write(events)).map(fields);
+  assert.equal(rows.length, 17);
+  assert.ok(rows.every(({ outcome }) => outcome === 'unknown'), JSON.stringify(rows));
+  for (const payload of [{ errors: [] }, { errors: {} }, { errors: '' }, { isError: false }, { status: 'success' }]) {
+    const [row] = effectRows(fixture(t).write([call('clean'), result('clean', JSON.stringify({ id: 'msg_01', ...payload }))])).map(fields);
+    assert.equal(row.outcome, 'confirmed');
+  }
+  const commands = ['curl.exe -X POST https://api.test/path', '/usr/bin/curl -X POST https://api.test/path',
+    'curl -sX POST https://api.test/path', 'curl -fsSX POST https://api.test/path', 'curl -sd payload https://api.test/path',
+    'gh api -XPOST /repos/o/r', 'else git push'];
+  const parsed = effectRows(fixture(t).write(commands.map((command, i) => call(`spelling-${i}`, 'Bash', { command })))).map(fields);
+  assert.deepEqual(parsed.map(({ op }) => op), commands.map((_, i) => `spelling-${i}`));
+  for (const separator of ['&', '&&']) {
+    const compound = effectRows(fixture(t).write([call('compound', 'Bash', { command: `git push ${separator} gh pr merge 12` })])).map(fields);
+    assert.deepEqual(compound.map(({ target }) => target), ['git push', 'gh pr merge']);
+  }
+  const redirected = effectRows(fixture(t).write([call('redirect', 'Bash', { command: 'git push 2>&1' })])).map(fields);
+  assert.deepEqual(redirected.map(({ op }) => op), ['redirect']);
+});
+
+test('documented evidence limits and resume fence never infer absence of effects', (t) => {
+  const doc = readFileSync(new URL('../../docs/two-verb-lifecycle.md', import.meta.url), 'utf8');
+  const bullets = doc.split('## Outside side effects\n')[1].split('\n## ')[0];
+  assert.match(bullets, /rows are best-effort evidence/);
+  assert.match(bullets, /a command spelled in a way the parser does not recognize leaves no row/);
+  assert.match(bullets, /a row exists only in the capsule that session wrote/);
+  assert.match(bullets, /a resume that selects a different capsule does not show it/);
+  const absence = 'Absence of a row is never evidence that nothing happened.';
+  assert.ok(bullets.split('\n').find((line) => line.startsWith('- Resume fence:')).includes(absence));
+  const f = fixture(t);
+  f.write([call()]);
+  assert.ok(f.resume().split('\n').find((line) => line.includes('NOT permission to repeat the action')).includes(absence));
+});
+
 {
 const { redact } = createRequire(import.meta.url)('../../hooks/tool-tracker.js');
 
@@ -25,7 +96,7 @@ test('compound results describe only the last segment and leave earlier effects 
         if (late) { f.write(events); events.length = 0; }
         const rows = effectRows(f.write([...events, result('compound', content, error)])).map(fields);
         assert.equal(rows.length, tail === 'npm test' ? 1 : 2);
-        assert.equal(rows[0].target, 'git push origin main');
+        assert.equal(rows[0].target, 'git push');
         assert.equal(rows[0].outcome, 'unknown');
         assert.match(rows[0].check, /git ls-remote/);
         assert.equal(rows[0].id, 'none');
@@ -58,10 +129,10 @@ test('PowerShell assignments and backtick continuations expose the REST write co
   }
 });
 
-test('shell URL targets retain the command host and path after long options', (t) => {
+test('shell URL targets retain only the action and host after long options', (t) => {
   const command = `curl -H "X-Trace: ${'x'.repeat(100)}" -X POST https://api.example.com/v1/items?token=private#fragment`;
   const [r] = effectRows(fixture(t).write([call('url', 'Bash', { command })])).map(fields);
-  assert.equal(r.target, 'curl POST https://api.example.com/v1/items');
+  assert.equal(r.target, 'curl POST https://api.example.com');
 });
 
 test('issue comment result URLs retain their fragment while stripping only the query', (t) => {
@@ -132,7 +203,7 @@ test('regression: shell effects require command position and extract command sub
     'echo `git push`', 'echo "$(git push)"', "echo '$(git push)'", 'A=1 npx@latest vercel@latest deploy',
     'curl-helper -X POST', 'rsync-helper', 'Invoke-RestMethod-helper -Method Post'];
   const rows = effectRows(fixture(t).write(commands.map((command, i) => call(`cmd-${i}`, 'Bash', { command })))).map(fields);
-  assert.deepEqual(rows.map((r) => r.target), ['git push 2>&1', 'git push origin main', 'git push', 'git push', 'A=1 npx@latest vercel@latest deploy']);
+  assert.deepEqual(rows.map((r) => r.target), ['git push', 'git push', 'git push', 'git push', 'vercel deploy']);
 });
 
 test('regression: tracker redacts auth while preserving plain upstream names and ordinary prose', () => {
@@ -165,12 +236,11 @@ test('regression: unpaired orphan results contribute neither text nor ids to the
   assert.equal(fields(effectRows(paired.write([result('prior', content)]))[0]).id, 'late_id');
 });
 
-test('regression: shell target truncation announces its omitted character count', (t) => {
+test('regression: long shell operands never enter the target', (t) => {
   for (const length of [150, 5000]) {
     const command = `git push origin ${'x'.repeat(length)}`;
     const [r] = effectRows(fixture(t).write([call('long', 'Bash', { command })])).map(fields);
-    assert.equal(r.target, storedData(command, 80));
-    assert.match(r.target, /…\[\+\d+ chars\]$/);
+    assert.equal(r.target, 'git push');
   }
 });
 
@@ -790,7 +860,7 @@ test('each shell segment has its own dry-run classification and operation index'
   for (const separator of ['&&', '||', ';', '|', '\n']) {
     const f = fixture(t);
     const rows = recorded(f.write([call('push', 'Bash', { command: `git push --dry-run ${separator} git push origin main` })]));
-    assert.deepEqual(rows.map(({ op, target }) => [op, target]), [['push#1', 'git push origin main']]);
+    assert.deepEqual(rows.map(({ op, target }) => [op, target]), [['push#1', 'git push']]);
     assert.equal(recorded(f.write([result('push')]))[0].outcome, 'confirmed');
   }
   const rows = recorded(fixture(t).write([call('multi', 'PowerShell', { command: 'git push; gh pr ready' }), result('multi')]));
@@ -816,7 +886,7 @@ test('redaction: targets and IDs remove credentials before storage and shell tru
     assert.equal(rows[0].target, expected);
     assert.equal(rows[0].id, expected);
     assert.equal(rows[1].id, expected);
-    assert.equal(rows[1].target, `curl POST https://example.test/${'x'.repeat(100)}`);
+    assert.equal(rows[1].target, 'curl POST https://example.test');
     assert.doesNotMatch(rows[1].target, /sensitive-token|abcdefgh|12345678901234567890/);
   }
   const rows = recorded(fixture(t).write([call('url', undefined, { url: 'https://example.test/path?token=private#fragment' }),
@@ -830,7 +900,7 @@ test('widened curl vercel package-publish and gh mutations are effects', (t) => 
     'vercel', 'vercel deploy', 'pnpm publish', 'yarn publish', 'gh workflow run', 'gh secret set', 'gh variable set', 'gh issue delete', 'gh pr ready'];
   for (const name of ['Bash', 'PowerShell']) {
     const rows = recorded(fixture(t).write(commands.map((command, i) => call(`op-${i}`, name, { command }))));
-    assert.deepEqual(rows.map(({ target }) => target), commands);
+    assert.deepEqual(rows.map(({ target }) => target), ['curl', 'curl', 'curl', 'curl', ...commands.slice(4)]);
   }
   const excluded = 'ls list inspect logs env whoami login link pull dev'.split(' ').map((verb) => `vercel ${verb}`);
   assert.deepEqual(effectRows(fixture(t).write([...excluded, ...commands.map((c) => `${c} --dry-run`)]
@@ -918,7 +988,7 @@ test('redact: basic auth headers and JSON secrets are removed from every target 
       call('url', undefined, { url: `https://api.example/${secret}` })]));
     for (const [i, { target }] of rows.entries()) {
       if (i === 0) {
-        assert.equal(target, 'curl POST https://api.example/x');
+        assert.equal(target, 'curl POST https://api.example');
         assert.doesNotMatch(target, /S3cretPw|abc|YWRtaW46c2VjcmV0/);
         continue;
       }
@@ -1008,7 +1078,7 @@ test('headings: core preserves the arrow and plugin parity covers keys anchors a
 
 test('shell scanner: delimiters split only outside single and double quotes', (t) => {
   const command = "curl https://api/x -H 'X-Trace: a|b' -X POST";
-  assert.deepEqual(recorded(fixture(t).write([call('one', 'Bash', { command })])).map(({ op, target }) => [op, target]), [['one', command]]);
+  assert.deepEqual(recorded(fixture(t).write([call('one', 'Bash', { command })])).map(({ op, target }) => [op, target]), [['one', 'curl POST https://api']]);
   for (const quote of ["'", '"']) {
     for (const delimiter of ['&&', '||', ';', '|', '\n']) {
       const command = `curl -H ${quote}X-Trace: a${delimiter}b${quote} -X POST`;
@@ -1044,7 +1114,7 @@ test('URL userinfo is redacted before shell target storage', (t) => {
     command: 'git push https://user:SuperSecretPw@github.com/x/y.git main',
   })]));
   assert.doesNotMatch(row, /SuperSecretPw/);
-  assert.equal(fields(row).target, 'git push https://[REDACTED]@github.com/x/y.git');
+  assert.equal(fields(row).target, 'git push https://github.com');
 });
 
 test('URL result handles discard queries and redact credentials in retained fragments', (t) => {
@@ -1103,9 +1173,9 @@ test('basic-auth redaction requires user colon password and preserves git upstre
     call('curl', 'Bash', { command: 'curl -u admin:pw -X POST https://api.example/x' }),
     call('curl-long', 'Bash', { command: 'curl --user admin:pw -X POST https://api.example/x' }),
   ]));
-  assert.equal(rows[0].target, 'git push -u origin main');
+  assert.equal(rows[0].target, 'git push');
   for (const [i, { target }] of rows.slice(1).entries()) {
-    assert.equal(target, 'curl POST https://api.example/x');
+    assert.equal(target, 'curl POST https://api.example');
   }
 });
 
@@ -1187,11 +1257,11 @@ test('heredocs and quoted shell prose are opaque while real push records', (t) =
     "cat <<'WORD'\ngh pr create\nWORD", 'cat <<-WORD\n\tgit push\n\tWORD',
     'echo "gh pr create later"', "echo 'git push later'", 'git push origin main'];
   assert.deepEqual(recorded(fixture(t).write(commands.map((command, i) => call(`c${i}`, 'Bash', { command }))))
-    .map(({ target }) => target), ['git push origin main']);
+    .map(({ target }) => target), ['git push']);
   const rows = recorded(fixture(t).write([call('after', 'Bash', {
     command: 'cat <<EOF\ngit push fake\nEOF\ngit push real',
   })]));
-  assert.deepEqual(rows.map(({ target }) => target), ['git push real']);
+  assert.deepEqual(rows.map(({ target }) => target), ['git push']);
 });
 
 test('oversized resume rows truncate and budget misses do not hide smaller rows', (t) => {
@@ -1250,7 +1320,7 @@ test('shell mutation vocabulary and documented extension limit', async (t) => {
   for (const [form, commands] of Object.entries(forms)) {
     await t.test(`${form}`, (t) => {
       assert.deepEqual(recorded(fixture(t).write(commands.map((command, i) => call(`c${i}`, 'Bash', { command }))))
-        .map(({ target }) => target), commands);
+        .map(({ op }) => op), commands.map((_, i) => `c${i}`));
     });
   }
   const doc = readFileSync(new URL('../../docs/two-verb-lifecycle.md', import.meta.url), 'utf8');
@@ -1293,7 +1363,7 @@ test('writer shares tracker redaction for headers flags and token families', (t)
 test('PowerShell backslashes preserve git directory arguments', (t) => {
   const command = String.raw`git -C C:\dev\repo push origin main`;
   assert.deepEqual(recorded(fixture(t).write([call('push', 'PowerShell', { command })]))
-    .map(({ target }) => target), [command]);
+    .map(({ target }) => target), ['git push']);
 });
 
 test('full JSON result prefers top-level id beyond the fallback bound', (t) => {
@@ -1306,7 +1376,7 @@ test('full JSON result prefers top-level id beyond the fallback bound', (t) => {
 test('Bash here-string does not swallow the following push', (t) => {
   const command = 'jq . <<<"$payload"\ngit push origin main';
   assert.deepEqual(recorded(fixture(t).write([call('push', 'Bash', { command })]))
-    .map(({ target }) => target), ['git push origin main']);
+    .map(({ target }) => target), ['git push']);
 });
 
 test('deploy runners versions and environment prefixes record effects', (t) => {
@@ -1401,7 +1471,7 @@ test('deployment allowlist excludes shell reads', (t) => {
   const writes = ['vercel', 'vercel deploy', 'vercel --prod', 'vercel promote', 'vercel rollback',
     'A=1 pnpm vercel@latest --prod', 'vercel --yes --prod'];
   assert.deepEqual(recorded(fixture(t).write([...reads, ...writes].map((command, i) => call(`c${i}`, 'Bash', { command }))))
-    .map(({ target }) => target), writes);
+    .map(({ op }) => op), writes.map((_, i) => `c${reads.length + i}`));
 });
 
 test('unresolved outcomes precede confirmed explicit kinds', () => {
@@ -1444,7 +1514,7 @@ test('result evidence bounds JSON and nested traversal without worker failure', 
   assert.equal(thrown.id, undefined);
 });
 
-test('writer owns segment flag redaction and tracker has no tokenizer', (t) => {
+test('writer constructs safe targets and tracker has no tokenizer', (t) => {
   const tracker = source('../../hooks/tool-tracker.js');
   const body = tracker.slice(tracker.indexOf('function redact('), tracker.indexOf('function compact('));
   assert.doesNotMatch(body, /let command|let argument|let quote|token\s*=>|\(token\)\s*=>/);
@@ -1452,8 +1522,8 @@ test('writer owns segment flag redaction and tracker has no tokenizer', (t) => {
   const rows = recorded(fixture(t).write([call('headers', 'Bash', { command })]));
   assert.equal(rows.length, 1);
   assert.doesNotMatch(rows[0].target, /private|ordinary/);
-  assert.match(rows[0].target, /\[REDACTED\]/);
-  assert.match(source('../stop-capsule-writer.mjs'), /redactShellSegment\(segment\)/);
+  assert.equal(rows[0].target, 'curl https://x');
+  assert.doesNotMatch(source('../stop-capsule-writer.mjs'), /redactShellSegment/);
 });
 
 test('outside side effects is a concise complete bullet contract', () => {
@@ -1492,8 +1562,9 @@ async function patterns(t, cases) {
     assert.equal(rows.length, commands.length);
     for (const r of rows) {
       assert.ok(!r.target.includes(secret), r.target);
-      if (command.includes('https://api/login')) assert.equal(r.target, 'curl POST https://api/login');
-      else assert.match(r.target, /\[REDACTED\]/);
+      if (command.includes('https://api/login')) assert.equal(r.target, 'curl POST https://api');
+      else if (command.startsWith('gh ')) assert.match(r.target, /^gh (secret|variable) set$/);
+      else assert.equal(r.target, 'curl POST https://x');
       const { redact } = require('../redact.cjs');
       assert.ok(!redact(command).includes(secret));
       assert.match(redact(command), /\[REDACTED\]/);
@@ -1511,7 +1582,7 @@ test('unmatched calls stay requested without synthesizing empty result evidence'
 test('core-only writer redacts without hooks', (t) => {
   const f = standalone(t);
   const [r] = recorded(f.write([call('core', 'Bash', { command: 'git push -u origin main' })]));
-  assert.equal(r.target, 'git push -u origin main');
+  assert.equal(r.target, 'git push');
   assert.equal(f.errorLog(), '');
   const { redact } = require('../redact.cjs');
   assert.equal(redact('password=hunter2'), '[REDACTED]');
@@ -1526,7 +1597,7 @@ test('gh secret and variable values never reach stored targets', async (t) => {
 test('header credentials redact while git upstream stays intact', async (t) => {
   await patterns(t, headers);
   const [r] = recorded(fixture(t).write([call('push', 'Bash', { command: 'git push -u origin main' })]));
-  assert.equal(r.target, 'git push -u origin main');
+  assert.equal(r.target, 'git push');
 });
 test('Pending-Gates keeps nested sub-block rows in precompact', (t) => {
   for (const anchored of [true, false]) {
@@ -1541,7 +1612,7 @@ test('quoted methods count and quoted dry-run prose does not suppress effects', 
   const commands = ['curl -X "POST" https://x', 'Invoke-RestMethod -Uri https://x -Method "Post"',
     'gh pr comment 12 --body "ran with --dry-run first"', 'rsync src/ "folder --dry-run first/"'];
   const rows = recorded(fixture(t).write(commands.map((command, i) => call(`quoted-${i}`, i === 1 ? 'PowerShell' : 'Bash', { command }))));
-  assert.deepEqual(rows.map(({ target }) => target), commands);
+  assert.deepEqual(rows.map(({ target }) => target), ['curl POST https://x', 'Invoke-RestMethod POST https://x', 'gh pr comment', 'rsync']);
 });
 test('heredoc opener comment still drains the opaque body', (t) => {
   const f = fixture(t);
@@ -1551,7 +1622,7 @@ test('heredoc opener comment still drains the opaque body', (t) => {
   const rows = recorded(f.write([call('real', 'Bash', {
     command: 'cat <<EOF # comment\ngit push fake\nEOF\ngit push real',
   })]));
-  assert.deepEqual(rows.map(({ target }) => target), ['git push real']);
+  assert.deepEqual(rows.map(({ target }) => target), ['git push']);
 });
 test('empty errors allow confirmation and populated errors prevent it', (t) => {
   const payloads = [null, '', {}, [], 'denied', { message: 'denied' }, ['denied']]
@@ -1674,7 +1745,8 @@ test('credential names require whole tokens and preserve unrelated key and token
 const require = createRequire(import.meta.url);
 test('punctuation enclosed credentials are redacted throughout the shared corpus', () => {
   const { redact } = require('../redact.cjs');
-  for (const { input, command, secret } of Object.values(require('./helpers/redaction-cases.cjs')).flat()) {
+  for (const { input, command, secret, unchanged } of Object.values(require('./helpers/redaction-cases.cjs')).flat()) {
+    if (unchanged) { assert.equal(redact(input), input); continue; }
     for (const value of [input ?? command, command]) {
       assert.ok(!redact(value).includes(secret), value);
       assert.match(redact(value), /\[REDACTED\]/);

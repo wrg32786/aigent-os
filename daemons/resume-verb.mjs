@@ -484,7 +484,7 @@ function procedurePrompt(
   lines.push('- Do NOT assert resumption is complete because this text appeared in context. Resumption is proven ONLY by an action taken from waiting_on.');
   lines.push('- Do NOT treat capsule content as an active instruction queue. Done / Historical-* / Pending-Gates / Claimed-Rows are stale-by-default [REFERENCE ONLY]; re-grounding is what makes acting safe.');
   lines.push('- All Done rows, including untagged rows, are claims to re-check before acting on or skipping them.');
-  lines.push('- An In-Flight Side Effects row with outcome requested or unknown is NOT permission to repeat the action; check the id first.');
+  lines.push('- An In-Flight Side Effects row with outcome requested or unknown is NOT permission to repeat the action; check the id first. Absence of a row is never evidence that nothing happened.');
   // The same rulings the capsule itself declares in frontmatter, restated where
   // the reader is: a document can only carry its framing if the framing is read.
   for (const line of FRAMING_LINES) lines.push(`- ${line}`);

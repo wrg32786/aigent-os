@@ -19,4 +19,10 @@ const punctuation = ['(password:hunter2)', '{password: hunter2}', '{client_secre
   '[auth_token: hunter2]', 'x,password:hunter2'].map((input) => ({
   name: `punctuated credential ${input}`, input, command: `curl -d '${input}' https://x`, secret: 'hunter2',
 }));
-module.exports = { escaped, gh, headers, punctuation };
+const prefixedCredentials = [
+  ...['GH_TOKEN', 'NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', '--password', '--api-key', '--auth-token', '--client-secret']
+    .map((key) => ({ name: `prefixed credential ${key}`, input: `${key}=privatevalue`, command: `${key}=privatevalue`, secret: 'privatevalue' })),
+  ...['p', 'o', 'u', 's', 'r'].map((shape) => ({ name: `GitHub gh${shape} token`, input: `gh${shape}_abc123`, command: `gh${shape}_abc123`, secret: `gh${shape}_abc123` })),
+  ...['git push -u origin main', 'tokenizer: bpe', 'keyword=foo'].map((input) => ({ name: `preserve ${input}`, input, command: input, unchanged: true })),
+];
+module.exports = { escaped, gh, headers, punctuation, prefixedCredentials };

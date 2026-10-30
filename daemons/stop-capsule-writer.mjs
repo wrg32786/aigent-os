@@ -61,7 +61,7 @@ function shellWords(text) {
     ionice: /^(?:-[cnptu]|--class|--classdata|--pid|--pgid|--uid)$/,
   };
   while (words.length) {
-    if (/^(?:\(|then|do|\{|if|while|until|!)$/.test(words[0])) { words.shift(); continue; }
+    if (/^(?:\(|then|else|do|\{|if|while|until|!)$/.test(words[0])) { words.shift(); continue; }
     if (/^[A-Za-z_]\w*=/.test(words[0])) { words.shift(); continue; }
     if (!wrappers.test(words[0])) break;
     const wrapper = words.shift().toLowerCase();
@@ -78,7 +78,7 @@ function shellWords(text) {
 function shellCommand(text) {
   const words = shellWords(text).map((word) => word.replace(/["']/g, '').replace(/\s+/g, ' '));
   const commands = /^(?:git|gh|curl|wget|docker|railway|vercel|npm|pnpm|yarn|aws|kubectl|terraform|scp|rsync|wrangler|fly|netlify|firebase|gcloud|Invoke-RestMethod|Invoke-WebRequest)$/i;
-  const binary = (word = '') => word.replace(/@[^\s]+$/, '');
+  const binary = (word = '') => word.split(/[\\/]/).pop().replace(/@[^\s]+$/, '').replace(/\.exe$/i, '');
   if (/^(?:npx|pnpm|yarn|bunx)$/i.test(binary(words[0]))) {
     let next = 1;
     if (/^(?:pnpm|yarn)$/i.test(binary(words[0])) && words[next] === 'dlx') next++;
@@ -159,7 +159,7 @@ function shellSegments(command, toolName) {
     segments.push({ text: command.slice(bodyStart, start), unquoted: '', opaque: true });
   };
   for (let i = 0; i < command.length; i++) {
-    // Keep mask offsets aligned with the original segment for flag redaction.
+    // Keep the unquoted mask aligned with the original segment.
     unquoted = unquoted.padEnd(i - start, ' ');
     const ch = command[i];
     if (toolName === 'Bash' && ch === '\\' && quote !== "'") {
@@ -205,7 +205,7 @@ function shellSegments(command, toolName) {
         continue;
       }
     }
-    if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && command[i + 1] === '&')) {
+    if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && command[i - 1] !== '>')) {
       push(i);
       if ((ch === '|' || ch === '&') && command[i + 1] === ch) i++;
       start = i + 1;
@@ -222,21 +222,6 @@ function shellSegments(command, toolName) {
   return segments.filter((segment) => segment.text.trim());
 }
 
-function redactShellSegment(segment) {
-  let text = segment.text;
-  // The segmenter's mask excludes flags in quoted prose and substitutions.
-  // Work backwards so replacements do not move subsequent argument offsets.
-  const flags = [...segment.unquoted.matchAll(/(?:^|\s)(-H|--header|--token|--password|--api-key)(?=\s|=|$)/g)];
-  for (const match of flags.reverse()) {
-    const start = match.index + match[0].length;
-    const argument = /^(\s+|=)("(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)/.exec(text.slice(start));
-    if (!argument) continue;
-    if (/^(?:-H|--header)$/.test(match[1])
-      && !/^["']?(?:X-Api-Key|apikey|Authorization|Cookie|Set-Cookie|X-Auth-Token|Private-Token)\s*:/i.test(argument[2])) continue;
-    text = text.slice(0, start) + argument[1] + '[REDACTED]' + text.slice(start + argument[0].length);
-  }
-  return text.trim();
-}
 const SHELL_EFFECT = new RegExp(String.raw`^(?:` + [
   String.raw`git\s+push\b`,
   String.raw`gh\s+(?:pr|issue|release)\s+(?:create|merge|comment|close|reopen|edit)\b`,
@@ -244,8 +229,8 @@ const SHELL_EFFECT = new RegExp(String.raw`^(?:` + [
   String.raw`gh\s+repo\s+(?:create|delete|edit|fork)\b`,
   String.raw`gh\s+pr\s+review\b`,
   String.raw`gh\s+(?:workflow\s+run|secret\s+set|variable\s+set|issue\s+delete|pr\s+ready)\b`,
-  String.raw`gh\s+api\b[^\n]*\s(?:(?:-X|--method)(?:\s+|=)["']?(?:POST|PUT|PATCH|DELETE)\b|(?:-f|-F|--field|--raw-field|--input)(?:\s|=|$))`,
-  String.raw`curl\b[^\n]*\s(?:-d\S|(?:-d|--data|--data-raw|--data-binary|--form|-F|--upload-file|--json|-T|--data-urlencode)(?:\s|=|$)|(?:--request(?:\s+|=)|-X(?:\s*|=))["']?(?:POST|PUT|PATCH|DELETE)\b)`,
+  String.raw`gh\s+api\b[^\n]*\s(?:(?:-X\s*=?|--method(?:\s+|=))["']?(?:POST|PUT|PATCH|DELETE)\b|(?:-f|-F|--field|--raw-field|--input)(?:\s|=|$))`,
+  String.raw`curl\b[^\n]*\s(?:-[fsS]*d\S|(?:-[fsS]*d|--data|--data-raw|--data-binary|--form|-F|--upload-file|--json|-T|--data-urlencode)(?:\s|=|$)|(?:--request(?:\s+|=)|-[fsS]*X(?:\s*|=))["']?(?:POST|PUT|PATCH|DELETE)\b)`,
   String.raw`docker\s+push\b|railway\s+up\b|(?:npm|pnpm|yarn)\s+(?:un)?publish\b`,
   String.raw`vercel(?:$|\s+(?:--yes|-y|--prod|deploy|promote|rollback|rm|remove|env\s+add|alias\s+set)(?:\s|$))`,
   String.raw`wget\b[^\n]*\s(?:--(?:post-data|post-file|body-data|body-file)(?:=|\s)|--method(?:=|\s+)(?:POST|PUT|PATCH|DELETE)\b)`,
@@ -288,9 +273,10 @@ function resultEvidence(text) {
     return undefined;
   };
   try {
-    const error = object(parsed) ? parsed.error : undefined;
-    const hasError = error === true || (typeof error === 'string' && error.length > 0)
-      || (object(error) && Object.keys(error).length > 0);
+    const nonempty = (value) => value === true || (typeof value === 'string' && value.length > 0)
+      || (object(value) && Object.keys(value).length > 0);
+    const hasError = object(parsed) && (nonempty(parsed.error) || nonempty(parsed.errors) || parsed.isError === true
+      || /^(?:failed|failure|error|declined|rejected|canceled)$/i.test(parsed.status));
     return {
       id: named(parsed) ?? (object(parsed) && Object.hasOwn(parsed, 'id') ? handle(parsed.id) : undefined) ?? nested(parsed),
       unclean: object(parsed) && (hasError || parsed.ok === false || parsed.success === false),
@@ -307,25 +293,30 @@ function inputHandle(input) {
 function storedTarget(target, shell) {
   let text = typeof target === 'object' ? JSON.stringify(target) : String(target);
   if (shell) {
-    const url = ID_URL.exec(text)?.[0];
-    if (url) {
-      const command = shellCommand(text);
-      const verb = SHELL_EFFECT.exec(command)?.[0];
-      const method = /(?:--request|--method|-Method|-X)\s*=?\s*(POST|PUT|PATCH|DELETE)\b/i.exec(command)?.[1];
-      const label = /^(?:curl|wget|Invoke-)/i.test(command)
-        ? [command.split(' ')[0], method?.toUpperCase()].filter(Boolean).join(' ')
-        : /^gh\s+api\b/i.test(command) ? ['gh api', method?.toUpperCase()].filter(Boolean).join(' ') : verb;
-      text = `${label} ${url.split(/[?#]/, 1)[0]}`;
-    }
+    const command = shellCommand(text);
+    const effect = (SHELL_EFFECT.exec(command)?.[0] ?? '').trim();
+    const words = command.split(' ');
+    const method = /(?:--request|--method|-Method|-[fsS]*X)\s*=?\s*(POST|PUT|PATCH|DELETE)\b/i.exec(command)?.[1];
+    // AWS's recognized put/create/delete/send prefixes can name hyphenated actions.
+    const action = /^aws\b/i.test(effect) ? effect + /^[\w-]*/.exec(command.slice(effect.length))[0] : effect;
+    // Select only the recognized action, never its flags, operands or payload.
+    const label = /^(?:curl|wget|Invoke-)/i.test(command)
+      ? [words[0], method?.toUpperCase()].filter(Boolean).join(' ')
+      : /^gh\s+api\b/i.test(command) ? 'gh api'
+        : action.split(/\s+/).filter((word) => !word.startsWith('-')).join(' ');
+    const url = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/i.exec(text)?.[0];
+    let origin = '';
+    try { const parsed = new URL(url); origin = ` ${parsed.protocol}//${parsed.host}`; } catch { /* no valid origin */ }
+    return storedData(label + origin, 240);
   }
-  if (shell) text = text.replace(/(https?:\/\/[^\s"'?#]+)[?#]\S*/g, '$1');
   if (/^https?:\/\//i.test(text)) text = text.split(/[?#]/, 1)[0];
   text = redact(text);
   if (typeof target === 'object') text = text.slice(0, 240);
-  return storedData(text, shell && ID_URL.test(text) ? 240 : shell ? 80 : 120);
+  return storedData(text, 120);
 }
 function storedResultId(value) {
-  return storedData(redact(String(value).replace(/^(https?:\/\/[^?#]*)\?[^#]*/i, '$1')), 120);
+  return storedData(redact(String(value).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, '$1')
+    .replace(/^(https?:\/\/[^?#]*)\?[^#]*/i, '$1')), 120);
 }
 function resultText(content) {
   return (typeof content === 'string' ? content : Array.isArray(content)
@@ -711,7 +702,7 @@ try {
         if (shell && (segment.opaque || /--dry-run/i.test(segment.unquoted)
           || /^rsync\b[^\n]*\s-[a-zA-Z]*n[a-zA-Z]*(?:\s|$)/i.test(shellCommand(segment.unquoted))
           || !SHELL_EFFECT.test(shellCommand(command)))) continue;
-        const target = shell ? redactShellSegment(segment) : ['to', 'recipient', 'recipients', 'channel', 'channel_id', 'url', 'repo', 'subject', 'title', 'command']
+        const target = shell ? command : ['to', 'recipient', 'recipients', 'channel', 'channel_id', 'url', 'repo', 'subject', 'title', 'command']
           .map((key) => input[key]).find((value) => value !== undefined && value !== null) ?? b.name;
         const op = segments.length > 1 ? `${toolOp}#${index}` : toolOp;
         if (!effectsByTool.has(toolOp)) effectsByTool.set(toolOp, new Set());
@@ -918,7 +909,8 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
     const candidates = effectsByTool.get(result.tool_use_id) ?? priorByTool.get(result.tool_use_id);
     for (const op of candidates || []) {
       if (effectCalls.get(op)?.earlierSegment) continue;
-      effectResults.set(op, { ...result, failed: result.is_error });
+      const interrupted = /timeout|timed out|interrupted|aborted|cancelled|connection|ECONNRESET/i.test(result.text);
+      effectResults.set(op, { ...result, failed: result.is_error && !interrupted });
     }
   }
 
@@ -1034,7 +1026,7 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
       : id !== 'none' ? `read back by id with a read tool on ${kind.split('__')[1]}; never re-run ${kind}`
         : 'no id: ask the operator before any retry';
     return formatSideEffectRow({ ...call, id, check: storedData(check, 500),
-      outcome: call.earlierSegment ? 'unknown' : !result ? 'requested' : result.failed ? 'failed' : structuredId && !evidence.unclean ? 'confirmed' : 'unknown' });
+      outcome: call.earlierSegment ? 'unknown' : !result ? 'requested' : result.failed ? 'failed' : structuredId && !result.is_error && !evidence.unclean ? 'confirmed' : 'unknown' });
   });
   for (const definition of CAPSULE_SECTIONS) {
     if (definition.key !== 'effects') {

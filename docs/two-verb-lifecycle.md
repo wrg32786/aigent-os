@@ -55,12 +55,13 @@ Known and accepted limitations: curated capsules are oldest-first, so the first-
 
 ## Outside side effects
 
-- `In-Flight Side Effects` records outside tool calls by operation ID, with redacted targets, timestamps, handles, and status checks; assistant prose does not establish outcomes.
-- Outcomes: requested means no result observed; unknown means evidence is inconclusive; confirmed means transport acceptance with a clean result ID, not independent observation; failed means an error result.
-- Resume fence: check requested or unknown calls before retry; without an ID, ask the operator and do not resend. Read Historical-Errors before retrying failed calls as new requests. Never repeat confirmed calls.
+- `In-Flight Side Effects` records outside tool calls by operation ID, with redacted targets, timestamps, handles, and status checks; rows are best-effort evidence, and assistant prose does not establish outcomes.
+- Outcomes: requested means no result observed; unknown means evidence is inconclusive, including interrupted or unclean results; confirmed means transport acceptance with a clean result ID, not independent observation; failed means an error result without interruption evidence.
+- Resume fence: check requested or unknown calls before retry; without an ID, ask the operator and do not resend. Read Historical-Errors before retrying failed calls as new requests. Never repeat confirmed calls. Absence of a row is never evidence that nothing happened.
+- Scope: a row exists only in the capsule that session wrote; a resume that selects a different capsule does not show it.
 - Resume and PreCompact prioritize requested or unknown rows (newest first), then confirmed or failed rows (newest first); within each tier, explicit-kind rows precede default-kind rows.
 - Known limit: an unlisted verb paired with a read noun is skipped; extend `WRITE_VERBS` when a new mutating tool appears.
-- Known limit: an unlisted command is not recorded; extend `SHELL_EFFECT` when a new mutating command appears.
+- Known limit: a command spelled in a way the parser does not recognize leaves no row; an unlisted command is not recorded; extend `SHELL_EFFECT` when a new mutating command appears.
 - Classification and storage rules live beside `WRITE_VERBS` and `CAPSULE_SECTIONS` in `daemons/lifecycle-common.mjs`, `SHELL_EFFECT` in `daemons/stop-capsule-writer.mjs`, and `SECRET_PATTERNS` in `daemons/redact.cjs`; render budgets live in the resume and precompact code.
 
 ## The content gate
