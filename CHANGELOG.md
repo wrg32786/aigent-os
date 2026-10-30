@@ -9,6 +9,7 @@ For changes to the kernel itself (the 16 numbered system documents and extended 
 ## [Unreleased]
 
 ### Added
+- **Filesystem Standard doc**: Defines storage tiers, per-run scratch cleanup, retention, enforcement requirements, and existing versus proposed root configuration.
 - **fleet-delivery mod 0.4.0: a `room_send` also announces the Room file to the recipient session as a pointer through the engine's cross-session channel; `room_drain` does the reading and the Room file stays the record.** A seat is announced to only while its own mod publishes a fresh, mod-owned, unheld marker in the shared Room; the marker is retired under a hold, when the mod loses the seat and at session end, and a pointer-shaped peer prompt is dropped at prompt time if the seat is held. Ledger, folders, read receipts and `/delivery-reconcile` unchanged. Design, fences, measurements and rollout: `docs/native-delivery.md`.
 
 ### Fixed
