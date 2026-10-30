@@ -2351,3 +2351,17 @@ test('session.end retires the marker (a /clear too); the next tick re-publishes 
   expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toMatchObject({ owner: 'mod', sessionId: 'alpha-sid-2' })
   expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('after the clear'))).toHaveLength(1)
 })
+
+test('an unresolved claim holds ordinary mail but not the supervisor\'s lifecycle legs; the unresolved item itself is never resent', CONFIGURED, async ($, on) => {
+  const leg = envelope('alpha-supervisor', '[refresh-cycle] Run the fleet capsule lifecycle verb now.\nROOM-LIFECYCLE capsule-request')
+  const w = world(on, $, { files: { ...READY, [LOG]: `${SEED}${UNRESOLVED_A}`, [`${INBOX}/b.json`]: envelope('beta', 'ordinary mail'), [`${INBOX}/leg.json`]: leg } })
+  await w.turn()
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(1)
+  expect(submits(w.log)[0]).toContain('capsule lifecycle verb')
+  expect(w.lastStatus()).toContain('holding until settled')
+  // a.json (the unresolved claim) and b.json (ordinary) are untouched; the leg went to processed/.
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.files.has(`${INBOX}/b.json`)).toBe(true)
+  expect(w.files.has(`${PROCESSED}/leg.json`)).toBe(true)
+})
