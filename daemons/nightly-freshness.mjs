@@ -97,12 +97,23 @@ export function expectedNightlyDate({
   return local.hour >= cutoff ? local.date : addDays(local.date, -1);
 }
 
+// Both header shapes a seat writes into NIGHTLY_LOG.md (issue #122): the
+// product's own `## Nightly Pass -- YYYY-MM-DD (run id)` and the
+// operator-journal shape `## Pass 89 — 2026-10-28T14:26–14:4xZ` (em dash, en
+// dash or `--`; a time or a time range after the date). The date is the key
+// either way; what follows it is not part of the key. One grammar, used by the
+// freshness reader and the completion assessor, so the two can never disagree
+// about which header is newest. Fresh RegExp per use: the `g` flag carries
+// lastIndex state.
+export const NIGHTLY_HEADER_SOURCE = String.raw`^##[ \t]+(?:Nightly Pass|Pass[ \t]+\d+)[ \t]*(?:--|\u2014|\u2013)[ \t]*(\d{4}-\d{2}-\d{2})(?!\d)`;
+export const nightlyHeaderPattern = () => new RegExp(NIGHTLY_HEADER_SOURCE, 'gmi');
+
 export function newestDatedHeader(text, kind) {
   if (!['nightly', 'dream'].includes(kind)) {
     throw new Error(`unsupported freshness kind: ${kind}`);
   }
   const pattern = kind === 'nightly'
-    ? /^##[ \t]+Nightly Pass[ \t]*--[ \t]*(\d{4}-\d{2}-\d{2})\b/gmi
+    ? nightlyHeaderPattern()
     : /^##[ \t]+(\d{4}-\d{2}-\d{2})\b/gm;
   const dates = [];
   let match;

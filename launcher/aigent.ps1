@@ -61,6 +61,14 @@ foreach ($arg in $args) {
 function Invoke-AigentClaude {
   param([string[]]$ClaudeArgs)
 
+  # Issue #98: a parent that is itself a Claude Code session exports
+  # CLAUDE_CODE_CHILD_SESSION=1, which turns the child's transcript OFF. The
+  # managed runner scrubs its own child; the two direct branches below exec
+  # claude without it, so the same two lines live here. This process is the
+  # launcher's own and ends with the child; the operator's shell is untouched.
+  Remove-Item Env:CLAUDE_CODE_CHILD_SESSION -ErrorAction SilentlyContinue
+  if (-not $env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE) { $env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = '1' }
+
   if ($script:LaunchUnmanaged) {
     & claude @ClaudeArgs
   } else {
