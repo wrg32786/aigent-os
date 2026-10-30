@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, PromptSubmitResult } from 'claude-code'
 
-import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, unwrapPeer, NATIVE_VERSION, versionAtLeast } from './register'
+import { MOVE, OWNER_PID, PID_DEAD, UNLINK, WRITE, safeName, renameArgv, ROOM_SEND_TOOL, pointerText, roomFileName, findPointer, FENCE_VERSION, versionAtLeast } from './register'
 
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
@@ -1845,7 +1845,7 @@ const POINTER = pointerText('beta', 'alpha', SENT_FILE)
 // The engine's own shape, measured on a live session 2026-10-29: the envelope, not the bare text.
 const wrap = (text: string) => `<cross-session-message from="uds:\\\\.\\pipe\\LOCAL\\cc-msg-x" from-name="beta" from-mode="prompting">\n${text}\n</cross-session-message>\n`
 const A_POINTER = pointerText('alpha', 'beta', 'a.json')
-const marker = (seat: string, at = '2026-10-07T18:25:00.000Z', version = NATIVE_VERSION, owner = 'mod') =>
+const marker = (seat: string, at = '2026-10-07T18:25:00.000Z', version = FENCE_VERSION, owner = 'mod') =>
   JSON.stringify({ seat, owner, version, at })
 const BETA_MARKER = `${ROOM}/state/native/beta.json`
 const ALPHA_MARKER = `${ROOM}/state/native/alpha.json`
@@ -1855,7 +1855,7 @@ const asPeerPrompt = (text: string) => ({ ...RUN, origin: { kind: 'peer' as cons
 test('the tick publishes this seat\'s native marker: mod-owned, this version, now', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY })
   await w.turn()
-  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toEqual({ seat: 'alpha', owner: 'mod', version: NATIVE_VERSION, at: '2026-10-07T18:30:00.000Z' })
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toEqual({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:30:00.000Z' })
 })
 
 test('room_send also queues a pointer to a seat with a fresh marker: the file name, never the body; the tool answer returns at once', CONFIGURED, async ($, on) => {
@@ -1911,7 +1911,7 @@ test('no marker, a stale marker, an older mod or a supervisor-owned recipient: n
   w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', '0.3.0'))
   await announce()
   expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker from mod 0.3.0); beta/${SENT_FILE} waits for its tick`)
-  w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', NATIVE_VERSION, 'supervisor'))
+  w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', FENCE_VERSION, 'supervisor'))
   await announce()
   expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick`)
   expect(sends).toEqual([])
@@ -1962,7 +1962,7 @@ test('a pointer for this seat enters as a prompt when delivery is open; the Room
   const w = world(on, $, { files: READY })
   const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
   expect('drop' in entered && entered.drop).toBeFalsy()
-  expect(unwrapPeer(wrap(A_POINTER))).toBe(A_POINTER)
+  expect(findPointer(wrap(A_POINTER))?.[3]).toBe('a.json')
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.ledger()).toEqual([])
   await w.turn()
@@ -1994,6 +1994,9 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   expect('drop' in sub && sub.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
   expect('drop' in plain && plain.drop).toBeFalsy()
+  // CRLF and a pointer line after other text: still a pointer, still dropped.
+  const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\nfrom beta:\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
+  expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
   // Owner flipped to the supervisor while the marker is still fresh: the hold still drops it.
   w.files.delete(OWNER)
   const unowned = await $.prompt.submit(asPeerPrompt(A_POINTER))
@@ -2033,6 +2036,16 @@ test('the marker is retired (owner: retired, one write, no process) under a refr
   expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(false)
 })
 
+test('a marker this module did not publish is never retired: a second session in the seat folder cannot take the live seat down', CONFIGURED, async ($, on) => {
+  const live = marker('alpha', '2026-10-07T18:29:30.000Z')
+  const w = world(on, $, { files: { ...READY, [ALPHA_MARKER]: live, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(live)
+  w.files.delete(OWNER)
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(live)
+})
+
 test('a retired marker is not announced to; a hold that begins while the tick is away is caught by the timer', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
   const sends: string[] = []
@@ -2042,7 +2055,7 @@ test('a retired marker is not announced to; a hold that begins while the tick is
     return { isDelivered: true as const }
   })
   await w.turn()
-  w.files.set(BETA_MARKER, JSON.stringify({ seat: 'beta', owner: 'retired', version: NATIVE_VERSION, at: '2026-10-07T18:29:00.000Z' }))
+  w.files.set(BETA_MARKER, JSON.stringify({ seat: 'beta', owner: 'retired', version: FENCE_VERSION, at: '2026-10-07T18:29:00.000Z' }))
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
   expect(sends).toEqual([])
@@ -2055,7 +2068,7 @@ test('a retired marker is not announced to; a hold that begins while the tick is
   expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
 })
 
-test('an inert mod (installRoot unset) neither fences peer prompts nor announces a room_send', async ($, on) => {
+test('an inert mod (installRoot unset, roomRoot set) neither fences peer prompts, announces a room_send, nor writes a marker', { options: { roomRoot: ROOM, seat: 'alpha' } }, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) }, noSpawn: true })
   on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
   const sends: string[] = []
@@ -2068,8 +2081,11 @@ test('an inert mod (installRoot unset) neither fences peer prompts nor announces
   expect('drop' in entered && entered.drop).toBeFalsy()
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
+  await w.clock.advance(5 * 60_000 + 31_000)
+  await w.clock.settle()
   expect(sends).toEqual([])
   expect(w.log.filter(entry => entry.includes('fleet-delivery:'))).toEqual([])
+  expect([...w.files.keys()].some(path => path.includes('/state/native/'))).toBe(false)
 })
 
 test('the marker is refreshed from the timer every 5 min, with no turn and no tick needed, and the version gate compares numerically', CONFIGURED, async ($, on) => {
@@ -2079,11 +2095,11 @@ test('the marker is refreshed from the timer every 5 min, with no turn and no ti
   await w.clock.advance(5 * 60_000 + 1_000)
   await w.clock.settle()
   expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').at).toBe('2026-10-07T18:35:00.000Z')
-  expect(versionAtLeast('0.10.0', NATIVE_VERSION)).toBe(true)
-  expect(versionAtLeast('1.0.0', NATIVE_VERSION)).toBe(true)
-  expect(versionAtLeast('0.3.9', NATIVE_VERSION)).toBe(false)
-  expect(versionAtLeast('0.4', NATIVE_VERSION)).toBe(false)
-  expect(versionAtLeast('x.y.z', NATIVE_VERSION)).toBe(false)
+  expect(versionAtLeast('0.10.0', FENCE_VERSION)).toBe(true)
+  expect(versionAtLeast('1.0.0', FENCE_VERSION)).toBe(true)
+  expect(versionAtLeast('0.3.9', FENCE_VERSION)).toBe(false)
+  expect(versionAtLeast('0.4', FENCE_VERSION)).toBe(false)
+  expect(versionAtLeast('x.y.z', FENCE_VERSION)).toBe(false)
 })
 
 test('a room_send the Room published to will or broadcast is never announced and logs nothing', CONFIGURED, async ($, on) => {
