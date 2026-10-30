@@ -1998,7 +1998,7 @@ test('a pointer is dropped at the moment it becomes a prompt while the refresh c
 test('under a hold the fence fails closed for pointer-shaped text: a pointer for another seat and a pointer to a seat the mod no longer owns are dropped; plain peer mail, peer text merely naming room_drain and a message quoting a pointer line enter', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
-  expect('drop' in other && other.drop).toContain('delivery held (cycle checkpoint-requested)')
+  expect('drop' in other && other.drop).toContain('the pointer to room:gamma:a.json is dropped')
   const words = await $.prompt.submit(asPeerPrompt('hey alpha, please call room_drain when you can'))
   expect('drop' in words && words.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
@@ -2013,6 +2013,9 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   // CRLF, envelope attributes on one line: still a pointer, still dropped.
   const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
   expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
+  // Unknown framing: a tag-shaped line and a notification lead-in are envelope, not substance; still a pointer.
+  const framed = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `Task notification:\n<task-notification kind="peer">\n${pointerText('alpha', 'beta', 'b.json')}\n</task-notification>` })
+  expect('drop' in framed && framed.drop).toContain('the pointer to room:alpha:b.json is dropped')
   // The engine's lead-in line, and a tag sharing a line with the pointer: still a pointer, still dropped.
   const leadIn = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `Another Claude session sent a message:\n${wrap(pointerText('alpha', 'beta', 'b.json'))}` })
   expect('drop' in leadIn && leadIn.drop).toContain('the pointer to room:alpha:b.json is dropped')
@@ -2190,6 +2193,8 @@ test('an admitted pointer keeps the tick off its file until the turn it starts c
   await w.clock.settle()
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.lastStatus()).toContain('turn in flight')
+  // A lifecycle leg filed meanwhile is not held back by the admitted pointer: the supervisor watches for its claim line.
+  w.files.set(`${INBOX}/lifecycle.json`, envelope('alpha-supervisor', '[refresh-cycle] Run the fleet capsule lifecycle verb now.\nROOM-LIFECYCLE capsule-request'))
   // The turn starts (a subagent's turn too, which must not matter) and ends.
   await $.turn.start({ text: 'sub', turnId: 'sub-1', agentId: 'agent-1' } as never)
   await $.turn.complete({ ...TURN, turnId: 'sub-1', agentId: 'agent-1' } as never)
@@ -2200,7 +2205,7 @@ test('an admitted pointer keeps the tick off its file until the turn it starts c
   await w.clock.settle()
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(0)
-  expect(w.lastStatus()).toContain('turn in flight')
+  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('ROOM-LIFECYCLE capsule-request'))).toHaveLength(1)
   await w.turn()
   expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(1)
 })
@@ -2235,6 +2240,8 @@ test('claim-before-pointer: a pointer whose file is no longer in the inbox (clai
   w.files.set(`${INBOX}/a.json`, ENVELOPE)
   const waiting = await $.prompt.submit(asPeerPrompt(A_POINTER))
   expect('drop' in waiting && waiting.drop).toBeFalsy()
+  const otherSeat = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
+  expect('drop' in otherSeat && otherSeat.drop).toBe('fleet-delivery: a pointer addressed to gamma reached alpha; dropped, nothing to drain here')
   const claimed = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'c.json')))
   expect('drop' in claimed && claimed.drop).toBe('fleet-delivery: c.json is no longer in the inbox (claimed by the tick or already read); the pointer to room:alpha:c.json is dropped')
   const gone = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'z.json')))
@@ -2247,4 +2254,17 @@ test('a pointer-shaped prompt is dropped when the seat name cannot be resolved: 
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
   const dropped = await $.prompt.submit(asPeerPrompt(A_POINTER))
   expect('drop' in dropped && dropped.drop).toBe('fleet-delivery: delivery held (seat unresolved); the pointer to room:alpha:a.json is dropped, the file waits for the tick')
+})
+
+test('session.end retires the marker (a /clear too); the next tick re-publishes it under the new session id', CONFIGURED, async ($, on) => {
+  const opts: World = { files: READY }
+  const w = world(on, $, opts)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toMatchObject({ owner: 'mod', sessionId: 'alpha-sid' })
+  await $.session.end({ reason: 'clear', sessionId: 'alpha-sid' } as never)
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
+  opts.sessionId = 'alpha-sid-2'
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')).toMatchObject({ owner: 'mod', sessionId: 'alpha-sid-2' })
 })
