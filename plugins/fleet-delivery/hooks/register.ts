@@ -1622,9 +1622,6 @@ let markerBusy = false
 let markerWarned = false
 // Room addresses that are not one session's seat: never announced (a documented limitation).
 const NOT_A_SEAT = /^(?:broadcast|will)$/
-// Any peer prompt that reads like a pointer, or tells the model to drain, is
-// held like one: the fence fails closed, like every other hold in this mod.
-const POINTER_WORDS = /Room mail for|room_drain/i
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
 // ':' and '.' turned to '-', then '__', then the messageId.
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
@@ -1769,23 +1766,23 @@ function announceNative($: $, e: Record<string, unknown>, answered: { text?: str
   })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
 }
 
-// At the moment a peer prompt that reads like a pointer becomes this seat's
-// prompt: dropped under any hold, whoever owns the seat (an owner flip or a
-// park under the supervisor leaves the marker fresh for up to 15 min), and
-// dropped when the holds cannot be read. A real pointer's file waits in the
+// At the moment a pointer-shaped peer prompt becomes this seat's prompt:
+// dropped under any hold, whoever owns the seat (an owner flip or a park
+// under the supervisor leaves the marker fresh for up to 15 min), and
+// dropped when the holds cannot be read. The pointer's file waits in the
 // inbox for the tick or the supervisor; nothing lands ahead of a resume.
+// Peer text that merely mentions Room mail has no file behind it and is
+// not this mod's to drop: it follows what the engine does today.
 async function pointerHold($: $, raw: string): Promise<string | null> {
-  if (!POINTER_WORDS.test(raw)) return null
+  const match = POINTER.exec(unwrapPeer(raw))
+  if (!match) return null
   const seat = await seatName($)
   if (!seat) return null
   const root = await installRoot($)
   const memory = root ? await memoryRoot($, root) : null
   const w: Where = { root, memory: memory ?? '', seat }
   const hold = memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved'
-  if (!hold) return null
-  const match = POINTER.exec(unwrapPeer(raw))
-  const what = match ? `the pointer to room:${match[1]}:${match[3]} is dropped, the file waits for the tick` : 'a peer prompt naming Room mail is dropped'
-  return `fleet-delivery: delivery held (${hold}); ${what}`
+  return hold ? `fleet-delivery: delivery held (${hold}); the pointer to room:${match[1]}:${match[3]} is dropped, the file waits for the tick` : null
 }
 
 export const register: Register = (on, options) => {
@@ -1831,7 +1828,7 @@ export const register: Register = (on, options) => {
     const kind = e.origin?.kind
     if ((kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined) return next(e)
     const held = await pointerHold($, e.text).catch(
-      error => `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); the peer prompt naming Room mail is dropped`,
+      error => `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); the pointer is dropped, the file waits for the tick`,
     )
     if (!held) return next(e)
     $.ui.log(held)

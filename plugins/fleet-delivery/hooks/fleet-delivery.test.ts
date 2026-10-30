@@ -1984,12 +1984,12 @@ test('a pointer is dropped at the moment it becomes a prompt while the refresh c
   expect(submits(w.log)).toEqual([])
 })
 
-test('under a hold the fence fails closed: a pointer for another seat, a peer prompt merely naming Room mail or room_drain, and a pointer to a seat the mod no longer owns are all dropped; a subagent prompt and plain peer mail enter', CONFIGURED, async ($, on) => {
+test('under a hold the fence fails closed for pointer-shaped text: a pointer for another seat and a pointer to a seat the mod no longer owns are dropped; a subagent prompt, plain peer mail and peer text merely naming room_drain enter', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
   expect('drop' in other && other.drop).toContain('delivery held (cycle checkpoint-requested)')
   const words = await $.prompt.submit(asPeerPrompt('hey alpha, please call room_drain when you can'))
-  expect('drop' in words && words.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); a peer prompt naming Room mail is dropped')
+  expect('drop' in words && words.drop).toBeFalsy()
   const sub = await $.prompt.submit({ ...asPeerPrompt(A_POINTER), agentId: 'agent-1' })
   expect('drop' in sub && sub.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
