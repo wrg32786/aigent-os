@@ -2256,9 +2256,33 @@ test('claim-before-pointer: a pointer whose file is no longer in the inbox (clai
   expect('drop' in otherSeat && otherSeat.drop).toBe('fleet-delivery: a pointer addressed to gamma reached alpha; dropped, nothing to drain here')
   const claimed = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'c.json')))
   expect('drop' in claimed && claimed.drop).toBe('fleet-delivery: c.json is already claimed by the tick; the pointer to room:alpha:c.json is dropped')
-  // A file in neither inbox/ nor claimed/ (read, or never written): the prompt is ordinary mail and enters.
+  // A bare pointer whose file is in neither inbox/ nor claimed/ (read, or never written): enters when open, the drain finds nothing.
   const gone = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'z.json')))
   expect('drop' in gone && gone.drop).toBeFalsy()
+  // Under a hold the same bare pointer is dropped: nothing may enter ahead of a resume.
+  w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
+  const goneHeld = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'z.json')))
+  expect('drop' in goneHeld && goneHeld.drop).toContain('delivery held (cycle checkpoint-requested)')
+  // Quoted inside real mail, with no file behind it: mail, even under the hold.
+  const goneQuoted = await $.prompt.submit(asPeerPrompt(`about that: \n${pointerText('alpha', 'beta', 'z.json').split('\n')[0]}\nit is handled.`))
+  expect('drop' in goneQuoted && goneQuoted.drop).toBeFalsy()
+})
+
+test('a pointer delivered into a running turn is released when THAT turn completes; two pointer lines admit both files', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  await w.turn()
+  await $.turn.start({ text: 'working', turnId: 't1' } as never)
+  w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  w.files.set(`${INBOX}/b.json`, envelope('beta', 'second from beta'))
+  const both = `${pointerText('alpha', 'beta', 'a.json')}\n${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}`
+  const entered = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, turnId: 't1', text: wrap(both) })
+  expect('drop' in entered && entered.drop).toBeFalsy()
+  // Delivered into t1: when t1 completes without a drain, the tick delivers both, in order.
+  await w.turn()
+  await w.turn()
+  const delivered = w.log.filter(entry => entry.startsWith('submit ') && /hello from beta|second from beta/.test(entry)).map(entry => (entry.includes('hello') ? 'a' : 'b'))
+  expect(delivered).toEqual(['a', 'b'])
 })
 
 test('a pointer queued behind a running turn is left to the NEXT turn: the running turn\'s completion does not release its file to the tick', CONFIGURED, async ($, on) => {

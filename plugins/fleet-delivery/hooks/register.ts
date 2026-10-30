@@ -41,6 +41,9 @@ const MAX_CLAIM_TRIES = 6
 const RETRY_CAP = 3
 const CAS_TRIES = 8
 const DEFAULT_SUBMIT_TIMEOUT_MIN = 10
+// How many submit timeouts a queued prompt may ride out while a main turn is
+// in flight before it is unresolved anyway: 6 x 10 min, the supervisor's busy ceiling.
+const TURN_WAIT_ROUNDS = 6
 // auto-clear-transport CYCLE_STATES outside a refresh cycle.
 const OPEN_CYCLE_STATES = ['idle', 'released']
 const PROBE_DEFAULT_S = 20
@@ -1232,7 +1235,17 @@ async function tick($: $): Promise<void> {
     let queue = [...due.filter(item => !stuck(item)), ...due.filter(stuck)]
     // One load per item per tick, whichever branches ask (freeze, turn guard, submit).
     const loads = new Map<string, ReturnType<Item['load']>>()
-    queue = queue.map(item => ({ ...item, load: () => loads.get(item.id) ?? loads.set(item.id, item.load()).get(item.id)! }))
+    queue = queue.map(item => ({
+      ...item,
+      load: async () => {
+        const cached = loads.get(item.id)
+        if (cached) return cached
+        const loaded = await item.load()
+        // Only a loaded body is kept: a vanished or unparseable file is asked again.
+        if (loaded && 'text' in loaded) loads.set(item.id, Promise.resolve(loaded))
+        return loaded
+      },
+    }))
     if (!entries) {
       $.ui.status(queue.length ? 'delivery: mod · ledger-missing, holding (seed it, see README)' : 'delivery: mod · 0 queued')
       return
@@ -1513,7 +1526,9 @@ async function tick($: $): Promise<void> {
         // A queued prompt cannot enter while a main turn runs: the clock on it
         // starts when the turn ends, so a lifecycle leg filed mid-turn does not
         // become submitting:unresolved for the length of the turn.
-        while (result === 'timeout' && turnInFlight()) result = await timeoutRace($, submit, config.submitTimeoutMs)
+        // Bounded: a turn.complete this hook never hears must not keep the
+        // claim open for the session (the supervisor's own busy ceiling is 60 min).
+        for (let waited = 1; result === 'timeout' && turnInFlight() && waited < TURN_WAIT_ROUNDS; waited++) result = await timeoutRace($, submit, config.submitTimeoutMs)
       } catch {
         try {
           await rejected()
@@ -1697,7 +1712,14 @@ const turnInFlight = () => mainTurns.size > 0
 // any turn completes (a pointer queued behind a running turn is read by the
 // next one). Marked before next(e) so a tick in between cannot claim the file.
 let turnSeq = 0
-const admitted = new Map<string, number>()
+// A pointer delivered into a running turn (the prompt carries that turnId) is
+// read by that turn and released when it completes; one queued as its own turn
+// is released by the first main turn that starts after it.
+type Admission = { seq: number; turnId?: string }
+const admitted = new Map<string, Admission>()
+const releaseAdmissions = (turnId: string, upTo: number) => {
+  for (const [file, a] of admitted) if (a.turnId === turnId || (a.turnId === undefined && a.seq < upTo)) admitted.delete(file)
+}
 // Files the tick is renaming inbox/ -> claimed/ right now: a pointer for one
 // is dropped (the tick owns it), closing the window across the rename spawn.
 const claiming = new Set<string>()
@@ -1946,35 +1968,41 @@ async function announceNative($: $, e: Record<string, unknown>, answered: { text
 // owns it and the pointer is dropped so the model does not act twice. A bare
 // pointer for another seat is dropped (nothing of it is here; a drain would
 // only consume this seat's own unread mail). Anything else is ordinary mail.
-type Fence = { drop: string } | { admit: string } | null
+type Fence = { drop: string } | { admit: string[] } | null
 async function pointerHold($: $, text: string, matches: RegExpExecArray[]): Promise<Fence> {
   const seat = await seatName($)
   const mine = matches.filter(match => match[1] === seat)
+  const bare = isBarePointer(text)
   if (!seat) {
-    return isBarePointer(text) ? { drop: `fleet-delivery: delivery held (seat unresolved); the pointer to room:${matches[0]![1]}:${matches[0]![3]} is dropped, the file waits for the tick` } : null
+    return bare ? { drop: `fleet-delivery: delivery held (seat unresolved); the pointer to room:${matches[0]![1]}:${matches[0]![3]} is dropped, the file waits for the tick` } : null
   }
   if (!mine.length) {
     const other = matches[0]!
-    return isBarePointer(text) ? { drop: `fleet-delivery: a pointer addressed to ${other[1]} reached ${seat}; dropped, nothing to drain here` } : null
+    return bare ? { drop: `fleet-delivery: a pointer addressed to ${other[1]} reached ${seat}; dropped, nothing to drain here` } : null
   }
-  if (!config.roomRoot) return null
   const root = await installRoot($)
   const memory = root ? await memoryRoot($, root) : null
   const w: Where = { root, memory: memory ?? '', seat }
-  for (const match of mine) {
-    const file = match[3]!
-    const dropped = `the pointer to room:${seat}:${file} is dropped, the file waits for the tick`
-    try {
+  const holdOf = async () => (memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved')
+  const files = mine.map(match => match[3]!)
+  const named = `room:${seat}:${files.join(',')}`
+  try {
+    const unread: string[] = []
+    for (const file of files) {
       if (claiming.has(file)) return { drop: `fleet-delivery: ${file} is being claimed by the tick; the pointer to room:${seat}:${file} is dropped` }
-      if (await $.fs.exists(claimedFile(w, file))) return { drop: `fleet-delivery: ${file} is already claimed by the tick; the pointer to room:${seat}:${file} is dropped` }
-      if (!(await $.fs.exists(inboxFile(w, file)))) continue
-      const hold = memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved'
-      return hold ? { drop: `fleet-delivery: delivery held (${hold}); ${dropped}` } : { admit: file }
-    } catch (error) {
-      return { drop: `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); ${dropped}` }
+      if (config.roomRoot && (await $.fs.exists(claimedFile(w, file)))) return { drop: `fleet-delivery: ${file} is already claimed by the tick; the pointer to room:${seat}:${file} is dropped` }
+      if (config.roomRoot && (await $.fs.exists(inboxFile(w, file)))) unread.push(file)
     }
+    // Nothing of it in the inbox (read already, never written, or no Room here):
+    // a bare pointer still meets the holds, since under a hold nothing may enter;
+    // open, it enters and the drain finds nothing. Quoted inside real mail: mail.
+    if (!unread.length && !bare) return null
+    const hold = await holdOf()
+    if (hold) return { drop: `fleet-delivery: delivery held (${hold}); the pointer to ${named} is dropped, the file waits for the tick` }
+    return unread.length ? { admit: unread } : null
+  } catch (error) {
+    return { drop: `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); the pointer to ${named} is dropped, the file waits for the tick` }
   }
-  return null
 }
 
 export const register: Register = (on, options) => {
@@ -2018,8 +2046,7 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       // A turn whose start this hook never heard counts as the turn after every
       // admission, so a lost turn.start cannot park a file until session end.
-      const upTo = startSeen ? turnSeq : turnSeq + 1
-      for (const [file, seq] of admitted) if (seq < upTo) admitted.delete(file)
+      releaseAdmissions(e.turnId, startSeen ? turnSeq : turnSeq + 1)
       warnSubmitTimeout($)
       await ensureTicking($)
       void tick($)
@@ -2047,19 +2074,27 @@ export const register: Register = (on, options) => {
       $.ui.log(fence.drop)
       return { drop: fence.drop }
     }
-    // Marked before the prompt goes on, so a tick in this window leaves the file alone.
-    admitted.set(fence.admit, turnSeq)
+    // Marked before the prompt goes on, so a tick in this window leaves the
+    // files alone; keyed to the turn that will read them.
+    for (const file of fence.admit) admitted.set(file, { seq: turnSeq, turnId: e.turnId })
     const entered = await next(e)
-    if ((entered as { drop?: unknown }).drop) admitted.delete(fence.admit)
+    if ((entered as { drop?: unknown }).drop) for (const file of fence.admit) admitted.delete(file)
     return entered
   }).catch(($, e, next) => {
     // The engine skips a hook that throws or overruns and lets the prompt in;
     // this fence fails closed instead: a pointer whose check did not finish is
     // dropped (the file waits for the tick). A prompt the hook had already
-    // passed on is replayed, not dropped.
+    // passed on is replayed, not dropped; a replay that settles to a drop
+    // releases what the hook admitted.
     // `Caught.called`: next(e) then resolves to what the hook's last call settled
     // to, nothing beneath running again (claude-code.d.ts, Caught).
-    if (next.called) return next(e)
+    if (next.called) {
+      return (async () => {
+        const entered = await next(e)
+        if ((entered as { drop?: unknown }).drop && typeof e.text === 'string') for (const match of findPointers(e.text)) admitted.delete(match[3]!)
+        return entered
+      })()
+    }
     const drop = 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick'
     $.ui.log(drop)
     return { drop }
