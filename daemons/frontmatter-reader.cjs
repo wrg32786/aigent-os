@@ -145,20 +145,34 @@ function headingPattern(key) {
   return escaped(key).replace(/_/g, '[ _]');
 }
 
+// Export a stateless pattern; each multi-heading scan owns its own cursor.
+const HEADING_SCAN = /(?:^|\r?\n)(#{1,6})[ \t]+([^\r\n]*)/;
+
+function documentBodyStart(doc) {
+  return String(doc ?? '').match(FRONTMATTER)?.[0].length ?? 0;
+}
+
+// A heading owns everything up to the next heading at its level or above.
+// The matched heading carries its depth; callers cannot override the grammar.
+function sectionBounds(source, heading) {
+  const start = heading.index + heading[0].length;
+  const next = new RegExp(`(?:^|\\r?\\n)#{1,${heading[1].length}}[ \\t]`).exec(source.slice(start));
+  // Keep the terminator in the section; end points at the heading itself.
+  return next ? start + next.index + next[0].indexOf('#') : source.length;
+}
+
 function unsafeRawBodySection(doc, key, reason) {
   requireReason(reason, 'unsafeRawBodySection');
   const source = String(doc ?? '');
-  const frontmatter = source.match(FRONTMATTER);
-  const body = frontmatter ? source.slice(frontmatter[0].length) : source;
-  const match = body.match(
-    new RegExp(
-      `(?:^|\\r?\\n)#{1,6}[ \\t]+${headingPattern(key)}[ \\t]*\\r?\\n`
-        + `([\\s\\S]*?)(?=\\r?\\n#{1,6}[ \\t]|$)`,
-      'i',
-    ),
-  );
-  const value = match?.[1]?.trim();
-  return value || null;
+  const body = source.slice(documentBodyStart(source));
+  const matches = typeof key === 'function' ? key
+    : (title) => new RegExp(`^${headingPattern(key)}$`, 'i').test(title);
+  for (const heading of body.matchAll(new RegExp(HEADING_SCAN, 'g'))) {
+    if (!matches(heading[2].trim())) continue;
+    const start = heading.index + heading[0].length;
+    return body.slice(start, sectionBounds(body, heading)).trim() || null;
+  }
+  return null;
 }
 
 function bodySection(doc, key) {
@@ -178,8 +192,7 @@ function unsafeRawCapsuleValue(doc, key, reason) {
 function unsafeRawDocumentBody(doc, reason) {
   requireReason(reason, 'unsafeRawDocumentBody');
   const source = String(doc ?? '');
-  const match = source.match(FRONTMATTER);
-  return (match ? source.slice(match[0].length) : source).trim();
+  return source.slice(documentBodyStart(source)).trim();
 }
 
 function unsafeRawRewriteScalar(doc, key, expected, replacement, reason) {
@@ -252,9 +265,12 @@ module.exports = {
   bodySection,
   capsuleValue,
   collapseLineBreaking,
+  documentBodyStart,
   frontmatterList,
   hasFrontmatter,
   scalar,
+  HEADING_SCAN,
+  sectionBounds,
   scalarHasUnsupportedInlineComment,
   scalarIsUnquotedYamlNull,
   unsafeRawBodySection,

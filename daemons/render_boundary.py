@@ -104,20 +104,29 @@ def scalar(text: str, key: str) -> str | None:
     return collapse_line_breaking(value) if value is not None else None
 
 
-def unsafeRawBodySection(text: str, key: str, reason: str) -> str | None:
+_HEADING_SCAN = re.compile(r"(?:^|\r?\n)(#{1,6})[ \t]+([^\r\n]*)")
+
+
+def _section_bounds(source: str, heading: re.Match) -> int:
+    start = heading.end()
+    next_heading = re.search(
+        rf"(?:^|\r?\n)#{{1,{len(heading.group(1))}}}[ \t]", source[start:]
+    )
+    return (start + next_heading.start() + next_heading.group(0).index("#")) if next_heading else len(source)
+
+
+def unsafeRawBodySection(text: str, key, reason: str) -> str | None:
     _require_reason(reason, "unsafeRawBodySection")
-    heading = re.escape(str(key)).replace("_", "[ _]")
+    matches = key if callable(key) else re.compile(
+        "^" + re.escape(str(key)).replace("_", "[ _]") + "$", re.IGNORECASE
+    ).search
     source = str(text)
     frontmatter = _FRONTMATTER.match(source)
     body = source[frontmatter.end() :] if frontmatter else source
-    match = re.search(
-        rf"^#{{1,6}}[ \t]+{heading}[ \t]*\r?\n"
-        rf"(.*?)(?=^#{{1,6}}[ \t]|\Z)",
-        body,
-        re.MULTILINE | re.IGNORECASE | re.DOTALL,
-    )
-    value = match.group(1).strip() if match else ""
-    return value or None
+    for heading in _HEADING_SCAN.finditer(body):
+        if matches(heading.group(2).strip()):
+            return body[heading.end():_section_bounds(body, heading)].strip() or None
+    return None
 
 
 def body_section(text: str, key: str) -> str | None:

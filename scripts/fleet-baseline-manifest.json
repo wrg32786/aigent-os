@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-29-9331148e",
-  "public_product_commit": "9331148e67829be68c55ae75f4fdb9c1d9ed61bc",
+  "baseline_id": "aigent-os-2026-10-30-ebebbe90",
+  "public_product_commit": "ebebbe90a69352c1d5f4db473c012839e0d2d708",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -30,12 +30,14 @@
     "v8 cut for issues #99 and #104 (input accounting), as corrected by pre-push review: daemons/pty-runner.mjs accounts for a C0 control EXECUTED inside an unfinished control sequence (ECMA-48 5.4 / DEC STD 070) instead of absorbing it as a parameter byte. Such a control taints with the byte named printably, and a CR BOOKS the transcript record it may owe as an uncertain submission -- but only when the host could actually have submitted: a CR whose pre-sequence byte before the cursor was a backslash is the documented composer newline and owes nothing, and a CR on a composer that was empty and clean changes nothing and is neither booked nor tainted, so neither leaves a phantom FIFO entry to absorb the next genuine receipt. A booked mid-sequence CR is forced NOT `certain`, which _uncertainSubmission would otherwise derive from the previous record and which reopened #99 in a narrower shape. A receipt settles a submission WITHOUT discarding an unfinished parser state or its restore snapshot: confirmSubmission leaves mode/sequence/activeControl alone while a sequence is in flight and re-points the ESC-arrival snapshot at the confirmed state, so automatic input stays deferred until the sequence completes and an inert completion then releases it on the receipt already held, with no further operator Enter and no fabricated receipt. The ESC-arrival snapshot is otherwise poisoned so no restore path can put the pre-report state back over any of this. A bracketed paste carrying more than its own end-marker ESC no longer adopts an interleaved terminal report's trailing byte as the byte before the cursor. _disableAutomation emits automation-disabled on entry or on a change of effective reason rather than on every poll, compared on the UNTRUNCATED reason, with the per-tick cancellation work left deliberately unconditional. daemons/pty-runner.mjs is the ONLY pinned file that moved relative to the previous baseline. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 37 pinned, 36 matching, 1 moved, 0 missing; no pin was added or removed. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash.",
     "v8 cut for the hook timeout unit correction (8b4a7bbd): .claude/settings.json.template is the only pin that moved. Claude Code reads a hook's timeout in seconds; the template wrote milliseconds, so every rendered install matched the template and attested COMPLIANT with its hook timeouts effectively disabled. Every template value is now a per-hook second budget from a healthy-host measurement (5 s light hooks, 10 s caddy.sh, 8 s interlock legs and sessionend-flush, 10 s precompact-flush), and doctor.sh --attest now also bounds every template and installed hook timeout to [1, 120] s independently of the template. Every other hash was recomputed from the blob at this commit and is unchanged. Population stays 38.",
     "v8 recut for issues #98 and #111 (b12b3a56): daemons/pty-runner.mjs is the only pin that moved. #98: the runner builds the claude child's environment at the one boundary every launch passes (childEnvironment: CLAUDE_CODE_CHILD_SESSION removed, CLAUDE_CODE_FORCE_SESSION_PERSISTENCE set), so a parent that is itself a Claude Code session can no longer turn the seat's transcript off; the runner's own environment and the operator's shell are untouched. #111: a zero-length transcript is not-ready at the capsule-request, capsule-request-enter, clear-submission and control-enter boundaries (tool-call-transcript-empty), the wake family keeps its exemption. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for issues #98 and #111, review round 2 (9331148e): pins that moved: daemons/pty-runner.mjs, launcher/aigent.sh, launcher/aigent.ps1. daemons/pty-runner.mjs: an absent tool-call watch re-baselines the moment the transcript appears, and readiness reads one live no-records predicate (absent or zero-length). launcher/aigent.ps1 and launcher/aigent.sh: the direct branches (--no-deps, node missing) remove CLAUDE_CODE_CHILD_SESSION and default CLAUDE_CODE_FORCE_SESSION_PERSISTENCE themselves, so no launch path hands the seat the marker that turns its transcript off. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for issues #98 and #111, review round 2 (9331148e): pins that moved: daemons/pty-runner.mjs, launcher/aigent.sh, launcher/aigent.ps1. daemons/pty-runner.mjs: an absent tool-call watch re-baselines the moment the transcript appears, and readiness reads one live no-records predicate (absent or zero-length). launcher/aigent.ps1 and launcher/aigent.sh: the direct branches (--no-deps, node missing) remove CLAUDE_CODE_CHILD_SESSION and default CLAUDE_CODE_FORCE_SESSION_PERSISTENCE themselves, so no launch path hands the seat the marker that turns its transcript off. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #80 (issue #80, PR #131) after merging master c7fdbb37 (df44b232): pins that moved: none. The #80 Done-claims change (shared Done locator, DONE_TAG closed set, section grammar, claims render) moved the capsule writer, reader and lifecycle pins; master's #125 runner/launcher pins carry forward unchanged. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #80 (PR #131) after the private heading scan and master 054590b2 (ebebbe90): pins that moved: daemons/render_boundary.py. render_boundary.py moved because its heading scan became private; no other pin moved. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
     "daemons/sessionstart-reinject.mjs": "af62ac18954e7ec773e3051ac23fb89e8b1731e74dcac9b1e5bbd1320fd3ff52",
-    "daemons/resume-verb.mjs": "bccfb86202a29f2281f3429997fd5c76a40731af56a6c94e744f49ebc65c83d8",
+    "daemons/resume-verb.mjs": "0bb9b173fefe8f653d9096b970ab71616c6685f87c991c88626d6ea806f30b43",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
     "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
@@ -49,7 +51,7 @@
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
     "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
-    "daemons/stop-capsule-writer.mjs": "a9c37843f0b8d9e2bec10c1cd798afae80add202f795bcd0d0326410fca30f55",
+    "daemons/stop-capsule-writer.mjs": "69ecfe6cd4b56ebd398a08595810e478d1b7093872c2fd9680daa7d6933d5dba",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
     "hooks/log-token-usage.sh": "d6940138f66a9ef407d7a0a92a2a67d7a5f76270ea17004159a733b2a20d9700",
@@ -58,11 +60,11 @@
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "d592fce7a187f2b29e9aa27ff10849ff23a48a565b586f0581fd199ff76aee0e",
     "daemons/auto-clear-transport.mjs": "70d359a8f77eeeacd316d121f924eed7c9e2a8b172398a9fc9a40be5bf4428ea",
-    "daemons/lifecycle-common.mjs": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+    "daemons/lifecycle-common.mjs": "1b3d9185e39c36ba060784b31ecaba622bf7d49e0c5f862c84da1498a806be2b",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
-    "daemons/render_boundary.py": "ec2ed2b238d46cc964770d86dd3abe37913a611343871d348b8525e289ff1ff3",
+    "daemons/render_boundary.py": "809233926f028f56b88590e3bd4731e3436231c08f7cd6c00da0792b6085f976",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
     "launcher/aigent.sh": "6443ce3a8299d9887a05292024d56463a414436ca5b1c5ce4292ddd21fdc9996",
@@ -70,7 +72,7 @@
     "launcher/install.sh": "ca3799b4642558556be2b2062b714d33ede481487b526dbed01548536319dfeb",
     "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
-    "daemons/frontmatter-reader.cjs": "20f4d4c158f3d80da4fef3857f8a4cd8b597e47d5d4635bd15725e927163fd53"
+    "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b"
   },
   "required_settings": {
     "path": ".claude/settings.json",
