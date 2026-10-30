@@ -38,9 +38,9 @@ const ENVELOPE = envelope('beta', 'hello from beta')
 const READY = { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [`${INBOX}/a.json`]: ENVELOPE }
 
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as const
-const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as const
+const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 }, wait: false } as const
 
-type Entries = Record<string, { status: string; at: string; attempts?: number }>
+type Entries = Record<string, { status: string; at: string; attempts?: number; pid?: string; gen?: number }>
 
 type World = {
   sessionId?: string
@@ -265,7 +265,7 @@ function seat(on: On, world: World = {}) {
       expect(e.argv.slice(0, 2)).toEqual(['node', '-e'])
       expect(e.argv[3]).toBe('--')
       expect(e.argv).toHaveLength(5)
-      expect(norm(e.argv[4]!)).toMatch(/^C:\/example\/room\/state\/(?:admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)|native\/[a-z0-9_-]+\.json)$/)
+      expect(norm(e.argv[4]!)).toMatch(/^C:\/example\/room\/state\/admit\/[a-z0-9_-]+\/(?:[^/]+\.json|\.probe-[1-9][0-9]*)$/)
       files.delete(norm(e.argv[4]!))
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -1995,14 +1995,12 @@ test('a pointer is dropped at the moment it becomes a prompt while the refresh c
   expect(submits(w.log)).toEqual([])
 })
 
-test('under a hold the fence fails closed for pointer-shaped text: a pointer for another seat and a pointer to a seat the mod no longer owns are dropped; a subagent prompt, plain peer mail and peer text merely naming room_drain enter', CONFIGURED, async ($, on) => {
+test('under a hold the fence fails closed for pointer-shaped text: a pointer for another seat and a pointer to a seat the mod no longer owns are dropped; plain peer mail, peer text merely naming room_drain and a message quoting a pointer line enter', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
   expect('drop' in other && other.drop).toContain('delivery held (cycle checkpoint-requested)')
   const words = await $.prompt.submit(asPeerPrompt('hey alpha, please call room_drain when you can'))
   expect('drop' in words && words.drop).toBeFalsy()
-  const sub = await $.prompt.submit({ ...asPeerPrompt(A_POINTER), agentId: 'agent-1' })
-  expect('drop' in sub && sub.drop).toBeFalsy()
   const plain = await $.prompt.submit(asPeerPrompt('just a peer message'))
   expect('drop' in plain && plain.drop).toBeFalsy()
   // The SendMessage route, in both spellings the engine has for it: still dropped.
@@ -2015,6 +2013,11 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   // CRLF, envelope attributes on one line: still a pointer, still dropped.
   const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
   expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
+  // The engine's lead-in line, and a tag sharing a line with the pointer: still a pointer, still dropped.
+  const leadIn = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `Another Claude session sent a message:\n${wrap(pointerText('alpha', 'beta', 'b.json'))}` })
+  expect('drop' in leadIn && leadIn.drop).toContain('the pointer to room:alpha:b.json is dropped')
+  const oneLine = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">${pointerText('alpha', 'beta', 'b.json')}</cross-session-message>` })
+  expect('drop' in oneLine && oneLine.drop).toContain('the pointer to room:alpha:b.json is dropped')
   // A real message that quotes a pointer line is not a pointer: it enters even under the hold.
   const quoting = await $.prompt.submit(asPeerPrompt(`Drained it, thanks. ${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}\nNext I will reply on the thread.`))
   expect('drop' in quoting && quoting.drop).toBeFalsy()
@@ -2175,12 +2178,22 @@ test('a room_send the Room published to will or broadcast is never announced and
   expect(w.log.filter(entry => entry.includes('takes no pointers') || entry.includes('pointer'))).toEqual([])
 })
 
-test('the tick does not claim while a main turn is in flight (the drain keeps the inbox); it delivers at turn end', CONFIGURED, async ($, on) => {
+test('an admitted pointer keeps the tick off its file until the turn it starts completes, and the tick does not claim while a main turn is in flight; it delivers at turn end', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
-  on('turn.start', () => ({ turnId: 't2' }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
   await w.turn()
-  await $.turn.start({ text: 'working', turnId: 't2' } as never)
+  // Between prompt.submit and turn.start: the pointer entered, no turn yet; the tick leaves a.json alone.
   w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in entered && entered.drop).toBeFalsy()
+  await w.clock.advance(31_000)
+  await w.clock.settle()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  expect(w.lastStatus()).toContain('turn in flight')
+  // The turn starts (a subagent's turn too, which must not matter) and ends.
+  await $.turn.start({ text: 'sub', turnId: 'sub-1', agentId: 'agent-1' } as never)
+  await $.turn.complete({ ...TURN, turnId: 'sub-1', agentId: 'agent-1' } as never)
+  await $.turn.start({ text: 'working', turnId: 't1' } as never)
   await w.clock.advance(31_000)
   await w.clock.settle()
   await w.clock.advance(31_000)
@@ -2193,8 +2206,13 @@ test('the tick does not claim while a main turn is in flight (the drain keeps th
 })
 
 test('while a tick is blocked in a never-settling submit, the timer keeps the marker fresh and retires it when a hold begins', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: READY, submit: new Promise<never>(() => {}) })
-  await w.turn()
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => {
+    enter = done
+  })
+  const w = world(on, $, { files: READY, submit: late })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
   const first = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
   expect(first.owner).toBe('mod')
   expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(1)
@@ -2207,6 +2225,8 @@ test('while a tick is blocked in a never-settling submit, the timer keeps the ma
   await w.clock.advance(31_000)
   await w.clock.settle()
   expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
+  enter({ text: 'entered' })
+  await w.clock.settle()
 })
 
 test('claim-before-pointer: a pointer whose file is no longer in the inbox (claimed by the tick or already read) is dropped; one whose file waits enters', CONFIGURED, async ($, on) => {

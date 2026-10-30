@@ -55,6 +55,14 @@ jobs:
           bash tests/test-caddy-detect-new-skill.sh
           node evals/run-evals.mjs
 
+      - name: fleet-delivery mod: engine typings, validate, plugin test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx -y -p typescript@5.9.3 tsc -p plugins/fleet-delivery/tsconfig.json
+          npx -y @anthropic-ai/claude-code@2.1.314 plugin validate plugins/fleet-delivery
+          npx -y @anthropic-ai/claude-code@2.1.314 plugin test plugins/fleet-delivery
+
       - name: Install daemon test dependencies
         shell: bash
         run: |
