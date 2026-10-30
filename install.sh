@@ -1556,7 +1556,7 @@ else
       # stale .cache used to pass here and attest COMPLIANT. One bounded,
       # read-only check, shared with doctor.sh --attest, decides.
       PROBE_RC=0; PROBE="$(bash "$TARGET/scripts/doctor.sh" "$TARGET" --component semantic_search 2>/dev/null)" || PROBE_RC=$?
-      PROBE_WHY="${PROBE#*-- }"
+      PROBE_WHY="${PROBE#*-- }"; [ -n "$PROBE" ] || PROBE_WHY="doctor gave no answer"
       case "$PROBE_RC" in
         0) printf '  [ok] %s dependencies installed and loadable -- %s\n' "$DEP_DIR" "$PROBE_WHY" ;;
         1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun npm install in daemons/%s\n' "$DEP_DIR" "$PROBE_WHY" "$DEP_DIR" ;;

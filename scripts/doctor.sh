@@ -87,7 +87,9 @@ for (const dep of deps) {
 }
 OPTIONAL_IMPORT_JS
   local runner=(node --input-type=module -e "$js" -- "$deps")
-  if command -v timeout >/dev/null 2>&1; then runner=(timeout 90 "${runner[@]}"); fi
+  # GNU timeout only: on a Windows PATH with System32 first, `timeout` is
+  # timeout.exe, which would turn every probe into a syntax-error failure.
+  if timeout --version 2>/dev/null | grep -q GNU; then runner=(timeout 90 "${runner[@]}"); fi
   if out="$(cd "$owner" && "${runner[@]}" 2>&1)"; then return 0; fi
   # The probe's own line is the last non-empty one.
   printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-200
@@ -752,6 +754,8 @@ ATTESTPY
     opt_name="${rec%%|*}"; rest="${rec#*|}"; opt_state="${rest%%|*}"; rest="${rest#*|}"; opt_why="${rest%%|*}"
     for imp in ${OPT_IMPORTS[@]+"${OPT_IMPORTS[@]}"}; do
       [ "${imp%%|*}" = "$opt_name" ] || continue
+      # In --component mode only the named component is imported.
+      if [ -n "$COMPONENT" ] && [ "$opt_name" != "$COMPONENT" ]; then continue; fi
       irest="${imp#*|}"; opt_deps="${irest%%|*}"; opt_owner="${irest#*|}"
       if reason="$(optional_import_probe "$opt_owner" "$opt_deps")"; then
         opt_state="functioning"; opt_why="${opt_deps//,/, } import cleanly"
