@@ -4,7 +4,8 @@
     "module": "esnext", "moduleResolution": "bundler",
     "strict": true, "noUncheckedIndexedAccess": true,
     "noEmit": true, "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react", "jsxFactory": "h", "jsxFragmentFactory": "Fragment"
   },
-  "include": ["typings", "hooks", "types"]
+  "include": ["typings", "hooks", "types", "tests"]
 }
