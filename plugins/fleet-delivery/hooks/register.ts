@@ -1183,7 +1183,7 @@ async function tick($: $): Promise<void> {
           await moveRoom($, rw, { id: `room:${rw.seat}:${file}`, source: 'room' }, [claimedFile, delivered ? processedFile : inboxFile], undefined, false, 'quiet')
         }
       }
-      await retireMarker($)
+      await retireMarker($, where.release?.seat)
       return
     }
     if ('hold' in where) {
@@ -1206,7 +1206,6 @@ async function tick($: $): Promise<void> {
       return
     }
     await sweepAdmissions($, w, entries)
-    await publishMarker($, w)
     await probeAdmission($, w)
     const reread = async (now: Entries) => (await $.state.get(LEDGER)).value?.[w.seat] ?? now
     if (entries) {
@@ -1230,6 +1229,7 @@ async function tick($: $): Promise<void> {
 
     const hold = await cycleHold($, w)
     if (hold) {
+      await retireMarker($, w.seat)
       for (const item of queue) {
         await record($, w, item, 'deferred:refresh-hold', entry => !isFinal(entry) && entry?.status !== 'deferred:refresh-hold', { detail: hold })
       }
@@ -1238,6 +1238,7 @@ async function tick($: $): Promise<void> {
     }
     const freeze = await supervisorHold($, w)
     const frozen = freeze?.reason ?? null
+    await settleMarker($, w, frozen)
     if (frozen) {
       const live: Item[] = []
       let deferred = 0
@@ -1618,8 +1619,10 @@ export const NATIVE_VERSION = '0.4.0'
 export const MARKER_FRESH_MS = 15 * 60_000
 const MARKER_EVERY_MS = 5 * 60_000
 let markerAt = 0
+let markerCheckedAt = 0
 let markerBusy = false
 let markerWarned = false
+let markerState: 'unknown' | 'published' | 'retired' = 'unknown'
 // Room addresses that are not one session's seat: never announced (a documented limitation).
 const NOT_A_SEAT = /^(?:broadcast|will)$/
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
@@ -1664,17 +1667,19 @@ async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T 
 }
 
 // This seat tells the Room it can take pointers: mod-owned, this version,
-// alive now. Written at most every MARKER_EVERY_MS, by the tick and by the
-// tick's timer on its own (refreshMarker), so a tick blocked on a long submit
-// cannot age the marker out.
+// alive now, and not held. Published only while both holds are clear, so a
+// held seat is never announced to and the sender falls back to the tick on
+// its own; the receiver's prompt-time drop is the safety net. Rewritten at
+// most every MARKER_EVERY_MS while published.
 async function publishMarker($: $, w: Where): Promise<void> {
   if (!config.roomRoot || markerBusy) return
   const now = await $.clock.now()
-  if (now - markerAt < MARKER_EVERY_MS) return
+  if (markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
   markerBusy = true
   try {
     await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: NATIVE_VERSION, at: new Date(now).toISOString() })}\n`)
     markerAt = now
+    markerState = 'published'
     markerWarned = false
   } catch (error) {
     if (!markerWarned) $.ui.log(`fleet-delivery: could not publish the native marker (${clean((error as Error)?.message, 120)}); peers will not announce to this seat`)
@@ -1684,31 +1689,44 @@ async function publishMarker($: $, w: Where): Promise<void> {
   }
 }
 
-// The marker is this seat's promise to fence pointers. Gone the moment the
-// mod no longer owns the seat (the tick's off branch) and when the session
-// ends, so a seat handed to the supervisor is not announced to for the rest
-// of the marker's freshness.
-async function retireMarker($: $): Promise<void> {
+// Retired by overwriting: {owner: 'retired'} fails the sender's mod-owned
+// check at once, needs no process, and is one write a session.end hook can
+// afford. Written once per retirement: under a hold, when the mod no longer
+// owns the seat, and when the session ends.
+async function retireMarker($: $, seat?: string | null): Promise<void> {
   markerAt = 0
-  if (!config.roomRoot) return
-  const seat = await seatName($)
+  if (!config.roomRoot || markerState === 'retired' || markerBusy) return
+  seat ??= await seatName($)
   if (!seat) return
-  const file = markerFile(seat)
+  markerBusy = true
   try {
-    if (!(await $.fs.exists(file))) return
+    await $.fs.write(markerFile(seat), `${JSON.stringify({ seat, owner: 'retired', version: NATIVE_VERSION, at: await iso($) })}\n`)
+    markerState = 'retired'
   } catch {
-    return
+  } finally {
+    markerBusy = false
   }
-  const failed = await runHost($, ['node', '-e', UNLINK, '--', file])
-  if (failed) $.ui.log(`fleet-delivery: could not retire the native marker (${failed}); peers may announce to this seat for up to ${MARKER_FRESH_MS / 60_000} min`)
 }
 
-// From the tick's timer, whether or not a tick is in flight.
+// The marker's own hold check: published while both holds are clear, retired otherwise.
+async function settleMarker($: $, w: Where, hold: string | null): Promise<void> {
+  if (hold) await retireMarker($, w.seat)
+  else await publishMarker($, w)
+}
+
+// From the tick's timer, whether or not a tick is in flight (a tick blocked
+// on a long submit must not age the marker out, and a hold that begins
+// meanwhile must retire it). While published it looks every tick; retired
+// or unknown, every MARKER_EVERY_MS, so an off seat does not re-resolve
+// its owner and memory root every 30 s.
 async function refreshMarker($: $): Promise<void> {
-  if (!config.roomRoot || (await $.clock.now()) - markerAt < MARKER_EVERY_MS) return
+  if (!config.roomRoot) return
+  const now = await $.clock.now()
+  if (markerState !== 'published' && now - markerCheckedAt < MARKER_EVERY_MS) return
+  markerCheckedAt = now
   const place = await resolve($)
-  if ('w' in place) await publishMarker($, place.w)
-  else if ('off' in place) await retireMarker($)
+  if (!('w' in place)) return retireMarker($)
+  await settleMarker($, place.w, (await cycleHold($, place.w)) ?? (await supervisorHold($, place.w))?.reason ?? null)
 }
 
 // Whether `seat` can take a pointer right now: a fresh marker from a
@@ -1819,14 +1837,14 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: ROOM_SEND_TOOL }, async ($, e, next) => {
     const answered = await next(e)
-    if ('deny' in answered || answered.isError) return answered
+    if (!config.installRoot || 'deny' in answered || answered.isError) return answered
     announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
     return answered
   })
 
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin?.kind
-    if ((kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined) return next(e)
+    if (!config.installRoot || (kind !== 'peer' && kind !== 'peer-send-message') || e.agentId !== undefined) return next(e)
     const held = await pointerHold($, e.text).catch(
       error => `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); the pointer is dropped, the file waits for the tick`,
     )

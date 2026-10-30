@@ -2004,17 +2004,72 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   expect('drop' in broken && broken.drop).toContain('delivery held (refresh-state-unreadable)')
 })
 
-test('the marker is retired when the mod no longer owns the seat; it comes back with ownership', CONFIGURED, async ($, on) => {
+test('the marker is retired (owner: retired, one write, no process) under a refresh hold, under a supervisor hold and when the mod loses the seat; it comes back when all three clear', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: READY })
+  const ownerOf = () => JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner
   await w.turn()
-  expect(w.files.has(ALPHA_MARKER)).toBe(true)
+  expect(ownerOf()).toBe('mod')
+  w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
+  await w.turn()
+  expect(ownerOf()).toBe('retired')
+  const retired = w.files.get(ALPHA_MARKER)
+  await w.turn()
+  expect(w.files.get(ALPHA_MARKER)).toBe(retired)
+  w.files.set(CYCLE, IDLE)
+  await w.turn()
+  expect(ownerOf()).toBe('mod')
+  w.files.set(`${ROOM}/state/holds/alpha.json`, JSON.stringify({ reason: 'refresh', ts: '2026-10-07T18:30:00.000Z', phase: 'resume' }))
+  await w.turn()
+  expect(ownerOf()).toBe('retired')
+  w.files.delete(`${ROOM}/state/holds/alpha.json`)
+  await w.turn()
+  expect(ownerOf()).toBe('mod')
   w.files.delete(OWNER)
   await w.turn()
-  expect(w.files.has(ALPHA_MARKER)).toBe(false)
-  expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(true)
+  expect(ownerOf()).toBe('retired')
   w.files.set(OWNER, MOD)
   await w.turn()
-  expect(w.files.has(ALPHA_MARKER)).toBe(true)
+  expect(ownerOf()).toBe('mod')
+  expect(w.runs.some(argv => argv[2] === UNLINK && argv[4] === ALPHA_MARKER)).toBe(false)
+})
+
+test('a retired marker is not announced to; a hold that begins while the tick is away is caught by the timer', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE, [BETA_MARKER]: marker('beta') } })
+  const sends: string[] = []
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  w.files.set(BETA_MARKER, JSON.stringify({ seat: 'beta', owner: 'retired', version: NATIVE_VERSION, at: '2026-10-07T18:29:00.000Z' }))
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
+  await w.clock.settle()
+  expect(sends).toEqual([])
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick`)
+  // This seat: a hold arrives between turns; the 30 s timer retires the marker with no turn.
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('mod')
+  w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
+  await w.clock.advance(31_000)
+  await w.clock.settle()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
+})
+
+test('an inert mod (installRoot unset) neither fences peer prompts nor announces a room_send', async ($, on) => {
+  const w = world(on, $, { files: { ...READY, [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) }, noSpawn: true })
+  on('tool.call', { tool: ROOM_SEND_TOOL }, () => ({ result: SENT, text: SENT }))
+  const sends: string[] = []
+  on('session.send', ($, e) => {
+    sends.push(e.to)
+    return { isDelivered: true as const }
+  })
+  await w.turn()
+  const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in entered && entered.drop).toBeFalsy()
+  await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
+  await w.clock.settle()
+  expect(sends).toEqual([])
+  expect(w.log.filter(entry => entry.includes('fleet-delivery:'))).toEqual([])
 })
 
 test('the marker is refreshed from the timer every 5 min, with no turn and no tick needed, and the version gate compares numerically', CONFIGURED, async ($, on) => {
