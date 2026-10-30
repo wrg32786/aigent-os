@@ -56,6 +56,13 @@ done
 AIGENT_ARG_CONV_EXCL='/start'
 
 launch_claude() {
+  # Issue #98: a parent that is itself a Claude Code session exports
+  # CLAUDE_CODE_CHILD_SESSION=1, which turns the child's transcript OFF. The
+  # managed runner scrubs its own child; the direct branches below exec claude
+  # without it, so the same two lines live here (this shell is the launcher's
+  # own; the operator's shell is untouched).
+  unset CLAUDE_CODE_CHILD_SESSION
+  export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE="${CLAUDE_CODE_FORCE_SESSION_PERSISTENCE:-1}"
   if [ "$unmanaged" -eq 1 ]; then
     MSYS_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \
     MSYS2_ARG_CONV_EXCL="$AIGENT_ARG_CONV_EXCL" \

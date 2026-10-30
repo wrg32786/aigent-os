@@ -1112,6 +1112,17 @@ else
   warn "Node.js not found -- semantic search and hook automation will be skipped (optional)"
 fi
 
+# -- 8b. Launch-shell marker (issue #98) ---------------------------------------
+# A shell that carries CLAUDE_CODE_CHILD_SESSION is itself a Claude Code
+# session's child; a seat launched from it would inherit the marker and record
+# no transcript. The managed runner now scrubs it at spawn; an older runner, or
+# a bare `claude` started by hand from this shell, does not.
+if [ -n "${CLAUDE_CODE_CHILD_SESSION:-}" ]; then
+  warn "CLAUDE_CODE_CHILD_SESSION is set in this shell -- a bare claude started from here by hand would record no transcript (the managed runner and the aigent launcher scrub it since the #98 fix)"
+else
+  pass "launch shell carries no CLAUDE_CODE_CHILD_SESSION marker"
+fi
+
 # -- 9. Semantic search node_modules -------------------------------------------
 # The same classifier --attest and --component use (issue #107): the directory
 # existing never certified anything.
