@@ -37,7 +37,7 @@ A capsule is a small markdown file with YAML frontmatter. A fresh session reads 
 
 ## Format
 
-Frontmatter fields: `id`, `parent_capsule_id`, `status: active`, `objective`, `waiting_on`, `resume_trigger`, `expires`, `trigger`, `next_valid_action`, `success_criteria`, `tags`, `created_at` (ISO-8601 with offset), `resolved_at`. Body sections: `Done (don't redo)`, `Historical-Errors -> Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `Pending-Gates`, `Claimed-Rows`. The format is compatible with the full aigent-os install.
+Frontmatter fields: `id`, `parent_capsule_id`, `status: active`, `objective`, `waiting_on`, `resume_trigger`, `expires`, `trigger`, `next_valid_action`, `success_criteria`, `tags`, `created_at` (ISO-8601 with offset), `resolved_at`. Body sections: `Done (don't redo)`, `Historical-Errors -> Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `In-Flight Side Effects`, `Pending-Gates`, `Claimed-Rows`. The format is compatible with the full aigent-os install.
 
 ## Lifecycle
 

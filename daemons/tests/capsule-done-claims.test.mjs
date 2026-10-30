@@ -85,7 +85,7 @@ test('R17.1: writer preserves a Done row quoting the Files anchor', (t) => {
   assert.match(doc, /## Files-Read \/ Files-Modified\n<!-- swe:files -->\n- read source\.mjs/);
 });
 
-test('R17.2: anchored and fallback sections ignore deeper owning headings', () => {
+test('R17.2: anchored and fallback sections ignore unrelated nested headings', () => {
   const anchor = '<!-- swe:done -->';
   for (const level of ['#', '##']) {
     const heading = `${level} Done (don't redo)`;

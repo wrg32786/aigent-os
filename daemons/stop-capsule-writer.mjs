@@ -35,15 +35,304 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  capsuleRowKey, doneRowPriority, DONE_LIMITS, DONE_TAG, locateCapsuleSection, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
+  CAPSULE_SECTIONS, classifyMcpEffect, capsuleRowKey, doneRowPriority, DONE_LIMITS, DONE_TAG, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, effectKey, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
 
 const require = createRequire(import.meta.url);
 const { atomicUpdateJson } = require('./memory-hygiene/atomic-state.cjs');
+const { redact } = require('./redact.cjs');
 
 const SELF = fileURLToPath(import.meta.url);
+
+function shellWords(text) {
+  text = text.replace(/^\s*\$[A-Za-z_]\w*\s*=\s*/, '');
+  // Tokenize before stripping quotes so a quoted option value stays one token.
+  const words = (text.trim().match(/(?:[^\s"'(){}]+|"(?:\\.|[^"\\])*"|'[^']*')+|[(){}]/g) || []);
+  const wrappers = /^(sudo|time|env|nohup|exec|command|nice|ionice|timeout)$/i;
+  const optionValue = {
+    sudo: /^(?:-[ughpCRT]|--user|--group|--host|--prompt|--chdir|--chroot|--command-timeout)$/,
+    time: /^(?:-[fo]|--format|--output)$/,
+    env: /^(?:-[uCS]|--unset|--chdir|--split-string)$/,
+    exec: /^-a$/,
+    timeout: /^(?:-s|--signal|-k|--kill-after)$/,
+    nice: /^(?:-n|--adjustment)$/,
+    ionice: /^(?:-[cnptu]|--class|--classdata|--pid|--pgid|--uid)$/,
+  };
+  while (words.length) {
+    if (/^(?:\(|then|do|\{|if|while|until|!)$/.test(words[0])) { words.shift(); continue; }
+    if (/^[A-Za-z_]\w*=/.test(words[0])) { words.shift(); continue; }
+    if (!wrappers.test(words[0])) break;
+    const wrapper = words.shift().toLowerCase();
+    while (words[0]?.startsWith('-')) {
+      const option = words.shift();
+      if (option === '--') break;
+      if (optionValue[wrapper]?.test(option)) words.shift();
+    }
+    if (wrapper === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(words[0])) words.shift();
+  }
+  return words;
+}
+
+function shellCommand(text) {
+  const words = shellWords(text).map((word) => word.replace(/["']/g, '').replace(/\s+/g, ' '));
+  const commands = /^(?:git|gh|curl|wget|docker|railway|vercel|npm|pnpm|yarn|aws|kubectl|terraform|scp|rsync|wrangler|fly|netlify|firebase|gcloud|Invoke-RestMethod|Invoke-WebRequest)$/i;
+  const binary = (word = '') => word.replace(/@[^\s]+$/, '');
+  if (/^(?:npx|pnpm|yarn|bunx)$/i.test(binary(words[0]))) {
+    let next = 1;
+    if (/^(?:pnpm|yarn)$/i.test(binary(words[0])) && words[next] === 'dlx') next++;
+    while (words[next]?.startsWith('-')) {
+      const option = words[next++];
+      if (/^(?:-p|--package)$/.test(option)) next++;
+      else if (!/^(?:-y|--yes|-q|--package=.+)$/.test(option)) break;
+    }
+    if (commands.test(binary(words[next]))) words.splice(0, next);
+  }
+  const command = binary(words.shift());
+  if (!commands.test(command)) return '';
+  const original = [...words];
+  const options = [];
+  while (/^-\S+/.test(words[0])) {
+    const option = words.shift();
+    if (option === '--') break;
+    if (/^(?:-n|-C|-c|--profile|--project|--context|--token|--namespace|--region|--git-dir|--work-tree|--config-env)$/.test(option)) words.shift();
+    else options.push(option);
+  }
+  // Flag-driven commands need their original flag/value adjacency for evidence.
+  const args = /^(?:curl|wget|scp|rsync|Invoke-RestMethod|Invoke-WebRequest)$/i.test(command)
+    ? original : words.length ? words : options;
+  return [command, ...args].join(' ');
+}
+
+// Find substitutions without treating quoted prose or escaped delimiters as code.
+function substitutionEnd(command, start, backtick) {
+  let depth = 1, quote = null;
+  for (let i = start; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === '\\' && quote !== "'") { i++; continue; }
+    if (backtick && ch === '`') return i;
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (!backtick && ch === '(') depth++;
+    if (!backtick && ch === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function shellSegments(command, toolName) {
+  if (toolName === 'PowerShell') command = command.replace(/`\r?\n/g, ' ');
+  const segments = [];
+  let quote = null;
+  let start = 0;
+  let unquoted = '';
+  const heredocs = [];
+  let substitutions = [];
+  const push = (end) => {
+    const text = command.slice(start, end);
+    const words = shellWords(text);
+    const shell = /^(?:bash|sh|zsh)$/i.test(words[0]) && words[1] === '-c'
+      ? 'Bash' : /^(?:pwsh|powershell)$/i.test(words[0]) && /^-Command$/i.test(words[1]) ? 'PowerShell' : null;
+    const payload = words[2];
+    if (shell && /^(?:"(?:\\.|[^"\\])*"|'[^']*')$/.test(payload)) {
+      const inner = payload.slice(1, -1);
+      segments.push(...shellSegments(payload[0] === '"' ? inner.replace(/\\(["\\])/g, '$1') : inner, shell));
+    } else {
+      segments.push(...substitutions, { text, unquoted: unquoted.padEnd(end - start, ' ') });
+    }
+    substitutions = [];
+    unquoted = '';
+  };
+  const drainHeredocs = () => {
+    if (!heredocs.length) return;
+    const bodyStart = start;
+    for (const { word, tabs } of heredocs.splice(0)) {
+      while (start < command.length) {
+        const newline = command.indexOf('\n', start);
+        const end = newline === -1 ? command.length : newline;
+        let line = command.slice(start, end).replace(/\r$/, '');
+        if (tabs) line = line.replace(/^\t+/, '');
+        start = newline === -1 ? command.length : newline + 1;
+        if (line === word) break;
+      }
+    }
+    segments.push({ text: command.slice(bodyStart, start), unquoted: '', opaque: true });
+  };
+  for (let i = 0; i < command.length; i++) {
+    // Keep mask offsets aligned with the original segment for flag redaction.
+    unquoted = unquoted.padEnd(i - start, ' ');
+    const ch = command[i];
+    if (toolName === 'Bash' && ch === '\\' && quote !== "'") {
+      if (!quote) unquoted += ' ';
+      i++;
+      continue;
+    }
+    if (quote !== "'" && (command.startsWith('$(', i) || (toolName === 'Bash' && ch === '`'))) {
+      const backtick = ch === '`';
+      const innerStart = i + (backtick ? 1 : 2);
+      const end = substitutionEnd(command, innerStart, backtick);
+      if (end !== -1) {
+        substitutions.push(...shellSegments(command.slice(innerStart, end), toolName));
+        unquoted += ' ';
+        i = end;
+        continue;
+      }
+    }
+    if (!quote && ch === '#' && (i === 0 || /\s/.test(command[i - 1]))) {
+      push(i);
+      const newline = command.indexOf('\n', i);
+      start = newline === -1 ? command.length : newline + 1;
+      drainHeredocs();
+      i = start - 1;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; unquoted += ' '; continue; }
+    if (command.startsWith('<<<', i)) {
+      unquoted += ' ';
+      i += 2;
+      continue;
+    }
+    if (ch === '<' && command[i + 1] === '<') {
+      const heredoc = /^<<(-?)[ \t]*(?:'([^'\r\n]+)'|"([^"\r\n]+)"|([\w]+))/.exec(command.slice(i));
+      if (heredoc) {
+        heredocs.push({ word: heredoc[2] ?? heredoc[3] ?? heredoc[4], tabs: heredoc[1] === '-' });
+        unquoted += ' ';
+        i += heredoc[0].length - 1;
+        continue;
+      }
+    }
+    if (ch === ';' || ch === '|' || ch === '\n' || (ch === '&' && command[i + 1] === '&')) {
+      push(i);
+      if ((ch === '|' || ch === '&') && command[i + 1] === ch) i++;
+      start = i + 1;
+      if (ch === '\n' && heredocs.length) {
+        // Bodies and terminators are opaque, including quoted command-looking text.
+        drainHeredocs();
+        i = start - 1;
+      }
+    } else {
+      unquoted += ch;
+    }
+  }
+  push(command.length);
+  return segments.filter((segment) => segment.text.trim());
+}
+
+function redactShellSegment(segment) {
+  let text = segment.text;
+  // The segmenter's mask excludes flags in quoted prose and substitutions.
+  // Work backwards so replacements do not move subsequent argument offsets.
+  const flags = [...segment.unquoted.matchAll(/(?:^|\s)(-H|--header|--token|--password|--api-key)(?=\s|=|$)/g)];
+  for (const match of flags.reverse()) {
+    const start = match.index + match[0].length;
+    const argument = /^(\s+|=)("(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)/.exec(text.slice(start));
+    if (!argument) continue;
+    if (/^(?:-H|--header)$/.test(match[1])
+      && !/^["']?(?:X-Api-Key|apikey|Authorization|Cookie|Set-Cookie|X-Auth-Token|Private-Token)\s*:/i.test(argument[2])) continue;
+    text = text.slice(0, start) + argument[1] + '[REDACTED]' + text.slice(start + argument[0].length);
+  }
+  return text.trim();
+}
+const SHELL_EFFECT = new RegExp(String.raw`^(?:` + [
+  String.raw`git\s+push\b`,
+  String.raw`gh\s+(?:pr|issue|release)\s+(?:create|merge|comment|close|reopen|edit)\b`,
+  String.raw`gh\s+release\s+(?:upload|delete)\b`,
+  String.raw`gh\s+repo\s+(?:create|delete|edit|fork)\b`,
+  String.raw`gh\s+pr\s+review\b`,
+  String.raw`gh\s+(?:workflow\s+run|secret\s+set|variable\s+set|issue\s+delete|pr\s+ready)\b`,
+  String.raw`gh\s+api\b[^\n]*\s(?:(?:-X|--method)(?:\s+|=)["']?(?:POST|PUT|PATCH|DELETE)\b|(?:-f|-F|--field|--raw-field|--input)(?:\s|=|$))`,
+  String.raw`curl\b[^\n]*\s(?:-d\S|(?:-d|--data|--data-raw|--data-binary|--form|-F|--upload-file|--json|-T|--data-urlencode)(?:\s|=|$)|(?:--request(?:\s+|=)|-X(?:\s*|=))["']?(?:POST|PUT|PATCH|DELETE)\b)`,
+  String.raw`docker\s+push\b|railway\s+up\b|(?:npm|pnpm|yarn)\s+(?:un)?publish\b`,
+  String.raw`vercel(?:$|\s+(?:--yes|-y|--prod|deploy|promote|rollback|rm|remove|env\s+add|alias\s+set)(?:\s|$))`,
+  String.raw`wget\b[^\n]*\s(?:--(?:post-data|post-file|body-data|body-file)(?:=|\s)|--method(?:=|\s+)(?:POST|PUT|PATCH|DELETE)\b)`,
+  String.raw`aws\s+cloudformation\s+deploy\b`,
+  String.raw`Invoke-(?:RestMethod|WebRequest)\b[^\n]*\s-Method\s+["']?(?:Post|Put|Patch|Delete)\b`,
+  String.raw`aws\s+\S+\s+(?:put|create|delete|send)\b|gcloud\s+\S+\s+(?:deploy|create|delete|update)\b`,
+  String.raw`aws\s+s3\s+(?:cp|sync|rm|mv)\b|aws\s+sns\s+publish\b|aws\s+sqs\s+send-message\b`,
+  String.raw`aws\s+lambda\s+(?:update|invoke|create|delete)\S*`,
+  String.raw`kubectl\s+(?:apply|delete|rollout(?!\s+(?:status|history)\b)|scale|patch|create)\b|terraform\s+(?:apply|destroy)\b`,
+  String.raw`(?:scp|rsync)\b(?!\s+--(?:version|help)\b)|(?:wrangler|fly|netlify|firebase)\s+deploy\b`,
+].join('|') + ')', 'i');
+// The quoted JSON key has its boundary inside the quote, not before it.
+const ID_KEY = /(?:\b(?:message[_-]?id|msg[_-]?id|draft[_-]?id|thread[_-]?id|job[_-]?id|run[_-]?id|deployment[_-]?id|post[_-]?id|order[_-]?id|task[_-]?id|op[_-]?id)|"id")\s*["']?\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._:/-]{3,119})/i;
+const NAMED_ID_KEY = new RegExp(ID_KEY.source.replace('|"id"', ''), 'i');
+const NAMED_IDS = ['message_id', 'msg_id', 'draft_id', 'thread_id', 'job_id', 'run_id', 'deployment_id',
+  'post_id', 'order_id', 'task_id', 'op_id', 'messageId', 'draftId', 'jobId', 'runId', 'deploymentId'];
+function resultEvidence(text) {
+  text = text.slice(0, 64 * 1024);
+  let parsed;
+  try { parsed = JSON.parse(text); } catch {
+    text = text.slice(0, 4000);
+    return { id: NAMED_ID_KEY.exec(text)?.[1] ?? ID_KEY.exec(text)?.[1],
+      unclean: /\b(error|failed|failure|denied|refused|rejected|not sent|timed? ?out)\b/i.test(text) };
+  }
+  const object = (value) => value !== null && typeof value === 'object';
+  const handle = (value) => typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
+  const named = (value) => {
+    if (!object(value)) return undefined;
+    const key = NAMED_IDS.find((key) => Object.hasOwn(value, key));
+    return key === undefined ? undefined : handle(value[key]);
+  };
+  const nested = (value, depth = 0) => {
+    if (depth > 6 || !object(value)) return undefined;
+    const own = named(value);
+    if (own !== undefined) return own;
+    for (const child of Object.values(value)) {
+      const id = nested(child, depth + 1);
+      if (id !== undefined) return id;
+    }
+    return undefined;
+  };
+  try {
+    const error = object(parsed) ? parsed.error : undefined;
+    const hasError = error === true || (typeof error === 'string' && error.length > 0)
+      || (object(error) && Object.keys(error).length > 0);
+    return {
+      id: named(parsed) ?? (object(parsed) && Object.hasOwn(parsed, 'id') ? handle(parsed.id) : undefined) ?? nested(parsed),
+      unclean: object(parsed) && (hasError || parsed.ok === false || parsed.success === false),
+    };
+  } catch { return { id: undefined, unclean: true }; }
+}
+const ID_URL = /https?:\/\/[^\s"'<>)\]]{8,200}/;
+const INPUT_ID_KEY = /^(?:(?:message|msg|draft|thread|job|run|deployment|post|order|task|op)[_-]?)?id$/i;
+const SHELL_CHECK = 're-run the read form of the command (git ls-remote, gh pr view, curl GET) before any retry';
+function inputHandle(input) {
+  return Object.entries(input).find(([key, value]) => INPUT_ID_KEY.test(key)
+    && (typeof value === 'string' || typeof value === 'number'))?.[1] ?? 'none';
+}
+function storedTarget(target, shell) {
+  let text = typeof target === 'object' ? JSON.stringify(target) : String(target);
+  if (shell) {
+    const url = ID_URL.exec(text)?.[0];
+    if (url) {
+      const command = shellCommand(text);
+      const verb = SHELL_EFFECT.exec(command)?.[0];
+      const method = /(?:--request|--method|-Method|-X)\s*=?\s*(POST|PUT|PATCH|DELETE)\b/i.exec(command)?.[1];
+      const label = /^(?:curl|wget|Invoke-)/i.test(command)
+        ? [command.split(' ')[0], method?.toUpperCase()].filter(Boolean).join(' ')
+        : /^gh\s+api\b/i.test(command) ? ['gh api', method?.toUpperCase()].filter(Boolean).join(' ') : verb;
+      text = `${label} ${url.split(/[?#]/, 1)[0]}`;
+    }
+  }
+  if (shell) text = text.replace(/(https?:\/\/[^\s"'?#]+)[?#]\S*/g, '$1');
+  if (/^https?:\/\//i.test(text)) text = text.split(/[?#]/, 1)[0];
+  text = redact(text);
+  if (typeof target === 'object') text = text.slice(0, 240);
+  return storedData(text, shell && ID_URL.test(text) ? 240 : shell ? 80 : 120);
+}
+function storedResultId(value) {
+  return storedData(redact(String(value).replace(/^(https?:\/\/[^?#]*)\?[^#]*/i, '$1')), 120);
+}
+function resultText(content) {
+  return (typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ')
+    : '');
+}
+
 
 // Instrument identity, stamped into every receipt (board d185aeea). The hash
 // names the BYTES that ran, not the tree they sat in: hooks spawn this file
@@ -233,6 +522,14 @@ try {
   const errors = [];
   const claimedRows = new Set();
   const utterances = [];
+  const effectCalls = new Map();
+  const effectResults = new Map();
+  const toolResults = [];
+  // Defer decoding until the complete delta identifies forward-paired effect calls.
+  const resultContents = new Map();
+  const seenCalls = new Set();
+  const effectsByTool = new Map();
+  let effectPosition = 0;
   let latestRequest = null;
 
   // Speaker-aware classification. A close-time sweep can grep [OPERATOR] for
@@ -378,6 +675,7 @@ try {
     .replace(/^[\s\S]*<\/(?:system-reminder|local-command-[^>]*)>\s*$/i, '')
     .trim();
 
+  let previousTimestamp = 'unknown';
   for (const line of chunk.split('\n')) {
     const t = line.trim();
     if (!t) continue;
@@ -386,6 +684,44 @@ try {
     // JSON primitives and malformed content blocks are valid JSON but not
     // transcript events. Skip them instead of abandoning the entire Stop delta.
     if (!ev || typeof ev !== 'object' || Array.isArray(ev)) continue;
+    const requested = typeof ev.timestamp === 'string' ? ev.timestamp : previousTimestamp;
+    previousTimestamp = requested;
+
+    // Pair by operation ID across the entire delta, including sidechains.
+    for (const b of Array.isArray(ev.message?.content) ? ev.message.content : []) {
+      if (!b || typeof b !== 'object') continue;
+      const position = effectPosition++;
+      if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const result = { tool_use_id: storedData(b.tool_use_id, 240), is_error: b.is_error === true, position };
+        toolResults.push(result);
+        if (!seenCalls.has(result.tool_use_id) || effectsByTool.has(result.tool_use_id)) {
+          resultContents.set(result, b.content);
+        }
+      }
+      if (ev.type !== 'assistant' || b.type !== 'tool_use' || typeof b.id !== 'string') continue;
+      const toolOp = storedData(b.id, 240);
+      seenCalls.add(toolOp);
+      const input = b.input ?? {};
+      const shell = b.name === 'Bash' || b.name === 'PowerShell';
+      const mcpEffect = classifyMcpEffect(b.name) !== 'read';
+      if (!shell && b.name !== 'SendMessage' && !mcpEffect) continue;
+      const segments = shell ? (typeof input.command === 'string' ? shellSegments(input.command, b.name) : []) : [null];
+      for (const [index, segment] of segments.entries()) {
+        const command = segment?.text.trim();
+        if (shell && (segment.opaque || /--dry-run/i.test(segment.unquoted)
+          || /^rsync\b[^\n]*\s-[a-zA-Z]*n[a-zA-Z]*(?:\s|$)/i.test(shellCommand(segment.unquoted))
+          || !SHELL_EFFECT.test(shellCommand(command)))) continue;
+        const target = shell ? redactShellSegment(segment) : ['to', 'recipient', 'recipients', 'channel', 'channel_id', 'url', 'repo', 'subject', 'title', 'command']
+          .map((key) => input[key]).find((value) => value !== undefined && value !== null) ?? b.name;
+        const op = segments.length > 1 ? `${toolOp}#${index}` : toolOp;
+        if (!effectsByTool.has(toolOp)) effectsByTool.set(toolOp, new Set());
+        effectsByTool.get(toolOp).add(op);
+        effectCalls.set(op, { op, toolOp, kind: storedData(`${ev.isSidechain === true ? 'sidechain:' : ''}${shell ? 'shell' : b.name}`, 240),
+          earlierSegment: shell && index < segments.length - 1,
+          target: storedTarget(target, shell), requested: storedData(requested, 120),
+          id: storedData(redact(inputHandle(input)), 120), position });
+      }
+    }
 
     if (ev.type === 'user' && !ev.isMeta) {
       const speech = ev.isSidechain !== true;
@@ -401,14 +737,7 @@ try {
             if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
-            const txt = typeof b.content === 'string'
-              ? b.content
-              : Array.isArray(b.content)
-                ? b.content
-                  .filter((x) => x && typeof x === 'object'
-                    && !Array.isArray(x) && x.type === 'text' && typeof x.text === 'string')
-                  .map((x) => x.text).join(' ')
-                : '';
+            const txt = resultText(b.content);
             if (txt) errors.push(storedData(txt, 200));
           }
         }
@@ -445,20 +774,21 @@ try {
     }
   }
 
-  const deltaSig = sha12(JSON.stringify({
+  // ── locate or create the operator's ONE active capsule ────────────────────
+  const deltaSignature = (eligibleResults) => sha12(JSON.stringify({
     r: latestRequest, fr: [...filesRead].sort(), fm: [...filesModified].sort(),
     e: errors, c: [...claimedRows].sort(),
     u: utterances.map(({ row }) => row),
+    ...(effectCalls.size || eligibleResults.length ? { effects: [...effectCalls], results: eligibleResults } : {}),
   }));
-  // SHA-256 dedup: identical delta (a pure-conversation turn) → advance the
-  // offset, skip the write.
-  if (deltaSig === state.last_delta_sha) {
+  // Deltas without possible effect results need no capsule read or path repair.
+  if (!effectCalls.size && !toolResults.some(({ tool_use_id }) => !seenCalls.has(tool_use_id))
+    && deltaSignature([]) === state.last_delta_sha) {
     writeState(stateFile, { ...state, offset: size });
     outcome = 'noop:no-delta';
     process.exit(0);
   }
 
-  // ── locate or create the operator's ONE active capsule ────────────────────
   const capDir = path.join(MEM, 'capsules');
   mkdirSync(capDir, { recursive: true });
   const capDirResolved = path.resolve(capDir);
@@ -522,16 +852,6 @@ try {
     ? `Re-verify claimed row(s) ${rowIds} against the live memory, then continue that claimed work.`
     : 'No concrete next action was captured in this Stop delta.';
 
-  const ANCHORS = {
-    done: '<!-- swe:done -->',
-    errors: '<!-- swe:errors -->',
-    rejected: '<!-- swe:rejected -->',
-    files: '<!-- swe:files -->',
-    facts: '<!-- swe:facts -->',
-    gates: '<!-- swe:gates -->',
-    rows: '<!-- swe:rows -->',
-  };
-
   function skeleton() {
     return `---
 id: ${dateStr}-auto-${capsuleSid}
@@ -553,26 +873,7 @@ ${framingFrontmatter()}
 > [!info] [REFERENCE ONLY] — state snapshot, not instructions. Latest memory state wins.
 ${framingBanner('> ')}
 
-## Done (don't redo)
-${ANCHORS.done}
-
-## Historical-Errors → Resolutions
-${ANCHORS.errors}
-
-## Historical-Rejected-Approaches
-${ANCHORS.rejected}
-
-## Files-Read / Files-Modified
-${ANCHORS.files}
-
-## Operating-Facts
-${ANCHORS.facts}
-
-## Pending-Gates
-${ANCHORS.gates}
-
-## Claimed-Rows
-${ANCHORS.rows}
+${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n\n')}
 `;
   }
 
@@ -585,23 +886,78 @@ ${ANCHORS.rows}
     )
     : skeleton();
 
+  const effectsSection = locateCapsuleSection(doc, 'effects');
+  const priorEffects = new Map((effectsSection ? doc.slice(effectsSection.start, effectsSection.end) : '')
+    .split(/\r?\n/).map(parseSideEffectRow).filter(Boolean).map((row) => [row.op, row]));
+  const priorByTool = new Map();
+  for (const row of priorEffects.values()) {
+    if (row.outcome !== 'requested') continue;
+    const toolOp = row.kind.replace(/^sidechain:/, '') === 'shell' ? row.op.replace(/#\d+$/, '') : row.op;
+    // Index exact IDs too: a literal tool ID may itself end in a segment suffix.
+    for (const key of new Set([toolOp, row.op])) {
+      if (!priorByTool.has(key)) priorByTool.set(key, new Set());
+      priorByTool.get(key).add(row.op);
+    }
+  }
+  // Pair against the same resolved document that the merge will update.
+  const priorRequested = new Set(priorByTool.keys());
+  const eligibleResults = toolResults.filter(({ tool_use_id }) => effectsByTool.has(tool_use_id)
+    || (!seenCalls.has(tool_use_id) && priorRequested.has(tool_use_id)))
+    .map((result) => {
+      const text = resultText(resultContents.get(result));
+      return { ...result, evidence: resultEvidence(text), text: text.slice(0, 4000) };
+    });
+  resultContents.clear();
+  const deltaSig = deltaSignature(eligibleResults);
+  if (deltaSig === state.last_delta_sha) {
+    writeState(stateFile, { ...state, offset: size });
+    outcome = 'noop:no-delta';
+    process.exit(0);
+  }
+  for (const result of eligibleResults) {
+    const candidates = effectsByTool.get(result.tool_use_id) ?? priorByTool.get(result.tool_use_id);
+    for (const op of candidates || []) {
+      if (effectCalls.get(op)?.earlierSegment) continue;
+      effectResults.set(op, { ...result, failed: result.is_error });
+    }
+  }
+
   // The shared row key ignores list markers and volatile HH:MM stamps, so
   // replaying a span at another wall-clock minute cannot duplicate its rows.
-  function mergeUnder(anchor, bullets, keyFn = capsuleRowKey) {
+  function mergeUnder(definition, bullets, keyFn = capsuleRowKey, replace = false) {
     if (!bullets.length) return;
-    const section = locateCapsuleSection(doc, anchor);
-    if (!section) {
+    const { anchor } = definition;
+    const section = locateCapsuleSection(doc, definition);
+    if (!section || section.anchorAt === null) {
       // Hand-edited capsule without anchors: leaving it alone is right, but the
       // offset still advances — these bullets never land anywhere else, so the
       // drop must be visible.
       logErr(root, `anchor ${anchor} missing in ${path.basename(capPath)} — ${bullets.length} bullet(s) NOT merged (hand-edited capsule?)`);
       return;
     }
-    const insertAt = section.anchorAt + anchor.length;
     if (!section.hasHeading) {
       logErr(root, `anchor ${anchor} has no section heading in ${path.basename(capPath)} — merging under anchor`);
     }
-    const existing = doc.slice(section.start, section.end).split('\n')
+    if (replace) {
+      const replacements = new Map(bullets.map((row) => [keyFn(row), row]));
+      const original = doc.slice(section.start, section.end);
+      const eol = original.includes('\r\n') ? '\r\n' : '\n';
+      let matched = false;
+      const matchedKeys = new Set();
+      const lines = original.split(/\r?\n/).map((row) => {
+        const key = keyFn(row);
+        if (!replacements.has(key)) return row;
+        const fresh = replacements.get(key);
+        matchedKeys.add(key);
+        matched = true;
+        return fresh;
+      });
+      if (matched) doc = doc.slice(0, section.start) + lines.join(eol) + doc.slice(section.end);
+      bullets = [...replacements].filter(([key]) => !matchedKeys.has(key)).map(([, row]) => row);
+      if (!bullets.length) return;
+    }
+    const currentSection = locateCapsuleSection(doc, definition);
+    const existing = doc.slice(currentSection.start, currentSection.end).split(/\r?\n/)
       .filter((row) => row.trim() && row.trim() !== anchor);
     const existingNorm = new Set(
       existing.map(keyFn).filter(Boolean),
@@ -613,7 +969,25 @@ ${ANCHORS.rows}
       return true;
     });
     if (!fresh.length) return;
-    doc = doc.slice(0, insertAt) + '\n' + fresh.join('\n') + doc.slice(insertAt);
+    const body = doc.slice(currentSection.start, currentSection.end);
+    const eol = body.includes('\r\n') ? '\r\n' : '\n';
+    if (replace) {
+      // Side effects are chronological history: append after all existing rows.
+      // A nested heading immediately before the next anchor belongs to that
+      // anchor's section for insertion, even though our read window includes it.
+      const nextHeading = /(?:^|\r?\n)#{1,6}[ \t]+[^\r\n]*(?:\r?\n[ \t]*)*$/.exec(body);
+      if (nextHeading && /^\s*<!-- swe:[a-z]+ -->/.test(doc.slice(currentSection.end))) {
+        const insertAt = currentSection.start + nextHeading.index;
+        doc = doc.slice(0, insertAt) + eol + fresh.join(eol) + eol + doc.slice(insertAt);
+        return;
+      }
+      const content = body.trimEnd();
+      const insertAt = currentSection.start + content.length;
+      doc = doc.slice(0, insertAt) + eol + fresh.join(eol) + eol + eol + doc.slice(currentSection.end);
+    } else {
+      const insertAt = currentSection.anchorAt + anchor.length;
+      doc = doc.slice(0, insertAt) + eol + fresh.join(eol) + doc.slice(insertAt);
+    }
   }
 
   // Legacy untagged rows are assistant claims. Preserve outer speaker tags:
@@ -626,13 +1000,64 @@ ${ANCHORS.rows}
   const ts = new Date().toISOString().slice(11, 16);
   // Speaker-tagged utterances land under Done — a sweep can grep `[OPERATOR]` there.
   // Autosaves store accepted speech newest-first; readers preserve file order.
-  mergeUnder(ANCHORS.done, utterances.slice().reverse().map(({ row }) => `- ${ts} ${row}`), doneKey);
-  mergeUnder(ANCHORS.files, [
-    ...[...filesModified].map((f) => `- MODIFIED ${f}`),
-    ...[...filesRead].filter((f) => !filesModified.has(f)).map((f) => `- read ${f}`),
-  ]);
-  mergeUnder(ANCHORS.errors, errors.map((e) => `- ${ts} ${e} → (unresolved at capture; check next Done bullet)`));
-  mergeUnder(ANCHORS.rows, [...claimedRows].map((r) => `- ${r} (claimed this session — re-verify against memory at reinject)`));
+  const bulletsBySection = {
+    done: utterances.slice().reverse().map(({ row }) => `- ${ts} ${row}`),
+    files: [
+      ...[...filesModified].map((f) => `- MODIFIED ${f}`),
+      ...[...filesRead].filter((f) => !filesModified.has(f)).map((f) => `- read ${f}`),
+    ],
+    errors: errors.map((e) => `- ${ts} ${e} → (unresolved at capture; check next Done bullet)`),
+    rows: [...claimedRows].map((r) => `- ${r} (claimed this session — re-verify against memory at reinject)`),
+  };
+
+  const updates = new Map(effectCalls);
+  for (const [op, result] of effectResults) {
+    if (!updates.has(op) && priorEffects.has(op)) updates.set(op, { ...priorEffects.get(op), position: result.position });
+  }
+  const ordered = [...updates.values()].sort((a, b) => a.position - b.position);
+  // Prior rows are updates to recorded history, never part of the new-row cap.
+  const newCalls = ordered.filter((call) => !priorEffects.has(call.op));
+  const retainedNew = new Set(newCalls.slice(-24).map((call) => call.op));
+  if (newCalls.length > 24) logErr(root, `side-effects: ${newCalls.length - 24} rows not recorded in this delta (cap 24)`);
+  const effectRows = ordered.filter((call) => priorEffects.has(call.op) || retainedNew.has(call.op)).map((call) => {
+    const result = effectResults.get(call.op);
+    const prior = priorEffects.get(call.op);
+    // A replayed call without a new result must not erase an observed outcome.
+    if (!result && prior) return formatSideEffectRow(prior);
+    const evidence = result?.evidence;
+    const structuredId = evidence?.id;
+    const extracted = structuredId || ID_URL.exec((result?.text || '').slice(0, 4000))?.[0];
+    const id = extracted ? storedResultId(extracted) : call.id;
+    const kind = call.kind.replace(/^sidechain:/, '');
+    const check = result?.failed ? 'see Historical-Errors' : kind === 'shell' ? SHELL_CHECK
+      : kind === 'SendMessage' ? 'confirm receipt with the recipient before any resend'
+      : id !== 'none' ? `read back by id with a read tool on ${kind.split('__')[1]}; never re-run ${kind}`
+        : 'no id: ask the operator before any retry';
+    return formatSideEffectRow({ ...call, id, check: storedData(check, 500),
+      outcome: call.earlierSegment ? 'unknown' : !result ? 'requested' : result.failed ? 'failed' : structuredId && !evidence.unclean ? 'confirmed' : 'unknown' });
+  });
+  for (const definition of CAPSULE_SECTIONS) {
+    if (definition.key !== 'effects') {
+      mergeUnder(definition, bulletsBySection[definition.key] || [], definition.key === 'done' ? doneKey : capsuleRowKey);
+      continue;
+    }
+    // Earlier merges can shift offsets; locate again before restoring the anchor.
+    const currentEffects = locateCapsuleSection(doc, definition);
+    if (effectRows.length && currentEffects && currentEffects.anchorAt === null) {
+      const eol = /\r\n|\n|\r/.exec(doc)?.[0] || '\n';
+      doc = doc.slice(0, currentEffects.start) + eol + definition.anchor + doc.slice(currentEffects.start);
+    }
+    if (effectRows.length && !currentEffects) {
+      // Upgrade older capsules in place without reordering their other sections.
+      const gates = locateCapsuleSection(doc, 'gates');
+      const at = gates?.headingAt ?? gates?.anchorAt ?? doc.length;
+      const eol = /\r\n|\n|\r/.exec(doc)?.[0] || '\n';
+      const before = doc.slice(0, at);
+      const gap = before.endsWith(eol + eol) ? '' : before.endsWith(eol) ? eol : eol + eol;
+      doc = before + gap + `${gates?.headingAt != null ? /^#+/.exec(doc.slice(gates.headingAt))[0] : '##'} ${definition.title}${eol}${definition.anchor}${eol}${eol}` + doc.slice(at);
+    }
+    mergeUnder(definition, effectRows, effectKey, true);
+  }
 
   // Refresh live frontmatter fields. objective moves only on a real operator
   // utterance (apart from healing the legacy placeholder), while next_valid_action

@@ -36,13 +36,16 @@ import path from 'node:path';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CAPSULE_SECTIONS,
   capsuleValue,
   inert,
   logErr,
   memRoot,
+  parseSideEffectRow,
+  orderSideEffectRows,
   readStdin,
   seatOf,
-  unsafeRawBodySection,
+  locateCapsuleSection,
   unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 
@@ -204,18 +207,29 @@ try {
     if (obj) out.push(`objective: ${inert(obj)}`);
     if (next) out.push(`next_valid_action: ${inert(next)}`);
     if (waiting && waiting !== 'null') out.push(`waiting_on: ${inert(waiting)}`);
-    const gates = unsafeRawBodySection(
-      doc,
-      'Pending-Gates',
-      'precompact preserves authored gate rows but renders every row through inert',
-    );
-    if (gates) {
-      out.push(`Pending-Gates (MUST survive refresh; quoted data rows):\n${inertBodyLines(gates)}`);
+    const sectionBody = (key) => {
+      const section = locateCapsuleSection(doc, key);
+      return section ? doc.slice(section.start, section.end).split(/\r?\n/)
+        .filter((line) => line.trim() && !/^<!-- swe:[a-z]+ -->$/.test(line.trim())) : [];
+    };
+    const rows = sectionBody('effects');
+    if (rows.length) {
+      out.push('In-Flight Side Effects (status-check before any retry; quoted data rows):');
+      for (const row of orderSideEffectRows(rows).slice(0, 12)) {
+        const parsed = parseSideEffectRow(row);
+        out.push(parsed
+          ? `  - op ${inert(parsed.op, 80)} ${parsed.outcome} id ${inert(parsed.id, 120)} kind ${inert(parsed.kind, 80)}`
+          : '  - unparseable side-effect row (treat as outcome unknown)');
+      }
+      if (rows.length > 12) out.push(`  - ${rows.length - 12} more side-effect rows in the capsule file`);
+    }
+    const gates = sectionBody('gates');
+    if (gates.length) {
+      out.push(`Pending-Gates (MUST survive refresh; quoted data rows):\n${inertBodyLines(gates.join('\n'))}`);
     }
     out.push(`Sections on disk (pull on demand, never from memory): ` +
-      ['Done (don\'t redo)', 'Historical-Errors → Resolutions', 'Historical-Rejected-Approaches',
-        'Files-Read / Files-Modified', 'Operating-Facts', 'Pending-Gates', 'Claimed-Rows']
-        .map((s) => inert(`${rel}#${s}`)).join(' · '));
+      CAPSULE_SECTIONS
+        .map(({ title }) => inert(`${rel}#${title}`)).join(' · '));
   } else if (cap.outside) {
     logErr(root, 'precompact-flush', `OUTSIDE capsule pointer refused: ${cap.path}`);
     out.push(`[PRECOMPACT:capsule-toc] ${inert(seat, 80)} — WARNING: the active-capsule pointer resolves outside the capsules directory (${inert(cap.path)}); it was not read.`);

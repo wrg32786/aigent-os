@@ -1249,11 +1249,6 @@ const JS_RAW_ALLOWLIST = [
     accessor: 'unsafeRawCapsuleDocument',
     reason: 'precompact builds a bounded table of contents from shared-reader capsule values',
   },
-  {
-    file: 'daemons/precompact-flush.mjs',
-    accessor: 'unsafeRawBodySection',
-    reason: 'precompact preserves authored gate rows but renders every row through inert',
-  },
   // The stop writer is a byte-preserving document transformer for body sections
   // it does not own.
   {

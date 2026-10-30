@@ -11,6 +11,65 @@ const {
 
 const fixedTime = new Date('2026-07-10T12:34:56Z');
 
+test('missing shared redactor fails closed for every captured value with one stderr line', () => {
+  const { readFileSync } = require('node:fs');
+  const { runInNewContext } = require('node:vm');
+  const messages = [];
+  const exported = { exports: {} };
+  runInNewContext(readFileSync(require.resolve('../hooks/tool-tracker.js'), 'utf8'), {
+    module: exported,
+    require(name) { throw new Error(`missing ${name}`); },
+    process: { env: {}, stderr: { write: (text) => messages.push(text) } },
+    console: { error: (text) => messages.push(text + '\n') },
+  });
+  for (const value of ['ordinary description', 'password:hunter2', null, 42]) {
+    assert.equal(exported.exports.redact(value), '[REDACTOR UNAVAILABLE]');
+  }
+  for (const [tool_name, tool_input] of [['Agent', { description: 'password:hunter2' }],
+    ['Write', { file_path: 'private.txt' }], ['Bash', { command: 'git push' }],
+    ['mcp__private__send', {}]]) {
+    const capture = exported.exports.formatCapture({ tool_name, tool_input }, {}, fixedTime);
+    assert.match(capture, /\| "\[REDACTOR UNAVAILABLE\]" \| "\[REDACTOR UNAVAILABLE\]"$/);
+  }
+  assert.equal(messages.join('').trim().split('\n').length, 1);
+  assert.match(messages.join(''), /redact/i);
+});
+
+const redactionCases = require('../daemons/tests/helpers/redaction-cases.cjs');
+for (const { name, input, command, secret } of Object.values(redactionCases).flat()) {
+  test(`redacts credential pattern: ${name}`, () => {
+    for (const value of new Set([input ?? command, input?.replace(secret, `"${secret}"`) ?? command, command])) {
+      const output = redact(value);
+      assert.ok(!output.includes(secret), output);
+      assert.match(output, /\[REDACTED\]/);
+    }
+  });
+}
+
+test('live PostToolUse capture redacts spaced credential assignments', async (t) => {
+  const { spawnSync } = require('node:child_process');
+  for (const description of ['password: hunter2', 'password = hunter2', 'auth_token=abc', 'client_secret: abc', 'api_key = abc']) {
+    await t.test(description, () => {
+      const run = spawnSync(process.execPath, [require.resolve('../hooks/tool-tracker.js')], {
+        input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { description } }),
+        encoding: 'utf8', windowsHide: true,
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(run.stdout, /\[REDACTED\]/);
+      assert.doesNotMatch(run.stdout, /hunter2|abc/);
+    });
+  }
+});
+
+test('basic auth is redacted anywhere without consuming git upstream', () => {
+  for (const text of ['sudo curl -u alice:hunter2 https://x', '(curl -u alice:hunter2 https://x)',
+    'sudo curl --user alice:hunter2 https://x']) {
+    assert.doesNotMatch(redact(text), /alice|hunter2/);
+    assert.match(redact(text), /\[REDACTED\]/);
+  }
+  assert.equal(redact('git push -u origin main'), 'git push -u origin main');
+});
+
 test('redacts common credentials', () => {
   const value = 'Authorization: Bearer abc.def.ghi password=hunter2 ghp_abcdefghijklmnopqrstuvwxyz';
   const output = redact(value);

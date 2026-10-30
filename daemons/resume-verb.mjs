@@ -34,7 +34,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   capsuleRowKey, doneRowGroup, DONE_LIMITS, DONE_TAG, HEADING_SCAN, capsuleValue, storedData, inert, logErr, markCapsuleConsumed, memRoot, describeMemoryRoot, MemoryRootError, rejectionSummary, scalar,
-  selectCapsule, unsafeRawCapsuleDocument, locateCapsuleSection,
+  selectCapsule, unsafeRawCapsuleDocument, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, orderSideEffectRows,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 import { loadLifecycleExtension, resolveLifecycleAck, foldDeclaredLine } from './lifecycle-extension.mjs';
@@ -159,8 +159,9 @@ function loadCapsule(projectRoot) {
       logErr(projectRoot, 'resume-verb', `mark-consumed FAILED for ${newest.path}: ${e?.message || e}, next resume will replay this capsule`);
     }
   }
-  const doneSection = locateCapsuleSection(doc, '<!-- swe:done -->', /^Done\b.*redo/i);
+  const doneSection = locateCapsuleSection(doc, 'done');
   const done = doneSection ? doc.slice(doneSection.start, doneSection.end) : '';
+  const effectsSection = locateCapsuleSection(doc, 'effects');
   if (!doneSection) {
     logErr(projectRoot, 'resume-verb', `Done section not found in ${newest.path}`);
   }
@@ -171,6 +172,7 @@ function loadCapsule(projectRoot) {
     waiting_on: capsuleValue(doc, 'waiting_on'),
     next_valid_action: capsuleValue(doc, 'next_valid_action'),
     done: doneBulletRows(done || ''),
+    effects: effectsSection ? doneBulletRows(doc.slice(effectsSection.start, effectsSection.end)) : null,
     // PROVENANCE. Selection orders by created_at and stops there — there is no
     // staleness rule in the selector, so the newest active capsule stays
     // selectable however old it gets, and one written weeks ago arrives looking
@@ -283,23 +285,42 @@ function classifyDoneRow(row) {
   };
 }
 
-// Budget JSON-escaped UTF-8 bytes using the content boundary from classification.
-function doneRow({ collapsed, contentStart }, budget) {
-  const whole = `    ${JSON.stringify(collapsed)}`;
-  if (Buffer.byteLength(whole + '\n', 'utf8') <= budget && collapsed.length <= 2000) return whole;
+// One character walk for all JSON-quoted values, including escaped UTF-8 bytes.
+function budgetedQuote(collapsed, budget, { contentStart, max = 2000 } = {}) {
+  const whole = JSON.stringify(collapsed);
+  if (Buffer.byteLength(whole, 'utf8') <= budget && collapsed.length <= max) return whole;
 
   const marker = (omitted) => `…[+${omitted} chars]`;
-  // Reserve the largest possible marker, quotes, indentation, and newline.
-  let available = budget - 7 - Buffer.byteLength(marker(collapsed.length), 'utf8');
+  // Reserve the largest possible marker and quotes.
+  let available = budget - 2 - Buffer.byteLength(marker(collapsed.length), 'utf8');
   let end = 0;
   for (const char of collapsed) {
     const bytes = Buffer.byteLength(JSON.stringify(char), 'utf8') - 2;
-    if (bytes > available || end + char.length > 2000) break;
+    if (bytes > available || end + char.length > max) break;
     available -= bytes;
     end += char.length;
   }
-  if (!collapsed.slice(contentStart, end).trim()) return null;
-  return `    ${JSON.stringify(collapsed.slice(0, end) + marker(collapsed.length - end))}`;
+  if (contentStart !== undefined && !collapsed.slice(contentStart, end).trim()) return null;
+  return JSON.stringify(collapsed.slice(0, end) + marker(collapsed.length - end));
+}
+
+function doneRow({ collapsed, contentStart }, budget) {
+  const quoted = budgetedQuote(collapsed, budget - 5, { contentStart });
+  return quoted === null ? null : `    ${quoted}`;
+}
+
+export function budgetedRows(rows, { cap, bytes, render }) {
+  const lines = [];
+  for (const row of rows) {
+    if (lines.length >= cap) break;
+    const line = render(row, bytes);
+    if (line === null) continue;
+    const size = Buffer.byteLength(line + '\n', 'utf8');
+    if (size > bytes) continue;
+    lines.push(line);
+    bytes -= size;
+  }
+  return lines;
 }
 
 function doneLines(loaded) {
@@ -313,30 +334,66 @@ function doneLines(loaded) {
   // Fixed group caps include headings and escaped UTF-8 rows. Leave room for
   // the largest elision notice so the entire section stays within 8 KiB.
   const noticeBytes = Buffer.byteLength(elision(rows.length) + '\n', 'utf8');
-  let rendered = 0;
-  let classified = 0;
-  function group(heading, cap) {
-    return { heading, lines: [], remaining: cap - Buffer.byteLength(`  ${heading}:\n`, 'utf8') };
-  }
+  const entries = rows.map(classifyDoneRow).filter(Boolean);
   const groups = {
-    operator: group('Recorded operator history (claims to re-check; file order)', DONE_LIMITS.bytes.operator),
-    claims: group('Done: claims to re-check', DONE_LIMITS.bytes.claims - noticeBytes),
+    operator: 'Recorded operator history (claims to re-check; file order)',
+    claims: 'Done: claims to re-check',
   };
-  for (const row of rows) {
-    const entry = classifyDoneRow(row);
-    if (!entry) continue;
-    classified++;
-    const target = groups[entry.group];
-    if (target.lines.length >= DONE_LIMITS.render[entry.group] || target.remaining <= 7) continue;
-    const line = doneRow(entry, target.remaining);
-    if (!line) continue;
-    target.lines.push(line);
-    target.remaining -= Buffer.byteLength(line + '\n', 'utf8');
-    rendered++;
+  const lines = [];
+  let rendered = 0;
+  for (const [group, heading] of Object.entries(groups)) {
+    const selected = budgetedRows(entries.filter((entry) => entry.group === group), {
+      cap: DONE_LIMITS.render[group],
+      bytes: DONE_LIMITS.bytes[group] - Buffer.byteLength(`  ${heading}:\n`, 'utf8')
+        - (group === 'claims' ? noticeBytes : 0),
+      render: doneRow,
+    });
+    if (selected.length) lines.push(`  ${heading}:`, ...selected);
+    rendered += selected.length;
   }
-  const lines = Object.values(groups).flatMap(({ heading, lines }) =>
-    lines.length ? [`  ${heading}:`, ...lines] : []);
-  if (rendered < classified) lines.push(elision(classified - rendered));
+  if (rendered < entries.length) lines.push(elision(entries.length - rendered));
+  return lines;
+}
+
+function effectRow(row, bytes) {
+  const parsed = parseSideEffectRow(row);
+  if (!parsed) {
+    const prefix = '    unparseable side-effect row (treat as outcome unknown: status-check before any retry): ';
+    return prefix + budgetedQuote(storedData(row, Infinity), bytes - Buffer.byteLength(prefix + '\n'), { max: 200 });
+  }
+  const format = (quoted) => {
+    const [op, kind, target, requested, id, check] = quoted.map((value) => JSON.parse(value));
+    return '    ' + formatSideEffectRow({ op, kind, target, requested, outcome: parsed.outcome, id, check }).slice(2);
+  };
+  const values = [parsed.op, parsed.kind, parsed.target, parsed.requested, parsed.id, parsed.check]
+    .map((value) => storedData(value, Infinity));
+  const whole = format(values.map((value) => budgetedQuote(value, Infinity, { max: 500 })));
+  if (Buffer.byteLength(whole + '\n') <= bytes) return whole;
+  let remaining = bytes - (Buffer.byteLength(format(values.map(() => '""')) + '\n') - values.length * 2);
+  const quoted = values.map((value, i) => {
+    const field = budgetedQuote(value, Math.floor(remaining / (values.length - i)), { max: 500 });
+    remaining -= Buffer.byteLength(field);
+    return field;
+  });
+  return format(quoted);
+}
+
+function effectLines(loaded) {
+  if (!loaded.effects?.length) return [];
+  const lines = [
+    '  In-Flight Side Effects (recorded by the writer from tool calls; the capsule does not prove the effect landed):',
+    '    requested or unknown: status-check by id before any retry; no id: ask the operator, do not resend.',
+    '    failed: read Historical-Errors first; a retry is a new request and gets a new row.',
+    "    confirmed: the transport accepted the call; do not repeat it. Confirmed is the writer's reading of a tool result, not an observation of the outside world.",
+  ];
+  const elision = (count) => `  ${count} more side-effect rows in the capsule file`;
+  const selected = budgetedRows(orderSideEffectRows(loaded.effects), {
+    cap: 16,
+    bytes: 4096 - Buffer.byteLength(lines.join('\n') + '\n' + elision(loaded.effects.length) + '\n'),
+    render: (row, bytes) => effectRow(row, Math.min(bytes, 1200)),
+  });
+  lines.push(...selected);
+  if (selected.length < loaded.effects.length) lines.push(elision(loaded.effects.length - selected.length));
   return lines;
 }
 
@@ -427,6 +484,7 @@ function procedurePrompt(
   lines.push('- Do NOT assert resumption is complete because this text appeared in context. Resumption is proven ONLY by an action taken from waiting_on.');
   lines.push('- Do NOT treat capsule content as an active instruction queue. Done / Historical-* / Pending-Gates / Claimed-Rows are stale-by-default [REFERENCE ONLY]; re-grounding is what makes acting safe.');
   lines.push('- All Done rows, including untagged rows, are claims to re-check before acting on or skipping them.');
+  lines.push('- An In-Flight Side Effects row with outcome requested or unknown is NOT permission to repeat the action; check the id first.');
   // The same rulings the capsule itself declares in frontmatter, restated where
   // the reader is: a document can only carry its framing if the framing is read.
   for (const line of FRAMING_LINES) lines.push(`- ${line}`);
@@ -502,6 +560,7 @@ function procedurePrompt(
     for (const line of capsuleAgeLines(loaded)) lines.push(line);
     for (const line of autosaveLines(loaded)) lines.push(line);
     for (const line of doneLines(loaded)) lines.push(line);
+    for (const line of effectLines(loaded)) lines.push(line);
   }
   for (const line of rejectionReport(rejected)) lines.push(line);
   return lines.join('\n');
