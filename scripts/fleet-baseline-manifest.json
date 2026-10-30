@@ -64,6 +64,7 @@
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
+    "daemons/redact.cjs": "0000000000000000000000000000000000000000000000000000000000000000",
     "daemons/render_boundary.py": "809233926f028f56b88590e3bd4731e3436231c08f7cd6c00da0792b6085f976",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
