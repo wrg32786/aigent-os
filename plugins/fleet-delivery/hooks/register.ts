@@ -1290,6 +1290,16 @@ async function tick($: $): Promise<void> {
     for (const item of queue) {
       const attempts = (entries[item.id]?.attempts ?? 0) + 1
 
+      const pointedFile = item.source === 'room' ? roomFile(w, item.id) : null
+      if (pointedFile) {
+        const seen = pointed.get(pointedFile)
+        if (seen !== undefined && seen >= turnCount) {
+          show(' · pointer read, waiting for the turn to end')
+          continue
+        }
+        pointed.delete(pointedFile)
+      }
+
       if ((await $.prompt.read()).text !== '') {
         await record($, w, item, 'deferred:composer-busy', entry => !isFinal(entry) && entry?.status !== 'deferred:composer-busy')
         show(' · composer busy')
@@ -1635,6 +1645,13 @@ let markerState: 'unknown' | 'published' | 'retired' = 'unknown'
 // folder (a `claude -p` courier) cannot retire the live seat's marker, and
 // the live seat re-publishes at once when the file stops reading as its own.
 const markerStamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+// Files whose pointer this session's model has read (prompt.submit let it in)
+// and the main turn count when it did: the tick leaves such a file alone
+// until the turn that read the pointer has completed, so the model's own
+// room_drain and the tick do not both deliver one message. Cleared when the
+// tick claims the file; pruned by turn count.
+let turnCount = 0
+const pointed = new Map<string, number>()
 // Room addresses that are not one session's seat: never announced (a documented limitation).
 const NOT_A_SEAT = /^(?:broadcast|will)$/
 // The Room server's own file naming (agent-room-server.mjs): ISO time with
@@ -1678,7 +1695,7 @@ async function timeoutRace<T>($: $, pending: Promise<T>, ms: number): Promise<T 
 // Rewritten every MARKER_EVERY_MS while the file still reads as ours, at
 // once when it does not (another session's stamp, a retirement, a torn
 // read): the file, not process memory, says whose the marker is.
-type Marker = { owner?: unknown; version?: unknown; at?: unknown; stamp?: unknown }
+type Marker = { owner?: unknown; version?: unknown; at?: unknown; stamp?: unknown; sessionId?: unknown }
 async function readMarker($: $, seat: string): Promise<Marker | null> {
   try {
     return JSON.parse(await $.fs.read(markerFile(seat))) as Marker
@@ -1691,10 +1708,19 @@ async function publishMarker($: $, w: Where): Promise<void> {
   if (!config.roomRoot) return
   await serialMarker(async () => {
     const now = await $.clock.now()
-    const current = await readMarker($, w.seat)
-    if (ours(current) && current?.owner === 'mod' && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
+    // The id a sender addresses the pointer to; a /clear gives the process a new
+    // one. With no id there is nothing to address: publish nothing, the tick delivers.
+    let sessionId: string
     try {
-      await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: FENCE_VERSION, at: new Date(now).toISOString(), stamp: markerStamp })}\n`)
+      sessionId = await $.session.id()
+    } catch {
+      return
+    }
+    if (!sessionId) return
+    const current = await readMarker($, w.seat)
+    if (ours(current) && current?.owner === 'mod' && current?.sessionId === sessionId && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
+    try {
+      await $.fs.write(markerFile(w.seat), `${JSON.stringify({ seat: w.seat, owner: 'mod', version: FENCE_VERSION, at: new Date(now).toISOString(), stamp: markerStamp, sessionId })}\n`)
       markerAt = now
       markerState = 'published'
       markerWarned = false
@@ -1752,19 +1778,19 @@ async function refreshMarker($: $): Promise<void> {
 }
 
 // Whether `seat` can take a pointer right now: a fresh marker from a
-// mod-owned session of a version with the fence.
-async function takesPointers($: $, seat: string): Promise<string | null> {
-  let marker: { owner?: unknown; version?: unknown; at?: unknown }
-  try {
-    marker = JSON.parse(await $.fs.read(markerFile(seat)))
-  } catch {
-    return 'no native marker'
-  }
-  if (marker?.owner !== 'mod' || typeof marker.version !== 'string' || typeof marker.at !== 'string') return 'marker not mod-owned'
-  if (!versionAtLeast(marker.version, FENCE_VERSION)) return `marker from mod ${marker.version}`
+// mod-owned session of a version with the fence, carrying the session id
+// the pointer is addressed to. Never a bare name: the engine resolves a
+// name the way SendMessage does, and a subagent of the sender named like
+// the seat would take the pointer with isDelivered true.
+async function takesPointers($: $, seat: string): Promise<{ why: string } | { sessionId: string }> {
+  const marker = await readMarker($, seat)
+  if (!marker) return { why: 'no native marker' }
+  if (marker.owner !== 'mod' || typeof marker.version !== 'string' || typeof marker.at !== 'string') return { why: 'marker not mod-owned' }
+  if (!versionAtLeast(marker.version, FENCE_VERSION)) return { why: `marker from mod ${marker.version}` }
   const age = (await $.clock.now()) - Date.parse(marker.at)
-  if (!Number.isFinite(age) || age > MARKER_FRESH_MS) return 'marker stale'
-  return null
+  if (!Number.isFinite(age) || age > MARKER_FRESH_MS) return { why: 'marker stale' }
+  if (typeof marker.sessionId !== 'string' || !marker.sessionId) return { why: 'marker has no session id' }
+  return { sessionId: marker.sessionId }
 }
 
 function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
@@ -1799,12 +1825,12 @@ function announceNative($: $, e: Record<string, unknown>, answered: { text?: str
       $.ui.log(`fleet-delivery: this seat is not owned by the mod; ${to}/${file} is left to the Room`)
       return
     }
-    const why = await takesPointers($, to)
-    if (why) {
-      $.ui.log(`fleet-delivery: ${to} takes no pointers (${why}); ${to}/${file} waits for its tick`)
+    const take = await takesPointers($, to)
+    if ('why' in take) {
+      $.ui.log(`fleet-delivery: ${to} takes no pointers (${take.why}); ${to}/${file} waits for its tick`)
       return
     }
-    const sent = await $.session.send({ to, text: pointerText(to, place.w.seat, file) })
+    const sent = await $.session.send({ to: { sessionId: take.sessionId }, text: pointerText(to, place.w.seat, file) })
     if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
     else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
   })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
@@ -1856,6 +1882,8 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
+      turnCount++
+      for (const [file, seen] of pointed) if (seen < turnCount - 1) pointed.delete(file)
       warnSubmitTimeout($)
       await ensureTicking($)
       void tick($)
@@ -1877,9 +1905,12 @@ export const register: Register = (on, options) => {
     const match = findPointer(e.text)
     if (!match) return next(e)
     const held = await pointerHold($, match)
-    if (!held) return next(e)
-    $.ui.log(held)
-    return { drop: held }
+    if (held) {
+      $.ui.log(held)
+      return { drop: held }
+    }
+    if (match[1] === (await seatName($))) pointed.set(match[3], turnCount)
+    return next(e)
   })
 
   on('command.run', { command: 'delivery-probe' }, async ($, e) => {
