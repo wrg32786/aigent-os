@@ -2067,7 +2067,7 @@ test('round25 item 2: generic lead-in is MIXED for GONE and UNREAD with either h
     assert.match((await invoke20(r, 'prompt.submit', event20('gone.json', { text: `Another Claude session sent a message:\n${event20('gone.json').text}` }), next)).drop, /GONE/)
     r.drop('a', 'peer', 'hello')
     r.freeze()
-    assert.match((await invoke20(r, 'prompt.submit', generic('a.json'), next)).drop, /held/)
+    assert.deepEqual(await invoke20(r, 'prompt.submit', generic('a.json'), next), { text: generic('a.json').text })
     assert.equal(r.inspection.admissionTurns.size, 0)
     r.thaw()
     assert.deepEqual(await invoke20(r, 'prompt.submit', generic('a.json'), next), { text: generic('a.json').text })
@@ -2736,5 +2736,152 @@ test('round30 item 2: turn.start between the tick check and gate leaves the file
     assert.equal(r.runs.some(args => args.includes(MOVE)), false)
     assert.deepEqual(r.ledger(), {}, 'silent skip writes no deferral')
     assert.deepEqual(r.submitted, [])
+  } finally { r.done() }
+})
+
+
+test('round31 item 1: not-called catch forwards MIXED unchanged and drops BARE without binding', async () => {
+  for (const mixed of [true, false]) {
+    const r = await rig({ inspect: true })
+    const hold = Promise.withResolvers()
+    let prompt
+    try {
+      r.inspection.suppressTick()
+      r.drop('a', 'peer', 'unread')
+      const read = r.engine.fs.read
+      let readingHold = false
+      r.engine.fs.read = async p => {
+        if (p.endsWith('/auto-clear-cycle.json')) { readingHold = true; await hold.promise }
+        return read(p)
+      }
+      const event = event20('a.json', { text: `${mixed ? 'Please stop before the clear.\n' : ''}${event20().text}` })
+      let forwarded = 0
+      const next = async e => { forwarded++; assert.equal(e, event); return { text: e.text } }
+      prompt = invoke20(r, 'prompt.submit', event, next)
+      await until20(() => readingHold)
+      assert.equal(r.inspection.admissionTurns.size, 1)
+      const caught = await r.catches['prompt.submit'](r.engine, event, Object.assign(next, { called: false }))
+      assert.equal(r.inspection.admissionTurns.size, 0)
+      assert.equal(r.inspection.promptAdmissions.size, 0)
+      hold.resolve()
+      await prompt
+      assert.equal(forwarded, mixed ? 1 : 0, 'late hook never forwards a second time')
+      if (mixed) assert.deepEqual(caught, { text: event.text })
+      else assert.match(caught.drop, /did not finish/)
+    } finally { hold.resolve(); await prompt; r.done() }
+  }
+})
+
+test('round31 item 2 / D: held MIXED enters unbound and the tick delivers UNREAD after thaw; BARE drops', async () => {
+  for (const hold of ['cycle', 'supervisor']) {
+    const r = await rig({ inspect: true, cycle: hold === 'cycle' ? 'checkpoint-requested' : 'idle' })
+    try {
+      r.inspection.suppressTick()
+      if (hold === 'supervisor') r.freeze()
+      r.drop('a', 'peer', 'Room body survives the hold')
+      const event = event20('a.json', { text: `Please stop before the clear.\n${event20().text}` })
+      const result = await invoke20(r, 'prompt.submit', event, async e => {
+        assert.equal(e, event)
+        assert.equal(r.inspection.admissionTurns.size, 0, 'no binding when the peer words enter')
+        assert.equal(r.inspection.promptAdmissions.size, 0, 'nothing admitted')
+        return { text: e.text }
+      })
+      assert.deepEqual(result, { text: event.text })
+      assert.match((await invoke20(r, 'prompt.submit', event20())).drop, /held/)
+      assert.deepEqual(r.inbox(), ['a.json'])
+      assert.deepEqual(r.submitted, [])
+      r.thaw()
+      writeFileSync(join(r.where.memory, 'runtime', 'auto-clear-cycle.json'), JSON.stringify({ state: 'idle' }))
+      r.inspection.resumeTick()
+      await r.tick()
+      assert.equal(r.submitted.length, 1)
+      assert.match(r.submitted[0], /Room body survives the hold/)
+      assert.deepEqual(r.processed(), ['a.json'])
+    } finally { r.done() }
+  }
+})
+
+test('round31 item 3: falsy drops and rejected replays release only their admission', async () => {
+  const outcomes = []
+  for (const replay of [false, true]) for (const drop of ['', false, null, 0]) {
+    const r = await rig({ inspect: true })
+    try {
+      r.inspection.suppressTick()
+      r.drop('a', 'peer', 'drop this admission')
+      r.drop('b', 'peer', 'keep this admission')
+      await invoke20(r, 'prompt.submit', event20('b.json'))
+      const event = event20()
+      if (replay) {
+        await assert.rejects(invoke20(r, 'prompt.submit', event, async () => { throw Error('downstream') }), /downstream/)
+        assert.deepEqual(await r.catches['prompt.submit'](r.engine, event, Object.assign(async () => ({ drop }), { called: true })), { drop })
+      } else assert.deepEqual(await invoke20(r, 'prompt.submit', event, async () => ({ drop })), { drop })
+      outcomes.push([...r.inspection.admissionTurns.keys()])
+      assert.equal(r.inspection.promptAdmissions.size, 0)
+    } finally { r.done() }
+  }
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'replay rejects')
+    r.drop('b', 'peer', 'keep this admission')
+    await invoke20(r, 'prompt.submit', event20('b.json'))
+    const event = event20()
+    await assert.rejects(invoke20(r, 'prompt.submit', event, async () => { throw Error('downstream') }), /downstream/)
+    const failure = Error('replay rejection')
+    await assert.rejects(r.catches['prompt.submit'](r.engine, event, Object.assign(async () => { throw failure }, { called: true })), error => error === failure)
+    outcomes.push([...r.inspection.admissionTurns.keys()])
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+  } finally { r.done() }
+  assert.deepEqual(outcomes, Array.from({ length: 9 }, () => ['b.json']))
+})
+
+test('round31 item 4: a session reset during hold reads drops BARE and forwards MIXED unbound', async () => {
+  for (const edge of ['start', 'end']) for (const mixed of [false, true]) {
+    const r = await rig({ inspect: true })
+    const hold = Promise.withResolvers()
+    let prompt
+    try {
+      r.inspection.suppressTick()
+      r.drop('a', 'peer', 'unread')
+      const read = r.engine.fs.read
+      let readingHold = false
+      r.engine.fs.read = async p => {
+        if (p.endsWith('/auto-clear-cycle.json')) { readingHold = true; await hold.promise }
+        return read(p)
+      }
+      const event = event20('a.json', { text: `${mixed ? 'Please reply.\n' : ''}${event20().text}` })
+      let forwarded = 0
+      prompt = invoke20(r, 'prompt.submit', event, async e => {
+        forwarded++
+        assert.equal(e, event)
+        assert.equal(r.inspection.admissionTurns.size, 0)
+        assert.equal(r.inspection.promptAdmissions.size, 0)
+        return { text: e.text }
+      })
+      await until20(() => readingHold)
+      assert.equal(r.inspection.admissionTurns.size, 1)
+      r.inspection.resetTurnState(edge)
+      hold.resolve()
+      const result = await prompt
+      assert.equal(forwarded, mixed ? 1 : 0)
+      if (mixed) assert.deepEqual(result, { text: event.text })
+      else assert.match(result.drop, /binding|fence|check failed/)
+      assert.deepEqual(r.inbox(), ['a.json'])
+    } finally { hold.resolve(); await prompt; r.done() }
+  }
+})
+
+test('round31 item 5: angle-bracket peer words plus a GONE pointer are MIXED and enter unchanged', async () => {
+  const { pointerOnly } = await import('../hooks/register.ts')
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    const event = event20('gone.json', { text: `<urgent: stop before the clear>\n${event20('gone.json').text}` })
+    const result = await invoke20(r, 'prompt.submit', event, async e => { assert.equal(e, event); return { text: e.text } })
+    assert.deepEqual(result, { text: event.text })
+    assert.equal(pointerOnly(event.text), false)
+    for (const tag of ['cross-session-message', 'task-notification']) {
+      assert.equal(pointerOnly(`<${tag}>\n${event20('gone.json').text}\n</${tag}>`), true)
+    }
   } finally { r.done() }
 })

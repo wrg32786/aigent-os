@@ -89,10 +89,11 @@ test('FENCE H: a dropped catch replay releases only its admits, preserving a quo
   assert.deepEqual(await recover(engine, { ...event }, replay), { drop: 'downstream drop' })
   let recoveredText = ''
   const firstNext = Object.assign(async (e: { text: string }) => { recoveredText = e.text; return {} }, { called: false }) as unknown as Parameters<typeof recover>[2]
-  const recovered = await recover(engine, asPeerPrompt(`Plain mail.\n${A_POINTER}`), firstNext)
+  const mixed = asPeerPrompt(`Plain mail.\n${A_POINTER}`)
+  const recovered = await recover(engine, mixed, firstNext)
   assert.ok(recovered)
-  assert.ok('drop' in recovered)
-  assert.equal(recoveredText, '')
+  assert.deepEqual(recovered, {})
+  assert.equal(recoveredText, mixed.text)
   assert.deepEqual(await recover(engine, asPeerPrompt(A_POINTER), firstNext), { drop: 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick' })
   // The dropped pointer is available to the next tick.
   await complete(engine, { ...TURN, turnId: 'replay-turn' } as never, next as never)

@@ -1996,7 +1996,7 @@ test('FENCE C: bare pointers drop under each named hold', CONFIGURED, async ($, 
   expect(submits(w.log)).toEqual([])
 })
 
-test('FENCE C/D: other-seat bare pointers and held mixed unread mail drop; plain mail enters', CONFIGURED, async ($, on) => {
+test('FENCE C/D: other-seat bare pointers drop; held mixed unread mail and plain mail enter', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [`${INBOX}/b.json`]: envelope('beta', 'second'), [CYCLE]: JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }) } })
   const other = await $.prompt.submit(asPeerPrompt(pointerText('gamma', 'beta', 'a.json')))
   expect(other.drop).toContain('addressed to another seat')
@@ -2014,7 +2014,7 @@ test('FENCE C/D: other-seat bare pointers and held mixed unread mail drop; plain
   // CRLF, envelope attributes on one line: still a pointer, still dropped.
   const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
   expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
-  // Unknown framing: a tag-shaped line and a notification lead-in are envelope, not substance; still a pointer.
+  // Known task-notification framing remains a bare pointer.
   const framed = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `Task notification:\n<task-notification kind="peer">\n${pointerText('alpha', 'beta', 'b.json')}\n</task-notification>` })
   expect('drop' in framed && framed.drop).toContain('the pointer to room:alpha:b.json is dropped')
   // The engine's lead-in line, and a tag sharing a line with the pointer: still a pointer, still dropped.
@@ -2028,9 +2028,10 @@ test('FENCE C/D: other-seat bare pointers and held mixed unread mail drop; plain
   expect('drop' in quoting && quoting.drop).toBeFalsy()
   const quotingFirst = await $.prompt.submit(asPeerPrompt(`${pointerText('alpha', 'beta', 'read.json').split('\n')[0]}\nand here is my actual message about it.\n<some-tag>`))
   expect('drop' in quotingFirst && quotingFirst.drop).toBeFalsy()
-  // Mixed mail naming an unread file drops under the hold.
+  // Mixed mail naming an unread file enters unchanged under the hold.
   const quotingUnread = await $.prompt.submit(asPeerPrompt(`FYI, this came in:\n${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}\nhandle it after the clear.`))
-  expect(quotingUnread.drop).toContain('mixed mail')
+  expect(quotingUnread.drop).toBeUndefined()
+  expect(submits(w.log).at(-1)).toBe(`submit ${wrap(`FYI, this came in:\n${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}\nhandle it after the clear.`)}`)
   // A pointer for another seat quoted inside real mail is mail.
   const quotingOther = await $.prompt.submit(asPeerPrompt(`gamma got ${pointerText('gamma', 'beta', 'a.json').split('\n')[0]} and handled it.`))
   expect('drop' in quotingOther && quotingOther.drop).toBeFalsy()
@@ -2895,7 +2896,7 @@ test('FENCE A: sample files before reading both holds together', CONFIGURED, asy
 
 test('FENCE B: pointerOnly distinguishes bare payload from mixed mail', async () => {
   expect(pointerOnly(wrap(A_POINTER))).toBe(true)
-  expect(pointerOnly(`Task notification:\n<tag>\n${A_POINTER}\n</tag>`)).toBe(true)
+  expect(pointerOnly(`Task notification:\n<task-notification>\n${A_POINTER}\n</task-notification>`)).toBe(true)
   expect(pointerOnly(A_POINTER.split('\n')[0]!)).toBe(true)
   expect(pointerOnly(`Please reply.\n${A_POINTER}`)).toBe(false)
   expect(pointerOnly('')).toBe(false)
@@ -2921,7 +2922,7 @@ test('FENCE C: bare pointers admit only UNREAD without rewriting, and drop when 
   expect(w.moves()).toHaveLength(0)
 })
 
-for (const hold of ['open', 'cycle', 'supervisor']) test(`FENCE D: mixed mail drops held UNREAD files, otherwise enters unchanged (${hold})`, CONFIGURED, async ($, on) => {
+for (const hold of ['open', 'cycle', 'supervisor']) test(`FENCE D: mixed mail enters unchanged, with held UNREAD files unbound (${hold})`, CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
   await w.turn()
   w.files.set(`${INBOX}/a.json`, ENVELOPE)
@@ -2933,12 +2934,9 @@ for (const hold of ['open', 'cycle', 'supervisor']) test(`FENCE D: mixed mail dr
   const pointers = ['a', 'c', 'g', 'z'].map(file => pointerText('alpha', 'beta', `${file}.json`)).join('\n')
   const text = `  Please reply.\r\n${pointers}\n${other}\nKeep this.  `
   const result = await $.prompt.submit(asPeerPrompt(text))
-  if (hold === 'open') {
-    expect(result.drop).toBeUndefined()
-    expect(submits(w.log).at(-1)).toBe(`submit ${wrap(text)}`)
-  } else {
-    expect(result.drop).toContain('mixed mail')
-    expect(submits(w.log)).toEqual([])
+  expect(result.drop).toBeUndefined()
+  expect(submits(w.log).at(-1)).toBe(`submit ${wrap(text)}`)
+  if (hold !== 'open') {
     for (const pointer of [pointerText('alpha', 'beta', 'c.json'), pointerText('alpha', 'beta', 'g.json'), pointerText('alpha', 'beta', 'z.json'), other]) {
       const mail = `Please reply.\n${pointer}`
       expect((await $.prompt.submit(asPeerPrompt(mail))).drop).toBeUndefined()
@@ -2950,7 +2948,7 @@ for (const hold of ['open', 'cycle', 'supervisor']) test(`FENCE D: mixed mail dr
   w.files.delete(`${ROOM}/state/holds/alpha.json`)
   await w.clock.advance(31_000)
   await w.clock.settle()
-  // Held pointers admitted nothing: their file is available to the next tick.
+  // Held mixed mail admitted nothing: its file is available to the next tick.
   expect(w.files.has(`${INBOX}/a.json`)).toBe(hold === 'open')
 })
 

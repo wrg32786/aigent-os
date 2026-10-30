@@ -21,7 +21,7 @@ Answer `y` to add the marketplace, then pick a scope. Then fill in the settings,
 | `roomRoot` | The Room's `room/` folder. Empty: Room delivery is off. | `C:/example/agent-room/room` |
 | `seat` | Whose inbox and ledger. Empty: env `AIGENT_SEAT`, then `SEAT`, then the session root's folder name with a trailing `-vault` dropped (the rule fleet-band uses). Must match `[a-z0-9_-]+`, else the mod does nothing. | `beta` |
 | `jobSeat` | The one seat job results go to. Job records carry no recipient (job-results passes one only to its notifier), so this names it. Empty: job delivery is off. | `beta` |
-| `submitTimeoutMinutes` | How long a submit may wait for its turn to start before it is recorded `submitting:unresolved`. | `10` (default) |
+| `submitTimeoutMinutes` | The length of each submit window in 0.4.2. The total bound is a 60-minute turn wait plus up to six `submitTimeoutMinutes` windows before recording `submitting:unresolved`. | `10` (default) |
 | `requireRefreshState` | On: a missing, unreadable or invalid refresh-cycle file holds delivery. Off: a missing one means this install runs no refresh cycle (an unreadable or invalid one still holds). | `true` (default) |
 
 ## The memory root
@@ -158,7 +158,7 @@ With no log, or a log with no seed line, delivery holds with `ledger-missing` wh
 | `deferred:submit-rejected` | The submit was rejected: proven not delivered | yes, up to 3 attempts, then `error:submit-rejected` |
 | `submitting` | Claimed and submitting; carries the `pid` of the CLI that wrote it. Left behind by a crash or reload mid-submit, its outcome is unknown. | never. A claim whose pid is another process that is dead is released as `deferred:prior-session` (or `dropped:consumed` when its file is gone). Otherwise, at a tick's start (when this module awaits no submit) it becomes `submitting:unresolved`, said once in the transcript, when it carries this CLI's pid (so an older module of this process wrote it: a hot reload, or a `/clear`, which keeps the pid) or is older than the submit timeout. Those two tests decide; the module generation stamped on each claim only names the cause in the `detail` text (a live pid, a legacy line with no pid; a foreign pid that has not read alive is left to the release). It is never resent |
 | `deferred:prior-session` | A `submitting` claim whose process ended; the file is still in `claimed/` or `inbox/`, so the next tick delivers it again (a message whose prompt had landed can arrive twice) | yes |
-| `submitting:unresolved` | The submit's turn had not started within the timeout. Its prompt may still be queued. | never; holds delivery until the late start lands (`submitted`) or it is reconciled |
+| `submitting:unresolved` | In 0.4.2, the submit did not settle before its wait ended, bounded by a 60-minute turn wait plus up to six `submitTimeoutMinutes` windows (session end stops the wait immediately). Its prompt may still be queued. | never; holds delivery until the late start lands (`submitted`) or it is reconciled |
 | `submitted` | The submit resolved: its turn started | never |
 | `reconciled:not-delivered` | The operator checked the transcript and found it missing | yes |
 | `reconciled:delivered` | The operator checked the transcript and found it there | never |

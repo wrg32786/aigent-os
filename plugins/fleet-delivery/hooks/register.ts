@@ -863,54 +863,51 @@ async function moveRoom(
     // Decision and marking are one synchronous gated step: a turn that started or an
     // admission bound in the microtask gap after the tick's own check is seen here.
     const admitted = await serialized(() => {
-      if (!lifecycle && (turnInFlight() || admissionTurns.has(file))) return true
+      if (!lifecycle && guarded(file)) return true
       tickOwned.add(file)
       claimsInFlight.add(file)
       return false
     })
     if (admitted) return 'admitted'
   }
-  const move = async () => {
-    let landed = false
-    try {
-      const leftClaimed = () => { if (from === claimedFile) tickOwned.delete(file) }
-      // A note goes to the sink when there is one (the sweep writes its notes in one append).
-      const say = async (detail: string) => {
-        if (sink === 'quiet' || !entry) return
-        if (sink) sink.push({ item, entry, detail })
-        else await note($, w, item, entry, detail)
+  let landed = false
+  try {
+    const leftClaimed = () => { if (from === claimedFile) tickOwned.delete(file) }
+    // A note goes to the sink when there is one (the sweep writes its notes in one append).
+    const say = async (detail: string) => {
+      if (sink === 'quiet' || !entry) return
+      if (sink) sink.push({ item, entry, detail })
+      else await note($, w, item, entry, detail)
+    }
+    const blocked = async () => {
+      const key = `${from(w, file)}>${to(w, file)}`
+      if (sink !== 'quiet' && !notedBlocks.has(key)) {
+        notedBlocks.add(key)
+        await say(`note: ${to(w, file)} exists; ${from(w, file)} left in place`)
       }
-      const blocked = async () => {
-        const key = `${from(w, file)}>${to(w, file)}`
-        if (sink !== 'quiet' && !notedBlocks.has(key)) {
-          notedBlocks.add(key)
-          await say(`note: ${to(w, file)} exists; ${from(w, file)} left in place`)
-        }
-        return 'blocked' as const
-      }
-      // The destination is checked first, so a block spawns nothing; MOVE guards the race.
-      if ((await exists($, to(w, file))) === true) return blocked()
-      const failed = await rename($, from(w, file), to(w, file), MOVE)
-      if (!failed) { landed = true; leftClaimed(); return 'moved' }
-      const gone = (await exists($, from(w, file))) === false
-      const there = (await exists($, to(w, file))) === true
-      // The move landed though the mover said otherwise (a timeout after the rename).
-      if (gone && there) { landed = true; leftClaimed(); return 'moved' }
-      if (there) return blocked()
-      // Absent needs evidence: the mover said ENOENT, or the file went to processed/.
-      const absent = gone && (failed.includes('ENOENT') || (await exists($, processedFile(w, file))) === true)
-      if (absent) leftClaimed()
-      if (!absent || noteAbsent) await say(absent ? `note: ${from(w, file)} is absent` : `note: move failed: ${failed}`)
-      return absent ? 'absent' : 'failed'
-    } finally {
-      if (claiming) {
-        claimsInFlight.delete(file)
-        if (landed) tickOwned.add(file)
-        else tickOwned.delete(file)
-      }
+      return 'blocked' as const
+    }
+    // The destination is checked first, so a block spawns nothing; MOVE guards the race.
+    if ((await exists($, to(w, file))) === true) return blocked()
+    const failed = await rename($, from(w, file), to(w, file), MOVE)
+    if (!failed) { landed = true; leftClaimed(); return 'moved' }
+    const gone = (await exists($, from(w, file))) === false
+    const there = (await exists($, to(w, file))) === true
+    // The move landed though the mover said otherwise (a timeout after the rename).
+    if (gone && there) { landed = true; leftClaimed(); return 'moved' }
+    if (there) return blocked()
+    // Absent needs evidence: the mover said ENOENT, or the file went to processed/.
+    const absent = gone && (failed.includes('ENOENT') || (await exists($, processedFile(w, file))) === true)
+    if (absent) leftClaimed()
+    if (!absent || noteAbsent) await say(absent ? `note: ${from(w, file)} is absent` : `note: move failed: ${failed}`)
+    return absent ? 'absent' : 'failed'
+  } finally {
+    if (claiming) {
+      claimsInFlight.delete(file)
+      if (landed) tickOwned.add(file)
+      else tickOwned.delete(file)
     }
   }
-  return move()
 }
 
 // Final non-delivery (dropped, error:*): back to inbox/, where the seat's own
@@ -1818,9 +1815,9 @@ export const pointerText = (seat: string, from: string, file: string) =>
 // Pointer grammar shared by classification and admission.
 const POINTER_LINE = /^Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)$/
 const WRAPPING = /<\/?cross-session-message\b[^>]*>/g
-// Exclude tag wrappers; textual engine framings still obey the lead-in bounds.
+// Exclude only known engine wrappers; arbitrary angle-bracket lines are peer words.
 const ENVELOPE_LINE = /^(?:Another Claude session sent a message|Task notification|\[Cross-session [a-z ]+\]):?$/i
-const TAG_LINE = /^<[^>]+>$/
+const TAG_LINE = /^<\/?(?:cross-session-message|task-notification)(?:\s[^>]*)?>$/
 const POINTER_TAIL = /^Call room_drain to read it/
 const payloadLines = (text: string) => text.replace(/\r\n?/g, '\n').replace(WRAPPING, '').split('\n').map(line => line.trim()).filter(line => line && !TAG_LINE.test(line))
 export const findPointers = (text: string): RegExpExecArray[] =>
@@ -2177,7 +2174,13 @@ async function pointerHold($: $, text: string, matches: RegExpExecArray[], check
       if (!check.settled && (bare || unread)) {
         const [cycle, supervisor] = await Promise.all([cycleHold($, w), supervisorHold($, w)])
         const hold = cycle ?? supervisor?.reason
-        if (hold) { release(); return held(hold) }
+        if (hold) { release(); return bare ? held(hold) : null }
+      }
+      // A session edge can clear the provisional reservation during hold I/O.
+      if (fence && 'admission' in fence && !fence.admission.files.every(file =>
+        [...(admissionTurns.get(file) ?? [])].some(binding => binding.token === check.token))) {
+        release()
+        return bare ? held('pointer binding lost during hold check') : null
       }
       return fence
     } catch (error) { release(); throw error }
@@ -2283,22 +2286,26 @@ export const register: Register = (on, options) => {
       throw error
     }
     promptAdmissions.delete(token)
-    if ((entered as { drop?: unknown }).drop) releasePromptAdmission(admission)
+    if ((entered as { drop?: unknown }).drop !== undefined) releasePromptAdmission(admission)
     return entered
   }).catch(($, e, next) => {
     // The engine skips a hook that throws or overruns and lets the prompt in;
-    // this fence fails closed instead: a pointer whose check did not finish is
-    // dropped (the file waits for the tick). A prompt the hook had already
-    // passed on is replayed, not dropped; a replay that settles to a drop
-    // releases only its exact admission list.
+    // an unfinished fence drops BARE pointers, while MIXED mail enters unbound
+    // so the peer's words survive. A prompt already passed on is replayed;
+    // a replay drop or rejection releases only its exact admission list.
     // `Caught.called`: next(e) then resolves to what the hook's last call settled
     // to, nothing beneath running again (claude-code.d.ts, Caught).
     if (next.called) {
       return (async () => {
         const admission = takePromptAdmission(e)
-        const entered = await next(e)
-        if ((entered as { drop?: unknown }).drop && admission) releasePromptAdmission(admission)
-        return entered
+        let release = true
+        try {
+          const entered = await next(e)
+          release = (entered as { drop?: unknown }).drop !== undefined
+          return entered
+        } finally {
+          if (release && admission) releasePromptAdmission(admission)
+        }
       })()
     }
     const token = resolvePromptToken(e, [...pointerChecks.values()].filter(check => !check.settled))
@@ -2307,9 +2314,9 @@ export const register: Register = (on, options) => {
     // A hook that never called next() owns no replay admission: no text fallback here.
     const admission = token !== undefined ? takePromptAdmission(e, token) : undefined
     if (admission) releasePromptAdmission(admission)
-    const drop = abandonedPointer
-    $.ui.log(drop)
-    return { drop }
+    if (!pointerOnly(e.text)) return next(e)
+    $.ui.log(abandonedPointer)
+    return { drop: abandonedPointer }
   })
 
   on('command.run', { command: 'delivery-probe' }, async ($, e) => {
