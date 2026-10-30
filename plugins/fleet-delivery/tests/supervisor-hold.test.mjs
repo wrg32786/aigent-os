@@ -1,3 +1,4 @@
+import './direct-hooks.mts'
 // Drives the real register.ts tick against temp directories with a fake engine.
 // node --test plugins/fleet-delivery/tests/supervisor-hold.test.mjs  (needs a node that strips types)
 import assert from 'node:assert/strict'
@@ -6,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
+import { stripTypeScriptTypes } from 'node:module'
 
 const { logLine, UNLINK, MOVE, WRITE, OWNER_PID, PID_DEAD, safeName } = await import('../hooks/register.ts')
 
@@ -19,8 +21,17 @@ const ticketName = (base, ticket) => `${base.startsWith('job-') ? base.slice(0, 
 const ticketMatches = (path, base) => path.replaceAll('\\', '/').split('/').at(-1).startsWith(`${base.startsWith('job-') ? base.slice(0, -5) : base}.`) && path.endsWith('.json')
 
 let moduleId = 0
-async function rig({ cycle = 'idle', noRoom = false, noPid = false, entries = [], jobs = [], submitTimeoutMinutes } = {}) {
-  const { register } = await import(`../hooks/register.ts?rig=${++moduleId}`)
+async function rig({ cycle = 'idle', noRoom = false, noPid = false, entries = [], jobs = [], submitTimeoutMinutes, inspect = false, seat = SEAT } = {}) {
+  const module = inspect ? await import('data:text/javascript;base64,' + Buffer.from(stripTypeScriptTypes(
+    readFileSync(new URL('../hooks/register.ts', import.meta.url), 'utf8') + `
+export const inspection = { tick, pointerHold, findPointers, pointerChecks, mutex: typeof promiseMutex === 'function' ? promiseMutex : undefined, serialMarker, serialized, resetTurnState, resumeTick: () => { isTicking = false }, waitForSubmit, mainTurns, turnEndWaiters, admissionTurns, promptAdmissions, tickOwned,
+  runtime: () => ({ timeout: config.submitTimeoutMs, timer, isTicking, promptSeq,
+    admissions: [...promptAdmissions], owned: [...tickOwned] }),
+  token: e => promptTokens.get(e), suppressTick: () => { isTicking = true },
+  claim: ($, w, item) => moveRoom($, w, item, [inboxFile, claimedFile], undefined, false, 'quiet', false)
+};
+// rig ${++moduleId}`)).toString('base64')) : await import(`../hooks/register.ts?rig=${++moduleId}`)
+  const { register } = module
   const base = mkdtempSync(join(tmpdir(), 'fd-hold-'))
   const root = join(base, 'install')
   const room = join(base, 'room')
@@ -59,7 +70,7 @@ async function rig({ cycle = 'idle', noRoom = false, noPid = false, entries = []
   const $ = {
     clock: {
       now: async () => now,
-      after: (ms, fn) => { if (hooks.timeout) { delete hooks.timeout; queueMicrotask(fn) } return { cancel() {} } },
+      after: (ms, fn) => { if (hooks.timeout && ms !== 60 * 60_000) { delete hooks.timeout; queueMicrotask(fn) } return { cancel() {} } },
       every: () => ({ cancel() {} }),
     },
     env: { get: async () => undefined },
@@ -138,10 +149,11 @@ async function rig({ cycle = 'idle', noRoom = false, noPid = false, entries = []
     command: { register: async () => {} },
   }
   const handlers = {}
+  const catches = {}
   const install = register => register((name, ...rest) => {
     handlers[name] = rest.at(-1)
-    return { catch() {} }
-  }, { installRoot: root, roomRoot: noRoom ? undefined : room, seat: SEAT, submitTimeoutMinutes, ...(jobs.length ? { jobSeat: SEAT } : {}) })
+    return { catch(handler) { catches[name] = handler } }
+  }, { installRoot: root, roomRoot: noRoom ? undefined : room, seat, submitTimeoutMinutes, ...(jobs.length ? { jobSeat: SEAT } : {}) })
   install(register)
   const tick = async () => {
     holdLookups = 0
@@ -165,7 +177,8 @@ async function rig({ cycle = 'idle', noRoom = false, noPid = false, entries = []
         .split('\n').filter(Boolean).map(l => JSON.parse(l.replace(/^\d+ /, ''))).filter(l => l.id.startsWith('room:')).map(l => [l.id, l.status]),
     )
   return {
-    submitted, statuses, hooks, tick, drop, freeze, thaw, ledger, admit, tickets, ticketFile,
+    submitted, statuses, hooks, tick, drop, freeze, thaw, ledger, admit, tickets, ticketFile, clock: $.clock,
+    inspection: module.inspection, engine: $, handlers, catches, where: { root, memory, seat: SEAT },
     recoverPid: () => { noPid = false },
     reconcile: args => handlers['command.run']($, { args }), holdSamples, runs, order, writes, logs,
     reload: async () => install((await import(`../hooks/register.ts?rig=${++moduleId}`)).register),
@@ -1405,5 +1418,1323 @@ test('eight admission tickets for one dead pid produce one probe per sweep', asy
       assert.equal(r.logs.filter(line => line.includes('dead-no-item.json') && line.includes('dead-owner admission without an item; removing')).length, tick + 1)
       assert.equal(r.runs.filter(argv => argv[2] === PID_DEAD && argv.at(-1) === String(pid)).length, tick + 1)
     }
+  } finally { r.done() }
+})
+
+test('round19 item 1: an expired window absorbs late rejection and records its ledger outcome', async () => {
+  const r = await rig({ submitTimeoutMinutes: 0.05 })
+  const pending = Promise.withResolvers()
+  const unhandled = []
+  const listener = error => unhandled.push(error)
+  process.on('unhandledRejection', listener)
+  try {
+    r.drop('late-window', 'peer', 'late rejection after the window')
+    r.hooks.pending = pending.promise
+    r.clock.after = (ms, fn) => { if (ms === 3000) queueMicrotask(fn); return { cancel() {} } }
+    await r.tick()
+    assert.equal(r.held(`room:${SEAT}:late-window.json`).status, 'submitting:unresolved')
+    pending.reject(new Error('late window rejection'))
+    for (let i = 0; i < 100 && r.tickets().length; i++) await sleep(50)
+    await sleep(50)
+    assert.deepEqual(unhandled, [])
+    assert.equal(r.ledger()[`room:${SEAT}:late-window.json`], 'deferred:submit-rejected')
+  } finally {
+    process.removeListener('unhandledRejection', listener)
+    r.done()
+  }
+})
+
+
+
+// Round 20 uses isolated module state; the normal rig still imports register.ts directly.
+const flush20 = async () => { for (let i = 0; i < 100; i++) await Promise.resolve() }
+const event20 = (file = 'a.json', extra = {}) => ({ origin: { kind: 'peer' }, text: `Room mail for testseat from peer: ${file}`, ...extra })
+const invoke20 = (r, name, event = {}, next = async () => ({})) => r.handlers[name](r.engine, event, next)
+const until20 = async predicate => {
+  for (let i = 0; i < 200 && !predicate(); i++) await sleep(10)
+  assert.ok(predicate(), 'expected state reached')
+}
+
+test('round24 item 1 / D: UNKNOWN b leaves UNREAD a admitted in MIXED mail', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists
+    r.engine.fs.exists = p => p.endsWith('/b.json') ? Promise.reject(Error('sample failed')) : exists(p)
+    const pointers = `${event20().text}\n${event20('b.json').text}`
+    const event = event20('a.json', { text: `Please reply.\n${pointers}` })
+    const result = await invoke20(r, 'prompt.submit', event, async e => { assert.equal(e, event); return { text: e.text } })
+    assert.equal(result.text, event.text)
+    assert.deepEqual([...r.inspection.admissionTurns.keys()], ['a.json'])
+    assert.match((await invoke20(r, 'prompt.submit', event20('a.json', { text: pointers }))).drop, /UNKNOWN/)
+  } finally { r.done() }
+})
+
+test('round24 item 2 / E: serialization orders claims and samples; ownership persists until released', async t => {
+  await t.test('round26 item 1 / E: an admitted pointer blocks the queued claim and delivers only once', async () => {
+    const r = await rig({ inspect: true })
+    const deferred = Promise.withResolvers()
+    let prompt, claim
+    try {
+      r.inspection.suppressTick()
+      r.drop('a', 'peer', 'hello')
+      const exists = r.engine.fs.exists
+      const order = []
+      r.engine.fs.exists = async p => {
+        const present = await exists(p)
+        if (p.endsWith('/inbox/testseat/a.json')) { order.push('sample'); await deferred.promise; order.push('sample done') }
+        return present
+      }
+      let deliveries = 0
+      prompt = invoke20(r, 'prompt.submit', event20(), async () => { deliveries++; return {} })
+      await until20(() => order.includes('sample'))
+      deferred.resolve()
+      await prompt
+      claim = r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a.json', source: 'room' }).then(result => { order.push('claim done'); return result })
+      assert.equal(await claim, 'admitted')
+      assert.deepEqual(order, ['sample', 'sample done', 'claim done'])
+      assert.deepEqual(r.inbox(), ['a.json'])
+      assert.deepEqual(r.claimed(), [])
+      r.inspection.resumeTick()
+      await r.inspection.tick(r.engine)
+      assert.ok(r.inspection.admissionTurns.has('a.json'))
+      assert.deepEqual(r.inbox(), ['a.json'])
+      assert.equal(deliveries + r.submitted.length, 1)
+    } finally { deferred.resolve(); await Promise.allSettled([prompt, claim]); r.done() }
+  })
+  await t.test('b: externally restored file stays CLAIMED until the session edge clears ownership', async () => {
+    const r = await rig({ inspect: true })
+    try {
+      r.inspection.suppressTick()
+      r.drop('a', 'peer', 'hello')
+      await r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a.json', source: 'room' })
+      rmSync(join(r.where.root, '..', 'room', 'claimed', SEAT, 'a.json'))
+      r.drop('a', 'peer', 'restored')
+      let samples = 0
+      const exists = r.engine.fs.exists
+      r.engine.fs.exists = p => { if (/\/(inbox|claimed)\/testseat\/a.json$/.test(p)) samples++; return exists(p) }
+      assert.match((await invoke20(r, 'prompt.submit', event20())).drop, /CLAIMED/)
+      assert.equal(r.inspection.admissionTurns.has('a.json'), false)
+      assert.equal(samples, 2)
+      await invoke20(r, 'session.end')
+      assert.equal((await invoke20(r, 'prompt.submit', event20())).drop, undefined)
+      assert.ok(r.inspection.admissionTurns.has('a.json'))
+    } finally { r.done() }
+  })
+  await t.test('c: absent re-claim releases previous ownership and reads GONE', async () => {
+    const r = await rig({ inspect: true })
+    try {
+      r.inspection.suppressTick()
+      const item = { id: 'room:testseat:a.json', source: 'room' }
+      r.drop('a', 'peer', 'hello')
+      assert.equal(await r.inspection.claim(r.engine, r.where, item), 'moved')
+      rmSync(join(r.where.root, '..', 'room', 'claimed', SEAT, 'a.json'))
+      assert.equal(await r.inspection.claim(r.engine, r.where, item), 'absent')
+      assert.equal(r.inspection.tickOwned.has('a.json'), false)
+      assert.match((await invoke20(r, 'prompt.submit', event20())).drop, /GONE/)
+    } finally { r.done() }
+  })
+})
+
+test('round24 item 3 / J: window two after refusal on an idle seat returns timeout promptly', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers()
+  let done
+  try {
+    const timers = []
+    let calls = 0, result
+    r.clock.after = (ms, fire) => {
+      if (++calls === 2) throw Error('window two unavailable')
+      timers.push({ ms, fire })
+      return { cancel() {} }
+    }
+    done = r.inspection.waitForSubmit(r.engine, () => pending.promise).then(value => { result = value })
+    await invoke20(r, 'turn.start', { turnId: 'brief' })
+    r.inspection.suppressTick()
+    await invoke20(r, 'turn.complete', { turnId: 'brief' })
+    timers[0].fire()
+    await flush20()
+    assert.equal(calls, 2)
+    assert.equal(result, 'timeout')
+    assert.equal(r.inspection.turnEndWaiters.size, 0)
+  } finally { pending.resolve('cleanup'); await done; r.done() }
+})
+
+test('round24 item 4 / H: seventy throws without catch replay release capacity at completion', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    for (let i = 0; i < 70; i++) {
+      const turnId = `turn-${i}`
+      await invoke20(r, 'turn.start', { turnId })
+      await assert.rejects(invoke20(r, 'prompt.submit', event20('a.json', { turnId }), async () => { throw Error('downstream') }))
+      await invoke20(r, 'turn.complete', { turnId })
+    }
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+    await invoke20(r, 'prompt.submit', event20())
+    assert.ok(r.inspection.admissionTurns.has('a.json'), '71st pointer still binds')
+    assert.equal(r.logs.filter(line => line.includes('cap 64')).length, 0)
+    // Overflow warns once, including after a session edge restores capacity.
+    for (const edge of ['session.end', 'session.start']) {
+      for (let i = 0; i < 66; i++) {
+        const attempt = invoke20(r, 'prompt.submit', event20(), async () => { throw Error('downstream') })
+        if (i < 64) await assert.rejects(attempt)
+        else assert.match((await attempt).drop, /cap 64/)
+      }
+      assert.equal(r.inspection.promptAdmissions.size, 64)
+      assert.equal(r.logs.filter(line => line.includes('cap 64')).length, 1)
+      await invoke20(r, edge)
+      assert.equal(r.inspection.promptAdmissions.size, 0)
+    }
+  } finally { r.done() }
+})
+
+test('round24 item 5: other-seat and unresolved-seat drop logs name every pointer', async () => {
+  for (const unresolved of [false, true]) {
+    const r = await rig({ inspect: true, ...(unresolved ? { seat: 'INVALID!' } : {}) })
+    try {
+      const text = 'Room mail for other from peer: a.json\nRoom mail for third from peer: b.json'
+      const result = await invoke20(r, 'prompt.submit', event20('a.json', { text }))
+      assert.match(result.drop, unresolved ? /seat unresolved/ : /another seat/)
+      assert.ok(r.logs.some(line => line.includes('room:other:a.json') && line.includes('room:third:b.json')))
+    } finally { r.done() }
+  }
+})
+
+test('round24 item 6 / G: private releaseAdmissions is driven by turn.complete', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    await invoke20(r, 'turn.start', { turnId: 'bound' })
+    await invoke20(r, 'prompt.submit', event20('a.json', { turnId: 'bound' }))
+    await invoke20(r, 'turn.complete', { turnId: 'other' })
+    assert.ok(r.inspection.admissionTurns.has('a.json'))
+    await invoke20(r, 'turn.complete', { turnId: 'bound' })
+    assert.equal(r.inspection.admissionTurns.size, 0)
+  } finally { r.done() }
+})
+
+test('round25 B: CRLF framing and ordinary mail retain their classification', async () => {
+  const { pointerOnly } = await import('../hooks/register.ts')
+  assert.equal(pointerOnly(`Another Claude session sent a message:\r\n${event20().text}`), true)
+  assert.equal(pointerOnly(`Another Claude session sent a message:\r\nPlease reply\r\n${event20().text}`), false)
+})
+
+test('round23 item 1 / B: ordinary prose is MIXED and known engine framings are BARE', async () => {
+  const { pointerOnly } = await import('../hooks/register.ts')
+  const r = await rig({ inspect: true })
+  try {
+    for (const lead of ['Reply from beta: yes go ahead', 'Got your message, shipping now', 'Thanks from pheme', 'Approved - proceed with the deploy from main']) {
+      const event = event20('gone.json', { text: `${lead}\n${event20('gone.json').text}` })
+      assert.equal(pointerOnly(event.text), false, lead)
+      assert.deepEqual(await invoke20(r, 'prompt.submit', event, async e => { assert.equal(e, event); return { text: e.text } }), { text: event.text })
+    }
+    for (const lead of ['Another Claude session sent a message', '[Cross-session message]:']) {
+      const event = event20('gone.json', { text: `${lead}\n${event20('gone.json').text}` })
+      assert.equal(pointerOnly(event.text), true, lead)
+      assert.match((await invoke20(r, 'prompt.submit', event)).drop, /GONE/)
+    }
+  } finally { r.done() }
+})
+
+test('round23 item 2 / D: UNKNOWN samples and thrown checks enter MIXED but drop BARE', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.drop('a', 'peer', 'hello')
+    r.freeze()
+    const exists = r.engine.fs.exists
+    for (const thrown of [false, true]) for (const mixed of [true, false]) {
+      let failures = 0
+      r.engine.fs.exists = p => {
+        if (p.replaceAll('\\', '/').endsWith('/claimed/testseat/a.json')) {
+          failures++
+          if (thrown) throw Error('synchronous check failure')
+          return Promise.reject(Error('unreadable sample'))
+        }
+        return exists(p)
+      }
+      const event = event20('a.json', { text: `${mixed ? 'Please reply.\n' : ''}${event20().text}` })
+      let entered = 0
+      const result = await invoke20(r, 'prompt.submit', event, async e => { entered++; assert.equal(e, event); return { text: e.text } })
+      assert.equal(failures, 1)
+      assert.equal(entered, mixed ? 1 : 0)
+      if (mixed) assert.deepEqual(result, { text: event.text })
+      else assert.match(result.drop, thrown ? /check failed/ : /UNKNOWN/)
+    }
+  } finally { r.done() }
+})
+
+test('round23 item 3 / J: idle deadline-arm failure times out promptly and releases the tick', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers()
+  try {
+    r.clock.after = () => { throw Error('deadline unavailable') }
+    let result
+    void r.inspection.waitForSubmit(r.engine, () => new Promise(() => {})).then(value => { result = value })
+    await flush20()
+    assert.equal(result, 'timeout')
+    assert.equal(r.inspection.turnEndWaiters.size, 0)
+    r.hooks.pending = pending.promise
+    r.drop('a', 'peer', 'hello')
+    await invoke20(r, 'turn.complete', { turnId: 'idle' })
+    await until20(() => r.ledger()['room:testseat:a.json'] === 'submitting:unresolved' && !r.inspection.runtime().isTicking)
+    assert.equal(r.tickets().length, 1)
+    pending.resolve({})
+    await until20(() => r.ledger()['room:testseat:a.json'] === 'submitted' && !r.tickets().length)
+  } finally { pending.resolve({}); r.done() }
+})
+
+
+
+test('round23 item 5: both session edges clear all turn state before waking waiters', async () => {
+  for (const edge of ['start', 'end']) {
+    const r = await rig({ inspect: true })
+    try {
+      const h = r.inspection
+      h.suppressTick()
+      await invoke20(r, 'turn.start', { turnId: 'busy' })
+      r.drop('a', 'peer', 'hello')
+      const event = event20()
+      await assert.rejects(invoke20(r, 'prompt.submit', event, async () => { throw Error('pending replay') }))
+      h.tickOwned.add('settled.json')
+      let wakes = 0
+      const wake = reset => {
+        wakes++
+        assert.equal(reset, edge === 'end')
+        assert.equal(h.mainTurns.size, 0)
+        assert.equal(h.admissionTurns.size, 0)
+        assert.equal(h.promptAdmissions.size, 0)
+        assert.equal(h.token(event), undefined)
+        assert.equal(h.tickOwned.has('settled.json'), false)
+      }
+      h.turnEndWaiters.add(wake)
+      await invoke20(r, `session.${edge}`)
+      assert.equal(wakes, 1)
+      h.turnEndWaiters.delete(wake)
+    } finally { r.done() }
+  }
+})
+
+
+
+test('round20 item 1: later after refusal preserves pending ticket and engine settlement', async () => {
+  for (const refusal of [1, 2]) {
+    const r = await rig({ inspect: true, submitTimeoutMinutes: 0.05 })
+    const pending = Promise.withResolvers()
+    try {
+      const timers = []
+      let calls = 0
+      r.clock.after = (ms, run) => {
+        if (++calls === refusal) throw new Error('clock refused')
+        const timer = { ms, run, cancelled: false }
+        timers.push(timer)
+        return { cancel() { timer.cancelled = true } }
+      }
+      r.hooks.pending = pending.promise
+      r.drop('a', 'peer', 'hello')
+      await invoke20(r, 'turn.complete')
+      await until20(() => r.submitted.length === 1)
+      if (refusal === 2) {
+        await invoke20(r, 'turn.start', { turnId: 't1' })
+        await invoke20(r, 'turn.complete', { turnId: 'other' })
+        timers.find(t => t.ms === 3000).run()
+      }
+      await flush20()
+      if (refusal === 1) await until20(() => !r.inspection.runtime().isTicking)
+      assert.equal(r.held('room:testseat:a.json').status, refusal === 1 ? 'submitting:unresolved' : 'submitting')
+      assert.equal(r.tickets().length, 1)
+      pending.resolve({})
+      await until20(() => r.ledger()['room:testseat:a.json'] === 'submitted' && !r.tickets().length)
+      assert.deepEqual(r.inbox(), [])
+      assert.ok(!r.runs.some(a => a[2] === MOVE && a.at(-1).replaceAll('\\', '/').includes('/inbox/')))
+      assert.doesNotMatch(r.logText(), /submit-rejected/)
+      if (refusal === 1) assert.match(r.logText(), /submitting:unresolved/)
+      else assert.doesNotMatch(r.logText(), /submitting:unresolved/)
+    } finally { pending.resolve({}); await flush20(); r.done() }
+  }
+})
+
+test('round21 J: session end bounds discarded submit and frees the tick', async () => {
+  for (const inTurn of [false, true]) {
+    const r = await rig({ inspect: true, submitTimeoutMinutes: 0.05 })
+    const pending = Promise.withResolvers()
+    try {
+      const timers = []
+      r.clock.after = (ms, run) => { const t = { run, cancelled: false }; timers.push(t); return { cancel() { t.cancelled = true } } }
+      if (inTurn) await invoke20(r, 'turn.start', { turnId: 't1' })
+      r.hooks.pending = pending.promise
+      r.drop('a', 'testseat-supervisor', LEG)
+      await invoke20(r, 'turn.complete', { turnId: 'other' })
+      await until20(() => r.submitted.length === 1)
+      await invoke20(r, 'session.end')
+      await flush20()
+      const armed = timers.length
+      r.advance(3 * 60 * 60_000)
+      for (const t of timers) if (!t.cancelled) { t.run(); await flush20() }
+      await until20(() => r.ledger()['room:testseat:a.json'] === 'submitting:unresolved' && !r.inspection.runtime().isTicking)
+      assert.equal(timers.length, armed)
+      assert.equal(r.tickets().length, 1)
+      pending.resolve({ drop: 'engine discarded at clear' })
+      await until20(() => r.ledger()['room:testseat:a.json'] === 'dropped' && !r.tickets().length)
+      assert.match(r.logText(), /submitting:unresolved/)
+    } finally { pending.resolve({}); await flush20(); r.done() }
+  }
+})
+
+test('round22 item 1: session.start immediately wakes a lifecycle leg parked in turn WAIT', async () => {
+  const r = await rig({ inspect: true, submitTimeoutMinutes: 0.05 })
+  const pending = Promise.withResolvers()
+  try {
+    const timers = []
+    r.clock.after = (ms, run) => {
+      const t = { ms, run, cancelled: false }; timers.push(t)
+      return { cancel() { t.cancelled = true } }
+    }
+    await invoke20(r, 'turn.start', { turnId: 'lost-turn' })
+    r.hooks.pending = pending.promise
+    r.drop('a', 'testseat-supervisor', LEG)
+    await invoke20(r, 'turn.complete', { turnId: 'other' })
+    await until20(() => r.submitted.length === 1)
+    assert.deepEqual(timers.map(t => t.ms), [3600000])
+    assert.equal(r.inspection.runtime().isTicking, true)
+    await invoke20(r, 'session.start')
+    await flush20()
+    assert.deepEqual(timers.filter(t => !t.cancelled).map(t => t.ms), [3600000, 3000], 'session.start leaves WAIT for a full window and retains the turn-WAIT deadline')
+    timers.at(-1).run()
+    await until20(() => r.ledger()['room:testseat:a.json'] === 'submitting:unresolved' && !r.inspection.runtime().isTicking)
+    pending.resolve({ drop: 'discarded at reload' })
+    await until20(() => !r.tickets().length)
+  } finally {
+    pending.resolve({}); await flush20()
+    await until20(() => !r.inspection.runtime().isTicking)
+    r.done()
+  }
+})
+
+test('round22 item 4: MIXED mail quoting only GONE or CLAIMED files enters despite both holds', async () => {
+  const r = await rig({ inspect: true, cycle: 'clearing' })
+  try {
+    r.freeze()
+    const reads = []
+    const read = r.engine.fs.read
+    r.engine.fs.read = async path => { reads.push(path.replaceAll('\\', '/')); return read(path) }
+    for (const claimed of [false, true]) {
+      if (claimed) r.inspection.tickOwned.add('gone.json')
+      const event = event20('gone.json', { text: `Ordinary mail.\n${event20('gone.json').text}` })
+      const result = await invoke20(r, 'prompt.submit', event, async e => { assert.equal(e, event); return { text: e.text } })
+      assert.equal(result.text, event.text)
+      assert.equal(reads.some(p => p.endsWith('/auto-clear-cycle.json')), false)
+      assert.equal(reads.some(p => p.includes('/state/holds/')), false)
+    }
+  } finally { r.done() }
+})
+
+
+test('round20 item 3: unbound P1 survives completion of same-file bound P2', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    await invoke20(r, 'turn.start', { turnId: 't1' })
+    await invoke20(r, 'prompt.submit', event20())
+    await invoke20(r, 'prompt.submit', event20('a.json', { turnId: 't1' }))
+    await invoke20(r, 'turn.complete', { turnId: 't1' })
+    assert.ok(r.inspection.admissionTurns.has('a.json'))
+    await invoke20(r, 'turn.start', { turnId: 't2' })
+    await invoke20(r, 'turn.complete', { turnId: 't2' })
+    assert.equal(r.inspection.admissionTurns.size, 0)
+  } finally { r.done() }
+})
+
+test('round20 item 4: start and end clear live prompt tracking and reset cap capacity', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    r.engine.command.register = async () => {}
+    for (const boundary of ['session.end', 'session.start']) {
+      const event = event20()
+      void invoke20(r, 'prompt.submit', event, () => new Promise(() => {}))
+      await flush20()
+      assert.equal(r.inspection.promptAdmissions.size, 1)
+      await invoke20(r, boundary)
+      assert.equal(r.inspection.promptAdmissions.size, 0)
+      assert.equal(r.inspection.token(event), undefined)
+    }
+    for (let i = 0; i < 64; i++) {
+      void invoke20(r, 'prompt.submit', event20(), () => new Promise(() => {}))
+      await flush20()
+    }
+    assert.equal(r.inspection.promptAdmissions.size, 64)
+    assert.ok(!r.logs.some(line => line.includes('cap 64')))
+  } finally { r.done() }
+})
+
+test('round20 item 5: seventy mixed prompts with no admits consume no cap entries', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    for (let i = 0; i < 70; i++) {
+      const event = event20('gone.json', { text: `Ordinary mixed mail\n${event20('gone.json').text}` })
+      void invoke20(r, 'prompt.submit', event, () => new Promise(() => {}))
+      await flush20()
+      assert.equal(r.inspection.token(event), undefined)
+    }
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+    assert.ok(!r.logs.some(line => line.includes('cap 64')))
+  } finally { r.done() }
+})
+
+test('round20 item 6: blocked duplicate claim clears ownership while disk still reads CLAIMED', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    const item = { id: 'room:testseat:a.json', source: 'room' }
+    r.drop('a', 'peer', 'first')
+    assert.equal(await r.inspection.claim(r.engine, r.where, item), 'moved')
+    r.drop('a', 'peer', 'rewritten')
+    assert.equal(await r.inspection.claim(r.engine, r.where, item), 'blocked')
+    assert.equal(r.inspection.tickOwned.has('a.json'), false)
+    assert.match((await invoke20(r, 'prompt.submit', event20())).drop, /CLAIMED/)
+  } finally { r.done() }
+})
+
+test('round20 item 8: a running turn arms only the total deadline', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers()
+  try {
+    const windows = []
+    r.clock.after = (ms, run) => { windows.push(ms); return { cancel() {} } }
+    await invoke20(r, 'turn.start', { turnId: 't1' })
+    r.hooks.pending = pending.promise
+    r.drop('a', 'testseat-supervisor', LEG)
+    await invoke20(r, 'turn.complete', { turnId: 'other' })
+    await until20(() => r.submitted.length === 1)
+    assert.deepEqual(windows, [60 * 60_000])
+  } finally {
+    pending.resolve({})
+    await until20(() => r.ledger()['room:testseat:a.json'] === 'submitted' && !r.tickets().length)
+    r.done()
+  }
+})
+
+
+test('round21 item 1 / J: full windows, six-window cap, and immediate session teardown', async () => {
+  const r = await rig({ inspect: true, submitTimeoutMinutes: 10 })
+  try {
+    const h = r.inspection
+    const run = async ({ busy = true, failAt = 0 } = {}) => {
+      h.mainTurns.clear()
+      if (busy) h.mainTurns.add('t1')
+      const timers = []
+      let calls = 0, result
+      const pending = Promise.withResolvers()
+      r.clock.after = (ms, fire) => {
+        if (++calls === failAt) throw Error('clock unavailable')
+        const t = { ms, fire, cancelled: false }; timers.push(t)
+        return { cancel() { t.cancelled = true } }
+      }
+      const done = h.waitForSubmit(r.engine, () => pending.promise).then(value => { result = value })
+      const wake = (end = false) => { if (end) h.mainTurns.clear(); for (const w of h.turnEndWaiters) w(end) }
+      return { timers, pending, done, wake, result: () => result }
+    }
+    // A 59:50 completion grants ten full minutes even as the WAIT deadline fires.
+    let q = await run()
+    q.wake(); await flush20()
+    assert.deepEqual(q.timers.map(t => t.ms), [3600000, 600000])
+    q.timers[0].fire(); await flush20()
+    assert.equal(q.result(), undefined)
+    q.timers[1].fire(); await flush20()
+    assert.equal(q.result(), 'timeout')
+    await q.done
+    // Initial window plus five completion windows, including simultaneous wakes.
+    q = await run({ busy: false })
+    for (let i = 0; i < 10; i++) q.wake()
+    for (let i = 0; i < 6; i++) { q.timers[i].fire(); await flush20() }
+    assert.equal(q.result(), 'timeout')
+    assert.deepEqual(q.timers.map(t => t.ms), Array(6).fill(600000))
+    await q.done
+    for (const busy of [false, true]) {
+      q = await run({ busy }); q.wake(true); await flush20()
+      assert.equal(q.result(), 'timeout')
+      assert.deepEqual(q.timers.filter(t => !t.cancelled), [])
+      await q.done
+    }
+    for (const failAt of [1, 2, 3]) {
+      q = await run({ busy: false, failAt })
+      for (let arm = 2; arm <= failAt; arm++) { q.wake(); q.timers[arm - 2].fire(); await flush20() }
+      q.wake(true); await flush20()
+      assert.equal(q.result(), 'timeout')
+      await q.done
+    }
+  } finally { r.done() }
+})
+
+
+
+test('round22 item 2 / B: only known engine lead-ins are BARE', async () => {
+  const { pointerOnly } = await import('../hooks/register.ts')
+  const pointer = event20().text
+  const leads = ['Another Claude session sent a message', 'Task notification', '[Cross-session message]:']
+  for (const lead of leads) {
+    assert.equal(pointerOnly(`${lead}\n${pointer}`), true)
+  }
+  for (const lead of ['Another Claude session (pheme) sent a message:', '[Cross-session message from pheme-2]:', 'x'.repeat(111) + ' message:', 'FYI:', 'x'.repeat(112) + ' message:', 'Message from a.json:', '[Cross-session message from pheme-2]']) {
+    assert.equal(pointerOnly(`${lead}\n${pointer}`), false)
+  }
+  const r = await rig({ inspect: true })
+  try {
+    for (const lead of leads) for (const seat of ['testseat', 'other']) {
+      const event = event20('gone.json', { text: `${lead}\nRoom mail for ${seat} from peer: gone.json` })
+      const result = await invoke20(r, 'prompt.submit', event, async () => { assert.fail('BARE pointer must drop') })
+      assert.match(result.drop, seat === 'testseat' ? /GONE/ : /another seat/)
+    }
+    const event = event20('gone.json', { text: `FYI:\n${event20('gone.json').text}` })
+    const result = await invoke20(r, 'prompt.submit', event, async e => { assert.equal(e, event); return { text: e.text } })
+    assert.equal(result.text, event.text)
+  } finally { r.done() }
+})
+
+
+test('FENCE G: completion preserves other bound turns and new unbound admissions', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    await invoke20(r, 'turn.start', { turnId: 'reading' })
+    await invoke20(r, 'turn.start', { turnId: 'unrelated' })
+    const bindings = r.inspection.admissionTurns
+    bindings.set('bound', new Set([{ seq: 0, turnId: 'reading', token: 'bound' }]))
+    bindings.set('old', new Set([{ seq: 1, token: 'old' }]))
+    bindings.set('queued', new Set([{ seq: 2, token: 'queued' }]))
+    await invoke20(r, 'turn.complete', { turnId: 'unrelated' })
+    assert.deepEqual([...bindings.keys()], ['bound', 'queued'])
+    await invoke20(r, 'turn.complete', { turnId: 'reading' })
+    assert.deepEqual([...bindings.keys()], ['queued'])
+    await invoke20(r, 'turn.complete', { turnId: 'lost-unbound-start' })
+    assert.equal(bindings.size, 0)
+  } finally { r.done() }
+})
+
+
+
+
+
+test('round25 item 1: marks before samples read CLAIMED and bound samples block queued claims', async () => {
+  const r = await rig({ inspect: true })
+  const sample = Promise.withResolvers()
+  let prompt, claim
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists
+    let sampling = false
+    assert.equal(await r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a.json', source: 'room' }), 'moved')
+    prompt = invoke20(r, 'prompt.submit', event20())
+    assert.match((await prompt).drop, /CLAIMED/)
+    // Bookkeeping wins even when both disk samples falsely report inbox-only.
+    r.engine.fs.exists = p => /\/(inbox|claimed)\/testseat\/a.json$/.test(p) ? Promise.resolve(p.includes('/inbox/')) : exists(p)
+    assert.match((await invoke20(r, 'prompt.submit', event20())).drop, /CLAIMED/)
+    r.drop('b', 'peer', 'second')
+    r.engine.fs.exists = async p => {
+      const present = await exists(p)
+      if (p.endsWith('/inbox/testseat/b.json')) { sampling = true; await sample.promise }
+      return present
+    }
+    prompt = invoke20(r, 'prompt.submit', event20('b.json'))
+    await until20(() => sampling)
+    const run = r.engine.process.run
+    r.engine.process.run = async args => {
+      assert.ok(!args.includes(MOVE), 'an admitted file never reaches the mover')
+      return run(args)
+    }
+    sample.resolve()
+    assert.equal((await prompt).drop, undefined)
+    claim = r.inspection.claim(r.engine, r.where, { id: 'room:testseat:b.json', source: 'room' })
+    assert.equal(await claim, 'admitted')
+    assert.ok(r.inspection.admissionTurns.has('b.json'))
+    assert.ok(r.inbox().includes('b.json'))
+  } finally { sample.resolve(); await Promise.allSettled([prompt, claim]); r.done() }
+})
+
+test('round25 item 2: generic lead-in is MIXED for GONE and UNREAD with either hold state', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    const generic = file => event20(file, { text: `Here is what I got from the session:\n${event20(file).text}` })
+    const next = async e => ({ text: e.text })
+    assert.deepEqual(await invoke20(r, 'prompt.submit', generic('gone.json'), next), { text: generic('gone.json').text })
+    assert.match((await invoke20(r, 'prompt.submit', event20('gone.json', { text: `Another Claude session sent a message:\n${event20('gone.json').text}` }), next)).drop, /GONE/)
+    r.drop('a', 'peer', 'hello')
+    r.freeze()
+    assert.match((await invoke20(r, 'prompt.submit', generic('a.json'), next)).drop, /held/)
+    assert.equal(r.inspection.admissionTurns.size, 0)
+    r.thaw()
+    assert.deepEqual(await invoke20(r, 'prompt.submit', generic('a.json'), next), { text: generic('a.json').text })
+    assert.ok(r.inspection.admissionTurns.has('a.json'))
+  } finally { r.done() }
+})
+
+test('round25 item 3: 65th pointer drops with the cap reason and the tick delivers its file', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers(), calls = []
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'tracked')
+    r.drop('overflow', 'peer', 'overflow')
+    for (let i = 0; i < 64; i++) {
+      calls.push(invoke20(r, 'prompt.submit', event20(), () => pending.promise))
+      await flush20()
+    }
+    let forwarded = 0
+    for (let i = 0; i < 2; i++) {
+      const result = await invoke20(r, 'prompt.submit', event20('overflow.json'), async () => { forwarded++; return {} })
+      assert.match(result.drop, /promptAdmissions cap 64/)
+    }
+    assert.equal(forwarded, 0)
+    assert.equal(r.logs.filter(line => line.includes('cap 64')).length, 1)
+    assert.equal(r.inspection.admissionTurns.has('overflow.json'), false)
+    pending.resolve({ drop: 'tracked dropped' })
+    await Promise.all(calls)
+    r.inspection.resumeTick()
+    await r.tick()
+    await r.tick()
+    assert.ok(r.processed().includes('overflow.json'))
+  } finally { pending.resolve({ drop: 'cleanup' }); await Promise.all(calls); r.done() }
+})
+
+test('round25 item 4: claim bookkeeping follows landed status without a finally disk read', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const item = { id: 'room:testseat:a.json', source: 'room' }
+    assert.equal(await r.inspection.claim(r.engine, r.where, item), 'moved')
+    assert.ok(r.inspection.tickOwned.has('a.json'))
+    const exists = r.engine.fs.exists
+    let claimedReads = 0
+    r.engine.fs.exists = p => { if (p.endsWith('/claimed/testseat/a.json')) claimedReads++; return exists(p) }
+    assert.equal(await r.inspection.claim(r.engine, r.where, item), 'blocked')
+    assert.equal(claimedReads, 1, 'only the destination precheck reads claimed/')
+    assert.equal(r.inspection.tickOwned.has('a.json'), false, 'a blocked attempt did not move this file')
+    rmSync(join(r.where.root, '..', 'room', 'claimed', SEAT, 'a.json'))
+    claimedReads = 0
+    assert.equal(await r.inspection.claim(r.engine, r.where, item), 'absent')
+    assert.equal(claimedReads, 2, 'destination precheck plus post-failure sample only')
+    assert.equal(r.inspection.tickOwned.has('a.json'), false)
+  } finally { r.done() }
+})
+
+test('round25 item 6: only peer prompts mint tokens and session-end reset clears their bindings', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    const before = r.inspection.runtime().promptSeq
+    await invoke20(r, 'prompt.submit', event20('a.json', { origin: { kind: 'composer' } }))
+    assert.equal(r.inspection.runtime().promptSeq, before)
+    r.drop('a', 'peer', 'hello')
+    await invoke20(r, 'prompt.submit', event20())
+    const bindings = [...r.inspection.admissionTurns.get('a.json')]
+    assert.equal(bindings.length, 1)
+    assert.equal(bindings[0].token, String(before + 1))
+    r.inspection.resetTurnState('end')
+    assert.equal(r.inspection.admissionTurns.size, 0)
+  } finally { r.done() }
+})
+
+
+test('round26 item 3: abandoned hook cannot bind or call next after its sample resolves', async () => {
+  const r = await rig({ inspect: true })
+  const sample = Promise.withResolvers()
+  let prompt
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists
+    let sampling = false, calls = 0
+    r.engine.fs.exists = async p => {
+      const present = await exists(p)
+      if (p.endsWith('/inbox/testseat/a.json')) { sampling = true; await sample.promise }
+      return present
+    }
+    const event = Object.freeze(event20())
+    prompt = invoke20(r, 'prompt.submit', event, async () => { calls++; return {} })
+    await until20(() => sampling)
+    const caughtNext = Object.assign(async () => { calls++; return {} }, { called: false })
+    const caught = await r.catches['prompt.submit'](r.engine, event, caughtNext)
+    assert.match(caught.drop, /did not finish/)
+    sample.resolve()
+    await prompt
+    assert.equal(r.inspection.admissionTurns.size, 0)
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+    assert.equal(calls, 0)
+    assert.deepEqual(r.inbox(), ['a.json'])
+  } finally { sample.resolve(); await prompt; r.done() }
+})
+
+test('round26 item 4: session.start wakes WAIT without ending the submit windows', async () => {
+  const r = await rig({ inspect: true, submitTimeoutMinutes: 0.05 })
+  const pending = Promise.withResolvers()
+  try {
+    const timers = []
+    r.clock.after = (ms, run) => {
+      const timer = { ms, run, cancelled: false }; timers.push(timer)
+      return { cancel() { timer.cancelled = true } }
+    }
+    await invoke20(r, 'turn.start', { turnId: 'lost-turn' })
+    r.hooks.pending = pending.promise
+    r.drop('a', 'testseat-supervisor', LEG)
+    await invoke20(r, 'turn.complete', { turnId: 'other' })
+    await until20(() => r.submitted.length === 1)
+    assert.equal(r.inspection.turnEndWaiters.size, 1)
+    await invoke20(r, 'session.start')
+    await flush20()
+    assert.ok(timers.some(t => t.ms === 3000 && !t.cancelled), 'WAIT leaves for a submit window')
+    // A new main turn spans that window; its completion grants the next one.
+    await invoke20(r, 'turn.start', { turnId: 'new-turn' })
+    await invoke20(r, 'turn.complete', { turnId: 'new-turn' })
+    timers.find(t => t.ms === 3000).run()
+    await flush20()
+    assert.equal(timers.filter(t => t.ms === 3000).length, 2, 'start must not force a final window')
+    assert.doesNotMatch(r.logText(), /submitting:unresolved/)
+    pending.resolve({})
+    await until20(() => r.processed().includes('a.json') && !r.inspection.runtime().isTicking)
+    assert.equal(r.submitted.length, 1)
+    assert.equal(r.inspection.turnEndWaiters.size, 0)
+    assert.doesNotMatch(r.logText(), /submitting:unresolved/)
+  } finally {
+    pending.resolve({}); await flush20()
+    await until20(() => !r.inspection.runtime().isTicking)
+    r.done()
+  }
+})
+
+test('round26 item 5: both mutex queues preserve FIFO results and rejection recovery', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    assert.equal(typeof r.inspection.mutex, 'function', 'one shared promiseMutex factory')
+    for (const serial of [r.inspection.serialMarker, r.inspection.serialized]) {
+      const first = Promise.withResolvers(), order = []
+      const failure = Error('caller must receive this')
+      const a = serial(async () => { order.push('first'); await first.promise; throw failure })
+      const rejected = assert.rejects(a, error => error === failure)
+      const b = serial(async () => { order.push('second'); return 42 })
+      await flush20()
+      assert.deepEqual(order, ['first'])
+      first.resolve()
+      await rejected
+      assert.equal(await b, 42)
+      assert.deepEqual(order, ['first', 'second'])
+    }
+  } finally { r.done() }
+})
+
+test('round27 item 1: post-bind abandonment releases the token and cap entry before dropping', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    for (const viaCatch of [false, true]) {
+      const event = Object.freeze(event20())
+      let calls = 0
+      const admissions = r.inspection.promptAdmissions
+      const set = admissions.set.bind(admissions)
+      admissions.set = (token, admission) => {
+        set(token, admission)
+        const check = r.inspection.pointerChecks.get(event) ?? r.inspection.pointerChecks.get(token)
+        queueMicrotask(() => {
+          if (viaCatch) {
+            r.catches['prompt.submit'](r.engine, event, Object.assign(async () => { calls++; return {} }, { called: false }))
+            assert.equal(admissions.size, 0, 'not-called catch takes its admission immediately')
+            assert.equal(r.inspection.admissionTurns.size, 0)
+          } else check.settled = true
+        })
+        return admissions
+      }
+      const result = await invoke20(r, 'prompt.submit', event, async () => { calls++; return {} })
+      assert.match(result.drop, /did not finish/)
+      assert.equal(calls, 0)
+      assert.equal(r.inspection.admissionTurns.size, 0, 'abandoned file is not guarded')
+      assert.equal(admissions.size, 0, 'abandoned token uses no cap entry')
+      admissions.set = set
+    }
+    assert.deepEqual(r.inbox(), ['a.json'])
+  } finally { r.done() }
+})
+
+test('round27 item 2: copied-event catch settles the pending token before its sample can bind', async () => {
+  const r = await rig({ inspect: true })
+  const sample = Promise.withResolvers()
+  let prompt
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists
+    let sampling = false, calls = 0
+    r.engine.fs.exists = async p => {
+      const present = await exists(p)
+      if (p.endsWith('/inbox/testseat/a.json')) { sampling = true; await sample.promise }
+      return present
+    }
+    const event = Object.freeze(event20())
+    prompt = invoke20(r, 'prompt.submit', event, async () => { calls++; return {} })
+    await until20(() => sampling)
+    const check = r.inspection.pointerChecks.get(event) ?? r.inspection.pointerChecks.get(String(r.inspection.runtime().promptSeq))
+    const caught = await r.catches['prompt.submit'](r.engine, { ...event }, Object.assign(async () => { calls++; return {} }, { called: false }))
+    assert.match(caught.drop, /did not finish/)
+    assert.equal(check.settled, true, 'copied catch resolves the pending text FIFO token')
+    sample.resolve()
+    assert.match((await prompt).drop, /did not finish/)
+    assert.equal(calls, 0)
+    assert.equal(r.inspection.admissionTurns.size, 0)
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+    assert.deepEqual(r.inbox(), ['a.json'])
+  } finally { sample.resolve(); await prompt; r.done() }
+})
+
+test('round27 item 3 / J: session end releases WAIT and active window in the same tick, with late correction', async () => {
+  for (const inTurn of [true, false]) {
+    const r = await rig({ inspect: true, submitTimeoutMinutes: 10 })
+    const pending = Promise.withResolvers()
+    let tick
+    try {
+      const timers = []
+      r.clock.after = (ms, run) => {
+        const t = { ms, run, cancelled: false }; timers.push(t)
+        return { cancel() { t.cancelled = true } }
+      }
+      if (inTurn) await invoke20(r, 'turn.start', { turnId: 'working' })
+      r.drop('a', 'testseat-supervisor', LEG)
+      r.hooks.pending = pending.promise
+      tick = r.inspection.tick(r.engine)
+      await until20(() => r.inspection.turnEndWaiters.size === 1)
+      const armed = timers.length
+      await invoke20(r, 'session.end')
+      await flush20()
+      assert.equal(r.inspection.turnEndWaiters.size, 0, 'wait returns without firing or advancing a timer')
+      await tick
+      assert.equal(r.inspection.runtime().isTicking, false)
+      assert.equal(r.held('room:testseat:a.json').status, 'submitting:unresolved')
+      assert.equal(timers.length, armed, 'no final ten-minute window')
+      assert.ok(timers.every(t => t.cancelled))
+      pending.resolve({})
+      await until20(() => r.ledger()['room:testseat:a.json'] === 'submitted' && !r.tickets().length)
+      assert.match(r.logText(), /submitting:unresolved/)
+    } finally { pending.resolve({}); await tick; await flush20(); r.done() }
+  }
+})
+
+test('round27 item 4: admitted claim races silently skip without spending claim or deferral budgets', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    for (let i = 0; i < 9; i++) r.drop(`a${i}`, 'peer', `message ${i}`)
+    let reads = 0
+    r.engine.prompt.read = async () => {
+      const i = reads++
+      if (i < 8) await invoke20(r, 'prompt.submit', event20(`a${i}.json`))
+      return { text: '' }
+    }
+    await r.inspection.tick(r.engine)
+    assert.doesNotMatch(r.logText(), /deferred:claim-move/, 'admitted outcome is not a ledger deferral')
+    assert.equal(reads, 9, 'eight silent skips consume neither the six-claim nor three-deferral budget')
+    assert.deepEqual(r.inbox(), Array.from({ length: 8 }, (_, i) => `a${i}.json`))
+    assert.deepEqual(r.processed(), ['a8.json'])
+    assert.equal(r.submitted.length, 1)
+    assert.equal(await r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a0.json', source: 'room' }), 'admitted')
+    assert.equal(Object.values(r.ledger()).filter(s => s.startsWith('deferred:')).length, 0)
+  } finally { r.done() }
+})
+
+test('round27 item 5 / C: cap permits mixed mail unchanged with no admission and one log', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers(), calls = []
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'tracked')
+    r.drop('overflow', 'peer', 'unread quote')
+    for (let i = 0; i < 64; i++) {
+      calls.push(invoke20(r, 'prompt.submit', event20(), () => pending.promise))
+      await until20(() => r.inspection.promptAdmissions.size === i + 1)
+    }
+    const text = `Please answer this mail.\n${event20('overflow.json').text}`
+    for (let i = 0; i < 2; i++) {
+      const event = Object.freeze(event20('overflow.json', { text }))
+      let forwarded
+      const answer = await invoke20(r, 'prompt.submit', event, async e => { forwarded = e; return { text: e.text } })
+      assert.equal(forwarded, event, 'MIXED enters unchanged even when its quote is UNREAD')
+      assert.equal(answer.text, text)
+      assert.equal(r.inspection.admissionTurns.has('overflow.json'), false)
+      assert.equal(r.inspection.promptAdmissions.size, 64)
+    }
+    assert.equal(r.logs.filter(line => line.includes('cap 64')).length, 1)
+    assert.match((await invoke20(r, 'prompt.submit', event20('overflow.json'))).drop, /cap 64/)
+    assert.equal(r.logs.filter(line => line.includes('cap 64')).length, 1)
+    assert.ok(r.inbox().includes('overflow.json'))
+  } finally { pending.resolve({ drop: 'cleanup' }); await Promise.all(calls); r.done() }
+})
+
+test('round28 item 1: a five-second claim spawn does not delay the pointer sample', async () => {
+  const r = await rig({ inspect: true })
+  let claim, prompt, slow
+  const spawn = Promise.withResolvers()
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const run = r.engine.process.run
+    let spawning = false, settled = false
+    r.engine.process.run = async args => {
+      if (args.includes(MOVE)) {
+        spawning = true
+        slow = setTimeout(spawn.resolve, 5000)
+        await spawn.promise
+      }
+      return run(args)
+    }
+    claim = r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a.json', source: 'room' })
+    await until20(() => spawning)
+    const started = performance.now()
+    prompt = invoke20(r, 'prompt.submit', event20()).then(value => { settled = true; return value })
+    await sleep(100)
+    assert.equal(settled, true, 'fence completes while the five-second spawn is still pending')
+    assert.ok(performance.now() - started < 1000)
+    assert.match((await prompt).drop, /CLAIMED/)
+    assert.equal(r.inspection.admissionTurns.size, 0)
+    assert.ok(r.inspection.tickOwned.has('a.json'), 'claim marks before spawning')
+    assert.deepEqual(r.inbox(), ['a.json'])
+    await claim
+  } finally { clearTimeout(slow); spawn.resolve(); await Promise.allSettled([claim, prompt]); r.done() }
+})
+
+test('round28 item 2: installRoot without roomRoot admits a bare pointer unchanged after holds', async () => {
+  const r = await rig({ inspect: true, noRoom: true })
+  try {
+    r.inspection.suppressTick()
+    const event = event20()
+    let entered
+    const result = await invoke20(r, 'prompt.submit', event, async e => { entered = e; return { text: e.text } })
+    assert.equal(entered, event)
+    assert.equal(result.text, event.text)
+    assert.equal(r.inspection.admissionTurns.size, 0)
+    writeFileSync(join(r.where.memory, 'runtime', 'auto-clear-cycle.json'), JSON.stringify({ state: 'CLEAR_PENDING' }))
+    assert.match((await invoke20(r, 'prompt.submit', event)).drop, /delivery held/)
+  } finally { r.done() }
+})
+
+test('round28 item 3: clockless after two queued completions waits for a new completion', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers()
+  let waiting
+  try {
+    r.inspection.suppressTick()
+    r.inspection.mainTurns.add('still-working')
+    let arms = 0, result
+    r.clock.after = () => {
+      if (++arms === 2) throw Error('window clock unavailable')
+      return { cancel() {} }
+    }
+    waiting = r.inspection.waitForSubmit(r.engine, () => pending.promise).then(value => { result = value })
+    for (const wake of r.inspection.turnEndWaiters) { wake(); wake() }
+    await flush20()
+    assert.equal(arms, 2, 'two completions queued before the first window')
+    assert.equal(result, undefined, 'old settled ended promise must not end clockless WAIT')
+    assert.equal(r.inspection.turnEndWaiters.size, 1)
+    await invoke20(r, 'turn.complete', { turnId: 'still-working' })
+    await waiting
+    assert.equal(result, 'timeout')
+    assert.equal(r.inspection.turnEndWaiters.size, 0)
+  } finally { pending.resolve('cleanup'); await waiting; r.done() }
+})
+
+test('round28 item 4: abandoned pointer logs exactly once when the body resumes', async () => {
+  const r = await rig({ inspect: true })
+  const sample = Promise.withResolvers()
+  let prompt
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists
+    let sampling = false
+    r.engine.fs.exists = async p => {
+      const present = await exists(p)
+      if (p.endsWith('/inbox/testseat/a.json')) { sampling = true; await sample.promise }
+      return present
+    }
+    const event = event20()
+    prompt = invoke20(r, 'prompt.submit', event, async () => assert.fail('abandoned prompt entered'))
+    await until20(() => sampling)
+    const caught = await r.catches['prompt.submit'](r.engine, event, Object.assign(async () => ({}), { called: false }))
+    sample.resolve()
+    assert.deepEqual(await prompt, caught)
+    assert.equal(r.logs.filter(line => line.includes('pointer fence did not finish')).length, 1)
+  } finally { sample.resolve(); await prompt; r.done() }
+})
+
+test('round28 item 5: mixed GONE pointer skips hold reads and UNREAD samples precede holds outside the gate', async () => {
+  const r = await rig({ inspect: true })
+  const hold = Promise.withResolvers()
+  let prompt
+  try {
+    r.inspection.suppressTick()
+    r.freeze()
+    const reads = [], samples = []
+    const read = r.engine.fs.read, exists = r.engine.fs.exists
+    let readingHold = false
+    r.engine.fs.read = async p => {
+      if (/auto-clear-cycle.json|state\/holds\//.test(p)) {
+        reads.push(p)
+        if (p.endsWith('/auto-clear-cycle.json')) { readingHold = true; await hold.promise }
+      }
+      return read(p)
+    }
+    r.engine.fs.exists = p => {
+      if (/\/(inbox|claimed)\/testseat\//.test(p)) samples.push(p)
+      return exists(p)
+    }
+    const mixed = event20('gone.json', { text: `Please reply.\n${event20('gone.json').text}` })
+    // If the old fence tries holds, unblock it so RED is an assertion, not a hang.
+    const gone = invoke20(r, 'prompt.submit', mixed, async e => ({ text: e.text }))
+    await flush20()
+    hold.resolve()
+    assert.equal((await gone).text, mixed.text)
+    assert.deepEqual(reads, [], 'MIXED + GONE does not read either hold file')
+    assert.equal(samples.length, 2)
+    r.drop('a', 'peer', 'unread')
+    const blocked = Promise.withResolvers()
+    r.engine.fs.read = async p => {
+      if (p.endsWith('/auto-clear-cycle.json')) {
+        assert.equal(samples.length, 4, 'both samples precede the first hold read')
+        readingHold = true
+        await blocked.promise
+      }
+      return read(p)
+    }
+    readingHold = false
+    prompt = invoke20(r, 'prompt.submit', event20())
+    await until20(() => readingHold)
+    let gateFree = false
+    const gate = r.inspection.serialized(async () => { gateFree = true })
+    await flush20()
+    const freeDuringHold = gateFree
+    blocked.resolve()
+    await gate
+    assert.equal(freeDuringHold, true, 'hold I/O runs outside the gate')
+    assert.match((await prompt).drop, /delivery held/)
+    assert.equal(r.inspection.admissionTurns.size, 0, 'held prompt releases its provisional binding')
+  } finally { hold.resolve(); await prompt; r.done() }
+})
+
+test('round28 item 6: bare and mixed fences bind the same unread file', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.drop('a', 'peer', 'hello')
+    for (const bare of [true, false]) {
+      const text = `${bare ? '' : 'Please reply.\n'}${event20().text}`
+      const token = String(bare)
+      const fence = await r.inspection.pointerHold(r.engine, text, r.inspection.findPointers(text), { settled: false, token, text })
+      assert.deepEqual(fence.admission.files, ['a.json'])
+      assert.equal(r.inspection.promptAdmissions.get(token), fence.admission)
+    }
+  } finally { r.done() }
+})
+
+test('round28 item 7: promiseMutex invokes jobs with zero arguments across rejection recovery', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    const serial = r.inspection.mutex()
+    const seen = []
+    await assert.rejects(serial(function (...args) { seen.push(args); throw Error('first') }), /first/)
+    assert.equal(await serial(function (...args) { seen.push(args); return Promise.resolve(42) }), 42)
+    assert.deepEqual(seen, [[], []])
+  } finally { r.done() }
+})
+
+test('round28 item 8: two reachable prompt tokens prune separately at their last binding', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'first')
+    r.drop('b', 'peer', 'last')
+    for (const [file, turnId] of [['a.json', 'first'], ['b.json', 'last']]) {
+      await invoke20(r, 'turn.start', { turnId })
+      await assert.rejects(invoke20(r, 'prompt.submit', event20(file, { turnId }), async () => { throw Error('downstream') }), /downstream/)
+    }
+    const admissions = [...r.inspection.promptAdmissions.values()]
+    assert.equal(admissions.length, 2)
+    assert.notEqual(admissions[0].token, admissions[1].token)
+    assert.deepEqual(admissions.map(a => a.files), [['a.json'], ['b.json']])
+    await invoke20(r, 'turn.complete', { turnId: 'first' })
+    assert.deepEqual([...r.inspection.promptAdmissions.keys()], [admissions[1].token])
+    assert.deepEqual([...r.inspection.admissionTurns.keys()], ['b.json'])
+    await invoke20(r, 'turn.complete', { turnId: 'last' })
+    assert.equal(r.inspection.promptAdmissions.size, 0)
+    assert.equal(r.inspection.admissionTurns.size, 0)
+  } finally { r.done() }
+})
+
+
+test('round29 item 1: hung samples leave claims free and ownership wins before decision', async () => {
+  const r = await rig({ inspect: true })
+  const sample = Promise.withResolvers(), spawn = Promise.withResolvers()
+  let prompt, claim
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const exists = r.engine.fs.exists, run = r.engine.process.run
+    let sampling = false, spawning = false
+    r.engine.fs.exists = async p => {
+      const present = await exists(p)
+      if (p.endsWith('/inbox/testseat/a.json')) { sampling = true; await sample.promise }
+      return present
+    }
+    r.engine.process.run = async args => {
+      if (args.includes(MOVE)) { spawning = true; await spawn.promise }
+      return run(args)
+    }
+    prompt = invoke20(r, 'prompt.submit', event20())
+    await until20(() => sampling)
+    claim = r.inspection.claim(r.engine, r.where, { id: 'room:testseat:a.json', source: 'room' })
+    await flush20()
+    assert.equal(spawning, true, 'a hung pointer sample cannot block the tick claim')
+    sample.resolve()
+    assert.match((await prompt).drop, /CLAIMED/, 'mark before decide overrides the stale UNREAD sample')
+    spawn.resolve()
+    assert.equal(await claim, 'moved')
+    r.drop('b', 'peer', 'second')
+    await invoke20(r, 'prompt.submit', event20('b.json'))
+    assert.equal(await r.inspection.claim(r.engine, r.where, { id: 'room:testseat:b.json', source: 'room' }), 'admitted', 'mark after bind checks admission in its own gate')
+    assert.deepEqual(r.inbox(), ['b.json'])
+  } finally { sample.resolve(); spawn.resolve(); await Promise.allSettled([prompt, claim]); r.done() }
+})
+
+test('round29 item 2: bare and mixed quotes never admit a supervisor lifecycle leg', async () => {
+  for (const mixed of [false, true]) {
+    const r = await rig({ inspect: true })
+    try {
+      r.inspection.suppressTick()
+      r.drop('leg', 'testseat-supervisor', LEG)
+      const text = `${mixed ? 'Please reply.\n' : ''}${event20('leg.json').text}`
+      await invoke20(r, 'prompt.submit', event20('leg.json', { text }))
+      assert.equal(r.inspection.admissionTurns.has('leg.json'), false, 'lifecycle files never bind')
+      r.inspection.resumeTick()
+      await r.tick()
+      assert.deepEqual(r.processed(), ['leg.json'])
+      assert.equal(r.submitted.length, 1)
+      assert.ok(r.submitted[0].includes('ROOM-LIFECYCLE'))
+    } finally { r.done() }
+  }
+  // A real prior admission can outlive a replacement file with the same name.
+  // The claim's own exemption must still let the supervisor leg through.
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('leg', 'peer', 'ordinary mail')
+    await invoke20(r, 'prompt.submit', event20('leg.json'))
+    assert.equal(r.inspection.admissionTurns.has('leg.json'), true)
+    r.drop('leg', 'testseat-supervisor', LEG)
+    r.inspection.resumeTick()
+    await r.tick()
+    assert.deepEqual(r.processed(), ['leg.json'])
+    assert.equal(r.submitted.length, 1)
+    assert.ok(r.submitted[0].includes('ROOM-LIFECYCLE'))
+  } finally { r.done() }
+})
+
+test('round29 item 4: pointerHold returns its bound admission without a callback', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const text = event20().text
+    const fence = await r.inspection.pointerHold(r.engine, text, r.inspection.findPointers(text), { settled: false, token: 'direct', text })
+    assert.deepEqual(fence, { admission: { token: 'direct', text, files: ['a.json'] } })
+    assert.deepEqual([...r.inspection.admissionTurns.keys()], ['a.json'])
+    assert.equal(r.inspection.promptAdmissions.get('direct'), fence.admission)
+  } finally { r.done() }
+})
+
+test('round29 item 8: WAIT deadline arms once on first WAIT after an idle submit window', async () => {
+  const r = await rig({ inspect: true })
+  const pending = Promise.withResolvers()
+  let waiting
+  try {
+    r.inspection.suppressTick()
+    const timers = []
+    r.clock.after = (ms, run) => { const t = { ms, run, cancelled: false }; timers.push(t); return { cancel() { t.cancelled = true } } }
+    waiting = r.inspection.waitForSubmit(r.engine, () => pending.promise)
+    await flush20()
+    assert.deepEqual(timers.map(t => t.ms), [600000], 'idle submits only arm their submit window')
+    await invoke20(r, 'turn.start', { turnId: 'working' })
+    timers[0].run()
+    await flush20()
+    assert.deepEqual(timers.map(t => t.ms), [600000, 3600000])
+    await invoke20(r, 'turn.complete', { turnId: 'working' })
+    await flush20()
+    await invoke20(r, 'turn.start', { turnId: 'second' })
+    timers[2].run()
+    await flush20()
+    assert.equal(timers.filter(t => t.ms === 3600000).length, 1, 'later WAIT reuses the first deadline')
+    pending.resolve('entered')
+    assert.equal(await waiting, 'entered')
+    assert.ok(timers.every(t => t.cancelled))
+  } finally { pending.resolve('cleanup'); await waiting; r.done() }
+})
+
+
+test('round30 item 1: a not-called catch cannot release an identical pending replay admission', async () => {
+  const r = await rig({ inspect: true })
+  try {
+    r.inspection.suppressTick()
+    r.drop('a', 'peer', 'hello')
+    const p1 = event20()
+    await assert.rejects(invoke20(r, 'prompt.submit', p1, async () => { throw Error('P1 downstream') }), /P1 downstream/)
+    const admission = [...r.inspection.promptAdmissions.values()][0]
+    assert.equal(admission.replay, true)
+    const p2 = { ...p1, get origin() { throw Error('P2 before next') } }
+    let called = false
+    await assert.rejects(invoke20(r, 'prompt.submit', p2, async () => { called = true }), /P2 before next/)
+    assert.equal(called, false)
+    const unusedNext = Object.assign(async () => { throw Error('must not call next') }, { called: false })
+    assert.ok(r.catches['prompt.submit'](r.engine, p2, unusedNext).drop)
+    assert.equal(r.inspection.promptAdmissions.get(admission.token), admission, 'P2 owns no replay admission')
+    assert.equal(r.inspection.admissionTurns.get('a.json').size, 1, 'P1 remains bound')
+    const settled = Promise.withResolvers()
+    const replay = r.catches['prompt.submit'](r.engine, { ...p1 }, Object.assign(() => settled.promise, { called: true }))
+    await flush20()
+    assert.equal(r.inspection.admissionTurns.get('a.json').size, 1, 'pending replay keeps the binding')
+    settled.resolve({ drop: 'P1 replay dropped' })
+    assert.deepEqual(await replay, { drop: 'P1 replay dropped' })
+    assert.equal(r.inspection.admissionTurns.has('a.json'), false)
+  } finally { r.done() }
+})
+
+test('round30 item 2: turn.start between the tick check and gate leaves the file in inbox', async () => {
+  const r = await rig({ inspect: true })
+  let started
+  try {
+    r.drop('a', 'peer', 'hello')
+    const turns = r.inspection.mainTurns
+    const size = Object.getOwnPropertyDescriptor(Set.prototype, 'size').get
+    let armed = false
+    r.engine.prompt.read = async () => { armed = true; return { text: '' } }
+    Object.defineProperty(turns, 'size', { configurable: true, get() {
+      const count = size.call(this)
+      if (armed) {
+        armed = false
+        queueMicrotask(() => {
+          assert.equal(r.inspection.tickOwned.has('a.json'), false, 'turn starts before claim marking')
+          started = invoke20(r, 'turn.start', { turnId: 'gate-race' })
+        })
+      }
+      return count
+    } })
+    await r.inspection.tick(r.engine)
+    assert.ok(started, 'turn.start ran after the outside check')
+    await started
+    assert.deepEqual(r.inbox(), ['a.json'])
+    assert.deepEqual(r.claimed(), [])
+    assert.equal(r.inspection.tickOwned.has('a.json'), false)
+    assert.equal(r.runs.some(args => args.includes(MOVE)), false)
+    assert.deepEqual(r.ledger(), {}, 'silent skip writes no deferral')
+    assert.deepEqual(r.submitted, [])
   } finally { r.done() }
 })

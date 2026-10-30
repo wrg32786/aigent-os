@@ -6,12 +6,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
-// register.ts is TypeScript and CI's node may not strip types, so the one-liner
-// is read from its source: the exported MOVE literal, as the mod runs it.
+// This suite also runs on plain Node without TypeScript support in CI.
 const source = readFileSync(new URL('../hooks/register.ts', import.meta.url), 'utf8')
-const MOVE = /export const MOVE =\s*'([^'\r\n]*)'/.exec(source)?.[1]
+const MOVE = source.match(/export const MOVE =\s*'([^'\r\n]+)'/)?.[1]
 assert.ok(MOVE, 'MOVE literal not found in register.ts')
+
 const argvFor = (from, to) => ['-e', MOVE, '--', from, to]
 const run = (from, to) => spawnSync('node', argvFor(from, to), { encoding: 'utf8' })
 const runAsync = (from, to) =>
@@ -69,4 +70,17 @@ test('MOVE with two movers racing for one source: exactly one wins and the file 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+
+test('round26 item 2: MOVE tests load as plain JavaScript without TypeScript imports', () => {
+  const source = readFileSync(new URL(import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /(?:from\s*|import\s*\()(['"])[^'"\n]+\.ts\1/)
+  // Older plain Node releases have no stripping flag because they cannot strip types.
+  const noStrip = process.allowedNodeEnvironmentFlags.has('--experimental-strip-types') ? ['--no-experimental-strip-types'] : []
+  const loaded = spawnSync(process.execPath, [...noStrip, '--test', '--test-name-pattern=^MOVE against real files', fileURLToPath(import.meta.url)], {
+    encoding: 'utf8',
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'NODE_TEST_CONTEXT')),
+  })
+  assert.equal(loaded.status, 0, loaded.stderr + loaded.stdout)
 })
