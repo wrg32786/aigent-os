@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-30-027669ca",
-  "public_product_commit": "027669ca5e842887ea1fbccd4c60e67321c126b5",
+  "baseline_id": "aigent-os-2026-10-30-fae5fb70",
+  "public_product_commit": "fae5fb70f1eb3dbf5b72543b84902b7807008753",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -33,12 +33,13 @@
     "v8 recut for issues #98 and #111, review round 2 (9331148e): pins that moved: daemons/pty-runner.mjs, launcher/aigent.sh, launcher/aigent.ps1. daemons/pty-runner.mjs: an absent tool-call watch re-baselines the moment the transcript appears, and readiness reads one live no-records predicate (absent or zero-length). launcher/aigent.ps1 and launcher/aigent.sh: the direct branches (--no-deps, node missing) remove CLAUDE_CODE_CHILD_SESSION and default CLAUDE_CODE_FORCE_SESSION_PERSISTENCE themselves, so no launch path hands the seat the marker that turns its transcript off. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; one pin added, daemons/redact.cjs. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #80 (issue #80, PR #131) after merging master c7fdbb37 (df44b232): pins that moved: none. The #80 Done-claims change (shared Done locator, DONE_TAG closed set, section grammar, claims render) moved the capsule writer, reader and lifecycle pins; master's #125 runner/launcher pins carry forward unchanged. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; one pin added, daemons/redact.cjs. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #80 (PR #131) after the private heading scan and master 054590b2 (ebebbe90): pins that moved: daemons/render_boundary.py. render_boundary.py moved because its heading scan became private; no other pin moved. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; one pin added, daemons/redact.cjs. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for #81 (side effects) (027669ca): pins that moved: daemons/sessionstart-reinject.mjs, daemons/resume-verb.mjs, daemons/precompact-flush.mjs, daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs, daemons/redact.cjs. daemons/redact.cjs is a new pin: the capsule writer loads it and it decides what reaches the vault. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; one pin added, daemons/redact.cjs. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for #81 (side effects) (027669ca): pins that moved: daemons/sessionstart-reinject.mjs, daemons/resume-verb.mjs, daemons/precompact-flush.mjs, daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs, daemons/redact.cjs. daemons/redact.cjs is a new pin: the capsule writer loads it and it decides what reaches the vault. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; one pin added, daemons/redact.cjs. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #81 (side effects, final) (fae5fb70): pins that moved: daemons/resume-verb.mjs, daemons/stop-capsule-writer.mjs, daemons/redact.cjs. Shell rows store command and host only; redact.cjs and the writer moved. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
     "daemons/sessionstart-reinject.mjs": "3d8eda506714ffbf8e04a5c7e428252fedba0d01f2153b22e9f256b642de641e",
-    "daemons/resume-verb.mjs": "e574288204c463acde298bb3b60b5983ebab7cb2b3b4eb86cbdeffd416fc6f91",
+    "daemons/resume-verb.mjs": "313232ed09245433cd653036ea281e80cca80e2b308ee378e9824c5c2e2b8086",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
     "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
@@ -52,7 +53,7 @@
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
     "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
-    "daemons/stop-capsule-writer.mjs": "c76a68c9198a501b009500afdf9e910bd3847593efbd2b951eca093b3f964567",
+    "daemons/stop-capsule-writer.mjs": "890779002c07d18b8529765058efbc1ab365c7bacbb2d1915d966691c2d4666c",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
     "hooks/log-token-usage.sh": "d6940138f66a9ef407d7a0a92a2a67d7a5f76270ea17004159a733b2a20d9700",
@@ -65,7 +66,7 @@
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
-    "daemons/redact.cjs": "7142ef9078f6b642e19d5282e88c5e3e6f8a4eeaf988f6bf940a976341f83d42",
+    "daemons/redact.cjs": "d3946d9959b452b09a95cc1e9e798d7b8c9af6aaa9b07fae709d1f925103e995",
     "daemons/render_boundary.py": "809233926f028f56b88590e3bd4731e3436231c08f7cd6c00da0792b6085f976",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
