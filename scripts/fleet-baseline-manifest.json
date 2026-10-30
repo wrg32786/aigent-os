@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-28-8b4a7bbd",
-  "public_product_commit": "8b4a7bbd1c174f80c6b0b0e1b8ee967458222450",
+  "baseline_id": "aigent-os-2026-10-30-c548b73f",
+  "public_product_commit": "c548b73faf838ed2514189c87ffccbb39aef66e1",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -28,12 +28,13 @@
     "Ninth v8 cut (#90/#91 acknowledgement-lifecycle repair: the capsule ack is identity-bound to its session/request/cycle and invalidated on every cycle-abandonment path including the ordinary below-pressure gates; the cycle's own persisted ack_boundary replaces the stop-writer seed so restore recovers only current-cycle evidence, forward-only and provenance-checked; first-tick checkpoint-confirmed covered and legacy/absent/malformed/foreign boundaries named into the safe re-request path): daemons/pty-runner.mjs and daemons/auto-clear-transport.mjs moved; every hash recomputed from the product commit, no pin added or removed.",
     "v8 recut (program issue #49, #90/#91 acknowledgement-lifecycle repair, review rounds 1-3 close-out): one product commit moved one pin. daemons/pty-runner.mjs changed for the retired-request ledger that closes R1 (a retired cycle's late answer is consumed by the ledger that owes it, oldest-first, bounded at 8 and closed on the host's own submission-order record evidence rather than on a timer), for R2 (a checkpoint HOLD that keeps its cycle keeps its evidence, admitting only the HOLD:checkpoint- prefix family), for R3 (the drain reads complete lines with per-line end offsets so a torn tail is never consumed), and once more for the internal review of 384185b: the ordering precedent the ledger's closure rests on is now cited at the termination site as a correctness rule, and the ledger's cap is pinned by test. daemons/auto-clear-transport.mjs was recomputed from this baseline's commit and found unchanged since the previous recut. Recomputed: 37 pinned, 37 matching, 0 missing.",
     "v8 cut for issues #99 and #104 (input accounting), as corrected by pre-push review: daemons/pty-runner.mjs accounts for a C0 control EXECUTED inside an unfinished control sequence (ECMA-48 5.4 / DEC STD 070) instead of absorbing it as a parameter byte. Such a control taints with the byte named printably, and a CR BOOKS the transcript record it may owe as an uncertain submission -- but only when the host could actually have submitted: a CR whose pre-sequence byte before the cursor was a backslash is the documented composer newline and owes nothing, and a CR on a composer that was empty and clean changes nothing and is neither booked nor tainted, so neither leaves a phantom FIFO entry to absorb the next genuine receipt. A booked mid-sequence CR is forced NOT `certain`, which _uncertainSubmission would otherwise derive from the previous record and which reopened #99 in a narrower shape. A receipt settles a submission WITHOUT discarding an unfinished parser state or its restore snapshot: confirmSubmission leaves mode/sequence/activeControl alone while a sequence is in flight and re-points the ESC-arrival snapshot at the confirmed state, so automatic input stays deferred until the sequence completes and an inert completion then releases it on the receipt already held, with no further operator Enter and no fabricated receipt. The ESC-arrival snapshot is otherwise poisoned so no restore path can put the pre-report state back over any of this. A bracketed paste carrying more than its own end-marker ESC no longer adopts an interleaved terminal report's trailing byte as the byte before the cursor. _disableAutomation emits automation-disabled on entry or on a change of effective reason rather than on every poll, compared on the UNTRUNCATED reason, with the per-tick cancellation work left deliberately unconditional. daemons/pty-runner.mjs is the ONLY pinned file that moved relative to the previous baseline. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 37 pinned, 36 matching, 1 moved, 0 missing; no pin was added or removed. public_product_commit is a commit on the branch that lands this baseline and is required by daemons/tests/fleet-baseline-attest.test.mjs to be an ancestor of the tree under test, so the merge that lands it must be a normal merge, never a squash.",
-    "v8 cut for the hook timeout unit correction (8b4a7bbd): .claude/settings.json.template is the only pin that moved. Claude Code reads a hook's timeout in seconds; the template wrote milliseconds, so every rendered install matched the template and attested COMPLIANT with its hook timeouts effectively disabled. Every template value is now a per-hook second budget from a healthy-host measurement (5 s light hooks, 10 s caddy.sh, 8 s interlock legs and sessionend-flush, 10 s precompact-flush), and doctor.sh --attest now also bounds every template and installed hook timeout to [1, 120] s independently of the template. Every other hash was recomputed from the blob at this commit and is unchanged. Population stays 38."
+    "v8 cut for the hook timeout unit correction (8b4a7bbd): .claude/settings.json.template is the only pin that moved. Claude Code reads a hook's timeout in seconds; the template wrote milliseconds, so every rendered install matched the template and attested COMPLIANT with its hook timeouts effectively disabled. Every template value is now a per-hook second budget from a healthy-host measurement (5 s light hooks, 10 s caddy.sh, 8 s interlock legs and sessionend-flush, 10 s precompact-flush), and doctor.sh --attest now also bounds every template and installed hook timeout to [1, 120] s independently of the template. Every other hash was recomputed from the blob at this commit and is unchanged. Population stays 38.",
+    "v8 recut for #80 capsule Done claims (c548b73f): pins that moved: daemons/resume-verb.mjs, daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs, daemons/render_boundary.py, daemons/frontmatter-reader.cjs. Pins that moved carry the #80 Done-claims change to the Stop writer, the resume verb, the shared row and section helpers and the Python render-boundary mirror; hashes are the blobs at the commit. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
     "daemons/sessionstart-reinject.mjs": "af62ac18954e7ec773e3051ac23fb89e8b1731e74dcac9b1e5bbd1320fd3ff52",
-    "daemons/resume-verb.mjs": "bccfb86202a29f2281f3429997fd5c76a40731af56a6c94e744f49ebc65c83d8",
+    "daemons/resume-verb.mjs": "0bb9b173fefe8f653d9096b970ab71616c6685f87c991c88626d6ea806f30b43",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
     "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
@@ -47,7 +48,7 @@
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
     "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
-    "daemons/stop-capsule-writer.mjs": "a9c37843f0b8d9e2bec10c1cd798afae80add202f795bcd0d0326410fca30f55",
+    "daemons/stop-capsule-writer.mjs": "69ecfe6cd4b56ebd398a08595810e478d1b7093872c2fd9680daa7d6933d5dba",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
     "hooks/log-token-usage.sh": "d6940138f66a9ef407d7a0a92a2a67d7a5f76270ea17004159a733b2a20d9700",
@@ -56,11 +57,11 @@
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "83a247f4e1cfdc6b98ff09075421c299975a26c0535f604610bc7e1552b47877",
     "daemons/auto-clear-transport.mjs": "70d359a8f77eeeacd316d121f924eed7c9e2a8b172398a9fc9a40be5bf4428ea",
-    "daemons/lifecycle-common.mjs": "a7922c600ac6aa42bb62fa30fa013758492e4d87ee7ff2a2a0cd3fcc6da66c12",
+    "daemons/lifecycle-common.mjs": "1b3d9185e39c36ba060784b31ecaba622bf7d49e0c5f862c84da1498a806be2b",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
-    "daemons/render_boundary.py": "ec2ed2b238d46cc964770d86dd3abe37913a611343871d348b8525e289ff1ff3",
+    "daemons/render_boundary.py": "c490114e8b1cfe46df898932fee01b51a8dc854fb966e372049f2493e919e4cf",
     "daemons/transport-deps/package.json": "a1d03430f519bf4ee1ea7ebbc26d80a2213c928451cc253de726ab6aeaf01bca",
     "daemons/transport-deps/package-lock.json": "59cab0396f5d3758816f45f5f6903a1bde5a0649a180321b3ef10de0d9f7b5f5",
     "launcher/aigent.sh": "5aebacaf419b421f87260ff5aa31c0b7b68a795435031475b92e9c65d8419335",
@@ -68,7 +69,7 @@
     "launcher/install.sh": "ca3799b4642558556be2b2062b714d33ede481487b526dbed01548536319dfeb",
     "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
-    "daemons/frontmatter-reader.cjs": "20f4d4c158f3d80da4fef3857f8a4cd8b597e47d5d4635bd15725e927163fd53"
+    "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b"
   },
   "required_settings": {
     "path": ".claude/settings.json",
