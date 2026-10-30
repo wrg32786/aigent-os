@@ -69,19 +69,28 @@ component_answer() {
 # nowhere earlier. Bounded: one node process, 90 s where `timeout` exists.
 # Prints the first line of the failure on stdout; returns 0 on success.
 optional_import_probe() {
-  local owner="$1" deps="$2" out
+  local owner="$1" deps="$2" out js
   command -v node >/dev/null 2>&1 || { echo "node not found, so nothing can be imported"; return 1; }
-  local runner=(node --input-type=module -e 'const deps = (process.argv[1] || "").split(",").filter(Boolean); for (const dep of deps) await import(dep);' -- "$deps")
+  # The import script, in a quoted heredoc so no shell quoting can bend it: on
+  # failure it prints one line itself, <dep>: [<code>: ]<first message line>.
+  read -r -d '' js <<'OPTIONAL_IMPORT_JS' || true
+const deps = (process.argv[1] || '').split(',').filter(Boolean);
+for (const dep of deps) {
+  try {
+    await import(dep);
+  } catch (error) {
+    const text = String(error && error.message !== undefined ? error.message : error);
+    const first = text.split(/\r?\n/).find((line) => line.trim()) || 'import threw with no message';
+    console.error(`${dep}: ${error && error.code ? `${error.code}: ` : ''}${first}`);
+    process.exit(1);
+  }
+}
+OPTIONAL_IMPORT_JS
+  local runner=(node --input-type=module -e "$js" -- "$deps")
   if command -v timeout >/dev/null 2>&1; then runner=(timeout 90 "${runner[@]}"); fi
   if out="$(cd "$owner" && "${runner[@]}" 2>&1)"; then return 0; fi
-  # The message line, not node's file:line stack header above it.
-  local msg
-  msg="$(printf '%s
-' "$out" | grep -m1 -E '^[A-Za-z]*Error' || true)"
-  [ -z "$msg" ] && msg="$(printf '%s
-' "$out" | grep -v '^[[:space:]]*$' | grep -v '^    at ' | head -1)"
-  printf '%s
-' "$msg" | cut -c1-200
+  # The probe's own line is the last non-empty one.
+  printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-200
   return 1
 }
 if [ -z "$ROOT" ]; then
