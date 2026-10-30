@@ -237,7 +237,8 @@ core_owned = 0
 operator_owned_count = 0
 missing_count = 0
 # In --component mode only the optional-component lines are wanted; the hashing
-# pass is the baseline's business and is skipped.
+# pass belongs to the baseline and is skipped. (No apostrophes in this heredoc:
+# bash 3.2 on macOS tracks quotes inside $( ... ) even through a quoted heredoc.)
 component_probe = os.environ.get("AIGENT_DOCTOR_COMPONENT", "")
 for relative, expected in ([] if component_probe else manifest["required_files"].items()):
     try:
@@ -660,7 +661,7 @@ if auto_refresh["expected"] == "enabled":
 # functioning. Presence of the node_modules directory proved nothing: a tree
 # whose package held only a stale .cache attested like a working one. This
 # read-only Python settles what files can settle (the directory, the owning
-# package.json, each declared dependency's own package.json) and hands the
+# package.json, the package.json of each declared dependency) and hands the
 # proof that matters -- can node import every declared dependency -- to the
 # shell, which runs it the way the node-pty probe below already runs. Nothing
 # is downloaded; importing a library is not loading a model.
@@ -710,7 +711,10 @@ ATTESTPY
   ATTEST_FINDINGS=()
   RUNNER_ROOT=""
   ATTEST_UNMEASURABLE=""
-  declare -A OPT_STATE OPT_WHY OPT_DEPS OPT_OWNER
+  # Optional-component records, one string each "name|state|why|deps|owner"
+  # (plain array: macOS ships bash 3.2, which has no associative arrays).
+  OPT_RECORDS=()
+  OPT_IMPORTS=()
   while IFS= read -r line; do
     # python3 on Windows writes CRLF, and `read -r` keeps the CR. Without this
     # strip the runner root parsed below ends in a bare CR, the node-pty probe
@@ -720,11 +724,11 @@ ATTESTPY
     case "$line" in
       optional:*)
         opt="${line#optional:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_state="${opt%%:*}"; opt_why="${opt#*:}"
-        OPT_STATE["$opt_name"]="$opt_state"; OPT_WHY["$opt_name"]="$opt_why"
+        OPT_RECORDS+=("$opt_name|$opt_state|$opt_why||")
         ;;
       optional-import:*)
         opt="${line#optional-import:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_deps="${opt%%:*}"; opt_owner="${opt#*:}"
-        OPT_DEPS["$opt_name"]="$opt_deps"; OPT_OWNER["$opt_name"]="$opt_owner"
+        OPT_IMPORTS+=("$opt_name|$opt_deps|$opt_owner")
         ;;
       info:*)            [ -z "$COMPONENT" ] && echo "  ${line#info:}" ;;
       runner-required:*) RUNNER_ROOT="${line#runner-required:}" ;;
@@ -743,18 +747,27 @@ ATTESTPY
   # The import proof for every optional component whose files passed (#107).
   # Same instrument in --attest and in --component; a failure is a DEGRADED
   # finding here and the component's answer there.
-  for opt_name in "${!OPT_DEPS[@]}"; do
-    if reason="$(optional_import_probe "${OPT_OWNER[$opt_name]}" "${OPT_DEPS[$opt_name]}")"; then
-      OPT_STATE["$opt_name"]="functioning"; OPT_WHY["$opt_name"]="${OPT_DEPS[$opt_name]//,/, } import cleanly"
-    else
-      OPT_STATE["$opt_name"]="unloadable"; OPT_WHY["$opt_name"]="import failed: ${reason:-no detail}"
-      ATTEST_FINDINGS+=("optional $opt_name present but unloadable: import failed: ${reason:-no detail}")
-    fi
+  OPT_FINAL=()
+  for rec in ${OPT_RECORDS[@]+"${OPT_RECORDS[@]}"}; do
+    opt_name="${rec%%|*}"; rest="${rec#*|}"; opt_state="${rest%%|*}"; rest="${rest#*|}"; opt_why="${rest%%|*}"
+    for imp in ${OPT_IMPORTS[@]+"${OPT_IMPORTS[@]}"}; do
+      [ "${imp%%|*}" = "$opt_name" ] || continue
+      irest="${imp#*|}"; opt_deps="${irest%%|*}"; opt_owner="${irest#*|}"
+      if reason="$(optional_import_probe "$opt_owner" "$opt_deps")"; then
+        opt_state="functioning"; opt_why="${opt_deps//,/, } import cleanly"
+      else
+        opt_state="unloadable"; opt_why="import failed: ${reason:-no detail}"
+        ATTEST_FINDINGS+=("optional $opt_name present but unloadable: import failed: ${reason:-no detail}")
+      fi
+    done
+    OPT_FINAL+=("$opt_name|$opt_state|$opt_why")
   done
 
   if [ -n "$COMPONENT" ]; then
-    if [ -z "${OPT_STATE[$COMPONENT]+x}" ]; then component_answer unknown "$COMPONENT is not an optional component in the manifest"; fi
-    component_answer "${OPT_STATE[$COMPONENT]}" "${OPT_WHY[$COMPONENT]}"
+    for rec in ${OPT_FINAL[@]+"${OPT_FINAL[@]}"}; do
+      if [ "${rec%%|*}" = "$COMPONENT" ]; then rest="${rec#*|}"; component_answer "${rest%%|*}" "${rest#*|}"; fi
+    done
+    component_answer unknown "$COMPONENT is not an optional component in the manifest"
   fi
 
   # Managed runner. Same load probe install.sh runs after npm rebuild, so
