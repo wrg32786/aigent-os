@@ -64,8 +64,8 @@ export function assessNightlyCompletion({
   while ((match = pattern.exec(searchable)) !== null) {
     headers.push({ date: match[1], index: match.index });
   }
-  const selectedIndex = headers.findLastIndex((header) => header.date === date);
-  if (selectedIndex < 0) {
+  const sameDate = headers.filter((header) => header.date === date);
+  if (!sameDate.length) {
     return {
       ok: false,
       code: 'missing-block',
@@ -73,9 +73,24 @@ export function assessNightlyCompletion({
       missing: [],
     };
   }
-  const selected = headers[selectedIndex];
-  const next = headers.find((header) => header.index > selected.index);
-  const block = searchable.slice(selected.index, next?.index ?? searchable.length);
+  // EVERY block under the newest date is assessed, not the last one. A seat may
+  // write a prose journal entry for the night after its product block, and an
+  // appended unverifiable entry must not flip a verified night to UNVERIFIED
+  // (#129 review, item 1). The best verdict stands: complete over failed over
+  // incomplete over unverified; what the night proved cannot be undone by a
+  // later line that proves less.
+  const RANK = { complete: 0, failed: 1, incomplete: 2, unverified: 3 };
+  const results = sameDate.map((selected) => {
+    const next = headers.find((header) => header.index > selected.index);
+    const block = searchable.slice(selected.index, next?.index ?? searchable.length);
+    return assessNightlyBlock({ block, date, timeZone, cutoffHour });
+  });
+  results.sort((left, right) => RANK[left.code] - RANK[right.code]);
+  return results[0];
+}
+
+// One evidence block, as assessNightlyCompletion slices it under a header.
+export function assessNightlyBlock({ block, date, timeZone, cutoffHour } = {}) {
   const protocol = block.match(/^protocol:[ \t]*(\S+)[ \t]*$/mi)?.[1] || null;
   const declared = parseNightlyProtocol(protocol);
   const status = block.match(/^status:[ \t]*(PASS|FAIL)[ \t]*$/mi)?.[1] || null;
@@ -95,6 +110,26 @@ export function assessNightlyCompletion({
   // rows are absent, never read as skipped. Either way 7 of 7 passes and 6 of 7
   // does not.
   const ours = protocol === NIGHTLY_PROTOCOL;
+  // The product's own family (close-parity-*) is verified by checkpoint NAMES,
+  // which this reader knows only for its own version. A close-parity id of
+  // another shape (an older v1, a future v3) is not checked by count instead,
+  // which would bypass the names, the skip list and the unknown-name rule
+  // (#129 review, item 3): it is unverifiable by this build.
+  const productFamily = /^close-parity-/i.test(String(protocol ?? ''));
+  if (productFamily && !ours) {
+    return {
+      ok: false,
+      code: 'unverified',
+      protocol,
+      status,
+      completedAt,
+      timeZone: recordedZone,
+      cutoffHour: recordedCutoff === null ? null : Number(recordedCutoff),
+      missing: [],
+      failedCheckpoints: [],
+      detail: `evidence block under ${date} is in protocol ${protocol}; this build verifies ${NIGHTLY_PROTOCOL} by checkpoint name and cannot verify another product version by count`,
+    };
+  }
   const expectedCount = ours ? NIGHTLY_CHECKPOINTS.length : (declared?.checkpoints ?? 0);
   const missing = ours
     ? NIGHTLY_CHECKPOINTS.filter((checkpoint) => !recorded.has(checkpoint))
@@ -140,6 +175,26 @@ export function assessNightlyCompletion({
   // NO_FIRE. A block in THIS protocol with broken structure stays `incomplete`
   // (an abandoned night) and one that reports FAIL stays `failed`.
   const anyEvidence = protocol !== null || status !== null || looseRows.length > 0;
+  // An honest FAIL is reported as fired-and-failed whatever the shape question
+  // says (#129 review, item 5): a block that names its failed checkpoints must
+  // not have them vanish into "unverified".
+  const reportsFailure = status === 'FAIL' || failedRows.length > 0;
+  if (reportsFailure && (protocol === null || declared === null)) {
+    const failedNames = failedRows.map((entry) => entry[1].toLowerCase());
+    return {
+      ok: false,
+      code: 'failed',
+      protocol,
+      status,
+      completedAt,
+      timeZone: recordedZone,
+      cutoffHour: recordedCutoff === null ? null : Number(recordedCutoff),
+      missing: [],
+      failedCheckpoints: failedNames,
+      detail: `evidence block under ${date} is in protocol ${protocol || 'missing'}, which this reader cannot verify, but it reports terminal status=FAIL`
+        + ` — fired and failed: ${failedNames.length ? failedNames.join(', ') : 'no failed checkpoint rows'}`,
+    };
+  }
   if (!anyEvidence || (protocol !== null && declared === null)) {
     const detail = anyEvidence
       ? `evidence block under ${date} declares protocol ${protocol}, which names no shape (-<L>L-<C>C); the run is recorded but cannot be verified`
@@ -192,6 +247,13 @@ export function assessNightlyCompletion({
   if (duplicates.length) invalid.push(`duplicate_checkpoints=${duplicates.join(',')}`);
   if (unknown.length) invalid.push(`unknown_checkpoints=${unknown.join(',')}`);
   if (declared && Number.isFinite(declared.legs) && declared.legs <= 0) invalid.push(`legs=${declared.legs}`);
+  // A shape that declares zero checkpoints declares nothing to verify; a block
+  // with no rows must not read complete against it (#129 review, item 2).
+  if (!ours && declared && declared.checkpoints <= 0) invalid.push(`checkpoints_declared=${declared.checkpoints}`);
+  // A night in which no checkpoint RAN is not a complete night, whatever the
+  // protocol: every row SKIPPED is an abandoned pass dressed as a receipted one
+  // (#129 review, item 4).
+  if (checkpointRows.length && !checkpointRows.some((entry) => entry[2].toUpperCase() !== 'SKIPPED')) invalid.push('no checkpoint ran (all rows skipped)');
   if (illegalSkips.length) invalid.push(`illegal_skips=${illegalSkips.join(',')}`);
   if (unreceipted.length) invalid.push(`validator_receipts=${unreceipted.join(',')}`);
   // A block that claims PASS while carrying failed rows is lying about itself —

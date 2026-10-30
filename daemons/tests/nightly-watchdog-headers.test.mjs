@@ -227,3 +227,65 @@ test('#122 missed and abandoned nights still read as NO_FIRE', async () => {
   assert.equal(raised(abandoned, 'NIGHTLY:NO_FIRE').length, 1);
   assert.equal(raised(abandoned, 'NIGHTLY:UNVERIFIED').length, 0);
 });
+
+test('#129 review: a prose journal entry appended AFTER a complete product block for the same night does not flip GREEN to unverified', async () => {
+  const root = fixture(`${productBlock(PASS_DATE)}\n## Pass 90 \u2014 ${PASS_DATE}T11:00\u201311:0xZ\n\nprose only, written after the product block\n`);
+  const result = await run(root);
+  assert.equal(result.ok, true, 'MUST be red on 0b5d49cb: only the last header for the date was scored');
+  assert.equal(result.completion.code, 'complete');
+  assert.equal(raised(root, 'NIGHTLY:UNVERIFIED').length, 0);
+  // And the other way round: the journal entry first, the product block after, same answer.
+  const reversed = fixture(`## Pass 90 \u2014 ${PASS_DATE}T11:00\u201311:0xZ\n\nprose\n\n${productBlock(PASS_DATE)}`);
+  assert.equal((await run(reversed)).ok, true);
+  // A night whose blocks are a failed run and then a complete run reads complete: the night was made good.
+  const recovered = fixture(`${productBlock(PASS_DATE, { status: 'FAIL', failed: ['dream'] })}\n${productBlock(PASS_DATE)}`);
+  assert.equal((await run(recovered)).completion.code, 'complete');
+});
+
+test('#129 review: a protocol declaring zero checkpoints never reads complete; all-skipped rows never read complete', async () => {
+  const zero = fixture(metisBlock(PASS_DATE, { rows: [] }).replace('metis-local-v1-7L-7C', 'metis-local-v1-7L-0C'));
+  const z = await run(zero);
+  assert.equal(z.ok, false, 'MUST be red on 0b5d49cb: expectedCount 0 made an empty block complete');
+  assert.equal(z.freshness.code, 'incomplete');
+  assert.match(z.freshness.detail, /checkpoints_declared=0/);
+  const skipped = fixture(metisBlock(PASS_DATE).replace(/status=PASS exit=0/g, 'status=SKIPPED exit=0'));
+  const k = await run(skipped);
+  assert.equal(k.ok, false, 'MUST be red on 0b5d49cb: seven SKIPPED rows read as seven checkpoints');
+  assert.equal(k.freshness.code, 'incomplete');
+  assert.match(k.freshness.detail, /no checkpoint ran \(all rows skipped\)/);
+  assert.equal(raised(skipped, 'NIGHTLY:NO_FIRE').length, 1);
+});
+
+test('#129 review: another close-parity version is unverifiable by this build, never verified by count; the exact id keeps the name rules', async () => {
+  const older = fixture(productBlock(PASS_DATE).replace(`protocol: ${NIGHTLY_PROTOCOL}`, 'protocol: close-parity-v1-7L-11C'));
+  const v1 = await run(older);
+  assert.equal(v1.ok, false, 'MUST be red on 0b5d49cb: a non-exact product id degraded to a count check and passed');
+  assert.equal(v1.freshness.code, 'unverified');
+  assert.match(v1.freshness.detail, /cannot verify another product version by count/);
+  // Exact id: an illegal skip is still illegal, an unknown name still unknown.
+  const skip = fixture(productBlock(PASS_DATE).replace('- dream: status=PASS exit=0', '- dream: status=SKIPPED exit=0'));
+  const illegal = await run(skip);
+  assert.equal(illegal.freshness.code, 'incomplete');
+  assert.match(illegal.freshness.detail, /illegal_skips=dream/);
+});
+
+test('#129 review: an honest FAIL in an unverifiable format is fired-and-failed with its checkpoints named, never unverified', async () => {
+  const block = metisBlock(PASS_DATE).replace('protocol: metis-local-v1-7L-7C', 'protocol: journal').replace('status: PASS', 'status: FAIL').replace('- digest: status=PASS exit=0', '- digest: status=FAIL exit=1');
+  const root = fixture(block);
+  const result = await run(root);
+  assert.equal(result.ok, false);
+  assert.equal(result.freshness.code, 'failed', 'MUST be red on 0b5d49cb: the unverified return ran before the FAIL check');
+  assert.match(result.freshness.detail, /fired and failed: digest/);
+  assert.equal(raised(root, 'NIGHTLY:PASS_FAILED').length, 1);
+  assert.equal(raised(root, 'NIGHTLY:UNVERIFIED').length, 0);
+  const alert = raised(root, 'NIGHTLY:PASS_FAILED')[0];
+  assert.match(alert.summary, /digest/);
+});
+
+test('#129 review: absent time_zone / cutoff_hour mean the run\'s own configuration, also under a non-default --time-zone', async () => {
+  // 12:00Z is 13:00 in Berlin, past a 04:00 cutoff: the expected night is PASS_DATE there too.
+  const root = fixture(metisBlock(PASS_DATE, { zone: false }));
+  const result = await runNightlyWatchdog({ root, now: new Date(`${PASS_DATE}T12:00:00.000Z`), deliver: false, persist: false, timeZone: 'Europe/Berlin', cutoffHour: 4 });
+  assert.equal(result.ok, true, result.freshness.detail);
+  assert.equal(result.freshness.newest, PASS_DATE);
+});
