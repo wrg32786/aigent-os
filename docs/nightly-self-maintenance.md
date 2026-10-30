@@ -114,10 +114,21 @@ read error locally, continues the normal payload, and exits `0`.
 
 ## No-fire watchdog
 
-`daemons/nightly-watchdog.mjs` reads the actual newest
-`## Nightly Pass -- YYYY-MM-DD` header outside fenced examples. It ignores file
-mtime, applies the configured timezone and cutoff, then validates the selected
-terminal block.
+`daemons/nightly-watchdog.mjs` reads the newest dated header outside fenced
+examples, in either shape a seat writes: `## Nightly Pass -- YYYY-MM-DD …` or
+`## Pass N — YYYY-MM-DD…` (em dash, en dash or `--`; what follows the date is
+not part of the key). It ignores file mtime, applies the configured timezone
+and cutoff, then assesses every block under that date and keeps the best
+verdict (complete, then failed, then incomplete, then unverified). The
+protocol id declares the shape (`-<L>L-<C>C`): `close-parity-v2-7L-11C` is
+verified by checkpoint name; a seat-local protocol by the count it declares,
+its rows naming the checkpoints (seven of seven passes, six of seven does
+not; all rows skipped does not); another `close-parity-*` version is
+`unverified`, never checked by count. A block without `time_zone` /
+`cutoff_hour` means the run's own configuration. A recognised run with no
+machine-readable evidence, or a protocol id that declares no shape, is
+`unverified` (`NIGHTLY:UNVERIFIED`): not a pass, not a no-fire; an honest
+`status: FAIL` in any format is fired-and-failed (`NIGHTLY:PASS_FAILED`).
 
 Run it without mutation:
 
