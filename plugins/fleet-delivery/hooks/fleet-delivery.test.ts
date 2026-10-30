@@ -2070,6 +2070,14 @@ test('a marker another session stamped is never retired nor overwritten while fr
   await w.turn()
   expect(w.files.get(ALPHA_MARKER)).toBe(foreign)
   expect(w.log.filter(entry => entry.includes('another session holds this seat'))).toHaveLength(1)
+  // The seat's own earlier module (same session id, another stamp, a hot reload): ours; refreshed, and retired under a hold.
+  w.files.set(ALPHA_MARKER, JSON.stringify({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:29:30.000Z', stamp: 'before-reload', sessionId: 'alpha-sid' }))
+  w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
+  w.files.set(CYCLE, IDLE)
+  await w.turn()
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('mod')
   // The foreign marker ages out: ours replaces it.
   w.files.set(ALPHA_MARKER, JSON.stringify({ seat: 'alpha', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:00:00.000Z', stamp: 'courier-1' }))
   await w.turn()
@@ -2205,4 +2213,12 @@ test('claim-before-pointer: a pointer whose file is no longer in the inbox (clai
   expect('drop' in claimed && claimed.drop).toBe('fleet-delivery: c.json is no longer in the inbox (claimed by the tick or already read); the pointer to room:alpha:c.json is dropped')
   const gone = await $.prompt.submit(asPeerPrompt(pointerText('alpha', 'beta', 'z.json')))
   expect('drop' in gone && gone.drop).toContain('z.json is no longer in the inbox')
+})
+
+test('a pointer-shaped prompt is dropped when the seat name cannot be resolved: the fence fails closed, never open', { options: { installRoot: ROOT, roomRoot: ROOM, seat: 'not a seat name' } }, async ($, on) => {
+  const w = world(on, $, { files: READY })
+  await w.turn()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
+  const dropped = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in dropped && dropped.drop).toBe('fleet-delivery: delivery held (seat unresolved); the pointer to room:alpha:a.json is dropped, the file waits for the tick')
 })

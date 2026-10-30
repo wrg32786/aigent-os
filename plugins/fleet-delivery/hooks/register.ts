@@ -1188,6 +1188,7 @@ async function tick($: $): Promise<void> {
     }
     if ('hold' in where) {
       $.ui.status(`delivery: mod · ${where.hold}, holding`)
+      await retireMarker($)
       return
     }
     const { w } = where
@@ -1718,26 +1719,32 @@ async function readMarker($: $, seat: string): Promise<Marker | null> {
     return null
   }
 }
-const ours = (marker: Marker | null) => marker?.stamp === markerStamp
+// Ours: written by this module (stamp), or by this same session before a hot
+// reload (session id): the new module keeps, refreshes and retires its own
+// seat's marker instead of yielding to it for 15 min.
+const ours = (marker: Marker | null, sessionId: string | null) => marker?.stamp === markerStamp || (!!sessionId && marker?.sessionId === sessionId)
+async function sessionIdOrNull($: $): Promise<string | null> {
+  try {
+    return (await $.session.id()) || null
+  } catch {
+    return null
+  }
+}
 async function publishMarker($: $, w: Where): Promise<void> {
   if (!config.roomRoot) return
   await serialMarker(async () => {
     const now = await $.clock.now()
     // The id a sender addresses the pointer to; a /clear gives the process a new
     // one. With no id there is nothing to address: publish nothing, the tick delivers.
-    let sessionId: string
-    try {
-      sessionId = await $.session.id()
-    } catch {
-      return
-    }
+    const sessionId = await sessionIdOrNull($)
     if (!sessionId) return
     const current = await readMarker($, w.seat)
-    if (ours(current) && current?.owner === 'mod' && current?.sessionId === sessionId && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
+    const mine = ours(current, sessionId)
+    if (mine && current?.owner === 'mod' && current?.sessionId === sessionId && markerState === 'published' && now - markerAt < MARKER_EVERY_MS) return
     // Another live session's fresh marker (a courier in the seat folder, or the
     // seat's own earlier process): never overwritten, or pointers would flap
     // between the two and the courier's model would drain the seat's inbox.
-    if (!ours(current) && current?.owner === 'mod' && typeof current.stamp === 'string' && typeof current.at === 'string' && now - Date.parse(current.at) <= MARKER_FRESH_MS) {
+    if (!mine && current?.owner === 'mod' && typeof current.stamp === 'string' && typeof current.at === 'string' && now - Date.parse(current.at) <= MARKER_FRESH_MS) {
       if (!markerYielded) $.ui.log(`fleet-delivery: another session holds this seat's native marker (stamp ${clean(current.stamp, 20)}); pointers go to it until it retires or its marker ages out`)
       markerYielded = true
       return
@@ -1763,12 +1770,15 @@ async function publishMarker($: $, w: Where): Promise<void> {
 // hold, when the mod no longer owns the seat, and when the session ends.
 async function retireMarker($: $, seat?: string | null): Promise<void> {
   markerAt = 0
-  if (!config.roomRoot || markerState === 'retired') return
+  if (!config.roomRoot) return
+  // Always enqueued: a retire asked for during an in-flight publish must run
+  // after it, not be skipped on the state the publish is about to change.
   await serialMarker(async () => {
+    if (markerState === 'retired') return
     seat ??= await seatName($)
     if (!seat) return
     const current = await readMarker($, seat)
-    if (!ours(current) || current?.owner === 'retired') {
+    if (!ours(current, await sessionIdOrNull($)) || current?.owner === 'retired') {
       if (markerState === 'published') markerState = 'retired'
       return
     }
@@ -1817,7 +1827,8 @@ async function takesPointers($: $, seat: string): Promise<{ why: string } | { se
   return { sessionId: marker.sessionId }
 }
 
-function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): void {
+const ANNOUNCE_MS = 5_000
+async function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): Promise<void> {
   const body = typeof e.body === 'string' ? e.body : ''
   let out: { messageId?: unknown; ts?: unknown; to?: unknown } = {}
   try {
@@ -1836,10 +1847,8 @@ function announceNative($: $, e: Record<string, unknown>, answered: { text?: str
     $.ui.log(`fleet-delivery: Room file name ${file} is outside the pointer grammar; ${to} waits for its tick`)
     return
   }
-  // Never awaited by the tool call: the Room answer goes back to the model at
-  // once, and the send's outcome is a log line when it settles.
   if (!config.roomRoot) return
-  void (async () => {
+  const announce = (async () => {
     // The sender's own owner and holds have no bearing on the recipient: only
     // the recipient's marker decides.
     const from = (await seatName($)) ?? '?'
@@ -1852,6 +1861,7 @@ function announceNative($: $, e: Record<string, unknown>, answered: { text?: str
     if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
     else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
   })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
+  if ((await timeoutRace($, announce, ANNOUNCE_MS)) === 'timeout') $.ui.log(`fleet-delivery: pointer send unsettled after ${ANNOUNCE_MS / 1000} s; ${to}/${file} waits for its tick if it was not queued`)
 }
 
 // At the moment a pointer-shaped peer prompt becomes this seat's prompt:
@@ -1865,7 +1875,7 @@ async function pointerHold($: $, match: RegExpExecArray): Promise<string | null>
   const dropped = `the pointer to room:${match[1]}:${match[3]} is dropped, the file waits for the tick`
   try {
     const seat = await seatName($)
-    if (!seat) return null
+    if (!seat) return `fleet-delivery: delivery held (seat unresolved); ${dropped}`
     const root = await installRoot($)
     const memory = root ? await memoryRoot($, root) : null
     const w: Where = { root, memory: memory ?? '', seat }
@@ -1920,7 +1930,10 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ROOM_SEND_TOOL }, async ($, e, next) => {
     const answered = await next(e)
     if (!config.installRoot || 'deny' in answered || answered.isError) return answered
-    announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
+    // Awaited inside the hook: the typings promise $ for the hook's own run, not
+    // after it returns. The Room's answer is already in hand; the send is one
+    // read and one local pipe write, bounded below.
+    await announceNative($, e as unknown as Record<string, unknown>, answered as { text?: string })
     return answered
   })
 
@@ -1928,6 +1941,8 @@ export const register: Register = (on, options) => {
     if (!config.installRoot || !isPeerOrigin(e.origin) || e.agentId !== undefined || typeof e.text !== 'string') return next(e)
     const match = findPointer(e.text)
     if (!match) return next(e)
+    // The turn this pointer belongs to, before any await lets a turn end.
+    const turnAtEntry = turnCount
     const held = await pointerHold($, match)
     if (held) {
       $.ui.log(held)
@@ -1935,9 +1950,10 @@ export const register: Register = (on, options) => {
     }
     const entered = await next(e)
     // Only a pointer that entered holds the tick off its file; one a later hook dropped must not.
-    if (!(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnCount)
+    if (!(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnAtEntry)
     return entered
   }).catch(($, e, next) => {
+    const turnAtEntry = turnCount
     // The engine skips a hook that throws or overruns and lets the prompt in;
     // this fence fails closed instead: a pointer whose check did not finish is
     // dropped (the file waits for the tick). A prompt the hook had already
@@ -1949,7 +1965,7 @@ export const register: Register = (on, options) => {
       return (async () => {
         const entered = await next(e)
         const match = typeof e.text === 'string' ? findPointer(e.text) : null
-        if (match && !(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnCount)
+        if (match && !(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnAtEntry)
         return entered
       })()
     }
