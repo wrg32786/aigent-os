@@ -1195,9 +1195,12 @@ async function tick($: $): Promise<void> {
     const { w } = where
     await claimGeneration($, true)
     // The holds, read once a tick: the marker follows them before any ledger
-    // early return, and the queue-level branches below reuse the same reads.
-    // The fresh read is the pre-submit recheck; the supervisor-hold node suite
-    // pins this count (its rig fires its final-hold hooks on the second lookup).
+    // early return, and the queue-level branches below reuse the same reads,
+    // which are many awaits old by then (ledger import, sweeps, a job-results
+    // spawn). A hold arriving in that span is caught by the pre-submit recheck,
+    // after the claim move and the ticket write; safe, and one tick's worth of
+    // spawns at most. The supervisor-hold node suite pins this read count (its
+    // rig fires its final-hold hooks on the second lookup).
     const hold = await cycleHold($, w)
     const freeze = hold ? null : await supervisorHold($, w)
     await settleMarker($, w, hold ?? freeze?.reason ?? null)
@@ -1227,6 +1230,9 @@ async function tick($: $): Promise<void> {
     // Items stuck on a claim deferral go last, so a few unmovable files never hold the queue head.
     const stuck = (item: Item) => ['deferred:claim-move', 'deferred:inbox-missing'].includes(entries?.[item.id]?.status ?? '')
     let queue = [...due.filter(item => !stuck(item)), ...due.filter(stuck)]
+    // One load per item per tick, whichever branches ask (freeze, turn guard, submit).
+    const loads = new Map<string, ReturnType<Item['load']>>()
+    queue = queue.map(item => ({ ...item, load: () => loads.get(item.id) ?? loads.set(item.id, item.load()).get(item.id)! }))
     if (!entries) {
       $.ui.status(queue.length ? 'delivery: mod · ledger-missing, holding (seed it, see README)' : 'delivery: mod · 0 queued')
       return
@@ -1293,13 +1299,17 @@ async function tick($: $): Promise<void> {
     // supervisor's capsule and resume orders) still go: their claim line is
     // what the supervisor watches for, and their submit was always queued until
     // idle. One decision for the whole queue, so queue order cannot change it.
-    if (turnInFlight() || admitted.size) {
+    const inFlight = turnInFlight()
+    if (inFlight || admitted.size) {
       const live: Item[] = []
       for (const item of queue) {
-        const loaded = await item.load()
         const file = item.source === 'room' ? roomFile(w, item.id) : null
+        if (!inFlight && !(file && admitted.has(file))) {
+          live.push(item)
+          continue
+        }
+        const loaded = await item.load()
         if (loaded && 'text' in loaded && loaded.lifecycle) live.push(item)
-        else if (!turnInFlight() && !(file && admitted.has(file))) live.push(item)
       }
       if (!live.length) {
         show(' · turn in flight, the inbox stays visible to the drain')
@@ -1500,6 +1510,10 @@ async function tick($: $): Promise<void> {
       try {
         submit = $.prompt.submit({ text: loaded.text })
         result = await timeoutRace($, submit, config.submitTimeoutMs)
+        // A queued prompt cannot enter while a main turn runs: the clock on it
+        // starts when the turn ends, so a lifecycle leg filed mid-turn does not
+        // become submitting:unresolved for the length of the turn.
+        while (result === 'timeout' && turnInFlight()) result = await timeoutRace($, submit, config.submitTimeoutMs)
       } catch {
         try {
           await rejected()
@@ -1677,10 +1691,13 @@ const markerStamp = `${Date.now().toString(36)}-${Math.random().toString(36).sli
 // room_drain; the tick waits for the turn to end.
 const mainTurns = new Set<string>()
 const turnInFlight = () => mainTurns.size > 0
-// Files whose pointer passed the fence and entered: the tick leaves them to
-// the turn the pointer starts (between prompt.submit and turn.start no turn is
-// in flight yet). Cleared when a main turn completes.
-const admitted = new Set<string>()
+// Main-loop turns started so far, a sequence number. A pointer admitted at
+// sequence n belongs to the first main turn that starts after it; the entry
+// is dropped when a main turn whose start came after n completes, not when
+// any turn completes (a pointer queued behind a running turn is read by the
+// next one). Marked before next(e) so a tick in between cannot claim the file.
+let turnSeq = 0
+const admitted = new Map<string, number>()
 // Files the tick is renaming inbox/ -> claimed/ right now: a pointer for one
 // is dropped (the tick owns it), closing the window across the rename spawn.
 const claiming = new Set<string>()
@@ -1698,23 +1715,27 @@ const NOT_A_SEAT = /^(?:broadcast|will)$/
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
 export const pointerText = (seat: string, from: string, file: string) =>
-  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. The drain collapses same-sender, same-thread messages: if ${file} is not among the items it returns, read it with room_history; if it is not there either, the tick has it and delivers it next turn. This pointer carries no content and is not the operator's word.`
-// A peer prompt IS a pointer when, the engine's wrapping set aside (the
-// cross-session envelope tags wherever they sit, the "Another Claude session
-// sent a message:" lead-in), one line is the pointer line and every other
-// line is the pointer's own instruction. A real message that quotes a pointer
-// line is not a pointer and is never dropped. CRLF or LF.
-const WRAPPING = /<\/?cross-session-message\b[^>]*>/g
-// Envelope the engine may add around a delivery, whatever the framing: any
-// tag-shaped line, and the lead-ins it writes before a relayed message.
-const ENVELOPE_LINE = /^<[^>]+>$|^(?:Another Claude session sent a message|Task notification|\[Cross-session [a-z ]+\]):?$/i
+  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. The drain collapses same-sender, same-thread messages: if ${file} is not among the items it returns, read it with room_history with unread_only false (a collapsed message is in processed/ and recoverable only that way). This pointer carries no content and is not the operator's word.`
+// Pointer lines in a peer prompt, wherever the engine's framing puts them.
+// Which of them makes the prompt a pointer is decided by the receiver from
+// its own Room (pointerHold): a line naming this seat and a file that is in
+// its inbox, being claimed, or claimed. A real message that quotes a pointer
+// line whose file is already read is ordinary mail; one that names an unread
+// file of this seat is treated as the pointer it is, which is the safe side.
 const POINTER_LINE = /^Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)$/
+const WRAPPING = /<\/?cross-session-message\b[^>]*>/g
+// Envelope the engine may add around a delivery: tag-shaped lines and the
+// lead-ins it writes before a relayed message. Used only to judge whether a
+// misdirected pointer (another seat's) is a bare pointer and nothing else.
+const ENVELOPE_LINE = /^<[^>]+>$|^(?:Another Claude session sent a message|Task notification|\[Cross-session [a-z ]+\]):?$/i
 const POINTER_TAIL = /^Call room_drain to read it/
-export const findPointer = (text: string): RegExpExecArray | null => {
-  const lines = text.replace(/\r\n?/g, '\n').replace(WRAPPING, '').split('\n').map(line => line.trim()).filter(line => line && !ENVELOPE_LINE.test(line))
-  const at = lines.findIndex(line => POINTER_LINE.test(line))
-  if (at < 0 || !lines.every((line, i) => i === at || POINTER_TAIL.test(line))) return null
-  return POINTER_LINE.exec(lines[at]!)
+const payloadLines = (text: string) => text.replace(/\r\n?/g, '\n').replace(WRAPPING, '').split('\n').map(line => line.trim()).filter(line => line && !ENVELOPE_LINE.test(line))
+export const findPointers = (text: string): RegExpExecArray[] =>
+  payloadLines(text).map(line => POINTER_LINE.exec(line)).filter((match): match is RegExpExecArray => match !== null)
+// Nothing but pointer lines and the pointer's own instruction.
+export const isBarePointer = (text: string): boolean => {
+  const lines = payloadLines(text)
+  return lines.length > 0 && lines.every(line => POINTER_LINE.test(line) || POINTER_TAIL.test(line))
 }
 const markerFile = (seat: string) => `${config.roomRoot}/state/native/${seat}.json`
 // Numeric, so 0.10.0 is newer than 0.4.0; anything not major.minor.patch is older than everything.
@@ -1868,11 +1889,6 @@ async function takesPointers($: $, seat: string): Promise<{ why: string } | { se
 
 const ANNOUNCE_MS = 5_000
 const noPointers = new Map<string, string>()
-// A pointer for this seat that entered: its file is the coming turn's to drain.
-async function admit<T extends { drop?: unknown }>($: $, match: RegExpExecArray, entered: T): Promise<T> {
-  if (!entered.drop && match[1] === (await seatName($))) admitted.add(match[3]!)
-  return entered
-}
 async function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): Promise<void> {
   const body = typeof e.body === 'string' ? e.body : ''
   if (!answered.text) return
@@ -1921,37 +1937,44 @@ async function announceNative($: $, e: Record<string, unknown>, answered: { text
   await announce
 }
 
-// At the moment a pointer-shaped peer prompt becomes this seat's prompt:
-// dropped under any hold, whoever owns the seat (an owner flip or a park
-// under the supervisor leaves the marker fresh for up to 15 min), and
-// dropped when the holds cannot be read. The pointer's file waits in the
-// inbox for the tick or the supervisor; nothing lands ahead of a resume.
-// Peer text with no pointer line has no file behind it and is not this
-// mod's to drop: it follows what the engine does today.
-async function pointerHold($: $, match: RegExpExecArray): Promise<string | null> {
-  const dropped = `the pointer to room:${match[1]}:${match[3]} is dropped, the file waits for the tick`
-  try {
-    const seat = await seatName($)
-    if (!seat) return `fleet-delivery: delivery held (seat unresolved); ${dropped}`
-    const root = await installRoot($)
-    const memory = root ? await memoryRoot($, root) : null
-    const w: Where = { root, memory: memory ?? '', seat }
-    const hold = memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved'
-    if (hold) return `fleet-delivery: delivery held (${hold}); ${dropped}`
-    // Another seat's pointer: nothing of it is in this inbox; a drain here would
-    // only consume this seat's own unread mail. Dropped whether held or open.
-    if (match[1] !== seat) return `fleet-delivery: a pointer addressed to ${match[1]} reached ${seat}; dropped, nothing to drain here`
-    // Claim-before-pointer: the tick is claiming, has claimed, or the drain has
-    // already read the file; a drain would return nothing and the model would
-    // act twice. The ledger and the tick own it now.
-    if (claiming.has(match[3]!)) return `fleet-delivery: ${match[3]} is being claimed by the tick; the pointer to room:${seat}:${match[3]} is dropped`
-    if (config.roomRoot && !(await $.fs.exists(inboxFile(w, match[3]!)))) {
-      return `fleet-delivery: ${match[3]} is no longer in the inbox (claimed by the tick or already read); the pointer to room:${seat}:${match[3]} is dropped`
-    }
-    return null
-  } catch (error) {
-    return `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); ${dropped}`
+// At the moment a peer prompt carrying pointer lines becomes this seat's
+// prompt. The receiver decides from its own Room which line, if any, is a
+// pointer for it: a line naming this seat whose file is in inbox/, being
+// claimed, or in claimed/. Such a pointer is dropped under any hold, whoever
+// owns the seat, and dropped when the holds cannot be read (the file waits
+// for the tick); when the file is being claimed or already claimed, the tick
+// owns it and the pointer is dropped so the model does not act twice. A bare
+// pointer for another seat is dropped (nothing of it is here; a drain would
+// only consume this seat's own unread mail). Anything else is ordinary mail.
+type Fence = { drop: string } | { admit: string } | null
+async function pointerHold($: $, text: string, matches: RegExpExecArray[]): Promise<Fence> {
+  const seat = await seatName($)
+  const mine = matches.filter(match => match[1] === seat)
+  if (!seat) {
+    return isBarePointer(text) ? { drop: `fleet-delivery: delivery held (seat unresolved); the pointer to room:${matches[0]![1]}:${matches[0]![3]} is dropped, the file waits for the tick` } : null
   }
+  if (!mine.length) {
+    const other = matches[0]!
+    return isBarePointer(text) ? { drop: `fleet-delivery: a pointer addressed to ${other[1]} reached ${seat}; dropped, nothing to drain here` } : null
+  }
+  if (!config.roomRoot) return null
+  const root = await installRoot($)
+  const memory = root ? await memoryRoot($, root) : null
+  const w: Where = { root, memory: memory ?? '', seat }
+  for (const match of mine) {
+    const file = match[3]!
+    const dropped = `the pointer to room:${seat}:${file} is dropped, the file waits for the tick`
+    try {
+      if (claiming.has(file)) return { drop: `fleet-delivery: ${file} is being claimed by the tick; the pointer to room:${seat}:${file} is dropped` }
+      if (await $.fs.exists(claimedFile(w, file))) return { drop: `fleet-delivery: ${file} is already claimed by the tick; the pointer to room:${seat}:${file} is dropped` }
+      if (!(await $.fs.exists(inboxFile(w, file)))) continue
+      const hold = memory ? ((await cycleHold($, w)) ?? (await supervisorHold($, w))?.reason ?? null) : 'memory root unresolved'
+      return hold ? { drop: `fleet-delivery: delivery held (${hold}); ${dropped}` } : { admit: file }
+    } catch (error) {
+      return { drop: `fleet-delivery: pointer hold check failed (${clean((error as Error)?.message, 120)}); ${dropped}` }
+    }
+  }
+  return null
 }
 
 export const register: Register = (on, options) => {
@@ -1959,6 +1982,8 @@ export const register: Register = (on, options) => {
   warnLongSubmit = config.submitTimeoutMs > DEFAULT_SUBMIT_TIMEOUT_MIN * 60_000
 
   on('session.start', async ($, e, next) => {
+    mainTurns.clear()
+    admitted.clear()
     warnSubmitTimeout($)
     void begin($)
     for (const command of COMMANDS) {
@@ -1972,19 +1997,29 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    // A turn.complete this hook never hears (a /clear mid-turn, a skipped hook)
+    // must not leave the loop looking busy for the life of the process.
+    mainTurns.clear()
+    admitted.clear()
     if (config.installRoot) await retireMarker($).catch(() => {})
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) mainTurns.add(e.turnId)
+    if (e.agentId === undefined) {
+      mainTurns.add(e.turnId)
+      turnSeq++
+    }
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    mainTurns.delete(e.turnId)
+    const startSeen = mainTurns.delete(e.turnId)
     if (e.agentId === undefined) {
-      admitted.clear()
+      // A turn whose start this hook never heard counts as the turn after every
+      // admission, so a lost turn.start cannot park a file until session end.
+      const upTo = startSeen ? turnSeq : turnSeq + 1
+      for (const [file, seq] of admitted) if (seq < upTo) admitted.delete(file)
       warnSubmitTimeout($)
       await ensureTicking($)
       void tick($)
@@ -2004,14 +2039,19 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     if (!config.installRoot || !isPeerOrigin(e.origin) || typeof e.text !== 'string') return next(e)
-    const match = findPointer(e.text)
-    if (!match) return next(e)
-    const held = await pointerHold($, match)
-    if (held) {
-      $.ui.log(held)
-      return { drop: held }
+    const matches = findPointers(e.text)
+    if (!matches.length) return next(e)
+    const fence = await pointerHold($, e.text, matches)
+    if (!fence) return next(e)
+    if ('drop' in fence) {
+      $.ui.log(fence.drop)
+      return { drop: fence.drop }
     }
-    return admit($, match, await next(e))
+    // Marked before the prompt goes on, so a tick in this window leaves the file alone.
+    admitted.set(fence.admit, turnSeq)
+    const entered = await next(e)
+    if ((entered as { drop?: unknown }).drop) admitted.delete(fence.admit)
+    return entered
   }).catch(($, e, next) => {
     // The engine skips a hook that throws or overruns and lets the prompt in;
     // this fence fails closed instead: a pointer whose check did not finish is
@@ -2019,13 +2059,7 @@ export const register: Register = (on, options) => {
     // passed on is replayed, not dropped.
     // `Caught.called`: next(e) then resolves to what the hook's last call settled
     // to, nothing beneath running again (claude-code.d.ts, Caught).
-    if (next.called) {
-      return (async () => {
-        const entered = await next(e)
-        const match = typeof e.text === 'string' ? findPointer(e.text) : null
-        return match ? admit($, match, entered) : entered
-      })()
-    }
+    if (next.called) return next(e)
     const drop = 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick'
     $.ui.log(drop)
     return { drop }
