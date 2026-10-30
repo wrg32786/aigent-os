@@ -1911,20 +1911,20 @@ test('no marker, a stale marker, an older mod or a supervisor-owned recipient: n
     await w.clock.settle()
   }
   await announce()
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (no native marker); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (no native marker); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:00:00.000Z'))
   await announce()
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker stale); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker stale); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', '0.3.0'))
   await announce()
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker from mod 0.3.0); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker from mod 0.3.0); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   w.files.set(BETA_MARKER, JSON.stringify({ seat: 'beta', owner: 'mod', version: FENCE_VERSION, at: '2026-10-07T18:25:00.000Z', stamp: 'x' }))
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker has no session id); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker has no session id); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   w.files.set(BETA_MARKER, marker('beta', '2026-10-07T18:25:00.000Z', FENCE_VERSION, 'supervisor'))
   await announce()
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   expect(sends).toEqual([])
 })
 
@@ -2012,9 +2012,14 @@ test('under a hold the fence fails closed for pointer-shaped text: a pointer for
   expect('drop' in notification && notification.drop).toContain('delivery held (cycle checkpoint-requested)')
   const otherNotification = await $.prompt.submit({ ...RUN, origin: { kind: 'task-notification' } as never, text: wrap(A_POINTER) })
   expect('drop' in otherNotification && otherNotification.drop).toBeFalsy()
-  // CRLF and a pointer line after other text: still a pointer, still dropped.
-  const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\nfrom beta:\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
+  // CRLF, envelope attributes on one line: still a pointer, still dropped.
+  const crlf = await $.prompt.submit({ ...RUN, origin: { kind: 'peer' as const }, text: `<cross-session-message from="x" from-name="beta">\r\n${pointerText('alpha', 'beta', 'b.json').replace(/\n/g, '\r\n')}\r\n</cross-session-message>` })
   expect('drop' in crlf && crlf.drop).toBe('fleet-delivery: delivery held (cycle checkpoint-requested); the pointer to room:alpha:b.json is dropped, the file waits for the tick')
+  // A real message that quotes a pointer line is not a pointer: it enters even under the hold.
+  const quoting = await $.prompt.submit(asPeerPrompt(`Drained it, thanks. ${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}\nNext I will reply on the thread.`))
+  expect('drop' in quoting && quoting.drop).toBeFalsy()
+  const quotingFirst = await $.prompt.submit(asPeerPrompt(`${pointerText('alpha', 'beta', 'b.json').split('\n')[0]}\nand here is my actual message about it`))
+  expect('drop' in quotingFirst && quotingFirst.drop).toBeFalsy()
   // Owner flipped to the supervisor while the marker is still fresh: the hold still drops it.
   w.files.delete(OWNER)
   const unowned = await $.prompt.submit(asPeerPrompt(A_POINTER))
@@ -2109,7 +2114,7 @@ test('a retired marker is not announced to; a hold that begins while the tick is
   await $.tool.call({ tool: ROOM_SEND_TOOL, to: 'beta', body: 'hi' })
   await w.clock.settle()
   expect(sends).toEqual([])
-  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick`)
+  expect(w.log).toContain(`log fleet-delivery: beta takes no pointers (marker not mod-owned); beta/${SENT_FILE} waits for its tick (logged once per reason)`)
   // This seat: a hold arrives between turns; the 30 s timer retires the marker with no turn.
   expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('mod')
   w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
@@ -2170,37 +2175,38 @@ test('a room_send the Room published to will or broadcast is never announced and
   expect(w.log.filter(entry => entry.includes('takes no pointers') || entry.includes('pointer'))).toEqual([])
 })
 
-test('a file whose pointer the model has read holds the queue head until that turn ends; the tick delivers in arrival order on the next turn if it was not drained', CONFIGURED, async ($, on) => {
+test('the tick does not claim while a main turn is in flight (the drain keeps the inbox); it delivers at turn end', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
+  on('turn.start', () => ({ turnId: 't2' }))
   await w.turn()
+  await $.turn.start({ text: 'working', turnId: 't2' } as never)
   w.files.set(`${INBOX}/a.json`, ENVELOPE)
-  w.files.set(`${INBOX}/b.json`, envelope('beta', 'second from beta'))
-  const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
-  expect('drop' in entered && entered.drop).toBeFalsy()
-  // The tick runs twice inside the same turn: the file is not claimed.
   await w.clock.advance(31_000)
   await w.clock.settle()
   await w.clock.advance(31_000)
   await w.clock.settle()
-  const bodies = () => w.log.filter(entry => entry.startsWith('submit ') && /hello from beta|second from beta/.test(entry))
-  expect(bodies()).toHaveLength(0)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
-  // The turn ends without a drain: the ticks deliver the pointed file first, b.json after, arrival order kept.
+  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(0)
+  expect(w.lastStatus()).toContain('turn in flight')
   await w.turn()
-  await w.turn()
-  const delivered = bodies().map(entry => (entry.includes('hello from beta') ? 'a' : 'b'))
-  expect(delivered).toEqual(['a', 'b'])
+  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(1)
 })
 
-test('a pointer a later hook drops does not hold the tick off its file', CONFIGURED, async ($, on) => {
-  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE }, queue: [{ drop: 'a test hook beneath drops every prompt' }] })
+test('while a tick is blocked in a never-settling submit, the timer keeps the marker fresh and retires it when a hold begins', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, submit: new Promise<never>(() => {}) })
   await w.turn()
-  w.files.set(`${INBOX}/a.json`, ENVELOPE)
-  const dropped = await $.prompt.submit(asPeerPrompt(A_POINTER))
-  expect('drop' in dropped && dropped.drop).toBe('a test hook beneath drops every prompt')
+  const first = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
+  expect(first.owner).toBe('mod')
+  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(1)
+  await w.clock.advance(5 * 60_000 + 31_000)
+  await w.clock.settle()
+  const refreshed = JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}')
+  expect(refreshed.owner).toBe('mod')
+  expect(Date.parse(refreshed.at)).toBeGreaterThan(Date.parse(first.at))
+  w.files.set(CYCLE, JSON.stringify({ state: 'checkpoint-requested', clear_intent: null, hold: null }))
   await w.clock.advance(31_000)
   await w.clock.settle()
-  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
+  expect(JSON.parse(w.files.get(ALPHA_MARKER) ?? '{}').owner).toBe('retired')
 })
 
 test('claim-before-pointer: a pointer whose file is no longer in the inbox (claimed by the tick or already read) is dropped; one whose file waits enters', CONFIGURED, async ($, on) => {

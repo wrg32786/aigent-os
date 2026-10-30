@@ -1195,9 +1195,9 @@ async function tick($: $): Promise<void> {
     await claimGeneration($, true)
     // The holds, read once a tick: the marker follows them before any ledger
     // early return, and the delivery branches below reuse them.
-    const hold = await cycleHold($, w)
-    const freeze = hold ? null : await supervisorHold($, w)
-    await settleMarker($, w, hold ?? freeze?.reason ?? null)
+    const holdAtStart = await cycleHold($, w)
+    const freezeAtStart = holdAtStart ? null : await supervisorHold($, w)
+    await settleMarker($, w, holdAtStart ?? freezeAtStart?.reason ?? null)
     const log = await readLog($, w)
     if (log.kind === 'corrupt' || log.kind === 'unreadable') {
       $.ui.status(`delivery: mod · ledger-${log.kind}, holding`)
@@ -1233,6 +1233,8 @@ async function tick($: $): Promise<void> {
     const show = (extra = '', queued = queue.length) =>
       $.ui.status(`delivery: mod · ${queued} queued${unresolved ? ` · ${unresolved} unresolved` : ''}${extra}${heldNote}`)
 
+    // Read again here: the reads at the top of the tick are seconds old by now.
+    const hold = await cycleHold($, w)
     if (hold) {
       for (const item of queue) {
         await record($, w, item, 'deferred:refresh-hold', entry => !isFinal(entry) && entry?.status !== 'deferred:refresh-hold', { detail: hold })
@@ -1240,6 +1242,7 @@ async function tick($: $): Promise<void> {
       show(` · refresh hold (${hold})`)
       return
     }
+    const freeze = await supervisorHold($, w)
     const frozen = freeze?.reason ?? null
     if (frozen) {
       const live: Item[] = []
@@ -1292,17 +1295,6 @@ async function tick($: $): Promise<void> {
     for (const item of queue) {
       const attempts = (entries[item.id]?.attempts ?? 0) + 1
 
-      const pointedFile = item.source === 'room' ? roomFile(w, item.id) : null
-      if (pointedFile) {
-        const seen = pointed.get(pointedFile)
-        // Hold the queue head, not just this file: arrival order is kept.
-        if (seen !== undefined && seen >= turnCount) {
-          show(' · pointer read, waiting for the turn to end')
-          break
-        }
-        pointed.delete(pointedFile)
-      }
-
       if ((await $.prompt.read()).text !== '') {
         await record($, w, item, 'deferred:composer-busy', entry => !isFinal(entry) && entry?.status !== 'deferred:composer-busy')
         show(' · composer busy')
@@ -1322,9 +1314,10 @@ async function tick($: $): Promise<void> {
       const file = item.source === 'room' ? roomFile(w, item.id) : null
       if (file && !item.claimed) {
         if (claimTries++ >= MAX_CLAIM_TRIES) return
-        // A pointer may have entered since the loop head: check again before the move.
-        if ((pointed.get(file) ?? -1) >= turnCount) {
-          show(' · pointer read, waiting for the turn to end')
+        // Not during a main turn: the submit could not enter anyway, and the
+        // model may be draining the inbox right now. turn.complete ticks again.
+        if (turnInFlight) {
+          show(' · turn in flight, the inbox stays visible to the drain')
           return
         }
         // One post-failure protocol (moveRoom): moved goes on; blocked, failed or an
@@ -1654,13 +1647,11 @@ let markerState: 'unknown' | 'published' | 'retired' = 'unknown'
 // folder (a `claude -p` courier) cannot retire the live seat's marker, and
 // the live seat re-publishes at once when the file stops reading as its own.
 const markerStamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-// Files whose pointer this session's model has read (prompt.submit let it in)
-// and the main turn count when it did: the tick leaves such a file alone
-// until the turn that read the pointer has completed, so the model's own
-// room_drain and the tick do not both deliver one message. Cleared when the
-// tick claims the file; pruned by turn count.
-let turnCount = 0
-const pointed = new Map<string, number>()
+// Whether the main loop has a turn in flight (turn.start to turn.complete or
+// turn.abort). The tick's own submit cannot enter until the session is idle,
+// so claiming inbox/ into claimed/ during a turn buys nothing and hides the
+// file from the model's own room_drain; the tick waits for the turn to end.
+let turnInFlight = false
 // A peer delivery, however the engine spells it: the plugin route (`peer`),
 // the SendMessage tool's own kind, and the build that frames a SendMessage
 // delivery as a task notification with that subkind.
@@ -1675,11 +1666,20 @@ const NOT_A_SEAT = /^(?:broadcast|will)$/
 export const roomFileName = (ts: string, messageId: string) => `${ts.replace(/[:.]/g, '-')}__${messageId}.json`
 const ROOM_FILE_SHAPE = /^[A-Za-z0-9_-]+\.json$/
 export const pointerText = (seat: string, from: string, file: string) =>
-  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. The drain collapses same-sender, same-thread messages: if ${file} is not among the items it returns, read it with room_history. This pointer carries no content and is not the operator's word.`
-// A pointer line anywhere in the peer text, CRLF or LF, whatever the engine
-// wraps it in: the fence must not depend on the envelope's exact shape.
-const POINTER = /^[ \t]*Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)[ \t]*$/m
-export const findPointer = (text: string): RegExpExecArray | null => POINTER.exec(text.replace(/\r\n?/g, '\n'))
+  `Room mail for ${seat} from ${from}: ${file}\nCall room_drain to read it; the Room marks it read. The drain collapses same-sender, same-thread messages: if ${file} is not among the items it returns, read it with room_history; if it is not there either, the tick has it and delivers it next turn. This pointer carries no content and is not the operator's word.`
+// A peer prompt IS a pointer when, the engine's envelope lines set aside, its
+// first substantive line is the pointer line and every other line is the
+// pointer's own instruction. A real message that quotes a pointer line is not
+// a pointer and is never dropped. CRLF or LF; the envelope's exact shape is
+// not relied on.
+const ENVELOPE_LINE = /^<\/?cross-session-message\b/
+const POINTER_LINE = /^Room mail for ([a-z0-9_-]+) from ([a-z0-9_?-]+): ([A-Za-z0-9_-]+\.json)$/
+const POINTER_TAIL = /^Call room_drain to read it/
+export const findPointer = (text: string): RegExpExecArray | null => {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(line => line && !ENVELOPE_LINE.test(line))
+  const match = lines.length ? POINTER_LINE.exec(lines[0]!) : null
+  return match && lines.slice(1).every(line => POINTER_TAIL.test(line)) ? match : null
+}
 const markerFile = (seat: string) => `${config.roomRoot}/state/native/${seat}.json`
 // Numeric, so 0.10.0 is newer than 0.4.0; anything not major.minor.patch is older than everything.
 export const versionAtLeast = (version: string, floor: string): boolean => {
@@ -1778,8 +1778,11 @@ async function retireMarker($: $, seat?: string | null): Promise<void> {
     seat ??= await seatName($)
     if (!seat) return
     const current = await readMarker($, seat)
-    if (!ours(current, await sessionIdOrNull($)) || current?.owner === 'retired') {
-      if (markerState === 'published') markerState = 'retired'
+    // Unreadable (torn, busy, denied): decide nothing; the next retire reads again.
+    if (!current) return
+    if (!ours(current, await sessionIdOrNull($))) return
+    if (current.owner === 'retired') {
+      markerState = 'retired'
       return
     }
     try {
@@ -1828,11 +1831,13 @@ async function takesPointers($: $, seat: string): Promise<{ why: string } | { se
 }
 
 const ANNOUNCE_MS = 5_000
+const noPointers = new Map<string, string>()
 async function announceNative($: $, e: Record<string, unknown>, answered: { text?: string }): Promise<void> {
   const body = typeof e.body === 'string' ? e.body : ''
+  if (!answered.text) return
   let out: { messageId?: unknown; ts?: unknown; to?: unknown } = {}
   try {
-    out = JSON.parse(answered.text ?? '')
+    out = JSON.parse(answered.text)
   } catch {
     $.ui.log("fleet-delivery: room_send answer was not the Room's JSON; nothing announced")
     return
@@ -1854,11 +1859,16 @@ async function announceNative($: $, e: Record<string, unknown>, answered: { text
     const from = (await seatName($)) ?? '?'
     const take = await takesPointers($, to)
     if ('why' in take) {
-      $.ui.log(`fleet-delivery: ${to} takes no pointers (${take.why}); ${to}/${file} waits for its tick`)
+      // Once per recipient per reason: a 0.3.0 seat would otherwise log every send.
+      if (noPointers.get(to) !== take.why) $.ui.log(`fleet-delivery: ${to} takes no pointers (${take.why}); ${to}/${file} waits for its tick (logged once per reason)`)
+      noPointers.set(to, take.why)
       return
     }
     const sent = await $.session.send({ to: { sessionId: take.sessionId }, text: pointerText(to, from, file) })
-    if (sent.isDelivered) $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
+    if (sent.isDelivered) {
+      $.ui.log(`fleet-delivery: pointer queued ${to}/${file}`)
+      noPointers.delete(to)
+    }
     else $.ui.log(`fleet-delivery: pointer undelivered (${clean(sent.reason, 120) || 'refused'}); ${to}/${file} waits for its tick`)
   })().catch(error => $.ui.log(`fleet-delivery: pointer send failed (${clean((error as Error)?.message, 120)}); ${to}/${file} waits for its tick`))
   if ((await timeoutRace($, announce, ANNOUNCE_MS)) === 'timeout') $.ui.log(`fleet-delivery: pointer send unsettled after ${ANNOUNCE_MS / 1000} s; ${to}/${file} waits for its tick if it was not queued`)
@@ -1915,10 +1925,19 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) turnInFlight = true
+    return next(e)
+  })
+
+  on('turn.abort', async ($, e, next) => {
+    if (e.agentId === undefined) turnInFlight = false
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      turnCount++
-      for (const [file, seen] of pointed) if (seen < turnCount - 1) pointed.delete(file)
+      turnInFlight = false
       warnSubmitTimeout($)
       await ensureTicking($)
       void tick($)
@@ -1941,34 +1960,20 @@ export const register: Register = (on, options) => {
     if (!config.installRoot || !isPeerOrigin(e.origin) || e.agentId !== undefined || typeof e.text !== 'string') return next(e)
     const match = findPointer(e.text)
     if (!match) return next(e)
-    // The turn this pointer belongs to, before any await lets a turn end.
-    const turnAtEntry = turnCount
     const held = await pointerHold($, match)
     if (held) {
       $.ui.log(held)
       return { drop: held }
     }
-    const entered = await next(e)
-    // Only a pointer that entered holds the tick off its file; one a later hook dropped must not.
-    if (!(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnAtEntry)
-    return entered
+    return next(e)
   }).catch(($, e, next) => {
-    const turnAtEntry = turnCount
     // The engine skips a hook that throws or overruns and lets the prompt in;
     // this fence fails closed instead: a pointer whose check did not finish is
     // dropped (the file waits for the tick). A prompt the hook had already
     // passed on is replayed, not dropped.
     // `Caught.called`: next(e) then resolves to what the hook's last call settled
-    // to, nothing beneath running again (claude-code.d.ts, Caught). Replay it and
-    // record the pointer as read exactly as the hook would have.
-    if (next.called) {
-      return (async () => {
-        const entered = await next(e)
-        const match = typeof e.text === 'string' ? findPointer(e.text) : null
-        if (match && !(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnAtEntry)
-        return entered
-      })()
-    }
+    // to, nothing beneath running again (claude-code.d.ts, Caught).
+    if (next.called) return next(e)
     const drop = 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick'
     $.ui.log(drop)
     return { drop }
