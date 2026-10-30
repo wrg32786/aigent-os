@@ -33,7 +33,7 @@ trap cleanup EXIT INT TERM
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-TOTAL=3
+TOTAL=4
 FAKEBIN="$WORK/fakebin"
 mkdir -p "$FAKEBIN"
 
@@ -49,6 +49,10 @@ case "${CLAUDE_STUB_MODE:?}" in
     : "${CLAUDE_PID_FILE:?}"
     printf '%s\n' "$$" > "$CLAUDE_PID_FILE"
     exec sleep 30
+    ;;
+  env)
+    : "${CLAUDE_CALL_LOG:?}"
+    printf 'CHILD=[%s] FORCE=[%s]\n' "${CLAUDE_CODE_CHILD_SESSION:-}" "${CLAUDE_CODE_FORCE_SESSION_PERSISTENCE:-}" >> "$CLAUDE_CALL_LOG"
     ;;
   complete)
     : "${CLAUDE_CALL_LOG:?}"
@@ -143,3 +147,16 @@ fi
 printf '[3/%d] skill-owned completion: second launch receives --continue\n' "$TOTAL"
 
 printf 'launcher first-run marker suite passed (%d/%d)\n' "$TOTAL" "$TOTAL"
+
+# ── 4. Issue #98: a contaminated parent on the direct (--no-deps) branch ────────
+ENV_HOME="$WORK/env-home"
+ENV_LOG="$WORK/env.log"
+mkdir -p "$ENV_HOME"
+if ! PATH="$FAKEBIN:$PATH" AIGENT_HOME="$ENV_HOME" CLAUDE_STUB_MODE=env CLAUDE_CALL_LOG="$ENV_LOG" \
+  CLAUDE_CODE_CHILD_SESSION=1 bash "$LAUNCHER" --no-deps > "$WORK/env-run.log" 2>&1; then
+  fail "contaminated-parent launcher invocation returned nonzero"
+fi
+ENV_SEEN="$(tail -n 1 "$ENV_LOG")"
+[[ "$ENV_SEEN" == "CHILD=[] FORCE=[1]" ]] \
+  || fail "direct branch handed the child: $ENV_SEEN (expected CHILD=[] FORCE=[1])"
+printf '[4/%d] #98 direct branch: child sees no CLAUDE_CODE_CHILD_SESSION, persistence opt-in set\n' "$TOTAL"

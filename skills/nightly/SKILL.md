@@ -300,16 +300,29 @@ claim delivery without readback.
 
 ## No-fire watchdog
 
-`daemons/nightly-watchdog.mjs` reads the actual maximum dated Nightly Log
-header outside fenced examples. File mtime is ignored. It applies the same
-configured time zone and post-fire cutoff, then verifies the selected block:
+`daemons/nightly-watchdog.mjs` reads the newest dated Nightly Log header
+outside fenced examples, in either shape a seat writes (`## Nightly Pass --
+YYYY-MM-DD …` or `## Pass N — YYYY-MM-DD…`). File mtime is ignored. It applies
+the same configured time zone and post-fire cutoff, assesses every block under
+that date and keeps the best verdict (complete, failed, incomplete,
+unverified). A block is complete when it has:
 
-- exact protocol;
+- a protocol id that declares its shape (`-<L>L-<C>C`); `close-parity-v2-7L-11C`
+  is verified by checkpoint name, a seat-local protocol by the count it
+  declares (its rows name the checkpoints); another `close-parity-*` version
+  is `unverified`, never verified by count;
 - terminal `status: PASS`;
-- valid completion timestamp;
-- all eleven checkpoints exactly once;
+- valid completion timestamp; `time_zone` / `cutoff_hour` optional (absent
+  means the run's own configuration), present values must agree;
+- every declared checkpoint exactly once, at least one of them run (all
+  skipped is not a pass), no illegal skip for the product protocol;
 - no unknown, unparseable, or unreceipted rows;
 - no failed or nonzero row under a `PASS` terminal status.
+
+A recognised run with no machine-readable evidence, or a protocol id that
+declares no shape, is `unverified` (`NIGHTLY:UNVERIFIED`): not a pass, not a
+no-fire. An honest `status: FAIL` in any format is fired-and-failed
+(`NIGHTLY:PASS_FAILED`) with its checkpoints named.
 
 Red raises one of two distinct alerts, because "the pass never ran" and "the
 pass ran and failed" are different conditions and must not report as the same
