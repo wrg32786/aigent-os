@@ -46,8 +46,7 @@ import {
   loadNodePty,
   resolvePtyCommand,
   runUnmanaged,
-  runPtySession,
-} from '../pty-runner.mjs';
+  runPtySession, childEnvironment } from '../pty-runner.mjs';
 import {
   GATE_NAME,
   GATE_STALE_MS,
@@ -509,6 +508,8 @@ function makeThresholdWiringProbe(name, env) {
   let nodePtyLoadCount = 0;
   let runnerLockAcquireCount = 0;
   let runnerLockReleaseCount = 0;
+  // The environment each managed spawn was given (#98).
+  const spawnEnvs = [];
 
   const result = runPtySession({
     childArgs: ['--continue', '/open'],
@@ -528,8 +529,9 @@ function makeThresholdWiringProbe(name, env) {
       return {
         ok: true,
         module: {
-          spawn() {
+          spawn(command, args, options) {
             managedSpawnCount += 1;
+            spawnEnvs.push(options?.env);
             return pty;
           },
         },
@@ -579,6 +581,7 @@ function makeThresholdWiringProbe(name, env) {
     result,
     stderr,
     constructed,
+    spawnEnvs,
     bindTransport() {
       writeJson(fixture.bootPath, {
         boot_sequence: 11,
@@ -3911,6 +3914,53 @@ test('V1 threshold-applied: env=15 reaches the production transport constructor'
       boundaryProbe.close();
     }
   }
+});
+
+test('#98 the child never inherits CLAUDE_CODE_CHILD_SESSION: the managed spawn and the unmanaged fallback both get a scrubbed copy that asks for persistence; the runner\'s own env is untouched', () => {
+  // Contaminated parent: a maintenance Claude session started this runner.
+  const env = { CLAUDE_CODE_CHILD_SESSION: '1', TERM: 'xterm-256color', KEEP: 'me' };
+  const probe = makeThresholdWiringProbe('issue-98-contaminated-parent', env);
+  try {
+    assert.equal(probe.result.mode, 'managed');
+    assert.equal(probe.spawnEnvs.length, 1, 'one managed spawn');
+    const child = probe.spawnEnvs[0];
+    assert.equal(Object.hasOwn(child, 'CLAUDE_CODE_CHILD_SESSION'), false,
+      'the marker that turns transcript persistence off must not reach the seat');
+    assert.equal(child.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, '1',
+      'and persistence is asked for through the host\'s own opt-in');
+    assert.equal(child.KEEP, 'me', 'everything else is inherited');
+    assert.equal(env.CLAUDE_CODE_CHILD_SESSION, '1',
+      'the runner\'s own environment is left as the parent set it: no global scrub');
+    assert.equal(Object.hasOwn(env, 'CLAUDE_CODE_FORCE_SESSION_PERSISTENCE'), false);
+  } finally {
+    probe.close();
+  }
+
+  // Clean control: nothing to remove, the opt-in still set, nothing else changes.
+  const clean = makeThresholdWiringProbe('issue-98-clean-parent', { TERM: 'xterm-256color', KEEP: 'me' });
+  try {
+    assert.deepEqual(clean.spawnEnvs[0], { TERM: 'xterm-256color', KEEP: 'me', CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1' });
+  } finally {
+    clean.close();
+  }
+
+  // The unmanaged fallback (no node-pty) spawns through the same boundary.
+  const seen = [];
+  const code = runUnmanaged({
+    command: 'claude',
+    args: ['--continue'],
+    cwd: os.tmpdir(),
+    env: { CLAUDE_CODE_CHILD_SESSION: '1', KEEP: 'me' },
+    platform: 'linux',
+    spawnSyncFn: (command, args, options) => { seen.push({ command, args, env: options.env }); return { status: 0 }; },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen.length, 1);
+  assert.equal(Object.hasOwn(seen[0].env, 'CLAUDE_CODE_CHILD_SESSION'), false);
+  assert.equal(seen[0].env.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, '1');
+  assert.equal(seen[0].env.KEEP, 'me');
+  // The pure function, for the launcher scripts' sake: same answer, same shape.
+  assert.deepEqual(childEnvironment({ CLAUDE_CODE_CHILD_SESSION: '1', A: 'b' }), { A: 'b', CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1' });
 });
 
 test('V2 threshold-invalid-refuses: env=abc is loud and automation stays disarmed', () => {
@@ -11673,6 +11723,27 @@ dialogCase('D9 an UNRESOLVED transcript refuses; an ABSENT one depends on which 
   assert.equal(harness.runner._automaticWriteReadiness(undefined).ready, false,
     'and an unrecognised boundary is STRICT, so a new write site gets the '
     + 'fail-closed answer by default rather than inheriting the exemption');
+});
+
+dialogCase('D9b (#111) a ZERO-LENGTH transcript is not-ready at the capsule, clear and control boundaries, ready at the wake retry, and ready again once a record lands', (harness) => {
+  atRequestEdge(harness);
+  fs.writeFileSync(harness.fixture.transcriptPath, '');
+  harness.runner.toolCallWatch = null;
+  assert.equal(harness.runner._automaticWriteReadiness('wake-enter-retry').ready, true,
+    'at the wake retry no records yet is the truth');
+  for (const where of ['capsule-request', 'capsule-request-enter', 'clear-submission', 'control-enter', undefined]) {
+    const verdict = harness.runner._automaticWriteReadiness(where);
+    assert.equal(verdict.ready, false, `${where}: a session under pressure has records; an empty file is not its live transcript`);
+    assert.equal(verdict.code, 'runner-tool-call-readiness-unknown');
+    assert.equal(verdict.detail?.reason, 'tool-call-transcript-empty');
+    assert.equal(verdict.detail?.at, where ?? null);
+  }
+  harness.drive();
+  assert.equal(capsuleTextWriteCount(harness), 0, 'nothing is written while the transcript is empty');
+  // The first record lands: the same reader, the same boundary, now ready.
+  fs.appendFileSync(harness.fixture.transcriptPath, JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } }) + '\n');
+  assert.equal(harness.runner._automaticWriteReadiness('capsule-request').ready, true,
+    'growth is read by the same catch-up pass; no rebind needed');
 });
 
 dialogCase('D10 an unanchored baseline refuses: a call beyond the bounded tail is never assumed away', (harness) => {
