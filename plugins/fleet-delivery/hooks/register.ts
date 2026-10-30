@@ -1262,8 +1262,21 @@ async function tick($: $): Promise<void> {
       }
     }
     if (unresolved) {
-      show(heldOn(Object.keys(entries).find(id => isUnresolved(entries![id])) ?? '<id>'))
-      return
+      // Ordinary mail holds behind an unresolved claim, as before (order is
+      // kept, nothing is resent until the operator reconciles). The supervisor's
+      // lifecycle legs do not: a refresh cycle must never wait on a reconcile
+      // (Pheme, 2026-10-29: one stuck claim held the capsule request and the
+      // resume order for hours and the cycle failed). The unresolved item itself
+      // is never resent.
+      const legs: Item[] = []
+      for (const item of queue) {
+        if (isUnresolved(entries[item.id])) continue
+        const loaded = await item.load()
+        if (loaded && 'text' in loaded && loaded.lifecycle) legs.push(item)
+      }
+      show(heldOn(Object.keys(entries).find(id => isUnresolved(entries![id])) ?? '<id>'), queue.length)
+      if (!legs.length) return
+      queue = legs
     }
     if (!ownerPid && config.roomRoot) {
       for (const item of queue) {
