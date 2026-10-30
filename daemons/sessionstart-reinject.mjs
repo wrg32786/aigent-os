@@ -32,6 +32,7 @@
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  CAPSULE_SECTIONS,
   capsuleValue,
   inert,
   memRoot as resolveMemRoot,
@@ -189,7 +190,7 @@ try {
       if (obj) out.push(`   objective: ${inert(obj, 240)}`);
       if (next) out.push(`   next_valid_action: ${inert(next, 400)}`);
       if (waiting && waiting !== 'null') out.push(`   waiting_on: ${inert(waiting, 200)}`);
-      out.push(`   sections: Done (don't redo) · Historical-Errors → Resolutions · Historical-Rejected-Approaches · Files-Read / Files-Modified · Operating-Facts · Pending-Gates · Claimed-Rows`);
+      out.push(`   sections: ${CAPSULE_SECTIONS.map(({ title }) => title).join(' · ')}`);
       out.push(`   Pending-Gates + Claimed-Rows are LIVE classes — re-verify each against memory before resuming them.`);
       // Named rulings, not a mood. "Reference only" tells a reader what the
       // document is; these tell it what to DO when the document and the live

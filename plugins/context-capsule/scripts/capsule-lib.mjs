@@ -19,6 +19,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { CAPSULE_SECTIONS } from './capsule-sections.mjs';
 
 export const REQUIRED_FIELDS = Object.freeze(['id', 'objective', 'waiting_on', 'next_valid_action']);
 export const CONSUMED_STATUSES = new Set(['resumed', 'resolved', 'consumed', 'superseded']);
@@ -395,10 +396,8 @@ export function slugify(s) {
 }
 
 export function buildCapsule({ id, objective, waitingOn, nextAction, trigger = 'manual', body = '', now = new Date() }) {
-  const sections = body.trim() || [
-    "## Done (don't redo)", '', '## Historical-Errors -> Resolutions', '', '## Historical-Rejected-Approaches', '',
-    '## Files-Read / Files-Modified', '', '## Operating-Facts', '', '## Pending-Gates', '', '## Claimed-Rows', '',
-  ].join('\n');
+  const sections = body.trim() || CAPSULE_SECTIONS.map(({ title, anchor }) =>
+    `## ${title}\n${anchor}\n`).join('\n');
   return `---
 id: ${id}
 parent_capsule_id: null

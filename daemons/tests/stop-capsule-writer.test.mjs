@@ -46,6 +46,7 @@ const ANCHORS = [
   '<!-- swe:rejected -->',
   '<!-- swe:files -->',
   '<!-- swe:facts -->',
+  '<!-- swe:effects -->',
   '<!-- swe:gates -->',
   '<!-- swe:rows -->',
 ];
@@ -237,6 +238,9 @@ resolved_at: null
 ## Operating-Facts
 <!-- swe:facts -->
 
+## In-Flight Side Effects
+<!-- swe:effects -->
+
 ## Pending-Gates
 <!-- swe:gates -->
 
@@ -265,6 +269,7 @@ function writeInstrumentedDaemon(fixture, {
   const daemonDir = path.join(fixture.base, 'instrumented-daemons');
   const hygieneDir = path.join(daemonDir, 'memory-hygiene');
   mkdirSync(hygieneDir, { recursive: true });
+  copyFileSync(new URL('../redact.cjs', import.meta.url), path.join(daemonDir, 'redact.cjs'));
 
   const daemon = path.join(daemonDir, 'stop-capsule-writer.mjs');
   copyFileSync(DAEMON, daemon);

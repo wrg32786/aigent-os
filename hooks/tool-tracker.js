@@ -4,28 +4,17 @@
 // Records action metadata only. It never persists file contents, raw shell
 // commands, MCP queries, channel IDs, or arbitrary fallback input.
 
-const SECRET_PATTERNS = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, '[REDACTED]'],
-  [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]'],
-  [/\bBasic\s+[A-Za-z0-9+/=]+/gi, '[REDACTED]'],
-  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED]'],
-  [/\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\s*[:=]\s*["']?[^\s"']+/gi, '[REDACTED]'],
-  [/\b(?:sk|pk|ghp|github_pat|xox[baprs]|AKIA)[-_A-Za-z0-9]{12,}\b/g, '[REDACTED]'],
-  [/([a-z][a-z0-9+.-]*:\/\/[^\s:/]+:)[^@\s]+@/gi, '$1[REDACTED]@'],
-];
+let redact = () => '[REDACTOR UNAVAILABLE]';
+try {
+  ({ redact } = require('../daemons/redact.cjs'));
+} catch {
+  process.stderr.write('tool-tracker: shared redactor unavailable; captured values suppressed\n');
+}
 
 // A captured value is persisted in a Markdown list and later summarized into
 // model-facing orientation. Collapse every character that can create a visual
 // or physical line boundary before it reaches either renderer.
 const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
-
-function redact(value) {
-  let text = String(value ?? '');
-  for (const [pattern, replacement] of SECRET_PATTERNS) {
-    text = text.replace(pattern, replacement);
-  }
-  return text;
-}
 
 function compact(value, limit = 160) {
   const text = redact(value)

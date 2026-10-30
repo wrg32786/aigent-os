@@ -23,6 +23,36 @@ import frontmatterReader from './frontmatter-reader.cjs';
 // precompact-flush.test caught. Fail-open applies to this consumer too.
 import * as capsuleGate from './capsule-content-gate.mjs';
 import { resolveMemoryRoot, describeMemoryRoot, MemoryRootError } from './memory-root.cjs';
+const WRITE_VERBS = new Set('send reply forward publish post schedule deploy submit create update delete trigger merge pay charge purchase order push save add complete buy upload write set archive ban apply assign cancel claim renew register edit label trash mark move rename restore duplicate generate execute run start stop kill drain pin unpin approve reject resolve_report invite clear purge reset revoke unsubscribe subscribe remove disconnect connect close reopen retry sync import change rerequest modify toggle enable disable grant deny accept decline activate deactivate promote demote rollback redeploy restart moderate flag dismiss mute unmute lock unlock transfer reassign release upgrade downgrade convert rotate invalidate recalculate'.split(' '));
+const READ_VERBS = new Set('get list read search fetch describe query show view count find download peek lookup whoami history preview export snapshot context receipts discover learn extract balance transactions wait crawl map take screenshot review inspect poll ping echo version help'.split(' '));
+const NOUNISH = new Set(['post', 'order', 'run', 'label']);
+export function classifyMcpEffect(name) {
+  if (typeof name !== 'string' || !name.includes('__')) return 'read';
+  // Normalize camel suffixes before applying the final-segment vocabulary.
+  const tokens = name.slice(name.lastIndexOf('__') + 2).replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[-_]/);
+  // A leading read verb owns the name unless a conjunction introduces a write.
+  if (READ_VERBS.has(tokens[0])) {
+    return tokens.some((token, i) => (token === 'or' || token === 'and')
+      && tokens.slice(i + 1).some((word, j, tail) => WRITE_VERBS.has(word)
+        || WRITE_VERBS.has(`${word}_${tail[j + 1]}`))) ? 'write' : 'read';
+  }
+  // resolve_report is the one compound entry in the write vocabulary.
+  if (tokens.some((token, i) => (WRITE_VERBS.has(token) && (!NOUNISH.has(token) || i === 0))
+    || WRITE_VERBS.has(`${token}_${tokens[i + 1]}`))) return 'write';
+  return tokens.some((token) => READ_VERBS.has(token)) ? 'read' : 'default';
+}
+// Core owns the format. The standalone plugin carries its own parity-tested copy.
+export const CAPSULE_SECTIONS = Object.freeze([
+  { key: 'done', maxDepth: 2, title: "Done (don't redo)", anchor: '<!-- swe:done -->', headingPattern: '^Done\\b.*redo' },
+  { key: 'errors', maxDepth: 2, title: 'Historical-Errors → Resolutions', anchor: '<!-- swe:errors -->', headingPattern: '^Historical-Errors\\s*(?:→|->)\\s*Resolutions' },
+  { key: 'rejected', maxDepth: 2, title: 'Historical-Rejected-Approaches', anchor: '<!-- swe:rejected -->', headingPattern: '^Historical-Rejected-Approaches$' },
+  { key: 'files', maxDepth: 2, title: 'Files-Read / Files-Modified', anchor: '<!-- swe:files -->', headingPattern: '^Files-Read / Files-Modified$' },
+  { key: 'facts', maxDepth: 2, title: 'Operating-Facts', anchor: '<!-- swe:facts -->', headingPattern: '^Operating-Facts$' },
+  { key: 'effects', maxDepth: 3, title: 'In-Flight Side Effects', anchor: '<!-- swe:effects -->', headingPattern: '^In-Flight Side Effects' },
+  { key: 'gates', maxDepth: 3, title: 'Pending-Gates', anchor: '<!-- swe:gates -->', headingPattern: '^Pending-Gates$' },
+  { key: 'rows', maxDepth: 2, title: 'Claimed-Rows', anchor: '<!-- swe:rows -->', headingPattern: '^Claimed-Rows$' },
+].map((entry) => Object.freeze({ ...entry, heading: new RegExp(entry.headingPattern, 'i') })));
 
 export const {
   bodySection,
@@ -323,26 +353,53 @@ export function doneRowPriority(key) {
 
 // Locate an anchored body section once for readers and writers. Offsets refer
 // to the full document; frontmatter anchors and headings never participate.
+const ANCHOR_LINE = /(?:^|\r?\n)[ \t]*(<!-- swe:[a-z]+ -->)[ \t]*(?=\r?\n|$)/;
+const SECTION_HEADINGS = new RegExp(HEADING_SCAN, 'g');
+const SECTION_LINES = /^[^\r\n]+/gm;
+const LEGACY_HEADING_PATTERNS = new Map(CAPSULE_SECTIONS.map(({ headingPattern, heading }) => [headingPattern, heading]));
+function legacyHeading(pattern) {
+  if (typeof pattern !== 'string') return pattern;
+  if (!LEGACY_HEADING_PATTERNS.has(pattern)) LEGACY_HEADING_PATTERNS.set(pattern, new RegExp(pattern, 'i'));
+  return LEGACY_HEADING_PATTERNS.get(pattern);
+}
 export function locateCapsuleSection(doc, anchor, fallbackHeading) {
+  // Accept a format entry or key; retain arbitrary exact-line legacy anchors.
+  const definition = typeof anchor === 'object' ? anchor : CAPSULE_SECTIONS.find((entry) => entry.key === anchor || entry.anchor === anchor);
+  if (definition) {
+    anchor = definition.anchor;
+    fallbackHeading = definition.heading;
+  } else fallbackHeading = legacyHeading(fallbackHeading);
   const bodyStart = documentBodyStart(doc);
   const body = doc.slice(bodyStart);
-  const escapedAnchor = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const anchorLine = new RegExp(`(?:^|\\r?\\n)[ \\t]*${escapedAnchor}[ \\t]*(?=\\r?\\n|$)`).exec(body);
+  const anchorLine = [...body.matchAll(SECTION_LINES)].find((match) => match[0].trim() === anchor);
   const anchorIndex = anchorLine ? anchorLine.index + anchorLine[0].indexOf(anchor) : -1;
-  const headings = new RegExp(HEADING_SCAN, 'g');
-  const heading = anchorIndex === -1
-    ? [...body.matchAll(headings)].find((match) => match[1].length <= 2 && fallbackHeading?.test(match[2].trim()))
-    : [...body.slice(0, anchorIndex).matchAll(headings)].filter((match) => match[1].length <= 2).at(-1);
+  const headings = [...body.matchAll(SECTION_HEADINGS)];
+  let heading = anchorIndex === -1
+    ? headings.find((match) => match[1].length <= (definition?.maxDepth ?? 2) && fallbackHeading?.test(match[2].trim()))
+    : headings.filter((match) => match.index < anchorIndex
+      && (match[1].length <= (definition?.maxDepth ?? 2) || fallbackHeading?.test(match[2].trim()))).at(-1);
+  if (heading && anchorIndex !== -1
+    && ANCHOR_LINE.test(body.slice(heading.index + heading[0].length, anchorIndex))) {
+    heading = undefined; // A preceding section's anchor already owns that heading.
+  }
   if (anchorIndex === -1 && !heading) return null;
   const insertAt = anchorIndex === -1 ? null : anchorIndex + anchor.length;
-  // Writer-owned sections use level two. A headingless anchor gets the same
-  // boundary rule, including deeper subheadings, via a zero-width heading.
   const boundaryHeading = heading || { index: insertAt, 0: '', 1: '##' };
+  const start = boundaryHeading.index + boundaryHeading[0].length;
+  // Nested headings stay inside their opener; explicit sections still own rows.
+  const afterAnchor = insertAt ?? start;
+  const nextAnchor = ANCHOR_LINE.exec(body.slice(afterAnchor));
+  const nextHeading = headings.find((match) => match.index >= start && match[1].length <= boundaryHeading[1].length);
+  const headingOffset = (match) => match ? match.index + match[0].indexOf('#') : body.length;
+  const end = Math.min(headingOffset(nextHeading), nextAnchor
+    ? afterAnchor + nextAnchor.index + (nextAnchor[0].startsWith('\r\n') ? 2 : nextAnchor[0].startsWith('\n') ? 1 : 0)
+    : body.length);
   return {
     anchorAt: anchorIndex === -1 ? null : bodyStart + anchorIndex,
     hasHeading: !!heading,
-    start: bodyStart + boundaryHeading.index + boundaryHeading[0].length,
-    end: bodyStart + sectionBounds(body, boundaryHeading),
+    headingAt: heading ? bodyStart + heading.index + heading[0].indexOf('#') : null,
+    start: bodyStart + start,
+    end: bodyStart + end,
   };
 }
 
@@ -374,6 +431,42 @@ export function inert(value, max = 500) {
 // Decoded, single-line data for storage or further bounded rendering.
 export function storedData(value, maximum = 240) {
   return JSON.parse(inert(value, maximum));
+}
+
+// Fixed field order keeps pipes inside quoted values from becoming metadata.
+const EFFECT_STRING = '"(?:[^"\\\\]|\\\\.)*"';
+const EFFECT_ROW = new RegExp(`^- op (${EFFECT_STRING}) \\| kind (${EFFECT_STRING}) \\| target (${EFFECT_STRING}) \\| requested (${EFFECT_STRING}) \\| outcome: (requested|unknown|confirmed|failed) \\| id (${EFFECT_STRING}) \\| check (${EFFECT_STRING})$`);
+
+export function parseSideEffectRow(row) {
+  row = row.replace(/\r$/, '');
+  const match = EFFECT_ROW.exec(row);
+  if (!match || match[0].length !== row.length) return null;
+  try {
+    const [, op, kind, target, requested, outcome, id, check] = match;
+    return { op: JSON.parse(op), kind: JSON.parse(kind), target: JSON.parse(target),
+      requested: JSON.parse(requested), outcome, id: JSON.parse(id), check: JSON.parse(check) };
+  } catch { return null; }
+}
+
+export function formatSideEffectRow(fields) {
+  const q = JSON.stringify;
+  return `- op ${q(fields.op)} | kind ${q(fields.kind)} | target ${q(fields.target)} | requested ${q(fields.requested)} | outcome: ${fields.outcome} | id ${q(fields.id)} | check ${q(fields.check)}`;
+}
+
+export const effectKey = (row) => parseSideEffectRow(row)?.op ?? row;
+
+// Stored rows are chronological. Unresolved outcomes precede resolved outcomes;
+// within each tier explicit kinds precede defaults, newest first in each group.
+export function orderSideEffectRows(rows) {
+  const priority = (row) => {
+    const parsed = parseSideEffectRow(row);
+    const kind = parsed?.kind.replace(/^sidechain:/, '');
+    const explicit = kind === 'shell' || kind === 'SendMessage' || classifyMcpEffect(kind) === 'write';
+    return (['confirmed', 'failed'].includes(parsed?.outcome) ? 2 : 0) + (explicit ? 0 : 1);
+  };
+  return rows.map((row, index) => ({ row, index, priority: priority(row) }))
+    .sort((a, b) => a.priority - b.priority || b.index - a.index)
+    .map(({ row }) => row);
 }
 
 // The trust-boundary chokepoint (issue #43): every render of text that was

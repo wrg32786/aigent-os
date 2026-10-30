@@ -39,7 +39,7 @@ Plus `parent_capsule_id`, `status` (`active → resumed → resolved`, also `pau
 
 Two mechanics the fields above imply: `created_at` is stamped at write time in ISO-8601 with offset (the selector orders by parsing it; a date-only stamp backdates to midnight UTC), and `active → resumed` is written by the resume runtime at load (`markCapsuleConsumed`), never by hand: a consumed capsule cannot be silently re-resumed.
 
-The body carries seven `[REFERENCE ONLY]` sections behind HTML anchor comments (`<!-- swe:done -->` etc.) that `stop-capsule-writer.mjs` merges bullets into: `Done (don't redo)`, `Historical-Errors → Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `Pending-Gates`, `Claimed-Rows`. "Historical-" prefixes and latest-wins framing are deliberate: body content is a *reference snapshot*, never an active instruction queue. Treating it as one is exactly the trap `/resume`'s fences exist to prevent.
+The body carries eight `[REFERENCE ONLY]` sections behind HTML anchor comments (`<!-- swe:done -->` etc.) that `stop-capsule-writer.mjs` merges bullets into: `Done (don't redo)`, `Historical-Errors → Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `In-Flight Side Effects`, `Pending-Gates`, `Claimed-Rows`. "Historical-" prefixes and latest-wins framing are deliberate: body content is a *reference snapshot*, never an active instruction queue. Treating it as one is exactly the trap `/resume`'s fences exist to prevent.
 
 ## Done claims contract
 
@@ -52,6 +52,17 @@ Resume renders operator rows as a separate group above claims (#83), preserving 
 The Stop writer accepts at most 12 utterances per delta. Only the latest assistant row of the delta is protected and is never evicted. When full, it evicts non-human chatter first (the oldest injection, peer, or attachment, then the oldest relay), then older assistant rows, then operator rows, oldest first within each priority. Accepted speech is stored in reverse capture order; stored history survives later writes. Duplicate fresh rows and replays are suppressed, including legacy untagged assistant claims. Sidechain speech is skipped, while sidechain tools still populate Files-Read / Files-Modified, Claimed-Rows, and Historical-Errors. Both writer and reader end a section at the next heading whose level is less than or equal to its own heading level; deeper subheadings remain part of the section. Both locate the body anchor and use the last heading before it; a headingless anchor uses a synthetic level-two heading at the insertion point. Resume falls back to a body Done heading containing "redo" only when no body Done anchor exists.
 
 Known and accepted limitations: curated capsules are oldest-first, so the first-12 claims window favors older rows. Without a `<!-- swe:done -->` body anchor, a `## Done` heading without the word "redo" is not found by the reader. The last assistant text block replaces earlier blocks of the same message; this is pre-existing behavior left for follow-up.
+
+## Outside side effects
+
+- `In-Flight Side Effects` records outside tool calls by operation ID, with redacted targets, timestamps, handles, and status checks; rows are best-effort evidence, and assistant prose does not establish outcomes.
+- Outcomes: requested means no result observed; unknown means evidence is inconclusive, including interrupted or unclean results; confirmed means transport acceptance with a clean result ID, not independent observation; failed means an error result without interruption evidence.
+- Resume fence: check requested or unknown calls before retry; without an ID, ask the operator and do not resend. Read Historical-Errors before retrying failed calls as new requests. Never repeat confirmed calls. Absence of a row is never evidence that nothing happened.
+- Scope: a row exists only in the capsule that session wrote; a resume that selects a different capsule does not show it.
+- Resume and PreCompact prioritize requested or unknown rows (newest first), then confirmed or failed rows (newest first); within each tier, explicit-kind rows precede default-kind rows.
+- Known limit: an unlisted verb paired with a read noun is skipped; extend `WRITE_VERBS` when a new mutating tool appears.
+- Known limit: a command spelled in a way the parser does not recognize leaves no row; an unlisted command is not recorded; extend `SHELL_EFFECT` when a new mutating command appears.
+- Classification and storage rules live beside `WRITE_VERBS` and `CAPSULE_SECTIONS` in `daemons/lifecycle-common.mjs`, `SHELL_EFFECT` in `daemons/stop-capsule-writer.mjs`, and `SECRET_PATTERNS` in `daemons/redact.cjs`; render budgets live in the resume and precompact code.
 
 ## The content gate
 
