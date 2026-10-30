@@ -28,9 +28,12 @@ export const {
   bodySection,
   capsuleValue,
   collapseLineBreaking,
+  documentBodyStart,
   frontmatterList,
   hasFrontmatter,
   scalar,
+  HEADING_SCAN,
+  sectionBounds,
   scalarHasUnsupportedInlineComment,
   scalarIsUnquotedYamlNull,
   unsafeRawBodySection,
@@ -291,6 +294,58 @@ export function newestValidCapsule(memoryRoot, options) {
   return { ...capsule, rejected };
 }
 
+// Shared grouping/dedup key: discard list decoration and the undated clock
+// stamp without changing speaker tags or attempting to sort chronology.
+export function capsuleRowKey(row) {
+  return collapseLineBreaking(row).replace(/[ \t]+/g, ' ').trim().replace(/^(?:[-*+] |\d+\.[ \t]+)/, '').replace(/^\d{2}:\d{2} /, '');
+}
+
+// Only the writer's closed speaker vocabulary is metadata; other tags are content.
+export const DONE_TAG = /^\[(OPERATOR|ASSISTANT|(?:RELAY|PEER|INJECT):[^\]]+|ATTACHMENT)\]\s*/;
+
+// Bound each Stop delta and each rendered group; stored history stays intact.
+export const DONE_LIMITS = Object.freeze({
+  delta: 12,
+  render: Object.freeze({ operator: Infinity, claims: 12 }),
+  bytes: Object.freeze({ operator: 4096, claims: 4096 }),
+});
+
+export function doneRowGroup(key) {
+  return DONE_TAG.exec(key)?.[1] === 'OPERATOR' ? 'operator' : 'claims';
+}
+
+const DONE_SPEAKER_PRIORITY = Object.freeze({ OPERATOR: 3, ASSISTANT: 2, RELAY: 1 });
+
+export function doneRowPriority(key) {
+  const speaker = DONE_TAG.exec(capsuleRowKey(key))?.[1].split(':')[0];
+  return DONE_SPEAKER_PRIORITY[speaker] ?? 0;
+}
+
+// Locate an anchored body section once for readers and writers. Offsets refer
+// to the full document; frontmatter anchors and headings never participate.
+export function locateCapsuleSection(doc, anchor, fallbackHeading) {
+  const bodyStart = documentBodyStart(doc);
+  const body = doc.slice(bodyStart);
+  const escapedAnchor = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const anchorLine = new RegExp(`(?:^|\\r?\\n)[ \\t]*${escapedAnchor}[ \\t]*(?=\\r?\\n|$)`).exec(body);
+  const anchorIndex = anchorLine ? anchorLine.index + anchorLine[0].indexOf(anchor) : -1;
+  const headings = new RegExp(HEADING_SCAN, 'g');
+  const heading = anchorIndex === -1
+    ? [...body.matchAll(headings)].find((match) => match[1].length <= 2 && fallbackHeading?.test(match[2].trim()))
+    : [...body.slice(0, anchorIndex).matchAll(headings)].filter((match) => match[1].length <= 2).at(-1);
+  if (anchorIndex === -1 && !heading) return null;
+  const insertAt = anchorIndex === -1 ? null : anchorIndex + anchor.length;
+  // Writer-owned sections use level two. A headingless anchor gets the same
+  // boundary rule, including deeper subheadings, via a zero-width heading.
+  const boundaryHeading = heading || { index: insertAt, 0: '', 1: '##' };
+  return {
+    anchorAt: anchorIndex === -1 ? null : bodyStart + anchorIndex,
+    hasHeading: !!heading,
+    start: bodyStart + boundaryHeading.index + boundaryHeading[0].length,
+    end: bodyStart + sectionBounds(body, boundaryHeading),
+  };
+}
+
 // The rendering boundary between capsule content and prompt structure.
 //
 // Values read off a capsule are DATA. They are attacker-controllable in the
@@ -314,6 +369,11 @@ export function inert(value, max = 500) {
   let s = collapseLineBreaking(value ?? '').replace(/[ \t]+/g, ' ').trim();
   if (s.length > max) s = `${s.slice(0, max)}…[+${s.length - max} chars]`;
   return JSON.stringify(s);
+}
+
+// Decoded, single-line data for storage or further bounded rendering.
+export function storedData(value, maximum = 240) {
+  return JSON.parse(inert(value, maximum));
 }
 
 // The trust-boundary chokepoint (issue #43): every render of text that was

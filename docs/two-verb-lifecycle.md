@@ -41,6 +41,18 @@ Two mechanics the fields above imply: `created_at` is stamped at write time in I
 
 The body carries seven `[REFERENCE ONLY]` sections behind HTML anchor comments (`<!-- swe:done -->` etc.) that `stop-capsule-writer.mjs` merges bullets into: `Done (don't redo)`, `Historical-Errors → Resolutions`, `Historical-Rejected-Approaches`, `Files-Read / Files-Modified`, `Operating-Facts`, `Pending-Gates`, `Claimed-Rows`. "Historical-" prefixes and latest-wins framing are deliberate: body content is a *reference snapshot*, never an active instruction queue. Treating it as one is exactly the trap `/resume`'s fences exist to prevent.
 
+## Done claims contract
+
+All Done rows, including untagged rows, are claims to re-check before acting on or skipping them. There is no product source of command exit status for verified tags today; the transcript does not carry it. Hook success proves only that a hook ran successfully, not the Done claim.
+
+The literal `[UNVERIFIED claim]` tag is not emitted; untagged rows are claims.
+
+Resume renders operator rows as a separate group above claims (#83), preserving FILE order within each group. Curated capsules are oldest-first on disk; autosaves put the latest accepted speech first. Undated HH:MM stamps cannot establish chronology. All operator rows are eligible within a 4 KiB group budget, followed by the first 12 successfully rendered claim rows within another 4 KiB, including the notice `<K> more Done rows in the capsule file`. Only omitted rows classified as content-bearing are counted. Long rows are visibly truncated within escaped UTF-8 byte bounds; rows with no content beyond their tags are omitted. Only `[OPERATOR]`, `[ASSISTANT]`, `[RELAY:<x>]`, `[PEER:<x>]`, `[INJECT:<x>]`, and `[ATTACHMENT]` count as tags; other bracketed text, including markdown checkboxes, is content. Bullets may use `-`, `*`, `+`, or numbered lists; continuation lines stay with their row. Empty groups have no heading. Speaker tags are grouping hints, not authenticated authority.
+
+The Stop writer accepts at most 12 utterances per delta. Only the latest assistant row of the delta is protected and is never evicted. When full, it evicts non-human chatter first (the oldest injection, peer, or attachment, then the oldest relay), then older assistant rows, then operator rows, oldest first within each priority. Accepted speech is stored in reverse capture order; stored history survives later writes. Duplicate fresh rows and replays are suppressed, including legacy untagged assistant claims. Sidechain speech is skipped, while sidechain tools still populate Files-Read / Files-Modified, Claimed-Rows, and Historical-Errors. Both writer and reader end a section at the next heading whose level is less than or equal to its own heading level; deeper subheadings remain part of the section. Both locate the body anchor and use the last heading before it; a headingless anchor uses a synthetic level-two heading at the insertion point. Resume falls back to a body Done heading containing "redo" only when no body Done anchor exists.
+
+Known and accepted limitations: curated capsules are oldest-first, so the first-12 claims window favors older rows. Without a `<!-- swe:done -->` body anchor, a `## Done` heading without the word "redo" is not found by the reader. The last assistant text block replaces earlier blocks of the same message; this is pre-existing behavior left for follow-up.
+
 ## The content gate
 
 `daemons/capsule-content-gate.mjs` is a zero-dependency vocabulary shared by both enforcement points (`capsule-verb.mjs`'s validator and `stop-capsule-writer.mjs`'s classifier). It rejects two failure classes that non-empty checks alone miss:

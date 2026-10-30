@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Force $Work | Out-Null
 
 $script:LauncherProc = $null
 $script:StubPid = $null
-$Total = 3
+$Total = 4
 
 function Cleanup {
     if ($script:StubPid) {
@@ -44,6 +44,11 @@ switch ($env:CLAUDE_STUB_MODE) {
         if (-not $env:CLAUDE_PID_FILE) { exit 2 }
         Set-Content -Path $env:CLAUDE_PID_FILE -Value $PID
         Start-Sleep -Seconds 30
+        exit 0
+    }
+    'env' {
+        if (-not $env:CLAUDE_CALL_LOG) { exit 2 }
+        Add-Content -Path $env:CLAUDE_CALL_LOG -Value "CHILD=[$($env:CLAUDE_CODE_CHILD_SESSION)] FORCE=[$($env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE)]"
         exit 0
     }
     'complete' {
@@ -176,3 +181,20 @@ Write-Host "[3/$Total] skill-owned completion: second launch receives --continue
 Write-Host "launcher first-run marker suite passed ($Total/$Total)"
 Cleanup
 exit 0
+
+# ── 4. Issue #98: a contaminated parent on the direct (--no-deps) branch ────────
+# The parent exports CLAUDE_CODE_CHILD_SESSION=1 (it is itself a Claude Code
+# session). The child must not see it, and must see the persistence opt-in.
+$EnvHome = Join-Path $Work 'env-home'
+$EnvLog = Join-Path $Work 'env.log'
+New-Item -ItemType Directory -Force $EnvHome | Out-Null
+$env:AIGENT_HOME = $EnvHome
+$env:CLAUDE_STUB_MODE = 'env'
+$env:CLAUDE_CALL_LOG = $EnvLog
+$env:CLAUDE_CODE_CHILD_SESSION = '1'
+Remove-Item Env:CLAUDE_CODE_FORCE_SESSION_PERSISTENCE -ErrorAction SilentlyContinue
+$EnvExit = Invoke-Launcher (Join-Path $Work 'env-run.log')
+if ($EnvExit -ne 0) { Fail "contaminated-parent launcher invocation returned nonzero ($EnvExit)" }
+$EnvSeen = (Get-Content $EnvLog -ErrorAction Stop | Select-Object -Last 1)
+if ($EnvSeen -ne 'CHILD=[] FORCE=[1]') { Fail "direct branch handed the child: $EnvSeen (expected CHILD=[] FORCE=[1])" }
+Write-Host "[4/$Total] #98 direct branch: child sees no CLAUDE_CODE_CHILD_SESSION, persistence opt-in set"

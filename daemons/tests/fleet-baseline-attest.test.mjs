@@ -105,6 +105,12 @@ function buildInstall({ settingsRootFor = (root) => root } = {}) {
     path.join(root, ...manifest.optional_components.semantic_search.path.split('/')),
     { recursive: true },
   );
+  // The optional component's owning package, declaring nothing: functioning by
+  // declaration (#107). A node_modules with no owner is unloadable, see below.
+  writeFileSync(
+    path.join(root, ...manifest.optional_components.semantic_search.path.split('/').slice(0, -1), 'package.json'),
+    '{"name":"semantic-search","version":"1.0.0","type":"module"}\n',
+  );
 
   const ptyDir = path.join(
     root,
@@ -695,6 +701,108 @@ test('an absent optional component attests DEGRADED, everything else exact', () 
   });
 });
 
+// Issue #107: presence is not loadability. The node_modules directory existing
+// proved nothing; a package holding only a stale .cache attested like a working one,
+// and so would a package whose native binding never built. The proof is an import.
+function declareSemanticDependency(root, manifest) {
+  const nodeModules = path.join(root, ...manifest.optional_components.semantic_search.path.split('/'));
+  writeFileSync(
+    path.join(path.dirname(nodeModules), 'package.json'),
+    '{"name":"semantic-search","version":"1.0.0","type":"module","dependencies":{"@xenova/transformers":"^2.17.2"}}\n',
+  );
+  return path.join(nodeModules, '@xenova', 'transformers');
+}
+
+function layPackage(pkg, body) {
+  mkdirSync(path.join(pkg, 'src'), { recursive: true });
+  writeFileSync(path.join(pkg, 'package.json'), '{"name":"@xenova/transformers","version":"2.17.2","type":"module","main":"./src/transformers.js"}\n');
+  writeFileSync(path.join(pkg, 'src', 'transformers.js'), body);
+}
+
+function probeComponent(root, name = 'semantic_search') {
+  const args = [DOCTOR, root, '--component'];
+  if (name !== null) args.push(name);
+  const result = spawnSync('bash', args, { encoding: 'utf8' });
+  return { status: result.status, line: `${result.stdout}`.trim() };
+}
+
+test('#107 a present-but-unloadable optional component attests DEGRADED and is named as unloadable, not absent (stale cache specimen)', () => {
+  withInstall((root) => {
+    const pkg = declareSemanticDependency(root, readManifest());
+    mkdirSync(path.join(pkg, '.cache'), { recursive: true });
+    const { verdict, status, output } = attest(root);
+    assert.equal(verdict, 'DEGRADED', output);
+    assert.equal(status, 0);
+    assert.match(output, /optional semantic_search present but unloadable: @xenova\/transformers has no package\.json \(\.cache\)/);
+    assert.doesNotMatch(output, /optional semantic_search absent/);
+  });
+});
+
+test('#107 the proof is an import: a dependency whose files are all present but whose entry throws (an unbuilt native binding) is unloadable; a clean import is COMPLIANT', () => {
+  withInstall((root) => {
+    const pkg = declareSemanticDependency(root, readManifest());
+    layPackage(pkg, "throw new Error('Could not load the \"sharp\" module: native binding not built');\n");
+    const broken = attest(root);
+    assert.equal(broken.verdict, 'DEGRADED', broken.output);
+    assert.match(broken.output, /optional semantic_search present but unloadable: import failed: .*sharp.*native binding not built/);
+    layPackage(pkg, 'export const ok = true;\n');
+    const fixed = attest(root);
+    assert.equal(fixed.verdict, 'COMPLIANT', fixed.output);
+    assert.doesNotMatch(fixed.output, /optional semantic_search/);
+  });
+});
+
+test('#107 a node_modules with no owning package.json is unloadable, not functioning', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    rmSync(path.join(root, ...manifest.optional_components.semantic_search.path.split('/').slice(0, -1), 'package.json'));
+    const { verdict, output } = attest(root);
+    assert.equal(verdict, 'DEGRADED', output);
+    assert.match(output, /unloadable: no owning package\.json/);
+  });
+});
+
+test('#107 --component answers one line and exits by state: functioning 0, unloadable 1, absent 2, unknown 3', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const pkg = declareSemanticDependency(root, manifest);
+    mkdirSync(path.join(pkg, '.cache'), { recursive: true });
+    const files = probeComponent(root);
+    assert.equal(files.status, 1, files.line);
+    assert.match(files.line, /^COMPONENT semantic_search: unloadable -- @xenova\/transformers has no package\.json/);
+    assert.equal(files.line.split('\n').length, 1, 'one line, nothing else, so install.sh can print it');
+    layPackage(pkg, "throw new Error('binding missing');\n");
+    const imp = probeComponent(root);
+    assert.equal(imp.status, 1, imp.line);
+    assert.match(imp.line, /^COMPONENT semantic_search: unloadable -- import failed: .*binding missing/);
+    layPackage(pkg, 'export const ok = true;\n');
+    const functioning = probeComponent(root);
+    assert.equal(functioning.status, 0, functioning.line);
+    assert.match(functioning.line, /^COMPONENT semantic_search: functioning -- @xenova\/transformers import cleanly$/);
+    rmSync(path.join(root, ...manifest.optional_components.semantic_search.path.split('/')), { recursive: true, force: true });
+    const absent = probeComponent(root);
+    assert.equal(absent.status, 2, absent.line);
+    assert.match(absent.line, /^COMPONENT semantic_search: absent -- daemons\/semantic-search\/node_modules/);
+    const unknown = probeComponent(root, 'no_such_component');
+    assert.equal(unknown.status, 3, unknown.line);
+    assert.match(unknown.line, /^COMPONENT no_such_component: unknown -- /);
+    const nameless = probeComponent(root, null);
+    assert.equal(nameless.status, 3, nameless.line);
+    assert.match(nameless.line, /needs a name/);
+  });
+});
+
+test('#107 the default diagnostic pass (plain doctor.sh) uses the same classifier: the stale-cache specimen is a warn, never "ready"', () => {
+  withInstall((root) => {
+    const pkg = declareSemanticDependency(root, readManifest());
+    mkdirSync(path.join(pkg, '.cache'), { recursive: true });
+    const result = spawnSync('bash', [DOCTOR, root], { encoding: 'utf8' });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.match(output, /\[warn\] semantic search present but NOT loadable -- @xenova\/transformers has no package\.json/);
+    assert.doesNotMatch(output, /semantic search ready/);
+  });
+});
+
 // An optional absence must never pull a broken install back up to DEGRADED.
 test('an optional absence alongside a required failure stays NONCOMPLIANT', () => {
   withInstall((root) => {
@@ -727,10 +835,10 @@ const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 test('v8 manifest identity pins the recut population', () => {
   const manifest = readManifest();
   assert.equal(manifest.schema, 'FleetBaselineManifest/v8');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-10-28-8b4a7bbd');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-10-30-ebebbe90');
   assert.equal(
     manifest.public_product_commit,
-    '8b4a7bbd1c174f80c6b0b0e1b8ee967458222450',
+    'ebebbe90a69352c1d5f4db473c012839e0d2d708',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
