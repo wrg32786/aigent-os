@@ -2148,10 +2148,11 @@ test('a room_send the Room published to will or broadcast is never announced and
   expect(w.log.filter(entry => entry.includes('takes no pointers') || entry.includes('pointer'))).toEqual([])
 })
 
-test('a file whose pointer the model has read is left to the model until that turn ends; the tick delivers it on the next turn if it was not drained', CONFIGURED, async ($, on) => {
+test('a file whose pointer the model has read holds the queue head until that turn ends; the tick delivers in arrival order on the next turn if it was not drained', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE } })
   await w.turn()
   w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  w.files.set(`${INBOX}/b.json`, envelope('beta', 'second from beta'))
   const entered = await $.prompt.submit(asPeerPrompt(A_POINTER))
   expect('drop' in entered && entered.drop).toBeFalsy()
   // The tick runs twice inside the same turn: the file is not claimed.
@@ -2159,9 +2160,23 @@ test('a file whose pointer the model has read is left to the model until that tu
   await w.clock.settle()
   await w.clock.advance(31_000)
   await w.clock.settle()
-  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(0)
+  const bodies = () => w.log.filter(entry => entry.startsWith('submit ') && /hello from beta|second from beta/.test(entry))
+  expect(bodies()).toHaveLength(0)
   expect(w.files.has(`${INBOX}/a.json`)).toBe(true)
-  // The turn ends without a drain: the next tick delivers the file as before.
+  // The turn ends without a drain: the ticks deliver the pointed file first, b.json after, arrival order kept.
   await w.turn()
-  expect(w.log.filter(entry => entry.startsWith('submit ') && entry.includes('hello from beta'))).toHaveLength(1)
+  await w.turn()
+  const delivered = bodies().map(entry => (entry.includes('hello from beta') ? 'a' : 'b'))
+  expect(delivered).toEqual(['a', 'b'])
+})
+
+test('a pointer a later hook drops does not hold the tick off its file', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: { [OWNER]: MOD, [LOG]: SEED, [CYCLE]: IDLE }, queue: [{ drop: 'a test hook beneath drops every prompt' }] })
+  await w.turn()
+  w.files.set(`${INBOX}/a.json`, ENVELOPE)
+  const dropped = await $.prompt.submit(asPeerPrompt(A_POINTER))
+  expect('drop' in dropped && dropped.drop).toBe('a test hook beneath drops every prompt')
+  await w.clock.advance(31_000)
+  await w.clock.settle()
+  expect(w.files.has(`${INBOX}/a.json`)).toBe(false)
 })

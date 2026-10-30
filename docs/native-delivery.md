@@ -34,6 +34,7 @@ The first six rounds of review were spent on a design where the mod carried the 
 | name spelled `Probe-Seat` for a session registered `probe-seat` | delivered (resolution ignores case) |
 | a session sending to itself | refused by the engine: the sender's mod announces |
 | what `session.receive` carries (capture mod on a disposable session) | the engine's envelope, origin `peer`: `<cross-session-message from="uds:…" from-name="Recovery" from-mode="prompting">` + newline + the sender's text + newline + `</cross-session-message>`; the receiver unwraps it |
+| `$.session.send({ to: { sessionId } })` across processes (2026-10-30 01:01Z, disposable `probe-sid` mod in a `claude -p` process, target the Recovery operator session) | delivered: the engine resolved the id to the target's `uds:` pipe, answered `{"isDelivered":true}` in 75 ms, and the text arrived in the target as `<cross-session-message from="uds:…" from-name="probe-sid-72" from-plugin="probe-sid">`. A bogus id answered `{"isDelivered":false, reason: "no live session on this machine has id …"}`: a stale id after a `/clear` is refused the same way and the file waits for the tick |
 | courier alternative (`claude -p` calling SendMessage, as job-results does) | $0.008 to $0.017 and 3.5 to 5 s per message; not needed for seat mail |
 
 ## Rollout (fleet of four, staged like the cf08677 cutover)

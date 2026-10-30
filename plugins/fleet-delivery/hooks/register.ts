@@ -1293,9 +1293,10 @@ async function tick($: $): Promise<void> {
       const pointedFile = item.source === 'room' ? roomFile(w, item.id) : null
       if (pointedFile) {
         const seen = pointed.get(pointedFile)
+        // Hold the queue head, not just this file: arrival order is kept.
         if (seen !== undefined && seen >= turnCount) {
           show(' · pointer read, waiting for the turn to end')
-          continue
+          break
         }
         pointed.delete(pointedFile)
       }
@@ -1319,6 +1320,11 @@ async function tick($: $): Promise<void> {
       const file = item.source === 'room' ? roomFile(w, item.id) : null
       if (file && !item.claimed) {
         if (claimTries++ >= MAX_CLAIM_TRIES) return
+        // A pointer may have entered since the loop head: check again before the move.
+        if ((pointed.get(file) ?? -1) >= turnCount) {
+          show(' · pointer read, waiting for the turn to end')
+          return
+        }
         // One post-failure protocol (moveRoom): moved goes on; blocked, failed or an
         // unknown state defer; absent (with evidence) means room_drain took it.
         const claim = await moveRoom($, w, item, [inboxFile, claimedFile], undefined, false, 'quiet')
@@ -1739,7 +1745,7 @@ async function publishMarker($: $, w: Where): Promise<void> {
 // hold, when the mod no longer owns the seat, and when the session ends.
 async function retireMarker($: $, seat?: string | null): Promise<void> {
   markerAt = 0
-  if (!config.roomRoot) return
+  if (!config.roomRoot || markerState === 'retired') return
   await serialMarker(async () => {
     seat ??= await seatName($)
     if (!seat) return
@@ -1909,8 +1915,19 @@ export const register: Register = (on, options) => {
       $.ui.log(held)
       return { drop: held }
     }
-    if (match[1] === (await seatName($))) pointed.set(match[3], turnCount)
-    return next(e)
+    const entered = await next(e)
+    // Only a pointer that entered holds the tick off its file; one a later hook dropped must not.
+    if (!(entered as { drop?: unknown }).drop && match[1] === (await seatName($))) pointed.set(match[3], turnCount)
+    return entered
+  }).catch(($, e, next) => {
+    // The engine skips a hook that throws or overruns and lets the prompt in;
+    // this fence fails closed instead: a pointer whose check did not finish is
+    // dropped (the file waits for the tick). A prompt the hook had already
+    // passed on is replayed, not dropped.
+    if (next.called) return next(e)
+    const drop = 'fleet-delivery: pointer fence did not finish; the pointer is dropped, the file waits for the tick'
+    $.ui.log(drop)
+    return { drop }
   })
 
   on('command.run', { command: 'delivery-probe' }, async ($, e) => {
