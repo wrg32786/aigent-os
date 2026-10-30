@@ -1825,3 +1825,17 @@ test('side effect ordering parses and classifies each row once without mutating 
   assert.equal(classifications, rows.length);
 });
 }
+
+test('redaction stays fast on long underscore runs and covers prefixed key names', () => {
+  const { redact } = createRequire(import.meta.url)('../redact.cjs');
+  const started = Date.now();
+  for (const n of [32, 95, 400]) redact(`${'a_'.repeat(n)}!`);
+  assert.ok(Date.now() - started < 500, 'no catastrophic backtracking');
+  for (const text of ['OPENAI_API_KEY=abcd1234', 'ANTHROPIC_API_KEY=abcd1234', 'STRIPE_SECRET_KEY=abcd1234',
+    'GH_TOKEN=abcd1234', '--access-key=abcd1234', '--secret-key=abcd1234', '--auth-token abcd1234']) {
+    assert.ok(!redact(text).includes('abcd1234'), text);
+  }
+  for (const text of ['git push -u origin main', 'tokenizer: bpe', 'keyword=foo', 'my_token_count=5']) {
+    assert.equal(redact(text), text);
+  }
+});
