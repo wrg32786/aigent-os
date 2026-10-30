@@ -1555,11 +1555,14 @@ else
       # Installed is not loadable (issue #107): a tree whose package holds only a
       # stale .cache used to pass here and attest COMPLIANT. One bounded,
       # read-only check, shared with doctor.sh --attest, decides.
-      if PROBE="$(bash "$TARGET/scripts/doctor.sh" "$TARGET" --component semantic_search 2>/dev/null)"; then
-        printf '  [ok] %s dependencies installed and loadable\n' "$DEP_DIR"
-      else
-        printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun npm install in daemons/%s\n' "$DEP_DIR" "${PROBE#*-- }" "$DEP_DIR"
-      fi
+      PROBE_RC=0; PROBE="$(bash "$TARGET/scripts/doctor.sh" "$TARGET" --component semantic_search 2>/dev/null)" || PROBE_RC=$?
+      PROBE_WHY="${PROBE#*-- }"
+      case "$PROBE_RC" in
+        0) printf '  [ok] %s dependencies installed and loadable -- %s\n' "$DEP_DIR" "$PROBE_WHY" ;;
+        1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun npm install in daemons/%s\n' "$DEP_DIR" "$PROBE_WHY" "$DEP_DIR" ;;
+        2) printf '  [warn] %s dependencies reported installed but node_modules is absent -- rerun npm install in daemons/%s\n' "$DEP_DIR" "$DEP_DIR" ;;
+        *) printf '  [warn] %s dependencies installed; loadability could not be measured (%s)\n' "$DEP_DIR" "$PROBE_WHY" ;;
+      esac
     else
       printf '  [ok] %s dependencies installed\n' "$DEP_DIR"
     fi

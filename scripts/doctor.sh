@@ -50,6 +50,40 @@ for arg in "$@"; do
     *) [ -z "$ROOT" ] && ROOT="$arg" ;;
   esac
 done
+if [ "$COMPONENT_NEXT" -eq 1 ]; then
+  echo "COMPONENT: unknown -- --component needs a name (an optional_components key, e.g. semantic_search)"
+  exit 3
+fi
+
+# One optional component's state, printed as one line and exited by state:
+#   0 functioning, 1 unloadable, 2 absent, 3 unknown (name, or cannot measure).
+component_answer() {
+  echo "COMPONENT $COMPONENT: $1 -- $2"
+  case "$1" in functioning) exit 0 ;; unloadable) exit 1 ;; absent) exit 2 ;; *) exit 3 ;; esac
+}
+
+# Proof of loadability (issue #107): import every declared dependency from the
+# owning package's own directory with the installed node, the way install.sh and
+# --attest already prove node-pty. File presence is only the cheap fast-fail; a
+# native binding that `npm ci --ignore-scripts` never built fails HERE and
+# nowhere earlier. Bounded: one node process, 90 s where `timeout` exists.
+# Prints the first line of the failure on stdout; returns 0 on success.
+optional_import_probe() {
+  local owner="$1" deps="$2" out
+  command -v node >/dev/null 2>&1 || { echo "node not found, so nothing can be imported"; return 1; }
+  local runner=(node --input-type=module -e 'const deps = (process.argv[1] || "").split(",").filter(Boolean); for (const dep of deps) await import(dep);' -- "$deps")
+  if command -v timeout >/dev/null 2>&1; then runner=(timeout 90 "${runner[@]}"); fi
+  if out="$(cd "$owner" && "${runner[@]}" 2>&1)"; then return 0; fi
+  # The message line, not node's file:line stack header above it.
+  local msg
+  msg="$(printf '%s
+' "$out" | grep -m1 -E '^[A-Za-z]*Error' || true)"
+  [ -z "$msg" ] && msg="$(printf '%s
+' "$out" | grep -v '^[[:space:]]*$' | grep -v '^    at ' | head -1)"
+  printf '%s
+' "$msg" | cut -c1-200
+  return 1
+}
 if [ -z "$ROOT" ]; then
   # Try env var, then try to find markers in cwd / parent
   if [ -n "${AIGENT_ROOT:-}" ] && [ -d "$AIGENT_ROOT" ]; then
@@ -71,6 +105,7 @@ fi
 # "cannot measure", which is UNKNOWN, not a failure of the tree.
 if [ "$ATTEST" -eq 1 ]; then
   attest_verdict() {
+    if [ -n "$COMPONENT" ]; then component_answer unknown "cannot measure ($1)"; fi
     echo ""
     echo "  ----------------------------------------"
     echo "  ATTEST: $1"
@@ -192,7 +227,10 @@ def operator_owned(relative):
 core_owned = 0
 operator_owned_count = 0
 missing_count = 0
-for relative, expected in manifest["required_files"].items():
+# In --component mode only the optional-component lines are wanted; the hashing
+# pass is the baseline's business and is skipped.
+component_probe = os.environ.get("AIGENT_DOCTOR_COMPONENT", "")
+for relative, expected in ([] if component_probe else manifest["required_files"].items()):
     try:
         with open(under_root(relative), "rb") as fh:
             actual = hashlib.sha256(fh.read()).hexdigest()
@@ -609,54 +647,42 @@ if auto_refresh["expected"] == "enabled":
             )
     print("runner-required:%s" % under_root(manifest["managed_runner"]["dependency_root"]))
 
-# Optional components: absent, present-but-unloadable, or functioning (issue
-# #107). Presence of the node_modules directory proved nothing: a tree whose
-# package holds only a stale .cache attested like a working one. Loadability is
-# judged from files alone -- the owning package.json's declared dependencies,
-# each dependency's own package.json and the entry file it names -- so nothing
-# is executed and nothing is downloaded by this read-only instrument.
+# Optional components (issue #107): absent, present-but-unloadable, or
+# functioning. Presence of the node_modules directory proved nothing: a tree
+# whose package held only a stale .cache attested like a working one. This
+# read-only Python settles what files can settle (the directory, the owning
+# package.json, each declared dependency's own package.json) and hands the
+# proof that matters -- can node import every declared dependency -- to the
+# shell, which runs it the way the node-pty probe below already runs. Nothing
+# is downloaded; importing a library is not loading a model.
 def optional_component_state(spec):
     base = under_root(spec["path"])
     if not os.path.isdir(base):
-        return "absent", spec["path"]
-    owner = os.path.join(os.path.dirname(base), "package.json")
+        return "absent", spec["path"], None
+    owner_dir = os.path.dirname(base)
+    owner = os.path.join(owner_dir, "package.json")
     if not os.path.isfile(owner):
-        return "functioning", "no owning package.json, nothing declared"
+        return "unloadable", "no owning package.json beside %s declares what should load" % spec["path"], None
     try:
         with open(owner, encoding="utf-8") as fh:
             deps = sorted((json.load(fh).get("dependencies") or {}).keys())
     except (OSError, ValueError) as error:
-        return "unloadable", "owning package.json unreadable: %s" % error
+        return "unloadable", "owning package.json unreadable: %s" % error, None
     if not deps:
-        return "functioning", "no declared dependencies"
+        return "functioning", "no declared dependencies", None
     for dep in deps:
         pkg_dir = os.path.join(base, *dep.split("/"))
-        pkg_json = os.path.join(pkg_dir, "package.json")
-        if not os.path.isfile(pkg_json):
+        if not os.path.isfile(os.path.join(pkg_dir, "package.json")):
             seen = ", ".join(sorted(os.listdir(pkg_dir))[:4]) if os.path.isdir(pkg_dir) else "no directory"
-            return "unloadable", "%s has no package.json (%s)" % (dep, seen)
-        try:
-            with open(pkg_json, encoding="utf-8") as fh:
-                entry = json.load(fh).get("main") or "index.js"
-        except (OSError, ValueError) as error:
-            return "unloadable", "%s package.json unreadable: %s" % (dep, error)
-        if not os.path.isfile(os.path.join(pkg_dir, *str(entry).split("/"))):
-            return "unloadable", "%s entry %s missing" % (dep, entry)
-    return "functioning", "%d declared dependenc%s present with entry files" % (len(deps), "y" if len(deps) == 1 else "ies")
+            return "unloadable", "%s has no package.json (%s)" % (dep, seen), None
+    return "import", "%d declared dependenc%s present; import proof pending" % (len(deps), "y" if len(deps) == 1 else "ies"), (owner_dir, ",".join(deps))
 
-
-component_probe = os.environ.get("AIGENT_DOCTOR_COMPONENT", "")
-if component_probe:
-    spec = manifest["optional_components"].get(component_probe)
-    if spec is None:
-        print("component:unknown:%s is not an optional component in the manifest" % component_probe)
-    else:
-        state, why = optional_component_state(spec)
-        print("component:%s:%s" % (state, why))
-    sys.exit(0)
 
 for name, spec in manifest["optional_components"].items():
-    state, why = optional_component_state(spec)
+    state, why, probe = optional_component_state(spec)
+    print("optional:%s:%s:%s" % (name, state, why))
+    if probe is not None:
+        print("optional-import:%s:%s:%s" % (name, probe[1], probe[0]))
     if state == "absent":
         findings.append("optional %s absent: %s" % (name, why))
     elif state == "unloadable":
@@ -675,6 +701,7 @@ ATTESTPY
   ATTEST_FINDINGS=()
   RUNNER_ROOT=""
   ATTEST_UNMEASURABLE=""
+  declare -A OPT_STATE OPT_WHY OPT_DEPS OPT_OWNER
   while IFS= read -r line; do
     # python3 on Windows writes CRLF, and `read -r` keeps the CR. Without this
     # strip the runner root parsed below ends in a bare CR, the node-pty probe
@@ -682,10 +709,13 @@ ATTESTPY
     # as unavailable on every Windows install.
     line="${line%$'\r'}"
     case "$line" in
-      component:*)
-        COMPONENT_STATE="${line#component:}"; COMPONENT_WHY="${COMPONENT_STATE#*:}"; COMPONENT_STATE="${COMPONENT_STATE%%:*}"
-        echo "COMPONENT $COMPONENT: $COMPONENT_STATE -- $COMPONENT_WHY"
-        case "$COMPONENT_STATE" in functioning) exit 0 ;; unloadable) exit 1 ;; absent) exit 2 ;; *) exit 3 ;; esac
+      optional:*)
+        opt="${line#optional:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_state="${opt%%:*}"; opt_why="${opt#*:}"
+        OPT_STATE["$opt_name"]="$opt_state"; OPT_WHY["$opt_name"]="$opt_why"
+        ;;
+      optional-import:*)
+        opt="${line#optional-import:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_deps="${opt%%:*}"; opt_owner="${opt#*:}"
+        OPT_DEPS["$opt_name"]="$opt_deps"; OPT_OWNER["$opt_name"]="$opt_owner"
         ;;
       info:*)            [ -z "$COMPONENT" ] && echo "  ${line#info:}" ;;
       runner-required:*) RUNNER_ROOT="${line#runner-required:}" ;;
@@ -699,6 +729,23 @@ ATTESTPY
   if [ -n "$ATTEST_UNMEASURABLE" ]; then
     echo "  [detail] $ATTEST_UNMEASURABLE"
     attest_verdict UNKNOWN
+  fi
+
+  # The import proof for every optional component whose files passed (#107).
+  # Same instrument in --attest and in --component; a failure is a DEGRADED
+  # finding here and the component's answer there.
+  for opt_name in "${!OPT_DEPS[@]}"; do
+    if reason="$(optional_import_probe "${OPT_OWNER[$opt_name]}" "${OPT_DEPS[$opt_name]}")"; then
+      OPT_STATE["$opt_name"]="functioning"; OPT_WHY["$opt_name"]="${OPT_DEPS[$opt_name]//,/, } import cleanly"
+    else
+      OPT_STATE["$opt_name"]="unloadable"; OPT_WHY["$opt_name"]="import failed: ${reason:-no detail}"
+      ATTEST_FINDINGS+=("optional $opt_name present but unloadable: import failed: ${reason:-no detail}")
+    fi
+  done
+
+  if [ -n "$COMPONENT" ]; then
+    if [ -z "${OPT_STATE[$COMPONENT]+x}" ]; then component_answer unknown "$COMPONENT is not an optional component in the manifest"; fi
+    component_answer "${OPT_STATE[$COMPONENT]}" "${OPT_WHY[$COMPONENT]}"
   fi
 
   # Managed runner. Same load probe install.sh runs after npm rebuild, so
@@ -1040,12 +1087,17 @@ else
 fi
 
 # -- 9. Semantic search node_modules -------------------------------------------
+# The same classifier --attest and --component use (issue #107): the directory
+# existing never certified anything.
 if [ "$NODE_OK" -eq 1 ]; then
-  if [ -d "$ROOT/daemons/semantic-search/node_modules" ]; then
-    pass "daemons/semantic-search/node_modules found -- semantic search ready"
-  else
-    warn "daemons/semantic-search/node_modules missing -- run: cd daemons/semantic-search && npm install"
-  fi
+  SEM_RC=0; SEM_LINE="$(bash "$0" "$ROOT" --component semantic_search 2>/dev/null)" || SEM_RC=$?  # set -e: never let the probe abort the pass
+  SEM_WHY="${SEM_LINE#*-- }"
+  case "$SEM_RC" in
+    0) pass "semantic search loadable -- $SEM_WHY" ;;
+    1) warn "semantic search present but NOT loadable -- $SEM_WHY -- run: cd daemons/semantic-search && npm install" ;;
+    2) warn "daemons/semantic-search/node_modules missing -- run: cd daemons/semantic-search && npm install" ;;
+    *) warn "semantic search could not be measured -- $SEM_WHY" ;;
+  esac
 else
   warn "semantic search install check skipped (Node not available)"
 fi
