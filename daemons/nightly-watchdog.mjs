@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  assessFreshness, formatFreshness, maskMarkdownFences,
+  assessFreshness, formatFreshness, maskMarkdownFences, nightlyHeaderPattern,
 } from './nightly-freshness.mjs';
 import {
   NIGHTLY_CHECKPOINTS, NIGHTLY_PROTOCOL, NIGHTLY_SKIPPABLE_CHECKPOINTS,
@@ -47,7 +47,7 @@ export function assessNightlyCompletion({
     };
   }
 
-  const pattern = /^##[ \t]+Nightly Pass[ \t]*--[ \t]*(\d{4}-\d{2}-\d{2})\b/gmi;
+  const pattern = nightlyHeaderPattern();
   const headers = [];
   let match;
   const searchable = maskMarkdownFences(text);
@@ -109,6 +109,33 @@ export function assessNightlyCompletion({
   // "11/11 checkpoints" with a FAIL row sitting in it. Count loosely, compare
   // strictly: a row the strict parser cannot read is loud, never invisible.
   const looseRows = [...block.matchAll(/^-[ \t]+[a-z][a-z0-9-]*:[ \t]+status=/gmi)];
+  // A RECOGNISED RUN WHOSE EVIDENCE THIS READER CANNOT READ IS UNVERIFIED (issue
+  // #122): the newest header is for the expected night, so the pass fired, but
+  // the block under it carries no machine-readable evidence at all (a prose
+  // journal entry) or evidence in a format that is not this protocol (a seat's
+  // local protocol name). Neither is PASS: nothing was verified. Neither is a
+  // no-fire: the night was not missed. It is its own verdict and its own alert,
+  // so a reader is told the truth and a genuinely silent night still reads as
+  // NO_FIRE. A block in THIS protocol with broken structure stays `incomplete`
+  // (an abandoned night) and one that reports FAIL stays `failed`.
+  const anyEvidence = protocol !== null || status !== null || looseRows.length > 0;
+  if (!anyEvidence || (protocol !== null && protocol !== NIGHTLY_PROTOCOL)) {
+    const detail = anyEvidence
+      ? `evidence block under ${date} is in protocol ${protocol}, not ${NIGHTLY_PROTOCOL}; the run is recorded but cannot be verified`
+      : `no machine-readable evidence block under ${date}; the run is recorded but cannot be verified`;
+    return {
+      ok: false,
+      code: 'unverified',
+      protocol,
+      status,
+      completedAt,
+      timeZone: recordedZone,
+      cutoffHour: recordedCutoff === null ? null : Number(recordedCutoff),
+      missing: [],
+      failedCheckpoints: [],
+      detail,
+    };
+  }
   const invalid = [];
   if (looseRows.length !== checkpointRows.length) {
     invalid.push(`unparseable_rows=${looseRows.length - checkpointRows.length}`);
@@ -197,10 +224,13 @@ export function assessNightlyCompletion({
 // impossible, and an earlier version of this comment claimed otherwise.
 const ALERT_NO_FIRE = 'NIGHTLY:NO_FIRE';
 const ALERT_PASS_FAILED = 'NIGHTLY:PASS_FAILED';
+// A recognised run with no evidence this reader can verify (issue #122).
+const ALERT_UNVERIFIED = 'NIGHTLY:UNVERIFIED';
 
 export const WATCHDOG_ALERT_CODES = Object.freeze([
   ALERT_NO_FIRE,
   ALERT_PASS_FAILED,
+  ALERT_UNVERIFIED,
 ]);
 
 export async function runNightlyWatchdog({
@@ -270,25 +300,32 @@ export async function runNightlyWatchdog({
   // per-leg alerts already name which checkpoints failed; claiming the pass
   // never completed over a full evidence block is the instrument lying.
   const firedButFailed = freshness.code === 'failed';
+  // Recorded, not verifiable: it fired, so a standing NO_FIRE is cleared like
+  // the failed case, and its own alert names what is missing.
+  const unverified = freshness.code === 'unverified';
   const failedNames = completion?.failedCheckpoints ?? [];
   let alert = null;
   if (persist) {
-    if (firedButFailed) {
+    if (firedButFailed || unverified) {
       // It ran. Clear any prior NO_FIRE so a genuine silent death later is not
       // masked by a stale one, and so the ledger never carries both claims.
       resolveNightlyAlerts({
         root,
         code: ALERT_NO_FIRE,
-        reason: `nightly ${freshness.newest} fired with terminal status=FAIL`,
+        reason: unverified
+          ? `nightly ${freshness.newest} fired; its evidence cannot be verified`
+          : `nightly ${freshness.newest} fired with terminal status=FAIL`,
         now,
       });
     }
     alert = await emitNightlyAlert({
       root,
-      code: firedButFailed ? ALERT_PASS_FAILED : ALERT_NO_FIRE,
+      code: firedButFailed ? ALERT_PASS_FAILED : (unverified ? ALERT_UNVERIFIED : ALERT_NO_FIRE),
       summary: firedButFailed
         ? `nightly pass fired and failed (${failedNames.length} checkpoint${failedNames.length === 1 ? '' : 's'}: ${failedNames.join(', ') || 'unnamed'})`
-        : `nightly pass did not complete (${freshness.code})`,
+        : (unverified
+          ? 'nightly pass recorded without verifiable evidence (unverified: not a pass, not a no-fire)'
+          : `nightly pass did not complete (${freshness.code})`),
       detail: freshness.detail,
       evidence: `memory/runtime/NIGHTLY_LOG.md`
         + ` newest=${freshness.newest ?? 'none'}`
