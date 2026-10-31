@@ -1,10 +1,10 @@
 // Read historical test data, never import or execute the historical tests.
 // This explicit projection preserves their unresolved-id assertions, not rendering.
-import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-export function deriveCorpus(manifest, cwd) {
-  const source = execFileSync('git', ['show', `${manifest.commit}:${manifest.path}`], { cwd, windowsHide: true });
+export function deriveCorpus(manifest) {
+  const source = readFileSync(new URL(manifest.path, import.meta.url));
   const blob = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
   if (blob !== manifest.blob) throw new Error('UNKNOWN/HOLD: historical corpus blob mismatch');
   const text = source.toString('utf8');

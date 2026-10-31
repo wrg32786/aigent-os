@@ -28,7 +28,7 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     }
   }
   const manifest = JSON.parse(readFileSync(path.join(HERE, 'cases.json')));
-  const corpus = deriveCorpus(manifest, process.cwd());
+  const corpus = deriveCorpus(manifest);
   const root = mkdtempSync(path.join(os.tmpdir(), 'procedure-experiment-'));
   const pins = new Map();
   let frozen = false;
@@ -110,18 +110,13 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     if (before.split(selectedStep).length !== 2) throw new Error('ambiguous delta');
     const after = before.replace(selectedStep, () => replacement);
     const identity = sha(json({ base: sha(base), replacement, evidence }));
-    // Reuse the documented proposal object, with exact procedure identity and
-    // delta as additional evidence fields. Dream remains proposed throughout.
+    // Record the tested proposal identity and delta. Dream remains proposed throughout.
     candidate = {
       proposal_id: `ni-20261031-${identity.slice(0, 12)}`, author, status: 'proposed',
       created_from: [`finding:${finding.finding.candidate_id}`, ...finding.finding.source_refs, ...evidence],
-      observation: incident.observation, hypothesis: incident.proposed_explanation,
-      expected_change: replacement, success_predicate: 'origin fixed; held-out and healthy all pass; within budgets',
-      falsifying_result: 'any candidate failure, regression, unknown, or budget overrun',
-      evaluation: null, result: null, promoted_to: null, rejected_reason: null,
-      procedure: { path: 'procedure.md', sha256: sha(base) },
+      procedure: { sha256: sha(base) },
       candidate_sha256: sha(after), delta: { before: selectedStep, after: replacement },
-      lineage: { parent_sha256: sha(base), supersedes: null, finding_id: finding.finding.candidate_id },
+      lineage: { parent_sha256: sha(base) },
     };
     record('candidate.json', candidate);
     write('candidate.md', after);
@@ -136,24 +131,15 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     intact();
     if (frozen) throw new Error('freeze already recorded');
     plan = {
-      hypothesis: candidate.hypothesis,
-      population: cases.map((c) => ({ id: c.id, class: c.class })),
       provenance: corpus.provenance,
-      held_out: cases.filter((c) => c.class === 'held-out').map((c) => c.id),
-      metric: 'exact sorted unresolved operation ids; zero candidate errors and regressions',
       budgets: { ...ceilings, ...budgets },
-      stopping_rule: 'one sequential pass of both versions over every case; no retries or tuning',
-      baseline_sha256: sha(base), candidate_sha256: candidate.candidate_sha256,
-      candidate_record_sha256: pins.get('candidate.json'), corpus_sha256: pins.get('cases.json'),
+      candidate_sha256: candidate.candidate_sha256,
       instrument_sha256: sha(readFileSync(path.join(HERE, 'evaluate.mjs'))),
-      corpus_reader_sha256: sha(readFileSync(path.join(HERE, 'corpus.mjs'))),
       adapter_sha256: sha(readFileSync(fileURLToPath(import.meta.url))),
-      frozen_at: stamp(),
     };
     record('preregistration.json', plan);
     // Rollback exists before any verdict or adoption, with exact original bytes.
-    record('rollback.json', { target: 'procedure.md', prior_sha256: sha(base), artifact: 'baseline.md',
-      reason: 'bounded fixture experiment; restore after application proof', recorded_at: stamp() });
+    record('rollback.json', { recorded_at: stamp() });
     frozen = true;
     return copy(plan);
   }
@@ -170,10 +156,10 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
       for (const c of cases) {
         try {
           const actual = executeProcedure(procedure, c, base.toString('utf8'));
-          results.push({ scenario, id: c.id, class: c.class, status: same(actual, c.expected) ? 'pass' : 'fail',
-            detail: same(actual, c.expected) ? 'exact match' : 'unresolved-state mismatch', actual, expected: c.expected });
-        } catch (error) {
-          results.push({ scenario, id: c.id, class: c.class, status: 'unknown', detail: error.message });
+          results.push({ scenario, id: c.id, status: same(actual, c.expected) ? 'pass' : 'fail',
+            actual, expected: c.expected });
+        } catch {
+          results.push({ scenario, id: c.id, status: 'unknown' });
         }
       }
     }
@@ -184,11 +170,8 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     for (const key of Object.keys(costs)) if (costs[key] > plan.budgets[key]) failures.push(`budget:${key}`);
     const originRed = results.some((r) => r.scenario === 'BASELINE' && r.id === 'origin' && r.status === 'fail');
     measurement = {
-      preregistration: 'preregistration.json', packet_sha256: pins.get('preregistration.json'),
-      scenario: 'BASELINE/CANDIDATE', instrument_sha256: plan.instrument_sha256,
       terminal: results.some((r) => r.scenario === 'CANDIDATE' && r.status === 'unknown')
         ? 'UNKNOWN' : failures.length ? 'REJECT' : originRed ? 'PASS' : 'NO_IMPROVEMENT',
-      ran_at: stamp(), hashes: { baseline: plan.baseline_sha256, candidate: plan.candidate_sha256 },
       costs, failures, results,
     };
     return record('evaluation.json', measurement);
@@ -200,10 +183,9 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     if (evaluator === author) throw new Error('author-equals-evaluator refuses');
     if (evaluator !== `deterministic:${plan.instrument_sha256}`) throw new Error('unrecognized evaluator');
     if (note !== undefined || votes !== undefined) throw new Error('model notes and votes cannot produce a verdict');
-    verdict = { evaluator, author, candidate_sha256: candidate.candidate_sha256,
+    verdict = { evaluator,
       measurement_sha256: pins.get('evaluation.json'), verdict: measurement.terminal === 'PASS' ? 'ADOPT' : measurement.terminal,
-      reason: measurement.failures.length ? measurement.failures.join(', ') : measurement.terminal,
-      rollback: 'rollback.json', evaluated_at: stamp(), scope: 'fixture only; no independent human review claimed' };
+      evaluated_at: stamp() };
     return record('VERDICT.json', verdict);
   }
 
@@ -226,14 +208,14 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     if (priorRegions.length !== 2) throw new Error('ambiguous delta');
     const updated = current.replace(candidate.delta.before, () => candidate.delta.after);
     if (sha(updated) !== plan.candidate_sha256) throw new Error('wrong tested candidate refuses');
-    record('approval.json', { ...approval, approved_at: stamp() });
+    record('approval.json', approval);
     write('procedure.md', updated, false);
     adopted = true;
     const persisted = read('procedure.md').toString('utf8');
     const afterRegions = persisted.split(candidate.delta.after);
     if (sha(persisted) !== plan.candidate_sha256 || afterRegions.length !== 2) throw new Error('application verification failed');
-    record('application.json', { before: sha(current), after: sha(persisted),
-      unrelated_before: priorRegions.map(sha), unrelated_after: afterRegions.map(sha), applied_at: stamp() });
+    record('application.json', { after: sha(persisted),
+      unrelated_before: priorRegions.map(sha), unrelated_after: afterRegions.map(sha) });
     return JSON.parse(read('application.json'));
   }
 
@@ -244,7 +226,7 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     if (sha(prior) !== candidate.procedure.sha256) throw new Error('rollback prior hash refuses');
     write('procedure.md', prior, false);
     adopted = false;
-    return record('rollback-result.json', { restored_sha256: sha(read('procedure.md')), reason: 'fixture completed', rolled_back_at: stamp() });
+    return record('rollback-result.json', { restored_sha256: sha(read('procedure.md')) });
   }
 
   return { root, propose, freeze, evaluate, judge, promote, rollback, observe,

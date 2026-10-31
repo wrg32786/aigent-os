@@ -1,7 +1,5 @@
 {
-  "commit": "3ecc1c3d176029e1cdafb2c2a89d9fa449e4ef43",
-  "path": "daemons/tests/side-effects-across-capsules.test.mjs",
+  "path": "decision-table-source.txt",
   "blob": "d5c1e98e609ad712d13ef6768581f148df6b3bc0",
-  "rows": [1, 2, 3, 4, 5, 6, 8, 10],
-  "projection": "Unresolved operation ids only. Historical rendering, malformed-input diagnostics and truncation (rows 7, 9, 11) are outside this fixture. Origin is training evidence, never held-out."
+  "rows": [1, 2, 3, 4, 5, 6, 8, 10]
 }

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,7 +12,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DIR = path.join(ROOT, 'evals/procedure-experiment');
 const ledger = 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl';
 const parse = (f, name) => JSON.parse(f.read(name));
-const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', windowsHide: true });
 function fixture(t, options, factory = createExperiment) {
   const f = factory(options);
   t.after(() => f.cleanup());
@@ -74,14 +72,13 @@ test('row 1: fixture mechanics parse composable grammar and score results, not c
   console.log(`GRAMMAR parsed=${parsed} combinations over ${cases.length} fixture cases`);
 });
 
-test('row 2: fixture mechanics derive held-out assertions from the pre-candidate git blob', (t) => {
+test('row 2: fixture mechanics verify the vendored blob and hand-projected held-out assertions', (t) => {
   const manifest = JSON.parse(readFileSync(path.join(DIR, 'cases.json')));
-  assert.equal(manifest.commit, '3ecc1c3d176029e1cdafb2c2a89d9fa449e4ef43');
+  assert.equal(manifest.path, 'decision-table-source.txt');
   assert.equal(manifest.blob, 'd5c1e98e609ad712d13ef6768581f148df6b3bc0');
-  const source = git('show', `${manifest.commit}:${manifest.path}`);
-  assert.equal(git('rev-parse', `${manifest.commit}:${manifest.path}`).trim(), manifest.blob);
-  assert.ok(Number(git('show', '-s', '--format=%ct', manifest.commit)) < Number(git('show', '-s', '--format=%ct', 'da93aa6f')));
-  const corpus = deriveCorpus(manifest, ROOT);
+  const source = readFileSync(path.join(DIR, manifest.path), 'utf8');
+  const corpus = deriveCorpus(manifest);
+  assert.throws(() => deriveCorpus({ ...manifest, blob: '0'.repeat(40) }), /corpus blob mismatch/);
   assert.equal(corpus.source.toString(), source);
   const f = fixture(t);
   const c = f.propose();
@@ -241,7 +238,7 @@ test('row 8: fixture mechanics refuse instrument and adapter mutations in tempor
     assert.ok(path.basename(root).startsWith('procedure-experiment-module-'));
     rmSync(root, { recursive: true, force: true });
   });
-  for (const name of ['experiment.mjs', 'evaluate.mjs', 'corpus.mjs', 'procedure.md', 'incident.json', 'cases.json']) {
+  for (const name of ['experiment.mjs', 'evaluate.mjs', 'corpus.mjs', 'procedure.md', 'incident.json', 'cases.json', 'decision-table-source.txt']) {
     let bytes = readFileSync(path.join(DIR, name));
     if (name === 'experiment.mjs') {
       bytes = Buffer.from(bytes.toString().replace(/'\.\.\/\.\.\/daemons\/([^']+)'/g,
@@ -250,6 +247,12 @@ test('row 8: fixture mechanics refuse instrument and adapter mutations in tempor
     writeFileSync(path.join(root, name), bytes);
   }
   const { createExperiment: copiedFactory } = await import(pathToFileURL(path.join(root, 'experiment.mjs')).href);
+  const sourcePath = path.join(root, 'decision-table-source.txt');
+  const source = readFileSync(sourcePath);
+  try {
+    writeFileSync(sourcePath, Buffer.concat([source, Buffer.from('\n// changed source\n')]));
+    assert.throws(() => copiedFactory(), /corpus blob mismatch/);
+  } finally { writeFileSync(sourcePath, source); }
   for (const name of ['evaluate.mjs', 'experiment.mjs']) {
     const f = fixture(t, undefined, copiedFactory); f.propose(); f.freeze();
     const target = path.join(root, name); const prior = readFileSync(target);
