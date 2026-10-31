@@ -811,7 +811,8 @@ function vouchesForNoIntent(record) {
     && record.clear_intent === null
     && record.state !== 'clear-submitted'
     && record.state !== 'HOLD:clear-ambiguous'
-    && record.hold?.detail?.intent_known !== false;
+    && (!String(record.state).startsWith('HOLD:cycle-state-')
+      || record.hold?.detail?.intent_known === true);
 }
 
 function invalidStateReason(value) {
@@ -1545,8 +1546,9 @@ export class AutoClearTransport {
   //                                nothing was in flight at load   is known, else ambiguity
   //   hold with no marker, same    the lock                        ambiguity
   //   session
-  //   any null-intent hold from    the live session at a newer     idle (superseded)
-  //   another session              boot
+  //   null intent from another     the live session at a newer     idle (superseded)
+  //   session, unless ambiguity    boot
+  //   this code did not recover
   //   clear-ambiguous, no baseline a receipt is readable           stamped, row below
   //   clear-ambiguous              same session, boot later than   idle
   //                                its baseline

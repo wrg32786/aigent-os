@@ -661,6 +661,24 @@ test('row: bad content over an unknown intent during a tick does not launder it 
   assert.equal(nextProcess(fixture, { processInstance: 'third' }).tick().state.state, 'HOLD:clear-ambiguous');
 }));
 
+test('row: a hold from an older build has no marker, so damage to its record cannot promote it to a known intent', () => withFixture('r9', (fixture) => {
+  const legacy = {
+    state: 'HOLD:cycle-state-field-missing',
+    cycle_id: 'cycle-old',
+    session_id: SESSION_ID,
+    boot_sequence_at_start: 10,
+    clear_intent: null,
+    hold: { code: 'cycle-state-field-missing', detail: { fields: ['x'], resume_state: 'idle' } },
+    ack_boundary: null,
+    ack_classification: null,
+  };
+  writeJson(cyclePath(fixture), legacy);
+  fixture.pressure.pct = 10;
+  const next = nextProcess(fixture);
+  assert.equal(next.state.hold.detail.intent_known, false);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+}));
+
 test('ccr-14. a recovered hold under the kill switch starts nothing', () => withFixture('c14', (fixture) => {
   legacyHold(fixture);
   writeText(path.join(fixture.memRoot, 'runtime', 'auto-clear-off'), 'off\n');
