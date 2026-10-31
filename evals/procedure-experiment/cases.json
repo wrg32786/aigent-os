@@ -1,8 +1,7 @@
-[
-  {"id":"renamed","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"archive","scope":"local","writer":true,"rows":[{"op":"other","outcome":"requested"}]},{"id":"new","scope":"local","writer":false,"rows":[]}],"expected":["other"]},
-  {"id":"curated-claim","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"pending","outcome":"unknown"}]},{"id":"new","scope":"local","writer":false,"rows":[{"op":"pending","outcome":"confirmed"}]}],"expected":["pending"]},
-  {"id":"multiple","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"a","outcome":"requested"},{"op":"b","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"c","outcome":"unknown"}]}],"expected":["a","b","c"]},
-  {"id":"empty","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"new","scope":"local","writer":true,"rows":[]}],"expected":[]},
-  {"id":"resolved","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"done","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"done","outcome":"confirmed"}]}],"expected":[]},
-  {"id":"foreign","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"foreign","scope":"elsewhere","writer":true,"rows":[{"op":"foreign","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"local","outcome":"requested"}]}],"expected":["local"]}
-]
+{
+  "commit": "3ecc1c3d176029e1cdafb2c2a89d9fa449e4ef43",
+  "path": "daemons/tests/side-effects-across-capsules.test.mjs",
+  "blob": "d5c1e98e609ad712d13ef6768581f148df6b3bc0",
+  "rows": [1, 2, 3, 4, 5, 6, 8, 10],
+  "projection": "Unresolved operation ids only. Historical rendering, malformed-input diagnostics and truncation (rows 7, 9, 11) are outside this fixture. Origin is training evidence, never held-out."
+}

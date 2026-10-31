@@ -6,7 +6,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { performance } from 'node:perf_hooks';
+import { deriveCorpus } from './corpus.mjs';
 import { observeLedgerFinding } from '../../daemons/nightly-ledger-stage.mjs';
 import { validateMetaGate } from '../../daemons/nightly-contracts.mjs';
 import { executeProcedure, selectedStep, allStep } from './evaluate.mjs';
@@ -19,14 +19,16 @@ const copy = (value) => JSON.parse(JSON.stringify(value));
 const ledger = 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl';
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-export function createExperiment({ replacement = allStep, author = 'procedure-author', budgets = {} } = {}) {
+export function createExperiment({ replacement = allStep, author = 'procedure-author', budgets = {}, sourceRefs } = {}) {
   if (typeof author !== 'string' || !/^[a-zA-Z0-9:._-]+$/.test(author)) throw new Error('author identity required');
-  const ceilings = { tokens: 0, latency_ms: 1000, growth_bytes: 128, max_cases: 7 };
+  const ceilings = { growth_bytes: 128, max_cases: 32, procedure_bytes: 2048, corpus_bytes: 65536 };
   for (const [key, value] of Object.entries(budgets)) {
     if (!Object.hasOwn(ceilings, key) || !Number.isFinite(value) || value < 0 || value > ceilings[key]) {
       throw new Error('invalid fixture budget');
     }
   }
+  const manifest = JSON.parse(readFileSync(path.join(HERE, 'cases.json')));
+  const corpus = deriveCorpus(manifest, process.cwd());
   const root = mkdtempSync(path.join(os.tmpdir(), 'procedure-experiment-'));
   const pins = new Map();
   let frozen = false;
@@ -61,11 +63,15 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
   };
   const base = readFileSync(path.join(HERE, 'procedure.md'));
   const incident = JSON.parse(readFileSync(path.join(HERE, 'incident.json')));
-  const cases = [incident.origin, ...JSON.parse(readFileSync(path.join(HERE, 'cases.json')))];
+  const cases = [incident.origin, ...corpus.cases];
+  const evidence = sourceRefs === undefined ? incident.source_refs : copy(sourceRefs);
+  const evidenceValid = same(evidence, incident.source_refs);
   write('procedure.md', base);
   write('baseline.md', base);
   write('incident.json', json(incident));
   write('cases.json', json(cases));
+  write('corpus-source.mjs', corpus.source);
+  write('corpus-provenance.json', json(corpus.provenance));
   write('observed.json', json(incident.observed));
   mkdirSync(file('vault/memory/runtime'), { recursive: true });
 
@@ -102,13 +108,13 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     }
     const before = base.toString('utf8');
     if (before.split(selectedStep).length !== 2) throw new Error('ambiguous delta');
-    const after = before.replace(selectedStep, replacement);
-    const identity = sha(json({ base: sha(base), replacement, evidence: incident.source_refs }));
+    const after = before.replace(selectedStep, () => replacement);
+    const identity = sha(json({ base: sha(base), replacement, evidence }));
     // Reuse the documented proposal object, with exact procedure identity and
     // delta as additional evidence fields. Dream remains proposed throughout.
     candidate = {
       proposal_id: `ni-20261031-${identity.slice(0, 12)}`, author, status: 'proposed',
-      created_from: [`finding:${finding.finding.candidate_id}`, ...finding.finding.source_refs, ...incident.source_refs],
+      created_from: [`finding:${finding.finding.candidate_id}`, ...finding.finding.source_refs, ...evidence],
       observation: incident.observation, hypothesis: incident.proposed_explanation,
       expected_change: replacement, success_predicate: 'origin fixed; held-out and healthy all pass; within budgets',
       falsifying_result: 'any candidate failure, regression, unknown, or budget overrun',
@@ -121,7 +127,7 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     write('candidate.md', after);
     write('vault/memory/DREAM_LOG.md', dreamBlock('proposed', 'pending'));
     for (const name of ['baseline.md', 'candidate.md', 'incident.json', 'cases.json', 'observed.json', ledger,
-      'vault/memory/DREAM_LOG.md']) pins.set(name, sha(read(name)));
+      'vault/memory/DREAM_LOG.md', 'corpus-source.mjs', 'corpus-provenance.json']) pins.set(name, sha(read(name)));
     return copy(candidate);
   }
 
@@ -132,6 +138,7 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     plan = {
       hypothesis: candidate.hypothesis,
       population: cases.map((c) => ({ id: c.id, class: c.class })),
+      provenance: corpus.provenance,
       held_out: cases.filter((c) => c.class === 'held-out').map((c) => c.id),
       metric: 'exact sorted unresolved operation ids; zero candidate errors and regressions',
       budgets: { ...ceilings, ...budgets },
@@ -139,6 +146,7 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
       baseline_sha256: sha(base), candidate_sha256: candidate.candidate_sha256,
       candidate_record_sha256: pins.get('candidate.json'), corpus_sha256: pins.get('cases.json'),
       instrument_sha256: sha(readFileSync(path.join(HERE, 'evaluate.mjs'))),
+      corpus_reader_sha256: sha(readFileSync(path.join(HERE, 'corpus.mjs'))),
       adapter_sha256: sha(readFileSync(fileURLToPath(import.meta.url))),
       frozen_at: stamp(),
     };
@@ -156,7 +164,6 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     if (measurement) throw new Error('stopping rule: already evaluated');
     if (sha(readFileSync(path.join(HERE, 'evaluate.mjs'))) !== plan.instrument_sha256
         || sha(readFileSync(fileURLToPath(import.meta.url))) !== plan.adapter_sha256) throw new Error('HOLD: instrument changed');
-    const start = performance.now();
     const results = [];
     for (const scenario of ['BASELINE', 'CANDIDATE']) {
       const procedure = read(scenario === 'BASELINE' ? 'baseline.md' : 'candidate.md').toString('utf8');
@@ -165,21 +172,23 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
           const actual = executeProcedure(procedure, c, base.toString('utf8'));
           results.push({ scenario, id: c.id, class: c.class, status: same(actual, c.expected) ? 'pass' : 'fail',
             detail: same(actual, c.expected) ? 'exact match' : 'unresolved-state mismatch', actual, expected: c.expected });
-        } catch {
-          results.push({ scenario, id: c.id, class: c.class, status: 'unrunnable', detail: 'UNKNOWN: unsupported procedure or evidence' });
+        } catch (error) {
+          results.push({ scenario, id: c.id, class: c.class, status: 'unknown', detail: error.message });
         }
       }
     }
-    const costs = { tokens: 0, latency_ms: performance.now() - start,
-      growth_bytes: read('candidate.md').length - base.length, max_cases: cases.length };
+    const costs = { growth_bytes: Math.max(0, read('candidate.md').length - base.length),
+      max_cases: cases.length, procedure_bytes: read('candidate.md').length, corpus_bytes: read('cases.json').length };
     const failures = results.filter((r) => r.scenario === 'CANDIDATE' && r.status !== 'pass').map((r) => r.id);
+    if (!evidenceValid) failures.push('evidence:untrusted-source-refs');
     for (const key of Object.keys(costs)) if (costs[key] > plan.budgets[key]) failures.push(`budget:${key}`);
     const originRed = results.some((r) => r.scenario === 'BASELINE' && r.id === 'origin' && r.status === 'fail');
     measurement = {
       preregistration: 'preregistration.json', packet_sha256: pins.get('preregistration.json'),
       scenario: 'BASELINE/CANDIDATE', instrument_sha256: plan.instrument_sha256,
-      terminal: failures.length ? 'REJECT' : originRed ? 'PASS' : 'NO_IMPROVEMENT',
-      ran_at: stamp(), wall_ms: costs.latency_ms, hashes: { baseline: plan.baseline_sha256, candidate: plan.candidate_sha256 },
+      terminal: results.some((r) => r.scenario === 'CANDIDATE' && r.status === 'unknown')
+        ? 'UNKNOWN' : failures.length ? 'REJECT' : originRed ? 'PASS' : 'NO_IMPROVEMENT',
+      ran_at: stamp(), hashes: { baseline: plan.baseline_sha256, candidate: plan.candidate_sha256 },
       costs, failures, results,
     };
     return record('evaluation.json', measurement);
@@ -202,22 +211,29 @@ export function createExperiment({ replacement = allStep, author = 'procedure-au
     intact();
     if (!verdict || verdict.verdict !== 'ADOPT') throw new Error('passing independent verdict required');
     if (sha(read('procedure.md')) !== candidate.procedure.sha256) throw new Error('stale base refuses');
-    if (!approval || approval.decision !== 'approve-fixture' || approval.actor !== 'fixture-operator'
+    if (approval?.actor === author) throw new Error('author-equals-approver refuses');
+    if (!approval || approval.decision !== 'approve-fixture'
+        || typeof approval.actor !== 'string' || !/^[a-zA-Z0-9:._-]+$/.test(approval.actor)
         || approval.candidate_sha256 !== candidate.candidate_sha256 || approval.candidate_id !== candidate.proposal_id
-        || approval.base_sha256 !== candidate.procedure.sha256 || approval.evidence !== 'human:test-fixture-explicit-approval') {
+        || approval.base_sha256 !== candidate.procedure.sha256
+        || typeof approval.evidence !== 'string' || /[\r\n]/.test(approval.evidence)) {
       throw new Error('absent approval or wrong candidate/base/evidence refuses');
     }
     const gate = validateMetaGate({ dreamText: dreamBlock('approved', approval.evidence), candidateId: candidate.proposal_id });
     if (!gate.ok) throw new Error(gate.output);
     const current = read('procedure.md').toString('utf8');
-    const [prefix, suffix] = current.split(candidate.delta.before);
-    const updated = prefix + candidate.delta.after + suffix;
+    const priorRegions = current.split(candidate.delta.before);
+    if (priorRegions.length !== 2) throw new Error('ambiguous delta');
+    const updated = current.replace(candidate.delta.before, () => candidate.delta.after);
     if (sha(updated) !== plan.candidate_sha256) throw new Error('wrong tested candidate refuses');
     record('approval.json', { ...approval, approved_at: stamp() });
-    record('application.json', { before: sha(current), after: sha(updated),
-      unrelated_before: [sha(prefix), sha(suffix)], unrelated_after: [sha(prefix), sha(suffix)], applied_at: stamp() });
     write('procedure.md', updated, false);
     adopted = true;
+    const persisted = read('procedure.md').toString('utf8');
+    const afterRegions = persisted.split(candidate.delta.after);
+    if (sha(persisted) !== plan.candidate_sha256 || afterRegions.length !== 2) throw new Error('application verification failed');
+    record('application.json', { before: sha(current), after: sha(persisted),
+      unrelated_before: priorRegions.map(sha), unrelated_after: afterRegions.map(sha), applied_at: stamp() });
     return JSON.parse(read('application.json'));
   }
 
