@@ -1826,6 +1826,45 @@ test('#136 the host empties $.state while a submit is out (a /clear): the answer
   expect(w.lastStatus()).not.toContain('unresolved')
 })
 
+test('#136 a reload after the wipe is a real successor: the old module records nothing', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => { enter = done })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/a.json`]: ENVELOPE }, queue: [late] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  w.wipe()
+  w.reload()
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(statuses(w.ledger().filter(entry => entry.id === 'room:alpha:a.json'))).toEqual(['submitting'])
+})
+
+test('#136 wipe, then a timed-out submit, then the late answer: recorded submitted', { options: { ...CONFIGURED.options, submitTimeoutMinutes: 1 } }, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => { enter = done })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/a.json`]: ENVELOPE }, queue: [late] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  w.wipe()
+  await w.clock.advance(60_001)
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitting:unresolved')
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitted')
+})
+
+test('a failed tick is logged, not swallowed', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, submit: new Promise<PromptSubmitResult>(() => {}) })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  // The unresolved line is the next log write, and nothing catches it but the tick.
+  w.failNext(1)
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  expect(w.log.filter(entry => entry.startsWith('log fleet-delivery: tick failed:'))).toHaveLength(1)
+})
+
 test('a long-held submitting claim past the submit timeout, pid alive, nothing in flight here, becomes unresolved', CONFIGURED, async ($, on) => {
   const w = world(on, $, { files: { ...READY, [`${INBOX}/b.json`]: ENVELOPE, [LOG]: `${SEED}${claimLine(PRIOR, { pid: '777' })}` }, alive: ['777'] })
   await w.turn()

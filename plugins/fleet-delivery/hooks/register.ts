@@ -164,7 +164,7 @@ let jobScript: 'unchecked' | 'present' | 'absent' = 'unchecked'
 let timer: Timer | undefined
 let lastTickAt = 0
 let isTicking = false
-// A tick failure is logged once, not every 30 s.
+// A repeating tick failure is logged once, and again after a good tick.
 let lastTickError: string | undefined
 let hasWarnedBareOwner = false
 // Serializes this module's log appends.
@@ -445,7 +445,9 @@ async function claimGeneration($: $, reclaim = false): Promise<void> {
   if (generation !== undefined && (!reclaim || (await $.state.get(GENERATION)).value === generation)) return
   for (let i = 0; i < CAS_TRIES; i++) {
     const held = await $.state.get(GENERATION)
-    const next = (held.value ?? 0) + 1
+    // Empty state (#136): this module keeps its number; a new one takes the
+    // clock, so a reload after a wipe never shares the number it replaces.
+    const next = held.value !== undefined ? held.value + 1 : generation ?? (await $.clock.now())
     if ((await $.state.set(GENERATION, next, { ifVersion: held.version })).isSet) {
       generation = next
       return
@@ -1202,6 +1204,7 @@ async function resolve($: $): Promise<{ w: Where } | { off: true; release?: Wher
 async function tick($: $): Promise<void> {
   if (isTicking || !config.installRoot) return
   isTicking = true
+  let failed: string | undefined
   try {
     await begin($)
     const where = await resolve($)
@@ -1591,10 +1594,12 @@ async function tick($: $): Promise<void> {
     }
   } catch (error) {
     // A failed tick leaves the ledger as it stood; the next one retries.
-    const why = clean((error as Error)?.message, 160)
-    if (why !== lastTickError) $.ui.log(`fleet-delivery: tick failed: ${why}`)
-    lastTickError = why
+    if (!(error instanceof Superseded)) {
+      failed = clean((error as Error)?.message, 160)
+      if (failed !== lastTickError) try { $.ui.log(`fleet-delivery: tick failed: ${failed}`) } catch {}
+    }
   } finally {
+    lastTickError = failed
     isTicking = false
   }
 }
