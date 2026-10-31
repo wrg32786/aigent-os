@@ -229,7 +229,7 @@ test('dr-9. the Metis shape: right versions, unloadable tree, and an update that
   const npm = fakeNpm(installs('2.0.0', { throws: true }));
   const result = updateDependencyRoot({ root, npm });
   assert.equal(npm.calls.length, 1, 'an unloadable tree is not unchanged');
-  assert.equal(result.outcome, 'kept-previous');
+  assert.equal(result.outcome, 'kept-unusable', 'kept is not the same as working');
   assert.equal(result.usable, false);
 }));
 
@@ -255,6 +255,43 @@ test('dr-11. a run killed between the two renames is repaired by the next run', 
   assert.equal(updateDependencyRoot({ root, npm }).outcome, 'unchanged');
   assert.equal(npm.calls.length, 0);
   assert.equal(installedVersion(root), '1.0.0');
+}));
+
+test('dr-11b. a run killed between the swap and the final probe: the good previous tree is restored, never deleted', () => withRoot('1.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  fs.renameSync(path.join(root, 'node_modules'), path.join(root, 'node_modules.prev'));
+  writeTree(root, '1.0.0', { throws: true });
+
+  const npm = fakeNpm(fails('must not be called'));
+  assert.equal(updateDependencyRoot({ root, npm }).outcome, 'unchanged');
+  assert.equal(npm.calls.length, 0);
+  assert.equal(probeImports(root), null, 'the good tree came back');
+  assert.deepEqual(listing(root).filter((name) => name.startsWith('node_modules')), ['node_modules']);
+}));
+
+test('dr-11c. the same crash when neither tree loads leaves the newer one and a truthful outcome', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0', { throws: true });
+  fs.renameSync(path.join(root, 'node_modules'), path.join(root, 'node_modules.prev'));
+  writeTree(root, '2.0.0', { throws: true });
+
+  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')) });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.equal(installedVersion(root), '2.0.0');
+}));
+
+test('dr-11d. a stage that cannot be prepared keeps the tree and states the reason', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  const fsImpl = {
+    ...fs,
+    copyFileSync() {
+      throw Object.assign(new Error('ENOSPC: no space left on device, copyfile'), { code: 'ENOSPC' });
+    },
+  };
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), fsImpl });
+  assert.equal(result.outcome, 'kept-previous');
+  assert.match(result.reason, /ENOSPC/);
+  assert.equal(installedVersion(root), '1.0.0');
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
 
 test('dr-12. a native rebuild runs in the stage, never in the live root, and ignore-scripts stays on', () => withRoot('2.0.0', ({ root }) => {

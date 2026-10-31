@@ -17,9 +17,10 @@
 //
 //   node scripts/dependency-root.mjs <root> [package-to-rebuild]
 //
-// Prints `<outcome>|<reason>`. Exit 0: a tree is in place, usable or reported
-// as not. Exit 1: nothing was installed. Exit 2: rollback failed; the old tree
-// is preserved at the path in the reason.
+// Prints `<outcome>|<reason>`. Exit 0: a tree is in place, and `kept-unusable`
+// or `installed-unverified` say it does not load. Exit 1: nothing was
+// installed. Exit 2: rollback failed; the old tree is preserved at the path in
+// the reason.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -116,6 +117,27 @@ function removeTree(target, fsImpl) {
   } catch { /* a leftover is cleaned by the next run; the tree in place is what matters */ }
 }
 
+function restorePrevious({
+  live, previous, failed, root, probe, fsImpl, moveOptions,
+}) {
+  const stuck = (error) => ({ outcome: 'rollback-failed', preserved: previous, reason: error.message });
+  if (!fsImpl.existsSync(live)) {
+    const error = moveTree(previous, live, moveOptions);
+    return error ? stuck(error) : null;
+  }
+  if (probe(root) === null) return null;
+  removeTree(failed, fsImpl);
+  const aside = moveTree(live, failed, moveOptions);
+  if (aside) return stuck(aside);
+  const back = moveTree(previous, live, moveOptions);
+  if (back) return stuck(back);
+  if (probe(root) === null) return null;
+  // Neither loads, and a partly deleted previous tree can look like this. Put
+  // the newer one back; the ordinary path below decides what happens next.
+  const moved = moveTree(live, previous, moveOptions) ?? moveTree(failed, live, moveOptions);
+  return moved ? stuck(moved) : null;
+}
+
 export function updateDependencyRoot({
   root,
   rebuild = '',
@@ -133,9 +155,13 @@ export function updateDependencyRoot({
   const stageTree = path.join(stage, 'node_modules');
   const moveOptions = { fsImpl, retryDelayMs };
 
-  if (!fsImpl.existsSync(live) && fsImpl.existsSync(previous)) {
-    const error = moveTree(previous, live, moveOptions);
-    if (error) return { outcome: 'rollback-failed', preserved: previous, reason: error.message };
+  // A leftover previous tree is deleted only once the live one is proven: a run
+  // killed between the swap and the final probe leaves the only good tree here.
+  if (fsImpl.existsSync(previous)) {
+    const restored = restorePrevious({
+      live, previous, failed, root, probe, fsImpl, moveOptions,
+    });
+    if (restored) return restored;
   }
   removeTree(stage, fsImpl);
   removeTree(previous, fsImpl);
@@ -149,14 +175,18 @@ export function updateDependencyRoot({
   const abandon = (reason) => {
     removeTree(stage, fsImpl);
     return hadTree
-      ? { outcome: 'kept-previous', usable: previousUsable, reason }
+      ? { outcome: previousUsable ? 'kept-previous' : 'kept-unusable', usable: previousUsable, reason }
       : { outcome: 'failed', reason };
   };
 
-  fsImpl.mkdirSync(stage, { recursive: true });
   const hasLock = fsImpl.existsSync(path.join(root, 'package-lock.json'));
-  for (const name of hasLock ? ['package.json', 'package-lock.json'] : ['package.json']) {
-    fsImpl.copyFileSync(path.join(root, name), path.join(stage, name));
+  try {
+    fsImpl.mkdirSync(stage, { recursive: true });
+    for (const name of hasLock ? ['package.json', 'package-lock.json'] : ['package.json']) {
+      fsImpl.copyFileSync(path.join(root, name), path.join(stage, name));
+    }
+  } catch (error) {
+    return abandon(`the stage could not be prepared: ${error.message}`);
   }
   const install = npm([hasLock ? 'ci' : 'install', '--silent', '--ignore-scripts'], stage);
   if (!install.ok) return abandon(install.reason);
@@ -166,9 +196,7 @@ export function updateDependencyRoot({
   }
   if (!fsImpl.existsSync(stageTree)) {
     removeTree(stage, fsImpl);
-    return hadTree
-      ? { outcome: 'kept-previous', usable: previousUsable, reason: 'npm produced no tree' }
-      : { outcome: 'installed-unverified', reason: 'npm produced no tree' };
+    return hadTree ? abandon('npm produced no tree') : { outcome: 'installed-unverified', reason: 'npm produced no tree' };
   }
 
   const stageProblem = probe(stage);
@@ -199,7 +227,11 @@ export function updateDependencyRoot({
     const restore = aside ?? moveTree(previous, live, moveOptions);
     if (restore) return { outcome: 'rollback-failed', preserved: previous, reason: restore.message };
     removeTree(failed, fsImpl);
-    return { outcome: 'kept-previous', usable: previousUsable, reason: `rolled back: ${finalProblem}` };
+    return {
+      outcome: previousUsable ? 'kept-previous' : 'kept-unusable',
+      usable: previousUsable,
+      reason: `rolled back: ${finalProblem}`,
+    };
   }
   removeTree(previous, fsImpl);
   return fsImpl.existsSync(previous)

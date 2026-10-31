@@ -1555,6 +1555,11 @@ else
     case "${DEP_OUT%%|*}" in
       unchanged) printf '  [ok] %s dependencies match the lockfile and load; npm not run\n' "$DEP_DIR" ;;
       kept-previous) printf '  [warn] %s dependencies not updated (%s); the existing tree was kept\n' "$DEP_DIR" "$DEP_WHY" ;;
+      kept-unusable)
+        [[ "$DEP_DIR" != "transport-deps" ]] \
+          || fail "node-pty failed to build ($DEP_WHY). Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
+        printf '  [warn] %s dependencies could not be repaired (%s); the existing tree does not load\n' "$DEP_DIR" "$DEP_WHY"
+        ;;
       updated) [ -z "$DEP_WHY" ] || printf '  [warn] %s dependencies updated; %s\n' "$DEP_DIR" "$DEP_WHY" ;;
     esac
     if [[ "$DEP_DIR" == "semantic-search" ]]; then
