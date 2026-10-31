@@ -33,8 +33,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  capsuleRowKey, doneRowGroup, DONE_LIMITS, DONE_TAG, HEADING_SCAN, capsuleValue, storedData, inert, logErr, markCapsuleConsumed, memRoot, describeMemoryRoot, MemoryRootError, rejectionSummary, scalar,
+  capsuleRowKey, doneRowGroup, DONE_LIMITS, DONE_TAG, capsuleValue, storedData, inert, logErr, markCapsuleConsumed, memRoot, describeMemoryRoot, MemoryRootError, rejectionSummary, scalar,
   selectCapsule, unsafeRawCapsuleDocument, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, orderSideEffectRows,
+  capsuleBulletRows as doneBulletRows, collectCapsuleSideEffects,
 } from './lifecycle-common.mjs';
 import { FRAMING_LINES } from './memory-hygiene/resume-framing.mjs';
 import { loadLifecycleExtension, resolveLifecycleAck, foldDeclaredLine } from './lifecycle-extension.mjs';
@@ -100,24 +101,6 @@ function liveBootSession(projectRoot, hookSessionId) {
   return null;
 }
 
-// Only adjacent indented continuations belong to a bullet.
-function doneBulletRows(section) {
-  const rows = [];
-  let current = -1;
-  for (const line of section.split(/\r?\n/)) {
-    if (/^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)/.test(line)) {
-      current = rows.push(line) - 1;
-    } else if (!line.trim() || line.match(HEADING_SCAN) || /^[ \t]*<!--/.test(line)) {
-      current = -1;
-    } else if (current !== -1 && /^[ \t]/.test(line)) {
-      rows[current] += `\n${line}`;
-    } else {
-      current = -1;
-    }
-  }
-  return rows;
-}
-
 // SLOT-1: capsule selection. selectCapsule() is the ONE authority — no pointer
 // fallback, no auxiliary completion gate.
 //
@@ -173,6 +156,10 @@ function loadCapsule(projectRoot) {
     next_valid_action: capsuleValue(doc, 'next_valid_action'),
     done: doneBulletRows(done || ''),
     effects: effectsSection ? doneBulletRows(doc.slice(effectsSection.start, effectsSection.end)) : null,
+    otherEffects: collectCapsuleSideEffects(memRoot(projectRoot), {
+      selectedPath: newest.path, selectedDoc: doc,
+      onError: (file, error) => logErr(projectRoot, 'resume-verb', `side-effect scan could not check ${file}: ${error?.message || error}`),
+    }),
     // PROVENANCE. Selection orders by created_at and stops there — there is no
     // staleness rule in the selector, so the newest active capsule stays
     // selectable however old it gets, and one written weeks ago arrives looking
@@ -379,21 +366,37 @@ function effectRow(row, bytes) {
 }
 
 function effectLines(loaded) {
-  if (!loaded.effects?.length) return [];
+  const other = loaded.otherEffects;
+  const carried = !!other?.rows.length;
+  if (!loaded.effects?.length && !carried && !other?.unchecked) return [];
   const lines = [
     '  In-Flight Side Effects (recorded by the writer from tool calls; the capsule does not prove the effect landed):',
     '    requested or unknown: status-check by id before any retry; no id: ask the operator, do not resend.',
     '    failed: read Historical-Errors first; a retry is a new request and gets a new row.',
     "    confirmed: the transport accepted the call; do not repeat it. Confirmed is the writer's reading of a tool result, not an observation of the outside world.",
   ];
-  const elision = (count) => `  ${count} more side-effect rows in the capsule file`;
-  const selected = budgetedRows(orderSideEffectRows(loaded.effects), {
+  if (carried) lines[0] = '  In-Flight Side Effects (recorded claims from capsules; the capsule does not prove the effect landed):';
+  if (other?.unparseable) lines.push(`    ${other.unparseable} unparseable side-effect rows from other capsules; treat as outcome unknown.`);
+  if (other?.unchecked) lines.push(`    Some capsules could not be checked (${other.unchecked}); absence of a row is not evidence that nothing happened.`);
+  // Preserve the selected-only path byte for byte. Across capsules, creation
+  // time supplies chronological order; file order breaks ties within a capsule.
+  const rows = carried
+    ? [...(loaded.effects || []).map((row) => ({ row, created: loaded.created })), ...other.rows]
+      .sort((a, b) => a.created - b.created)
+    : loaded.effects || [];
+  const elision = (count) => `  ${count} more side-effect rows in the capsule file${carried ? 's' : ''}`;
+  const selected = budgetedRows(orderSideEffectRows(rows), {
     cap: 16,
-    bytes: 4096 - Buffer.byteLength(lines.join('\n') + '\n' + elision(loaded.effects.length) + '\n'),
-    render: (row, bytes) => effectRow(row, Math.min(bytes, 1200)),
+    bytes: 4096 - Buffer.byteLength(lines.join('\n') + '\n' + elision(rows.length) + '\n'),
+    render: (entry, bytes) => {
+      const source = entry.source === undefined ? '' : `source capsule ${inert(entry.source, 200)}: `;
+      const rendered = effectRow(typeof entry === 'string' ? entry : entry.row,
+        Math.min(bytes, 1200) - Buffer.byteLength(source));
+      return source ? `    ${source}${rendered.slice(4)}` : rendered;
+    },
   });
   lines.push(...selected);
-  if (selected.length < loaded.effects.length) lines.push(elision(loaded.effects.length - selected.length));
+  if (selected.length < rows.length) lines.push(elision(rows.length - selected.length));
   return lines;
 }
 

@@ -1187,6 +1187,11 @@ const JS_RAW_ALLOWLIST = [
   },
   {
     file: 'daemons/lifecycle-common.mjs',
+    accessor: 'unsafeRawCapsuleDocument',
+    reason: 'collect unresolved effects as inert claims from this memory root',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
     accessor: 'unsafeRawRewriteScalar',
     reason: 'consume transition preserves every byte outside the leading status scalar',
   },
@@ -1347,6 +1352,18 @@ const JS_SAFE_READER_ALLOWLIST = [
     accessor: 'scalar',
     needle: "scalar(doc, 'status')",
     reason: 'selection compares the status token and never renders it as prompt structure',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
+    accessor: 'scalar',
+    needle: "scalar(doc, 'tags')",
+    reason: 'the side-effect scan tests for an exact autosave tag and never renders the tags',
+  },
+  {
+    file: 'daemons/lifecycle-common.mjs',
+    accessor: 'scalar',
+    needle: "scalar(doc, 'trigger')",
+    reason: 'the side-effect scan compares the trigger to a fixed token and never renders it',
   },
   {
     file: 'daemons/lifecycle-common.mjs',
