@@ -75,8 +75,9 @@ test('documented evidence limits and resume fence never infer absence of effects
   const bullets = doc.split('## Outside side effects\n')[1].split('\n## ')[0];
   assert.match(bullets, /rows are best-effort evidence/);
   assert.match(bullets, /a command spelled in a way the parser does not recognize leaves no row/);
-  assert.match(bullets, /a row exists only in the capsule that session wrote/);
-  assert.match(bullets, /a resume that selects a different capsule does not show it/);
+  assert.match(bullets, /unresolved rows from all other capsules under the same memory root/);
+  assert.match(bullets, /prose and curated resolutions resolve nothing/);
+  assert.match(bullets, /no product record of a manual status check exists/);
   const absence = 'Absence of a row is never evidence that nothing happened.';
   assert.ok(bullets.split('\n').find((line) => line.startsWith('- Resume fence:')).includes(absence));
   const f = fixture(t);
