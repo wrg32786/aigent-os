@@ -715,6 +715,7 @@ ATTESTPY
   fi
 
   ATTEST_FINDINGS=()
+  LEDGER_FINDINGS=()
   RUNNER_ROOT=""
   ATTEST_UNMEASURABLE=""
   # Optional-component records, one string each "name|state|why|deps|owner"
@@ -729,14 +730,7 @@ ATTESTPY
     line="${line%$'\r'}"
     case "$line" in
       ledger-finding:*)
-        if ! node --input-type=module -e '
-          import { pathToFileURL } from "node:url";
-          const { observeLedgerFinding } = await import(pathToFileURL(process.argv[2]));
-          const result = observeLedgerFinding({ root: process.argv[1], ...JSON.parse(process.argv[3]) });
-          console.log(`LEDGER_FINDING ${JSON.stringify(result)}`);
-        ' "$ROOT" "$DOCTOR_DIR/../daemons/nightly-ledger-stage.mjs" "${line#ledger-finding:}"; then
-          ATTEST_UNMEASURABLE="ledger Finding capture failed"
-        fi
+        LEDGER_FINDINGS+=("${line#ledger-finding:}")
         ;;
       optional:*)
         opt="${line#optional:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_state="${opt%%:*}"; opt_why="${opt#*:}"
@@ -821,6 +815,24 @@ createRequire(process.argv[1])("node-pty");
     done
   fi
 
+  # Capture is a side effect after measurement and cannot change its class.
+  if [ "$TERMINAL" = "NONCOMPLIANT" ]; then
+    CAPTURE_FAILED=0
+    for record in ${LEDGER_FINDINGS[@]+"${LEDGER_FINDINGS[@]}"}; do
+      if ! node --input-type=module -e '
+        import { pathToFileURL } from "node:url";
+        const { observeLedgerFinding, findingSummary } = await import(pathToFileURL(process.argv[2]));
+        const result = observeLedgerFinding({ root: process.argv[1], ...JSON.parse(process.argv[3]) });
+        if (!result.finding) process.exit(1);
+        console.log(`LEDGER_FINDING ${JSON.stringify(findingSummary(result))}`);
+      ' "$ROOT" "$DOCTOR_DIR/../daemons/nightly-ledger-stage.mjs" "$record" 2>/dev/null; then
+        CAPTURE_FAILED=1
+      fi
+    done
+    if [ "$CAPTURE_FAILED" -eq 1 ]; then
+      echo "  [detail] Finding was not recorded"
+    fi
+  fi
   attest_verdict "$TERMINAL"
 fi
 

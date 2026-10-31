@@ -125,6 +125,9 @@ bash scripts/doctor.sh <aigent-root> --attest --finding
 
 Only an undeclared required-file hash mismatch invokes capture, using the expected
 hash from the baseline manifest; default attestation output stays unchanged.
+Capture never changes the measured attestation class; if storage fails, one detail
+line says the Finding was not recorded, and NONCOMPLIANT still exits 1.
+UNKNOWN and COMPLIANT attestations emit no Finding.
 The predicate evaluator also supports explicit capture:
 
 ```text
@@ -150,6 +153,10 @@ The existing `stageLedgerCandidate` append path stores one `trust_decay` row in
   evaluator, writer, and their local dependency files;
 - `subject` and `subject_root`, which anchor relative artifact references;
 - `state`, the embedded evaluator `receipt`, `scope`, and `exclusions`.
+
+`--root` selects the attested tree for hashing (including literal `memory/` paths), while the Finding row goes to the resolved runtime of the process's own state root selected by `AIGENT_STATE_HOME_DIR` when set.
+Finding stdout contains only `duplicate`, `state`, and `receipt_hash`; the full
+row and absolute paths remain in the local ledger.
 
 `receipt:sha256=<hash>` resolves to the embedded `finding.receipt` using the
 existing `receiptHash` function. A resolved file also retains the evaluator's

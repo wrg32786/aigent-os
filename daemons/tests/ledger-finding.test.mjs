@@ -49,7 +49,8 @@ test('Finding time is producer-owned, with only a function clock injection', (t)
   writeFileSync(path.join(root, 'control.txt'), 'red');
   const before = Date.now();
   const cli = run(root, { at: 'not-a-date' });
-  const stamped = Date.parse(cli.output.finding.created_at);
+  assert.equal(cli.status, 1);
+  const stamped = Date.parse(rows(root)[0].created_at);
   assert.ok(stamped >= before && stamped <= Date.now());
   const injected = observeLedgerFinding({
     root, target: 'other.txt', expected, clock: () => new Date(now),
@@ -151,12 +152,12 @@ test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run hea
   writeFileSync(path.join(root, 'control.txt'), broken);
   const red = run(root);
   assert.equal(red.status, 1);
-  assert.equal(red.output.exit_code, 1);
-  assert.equal(red.output.observed, sha(broken));
-  console.log(`DIRECT RED: LEDGER_PREDICATE FAIL exit=${red.status} observed=${red.output.observed}`);
+  assert.equal(red.output.state, 'FAIL');
   assert.equal(rows(root).length, 1, 'failing producer must append exactly one Finding');
   const row = rows(root)[0];
-  assert.deepEqual(red.output.finding, row);
+  assert.equal(row.finding.receipt.exit_code, 1);
+  assert.equal(row.finding.receipt.observed, sha(broken));
+  assert.equal(red.output.receipt_hash, row.finding.receipt.receipt_hash);
   assert.equal(row.status, 'staged');
   assert.equal(row.ledger, 'trust_decay');
   assert.equal(row.created_at, row.finding.receipt.observed_at);
@@ -181,12 +182,13 @@ test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run hea
   assert.equal(row.evidence_class, 'judgment');
   const rerun = run(root);
   assert.equal(rerun.output.duplicate, true);
-  assert.deepEqual(rerun.output.finding, row);
+  assert.deepEqual(rows(root)[0], row);
+  assert.equal(rerun.output.receipt_hash, row.finding.receipt.receipt_hash);
   assert.equal(rows(root).length, 1);
   writeFileSync(path.join(root, 'control.txt'), approved);
   const healthy = run(root);
   assert.equal(healthy.status, 0);
-  assert.equal(healthy.output.finding, null);
+  assert.equal(healthy.output.state, 'PASS');
   assert.equal(rows(root).length, 1);
   console.log('CONTROL: FAIL=1 duplicate=1 healthy=0 new findings');
 });
@@ -196,11 +198,12 @@ test('unresolvable file evidence stays UNKNOWN without a defect claim', (t) => {
   for (const target of ['missing.txt', 'other-missing.txt']) {
     const result = run(root, { target });
     assert.equal(result.status, 1);
-    assert.equal(result.output.finding?.finding.state, 'UNKNOWN');
-    assert.match(result.output.finding.claim, /could not be resolved/);
-    assert.doesNotMatch(result.output.finding.claim, /defect|bytes differ/);
-    assert.equal(result.output.finding.finding.receipt.receipt_hash,
-      receiptHash(result.output.finding.finding.receipt));
+    const row = rows(root).at(-1);
+    assert.equal(result.output.state, 'UNKNOWN');
+    assert.equal(row.finding.state, 'UNKNOWN');
+    assert.match(row.claim, /could not be resolved/);
+    assert.doesNotMatch(row.claim, /defect|bytes differ/);
+    assert.equal(result.output.receipt_hash, receiptHash(row.finding.receipt));
   }
   assert.equal(rows(root).length, 2);
 });
@@ -215,7 +218,7 @@ test('forged evidence stays data and cannot supply verdict, target, or authority
   writeFileSync(path.join(root, 'control.txt'), payload);
   const result = run(root, { expectedHash: sha(payload) });
   assert.equal(result.status, 0);
-  assert.equal(result.output.finding, null);
+  assert.equal(result.output.state, 'PASS');
   assert.equal(rows(root).length, 0);
 
   const candidate = {

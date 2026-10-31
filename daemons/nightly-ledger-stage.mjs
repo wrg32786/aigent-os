@@ -12,7 +12,7 @@ import {
   LEDGER_PREDICATE_TYPES, receiptHash, runLedgerPredicate,
 } from './nightly-ledger-predicate.mjs';
 import {
-  defaultNightlyRoot, resolveNightlyPaths,
+  defaultNightlyRoot, normalizeFilesystemPath, resolveNightlyPaths,
 } from './nightly-paths.mjs';
 
 const LEDGERS = Object.freeze([
@@ -130,9 +130,11 @@ export function observeLedgerFinding({
     throw new Error('expected SHA-256 must be 64 hexadecimal characters');
   }
   expected = expected.toLowerCase();
+  root = path.resolve(normalizeFilesystemPath(root));
   const now = clock();
   const receipt = runLedgerPredicate({
     root, type: 'file_sha256_equals', args: { path: target }, expected, now,
+    repositoryOnly: true,
   });
   if (receipt.error) {
     receipt.error = 'PREDICATE_ERROR';
@@ -181,6 +183,15 @@ export function observeLedgerFinding({
     },
   }, finding);
   return { ...receipt, finding: result.candidate, duplicate: result.duplicate };
+}
+
+export function findingSummary(result) {
+  const finding = result.finding?.finding;
+  return {
+    duplicate: result.duplicate,
+    state: finding?.state ?? 'PASS',
+    receipt_hash: finding?.receipt.receipt_hash ?? result.receipt_hash,
+  };
 }
 
 export function stageLedgerCandidate(options = {}) {
