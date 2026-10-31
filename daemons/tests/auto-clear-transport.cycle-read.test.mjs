@@ -138,6 +138,24 @@ function withFixture(name, body) {
   }
 }
 
+// A relaunch: another process instance, holding the runner lock on disk.
+function nextProcess(fixture, overrides = {}) {
+  writeJson(path.join(fixture.memRoot, 'runtime', 'auto-clear-transport.lock'), {
+    pid: process.pid,
+    started_at: new Date(fixture.clock.ms()).toISOString(),
+  });
+  return createTransport(fixture, { processInstance: `later-${fixture.cycles}`, ...overrides });
+}
+
+function bootAgain(fixture, sequence, source = 'resume') {
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+    boot_sequence: sequence,
+    session_id: SESSION_ID,
+    source,
+    observed_at: new Date(fixture.clock.ms() + 1000).toISOString(),
+  });
+}
+
 function primeCheckpointConfirmed(transport) {
   assert.equal(transport.tick().state.state, 'pressure');
   assert.equal(transport.tick().state.state, 'checkpoint-requested');
@@ -403,7 +421,7 @@ test('ccr-11. recovering a held cycle spends no old acknowledgement: the next cy
   assert.notEqual(next.state.cycle_id, oldCycle);
 }));
 
-test('ccr-12. corrupt content stays held in the process that met it and is revalidated by the next one', () => withFixture('c12', (fixture) => {
+test('ccr-12. corrupt content stays held through a same-process rebind and is revalidated by the next process', () => withFixture('c12', (fixture) => {
   const transport = createTransport(fixture);
   assert.equal(transport.tick().state.state, 'pressure');
   fs.writeFileSync(cyclePath(fixture), '{"state": "press');
@@ -412,19 +430,81 @@ test('ccr-12. corrupt content stays held in the process that met it and is reval
   for (let i = 0; i < 3; i += 1) {
     assert.equal(transport.tick().state.state, 'HOLD:cycle-state-invalid', 'content is not a blip');
   }
+  // A rebind after a clear: a new transport, the same process, and the lock
+  // held. The raiser is alive, so nothing here is proof (#141 review).
   fixture.pressure.pct = 10;
-  const next = createTransport(fixture);
-  assert.equal(next.tick().status, 'cycle-hold-recovered');
+  writeJson(path.join(fixture.memRoot, 'runtime', 'auto-clear-transport.lock'), { pid: process.pid });
+  const rebound = createTransport(fixture);
+  assert.equal(rebound.tick().state.state, 'HOLD:cycle-state-invalid');
+  assert.equal(disk(fixture).state, 'HOLD:cycle-state-invalid');
+
+  assert.equal(nextProcess(fixture).tick().status, 'cycle-hold-recovered');
   assert.equal(disk(fixture).state, 'idle');
 }));
 
-test('ccr-13. corrupt content at startup holds closed in that process; only a later process revalidates it', () => withFixture('c13', (fixture) => {
+test('ccr-12b. another process with no lock proves nothing: the raiser may still be running', () => withFixture('c12b', (fixture) => {
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  createTransport(fixture);
+  const other = createTransport(fixture, { processInstance: 'other' });
+  assert.equal(other.tick().state.state, 'HOLD:cycle-state-invalid');
+  writeJson(path.join(fixture.memRoot, 'runtime', 'auto-clear-transport.lock'), { pid: process.pid + 1 });
+  assert.equal(createTransport(fixture, { processInstance: 'other' }).tick().state.state, 'HOLD:cycle-state-invalid');
+}));
+
+test('ccr-13. unparseable content at startup cannot vouch for an intent: never idle on its own say, and the ambiguity hold has an exit', () => withFixture('c13', (fixture) => {
   writeText(cyclePath(fixture), 'not json');
   fixture.pressure.pct = 10;
   const transport = createTransport(fixture);
   assert.equal(transport.state.state, 'HOLD:cycle-state-invalid');
+  assert.equal(transport.state.boot_sequence_at_start, 10, 'the ambiguity hold needs a boot to compare');
   assert.equal(transport.tick().state.state, 'HOLD:cycle-state-invalid');
-  assert.equal(createTransport(fixture).tick().state.state, 'idle');
+
+  const next = nextProcess(fixture);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+  assert.equal(disk(fixture).cycle_id, null);
+
+  bootAgain(fixture, 11);
+  assert.equal(next.tick().state.state, 'idle', 'same session at a later boot proves no clear landed');
+}));
+
+test('ccr-13b. a submitted intent in a record that fails validation is never read as no intent', () => withFixture('c13b', (fixture) => {
+  const first = createTransport(fixture);
+  primeCheckpointConfirmed(first);
+  first.beginClearSubmission().consume(() => ({ submitted: true }));
+  const persisted = disk(fixture);
+  assert.equal(persisted.clear_intent.submitted, true);
+  delete persisted.entered_at;
+  writeJson(cyclePath(fixture), persisted);
+
+  fixture.pressure.pct = 10;
+  const held = createTransport(fixture);
+  assert.equal(held.state.state, 'HOLD:cycle-state-field-missing');
+  assert.equal(held.state.hold.detail.intent_known, false);
+
+  const next = nextProcess(fixture);
+  const result = next.tick();
+  assert.equal(result.state.state, 'HOLD:clear-ambiguous');
+  assert.notEqual(result.status, 'cycle-hold-recovered');
+  assert.throws(() => next.beginClearSubmission());
+}));
+
+test('ccr-13c. a hold with no marker comes from a build no running code can vouch for: ambiguity owns it', () => withFixture('c13c', (fixture) => {
+  writeJson(cyclePath(fixture), {
+    state: 'HOLD:cycle-state-field-missing',
+    cycle_id: 'cycle-old',
+    session_id: SESSION_ID,
+    boot_sequence_at_start: 10,
+    clear_intent: null,
+    entered_at: new Date(fixture.clock.ms()).toISOString(),
+    hold: { code: 'cycle-state-field-missing', detail: { fields: ['clear_intent'], resume_state: 'idle' } },
+    ack_boundary: null,
+    ack_classification: null,
+  });
+  const next = nextProcess(fixture);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+  bootAgain(fixture, 11);
+  assert.equal(next.tick().state.state, 'idle');
 }));
 
 test('ccr-14. a recovered hold under the kill switch starts nothing', () => withFixture('c14', (fixture) => {

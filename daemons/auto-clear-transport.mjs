@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { selectCapsule } from './lifecycle-common.mjs';
 import {
@@ -796,6 +797,11 @@ const CYCLE_UNREADABLE_ESCALATE_ATTEMPTS = 600;
 // never have this shape, and ENOENT is not a read failure of an existing file.
 const READ_ERROR_HOLD_VALUE = /^(?!ENOENT)[A-Z][A-Z0-9_]*: .*\bread\b/;
 
+// Who raised a cycle-state hold. Every transport in a runner shares this, and a
+// rebind after a clear builds a new transport in the same process, so a new
+// object is no evidence that the raiser is gone (#141 review).
+const PROCESS_INSTANCE = `${process.pid}:${randomUUID()}`;
+
 function invalidStateReason(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { code: 'cycle-state-invalid', detail: 'root object missing' };
@@ -932,6 +938,7 @@ export class AutoClearTransport {
     acquireLock = true,
     pid = process.pid,
     isPidAlive = defaultPidAlive,
+    processInstance = PROCESS_INSTANCE,
   } = {}) {
     if (!memRoot) throw new TypeError('memRoot is required');
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
@@ -978,8 +985,9 @@ export class AutoClearTransport {
     this._activeToken = null;
     this._cycleUnreadable = null;
     this._awaitingFirstRead = false;
-    this._heldAtLoad = false;
     this._withdrawIntent = false;
+    this.pid = pid;
+    this.processInstance = processInstance;
     try {
       this.state = this._loadState();
       this._inheritedIntent = this.state.clear_intent !== null;
@@ -1072,11 +1080,14 @@ export class AutoClearTransport {
 
     let parsed;
     try { parsed = JSON.parse(text); } catch (error) {
-      const base = initialState(this.sessionId, clockIso(this.now));
+      const base = {
+        ...initialState(this.sessionId, clockIso(this.now)),
+        boot_sequence_at_start: this._bootSequenceNow(),
+      };
       const held = holdState(
         base,
         'cycle-state-invalid',
-        error?.message || String(error),
+        this._cycleHoldDetail(error?.message || String(error), false),
         clockIso(this.now),
         'idle',
       );
@@ -1084,18 +1095,27 @@ export class AutoClearTransport {
       return this._atomicWrite(held);
     }
     const problem = invalidStateReason(parsed);
-    if (!problem) {
-      this._heldAtLoad = parsed.state.startsWith('HOLD:cycle-state-');
-      return parsed;
-    }
+    if (!problem) return parsed;
     const base = {
       ...initialState(this.sessionId, clockIso(this.now)),
       cycle_id: typeof parsed?.cycle_id === 'string' ? parsed.cycle_id : null,
       boot_sequence_at_start: Number.isSafeInteger(parsed?.boot_sequence_at_start)
         ? parsed.boot_sequence_at_start
-        : null,
+        : this._bootSequenceNow(),
     };
-    const held = holdState(base, problem.code, problem.detail, clockIso(this.now), 'idle');
+    // base.clear_intent is null because this record cannot be trusted, not
+    // because no clear exists. Only an explicit null outside clear-submitted
+    // says there was none.
+    const intentKnown = hasOwn(parsed ?? {}, 'clear_intent')
+      && parsed.clear_intent === null
+      && parsed.state !== 'clear-submitted';
+    const held = holdState(
+      base,
+      problem.code,
+      this._cycleHoldDetail(problem.detail, intentKnown),
+      clockIso(this.now),
+      'idle',
+    );
     this.log(`${problem.code}; held closed: ${JSON.stringify(problem.detail)}`);
     return this._atomicWrite(held);
   }
@@ -1108,15 +1128,17 @@ export class AutoClearTransport {
     }
     const read = this._readCycleFile();
     if (read.unreadable) return this.state;
+    // These three hold from this.state, the last verified state, so whatever
+    // intent it carries is the real one.
     if (read.missing) {
-      return this._hold('cycle-state-invalid', read.missing.message || String(read.missing), 'idle');
+      return this._hold('cycle-state-invalid', this._cycleHoldDetail(read.missing.message || String(read.missing), true), 'idle');
     }
     let parsed;
     try { parsed = JSON.parse(read.text); } catch (error) {
-      return this._hold('cycle-state-invalid', error?.message || String(error), 'idle');
+      return this._hold('cycle-state-invalid', this._cycleHoldDetail(error?.message || String(error), true), 'idle');
     }
     const problem = invalidStateReason(parsed);
-    if (problem) return this._hold(problem.code, problem.detail, 'idle');
+    if (problem) return this._hold(problem.code, this._cycleHoldDetail(problem.detail, true), 'idle');
     this.state = parsed;
     return this.state;
   }
@@ -1472,28 +1494,57 @@ export class AutoClearTransport {
     return { ack_boundary: null, ack_classification: null };
   }
 
+  _cycleHoldDetail(detail, intentKnown) {
+    const carried = detail && typeof detail === 'object' && !Array.isArray(detail)
+      ? detail
+      : { value: detail };
+    return { ...carried, raised_by: this.processInstance, intent_known: intentKnown };
+  }
+
+  _bootSequenceNow() {
+    const boot = this._readBootReceipt();
+    return boot.ok ? boot.receipt.boot_sequence : null;
+  }
+
+  // The outer runner lock lives in runPtySession, not in any transport, so it
+  // is read here: this process holds it, so every earlier runner is gone.
+  _ownsRunnerLock() {
+    try {
+      return JSON.parse(this.fs.readFileSync(runnerLockPath(this.memRoot), 'utf8'))?.pid === this.pid;
+    } catch {
+      return false;
+    }
+  }
+
   // A cycle-state hold is recoverable on evidence, not on a timer. A persisted
-  // read error said nothing about content (#139). Any other cycle-state hold
-  // this process inherited was raised by a runner that is gone, and the runner
-  // lock proves it: an in-flight submission died with it. Content that went bad
-  // under THIS process stays held until the relaunch that proves the same.
+  // read error said nothing about content (#139). Anything else needs proof
+  // that the process that raised it is gone, because an in-flight submission
+  // dies with that process: another process raised it, and this one holds the
+  // runner lock. A rebind in the raising process proves neither. A hold with
+  // no raised_by predates the marker, so no running code raised it.
   _recoverableCycleHold() {
     const hold = this.state.hold;
     if (!this.state.state.startsWith('HOLD:cycle-state-') || !hold) return null;
     if (hold.code === 'cycle-state-invalid'
       && READ_ERROR_HOLD_VALUE.test(String(hold.detail?.value ?? ''))) return 'read-error';
-    return this._heldAtLoad ? 'previous-process' : null;
+    if (hold.detail?.raised_by === this.processInstance) return null;
+    return this._ownsRunnerLock() ? 'previous-process' : null;
   }
 
   // Revalidation, never an unconditional idle. The hold's resume_state was
   // hard-coded and proves nothing, so the position is read from the facts: an
-  // intent means a clear may have landed, and clear-ambiguous owns that answer.
+  // intent, or an intent nobody can vouch for, means a clear may have landed,
+  // and clear-ambiguous owns that answer: a later boot of the same session, or
+  // a new clear receipt, which is why it needs a boot sequence to compare.
   // Without one, the cycle ends the way every abandonment does: its ack is
   // discarded rather than carried, and any next cycle must earn its own.
   _recoverCycleHold(reason) {
-    this._heldAtLoad = false;
-    if (this.state.clear_intent !== null) {
-      this.log(`${this.state.state} carries a clear intent (${reason}): clear-ambiguous owns it`);
+    const intentUnknown = reason === 'previous-process' && this.state.hold.detail?.intent_known !== true;
+    if (this.state.clear_intent !== null || intentUnknown) {
+      this.log(`${this.state.state} (${reason}) ${intentUnknown ? 'cannot vouch for its intent' : 'carries a clear intent'}: clear-ambiguous owns it`);
+      if (!Number.isSafeInteger(this.state.boot_sequence_at_start)) {
+        this.state = { ...this.state, boot_sequence_at_start: this._bootSequenceNow() };
+      }
       const held = this._hold('clear-ambiguous', { recovered_from: this.state.hold.code, reason }, 'clear-submitted');
       return resultFor(held, { transitioned: true, status: 'hold', code: 'clear-ambiguous' });
     }
@@ -1594,7 +1645,11 @@ export class AutoClearTransport {
     // against a baseline that no longer exists. Rebase the baseline to the
     // current receipt IFF: same session, receipt strictly newer, and NO clear
     // intent (an intent must keep its original binding — ambiguity protection).
+    // A cycle-state or ambiguity hold may be null only because its intent could
+    // not be read, so it keeps its binding too: the later boot is its evidence.
     if (this.state.clear_intent === null
+      && this.state.state !== 'HOLD:clear-ambiguous'
+      && !this.state.state.startsWith('HOLD:cycle-state-')
       && Number.isSafeInteger(this.state.boot_sequence_at_start)) {
       const bootNow = this._readBootReceipt();
       if (bootNow.ok
