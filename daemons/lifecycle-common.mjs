@@ -165,6 +165,18 @@ function normalizedSelectorPath(candidate) {
 // pick — placeholder or not, newer curated capsule or not. Omit the option and
 // this function is BYTE-IDENTICAL to before this parameter existed; every
 // caller that never heard of session binding never triggers this branch.
+// The one read of a capsule's identity fields, shared by selection and the
+// side-effect scan so both judge a capsule by the same values.
+function capsuleHead(doc) {
+  const createdRaw = scalar(doc, 'created_at');
+  return {
+    id: scalar(doc, 'id'),
+    createdRaw,
+    created: Date.parse(String(createdRaw)),
+    status: scalar(doc, 'status'),
+  };
+}
+
 export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
   const sessionTarget = typeof sessionCapsulePath === 'string' && sessionCapsulePath.trim().length
     ? normalizedSelectorPath(sessionCapsulePath)
@@ -201,10 +213,7 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
       doc = unsafeRawCapsuleDocument(full, 'capsule selection needs the complete document for shared field readers');
     } catch { note(name, 'unreadable'); continue; }
     if (!hasFrontmatter(doc)) { note(name, 'no-frontmatter'); continue; }
-    const id = scalar(doc, 'id');
-    const createdRaw = scalar(doc, 'created_at');
-    const created = Date.parse(String(createdRaw));
-    const status = scalar(doc, 'status');
+    const { id, createdRaw, created, status } = capsuleHead(doc);
     const objective = capsuleValue(doc, 'objective');
     const nextAction = capsuleValue(doc, 'next_valid_action');
 
@@ -336,9 +345,8 @@ export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDo
   };
   const identity = (r) => JSON.stringify([r.op, r.kind.replace(/^(?:sidechain:)+/, ''), r.target]);
   const inspect = (doc, file, selected = false) => {
-    const id = scalar(doc, 'id');
-    const created = Date.parse(scalar(doc, 'created_at'));
-    const valid = hasFrontmatter(doc) && id?.trim() && Number.isFinite(created) && scalar(doc, 'status');
+    const { id, created, status } = capsuleHead(doc);
+    const valid = hasFrontmatter(doc) && id?.trim() && Number.isFinite(created) && status;
     if (!valid) failed(file, new Error('malformed capsule frontmatter'));
     // Match the Stop writer's ownership test, including exact tag tokens.
     const autosaveTag = (scalar(doc, 'tags') || '').replace(/^\[|\]$/g, '').split(',')
