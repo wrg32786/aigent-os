@@ -7555,6 +7555,47 @@ test('T5 one ACK persists exactly one clear intent and the same-cycle duplicate 
   }
 });
 
+test('T6b #139 a failed read of the cycle state at commit writes nothing to the seat, and the clear is decided again', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  const realFs = harness.core.fs;
+  try {
+    harness.primeAuthorized();
+    harness.attemptAutomaticClear();
+    assert.equal(harness.runner.phase, 'prepared', 'setup: commit is pending');
+    const cyclePath = harness.core.cyclePath;
+    const before = fs.readFileSync(cyclePath, 'utf8');
+    harness.core.fs = {
+      ...realFs,
+      readFileSync(target, ...rest) {
+        if (String(target) === String(cyclePath)) {
+          throw Object.assign(new Error('UNKNOWN: unknown error, read'), { code: 'UNKNOWN' });
+        }
+        return realFs.readFileSync(target, ...rest);
+      },
+    };
+    harness.flushControl();
+    harness.fireEnter();
+
+    // Only the pre-submit composer kill-line may have gone out; that is not a clear.
+    assert.ok(
+      !Buffer.concat(harness.snapshot().automaticWrites.map((chunk) => Buffer.from(chunk))).toString().includes('/clear'),
+      'no clear may reach the seat',
+    );
+    assert.equal(harness.runner.token, null, 'the refused token is gone');
+    assert.equal(harness.snapshot().holdActive, false, 'the refusal releases the prepared hold');
+    assert.equal(harness.snapshot().lastDecision?.code, 'ECYCLE_STATE_UNREADABLE');
+    assert.equal(fs.readFileSync(cyclePath, 'utf8'), before, 'submitted stays false: nothing was submitted');
+
+    harness.core.fs = realFs;
+    const withdrawn = harness.core.tick();
+    assert.equal(withdrawn.status, 'clear-intent-withdrawn');
+    assert.equal(JSON.parse(fs.readFileSync(cyclePath, 'utf8')).clear_intent, null);
+  } finally {
+    harness.core.fs = realFs;
+    harness.cleanup();
+  }
+});
+
 test('T6 commit kill switch aborts fail-closed and an invalid boot binding is refused', () => {
   const killed = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
