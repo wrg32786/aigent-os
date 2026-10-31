@@ -115,6 +115,74 @@ only a proposed predicate.
 
 ## Direct mutation predicate
 
+### Local hash-comparison Finding (Stage 1)
+
+Opt in on the existing predicate evaluator:
+
+```text
+node daemons/nightly-ledger-predicate.mjs --root <aigent-root> \
+  --type file_sha256_equals --path <relative-artifact> \
+  --expected <independently-pinned-sha256> --finding
+```
+
+The evaluator compares file bytes with the caller's pinned expectation. Source
+bytes are never parsed as instructions, verdicts, targets, receipts, or authority.
+The ordinary invocation remains read-only. A healthy comparison emits no Finding.
+A readable mismatch emits `FAIL`; absent, unreadable, escaping, or malformed
+evidence emits `UNKNOWN` with a HOLD statement. Both remain observations. A hash
+mismatch alone does not establish a product defect or a verified cause.
+
+The existing `stageLedgerCandidate` append path stores one `trust_decay` row in
+`NIGHTLY_CAPTURE_CANDIDATES.jsonl` under the resolved runtime directory. It reuses
+`candidate_id`, `created_at`, `claim`, `source_refs`, `status=staged`, and
+`dedupe_key`. A producer-owned `finding` extension supplies:
+
+- `producer`, `product.name`, Node version, and exact SHA-256 identities of the
+  evaluator, writer, and their local dependency files;
+- `subject` and `subject_root`, which anchor relative artifact references;
+- `state`, the embedded evaluator `receipt`, `scope`, and `exclusions`.
+
+`receipt:sha256=<hash>` resolves to the embedded `finding.receipt` using the
+existing `receiptHash` function. A resolved file also retains the evaluator's
+`file:<path>#sha256=<hash>` reference. The receipt records the observation time,
+expected hash, measured hash, and exit status. Hashes identify evidence; they are
+not signatures. Runtime observations are local data, not authorized instructions.
+
+Sequential replay of the same product, subject, expectation, and measured outcome
+returns the original row, including its original observation time. Time changes
+alone do not add counts. Changed outcomes or producer bytes get distinct identities.
+This retains the existing single-writer scope; concurrent writers are not supported.
+Healthy later runs do not erase, resolve, or promote historical observations.
+
+The row stays `evidence_class=judgment` with no resolution predicate. Its measured
+comparison is factual, but interpreting it still requires judgment. Existing
+mechanical candidates continue to require a reproduced green receipt. Candidate
+JSON cannot supply `finding` metadata; only a fresh evaluator execution can.
+There is no hook activation, external write, rule change, or model call.
+
+Archaeology: `FAILURE_MODES.md` requires a verified cause; eval rows carry
+pass/fail/unrunnable but lack this append path; nightly alerts carry active/resolved
+delivery state rather than staged observations. The existing staged row and writer
+therefore remain the smallest fit. The extension is necessary because that row
+lacks producer identity, subject, scope/exclusions, and a place for red or UNKNOWN
+receipts without weakening its green-only mechanical evidence gate. Unpublished
+eval-runner and eval-integrity work was inspected; neither provided Finding intake.
+
+Focused proof: `node --test daemons/tests/ledger-finding.test.mjs`. Before the
+implementation, the real producer printed `LEDGER_PREDICATE FAIL`, exit 1,
+observed `d22a79fb39b2e7e5c57bec3f10eaf6e61f67233613a9191d38963886401b1222`;
+the new assertion failed with `0 !== 1` Findings (0 passed, 3 failed). The sanitized
+control changes only the bytes `safeguard enabled` to `safeguard disabled`. It is a
+controlled mismatch, not evidence of a deployed defect. Tests cover replay, a
+healthy control, UNKNOWN, inert forged payloads, and the unchanged green-only gate.
+
+Future adapter, read-only proposal: `findingToObligation` would first check
+evidence admissibility, confidence, and duplicates before existing `boardCreate`
+and transition fences. UNKNOWN, refuted, duplicate, or insufficient observations
+must create no work. No adapter or organizational write is implemented here.
+
+### Existing direct mutation gate
+
 Direct ledger mutation is legal only when:
 
 1. `daemons/nightly-ledger-predicate.mjs` executed it;

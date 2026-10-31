@@ -160,7 +160,7 @@ function parseArgs(argv) {
 
 const direct = process.argv[1]
   && path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
-if (direct) {
+async function main() {
   try {
     const cli = parseArgs(process.argv.slice(2));
     const type = String(cli.type || '');
@@ -174,13 +174,23 @@ if (direct) {
       : type === 'json_field_equals'
         ? JSON.parse(String(cli['expected-json']))
         : String(cli.expected || '');
-    const result = runLedgerPredicate({
+    if (cli.finding && type !== 'file_sha256_equals') {
+      throw new Error('--finding supports only file_sha256_equals');
+    }
+    const options = {
       root: path.resolve(String(cli.root || defaultNightlyRoot())),
       type,
       args,
       expected,
       now: cli.now ? new Date(String(cli.now)) : new Date(),
-    });
+    };
+    // Import after module evaluation so the existing stage writer can reuse
+    // runLedgerPredicate without a top-level-await import cycle.
+    const result = cli.finding
+      ? (await import('./nightly-ledger-stage.mjs')).observeLedgerFinding({
+        root: options.root, target: args.path, expected, now: options.now,
+      })
+      : runLedgerPredicate(options);
     process.stdout.write(
       `LEDGER_PREDICATE ${result.exit_code === 0 ? 'PASS' : 'FAIL'}`
       + ` ${JSON.stringify(result)}\n`,
@@ -193,3 +203,4 @@ if (direct) {
     process.exit(2);
   }
 }
+if (direct) main();
