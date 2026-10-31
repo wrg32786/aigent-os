@@ -128,8 +128,10 @@ function buildInstall({ settingsRootFor = (root) => root } = {}) {
   return root;
 }
 
-function attest(root) {
-  const result = spawnSync('bash', [DOCTOR, root, '--attest'], { encoding: 'utf8' });
+function attest(root, extra = [], env = {}) {
+  const result = spawnSync('bash', [DOCTOR, root, '--attest', ...extra], {
+    encoding: 'utf8', env: { ...process.env, AIGENT_STATE_HOME_DIR: root, ...env },
+  });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
   const verdicts = output
     .split('\n')
@@ -140,7 +142,7 @@ function attest(root) {
   // output". A second verdict line would make every assertion below ambiguous.
   assert.equal(verdicts.length, 1, `expected exactly one ATTEST line, got:\n${output}`);
   assert.ok(TERMINALS.includes(verdicts[0]), `unknown terminal class: ${verdicts[0]}`);
-  return { verdict: verdicts[0], status: result.status, output };
+  return { verdict: verdicts[0], status: result.status, output, stderr: result.stderr };
 }
 
 function digest(root) {
@@ -223,6 +225,152 @@ test('a byte changed in a required file attests NONCOMPLIANT', () => {
 
     const { verdict, output } = attest(root);
     assert.equal(verdict, 'NONCOMPLIANT', output);
+  });
+});
+
+test('measured NONCOMPLIANT stays NONCOMPLIANT and exits 1 when its Finding is stored', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const [target, expected] = Object.entries(manifest.required_files)[0];
+    const file = path.join(root, ...target.split('/'));
+    const original = readFileSync(file);
+    const ledger = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
+    writeFileSync(file, Buffer.concat([original, Buffer.from('\nFinding red witness\n')]));
+    const plain = attest(root);
+    assert.equal(plain.verdict, 'NONCOMPLIANT');
+    assert.equal(plain.status, 1);
+    assert.equal(existsSync(ledger), false);
+    const opted = attest(root, ['--finding']);
+    assert.equal(opted.verdict, 'NONCOMPLIANT', opted.output);
+    assert.equal(opted.status, 1);
+    assert.equal(opted.output.replace(/^LEDGER_FINDING .*\r?\n/gm, ''), plain.output);
+    const rows = readFileSync(ledger, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].finding.state, 'FAIL');
+    assert.equal(rows[0].finding.subject, target);
+    assert.equal(rows[0].finding.receipt.expected, expected);
+    assert.equal(rows[0].finding.receipt.observed, createHash('sha256').update(readFileSync(file)).digest('hex'));
+    assert.notEqual(rows[0].finding.receipt.observed, expected);
+    assert.equal(attest(root).output, plain.output);
+    console.log(`ATTEST RED WITNESS: target=${target} verdict=${opted.verdict} exit=${opted.status} findings=${rows.length}`);
+  });
+});
+
+test('capture failures preserve NONCOMPLIANT and exit 1 with one unrecorded detail', () => {
+  for (const failure of ['malformed ledger', 'runtime is a file', 'invalid state declaration']) {
+    withInstall((root) => {
+      const [target] = Object.keys(readManifest().required_files);
+      const file = path.join(root, target);
+      writeFileSync(file, Buffer.concat([readFileSync(file), Buffer.from('\nchanged\n')]));
+      const plain = attest(root);
+      assert.equal(plain.verdict, 'NONCOMPLIANT');
+      const stateRoot = path.join(root, 'process-state');
+      const runtime = path.join(stateRoot, 'vault/memory/runtime');
+      mkdirSync(path.dirname(runtime), { recursive: true });
+      if (failure === 'runtime is a file') {
+        writeFileSync(runtime, 'blocked');
+      } else if (failure === 'malformed ledger') {
+        mkdirSync(runtime);
+        writeFileSync(path.join(runtime, 'NIGHTLY_CAPTURE_CANDIDATES.jsonl'), '{broken\n');
+      } else {
+        mkdirSync(path.join(stateRoot, '.aigent'));
+        writeFileSync(path.join(stateRoot, '.aigent/state.json'), '{broken\n');
+      }
+      const before = digest(stateRoot);
+      const opted = attest(root, ['--finding'], { AIGENT_STATE_HOME_DIR: stateRoot });
+      assert.equal(opted.verdict, 'NONCOMPLIANT', `${failure}: ${opted.output}`);
+      assert.equal(opted.status, 1);
+      assert.equal(opted.stderr, '');
+      assert.equal(opted.output.split('\n').filter((line) => line.includes('Finding was not recorded')).length, 1);
+      assert.equal(opted.output.replace(/^  \[detail\] Finding was not recorded\r?\n/gm, ''), plain.output);
+      assert.equal(digest(stateRoot), before);
+    });
+  }
+});
+
+test('COMPLIANT and UNKNOWN remain unchanged and emit no Finding', () => {
+  withInstall((root) => {
+    const ledger = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
+    const plain = attest(root);
+    const healthy = attest(root, ['--finding']);
+    assert.equal(healthy.verdict, 'COMPLIANT');
+    assert.equal(healthy.status, 0);
+    assert.equal(healthy.output, plain.output);
+    assert.equal(existsSync(ledger), false);
+    const [target] = Object.keys(readManifest().required_files);
+    writeFileSync(path.join(root, target), 'changed');
+    mkdirSync(path.join(root, '.aigent'), { recursive: true });
+    writeFileSync(path.join(root, '.aigent/operator-owned.json'), '{broken');
+    const unknownPlain = attest(root);
+    const unknown = attest(root, ['--finding']);
+    assert.equal(unknown.verdict, 'UNKNOWN');
+    assert.equal(unknown.status, 2);
+    assert.equal(unknown.output, unknownPlain.output);
+    assert.equal(existsSync(ledger), false);
+  });
+});
+
+test('Finding stdout contains only duplicate, state and receipt_hash', () => {
+  withInstall((root) => {
+    const [target, expected] = Object.entries(readManifest().required_files)[0];
+    writeFileSync(path.join(root, target), 'changed');
+    const opted = attest(root, ['--finding']);
+    assert.equal(opted.verdict, 'NONCOMPLIANT');
+    const lines = opted.output.split('\n').filter((line) => line.startsWith('LEDGER_FINDING '));
+    assert.equal(lines.length, 1);
+    const check = (line, duplicate) => {
+      const summary = JSON.parse(line.slice(line.indexOf('{')));
+      assert.deepEqual(Object.keys(summary).sort(), ['duplicate', 'receipt_hash', 'state']);
+      assert.equal(summary.duplicate, duplicate);
+      assert.equal(summary.state, 'FAIL');
+      assert.match(summary.receipt_hash, /^[a-f0-9]{64}$/);
+      assert.equal(line.includes(root), false);
+      return summary;
+    };
+    const first = check(lines[0], false);
+    const direct = spawnSync(process.execPath, [path.join(REPO, 'daemons/nightly-ledger-predicate.mjs'),
+      '--root', root, '--type', 'file_sha256_equals', '--path', target, '--expected', expected, '--finding'], {
+      encoding: 'utf8', windowsHide: true, env: { ...process.env, AIGENT_STATE_HOME_DIR: root },
+    });
+    assert.equal(direct.status, 1);
+    assert.equal(direct.stderr, '');
+    assert.equal(direct.stdout.trim().split('\n').length, 1);
+    assert.equal(check(direct.stdout.trim(), true).receipt_hash, first.receipt_hash);
+  });
+});
+
+test('Finding hashes the attested tree and writes to the process state runtime when roots differ', () => {
+  withInstall((root) => {
+    const stateRoot = path.join(root, 'process-state');
+    const memory = path.join(stateRoot, 'seat-memory');
+    mkdirSync(memory, { recursive: true });
+    mkdirSync(path.join(stateRoot, '.aigent'));
+    writeFileSync(path.join(stateRoot, '.aigent/state.json'), JSON.stringify({ memory_root: 'seat-memory' }));
+    const target = 'memory/finding-control.txt';
+    mkdirSync(path.join(root, 'memory'));
+    const file = path.join(root, target);
+    writeFileSync(file, 'attested tree bytes');
+    writeFileSync(path.join(memory, 'finding-control.txt'), 'state memory bytes');
+    const expected = createHash('sha256').update('state memory bytes').digest('hex');
+    const manifestFile = path.join(root, 'scripts/fleet-baseline-manifest.json');
+    const manifest = readManifest();
+    manifest.required_files[target] = expected;
+    writeFileSync(manifestFile, JSON.stringify(manifest));
+    const opted = attest(root, ['--finding'], { AIGENT_STATE_HOME_DIR: stateRoot });
+    assert.equal(opted.verdict, 'NONCOMPLIANT', opted.output);
+    assert.equal(opted.status, 1);
+    assert.doesNotMatch(opted.output, /Finding was not recorded/);
+    const rows = readFileSync(path.join(memory, 'runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    const finding = rows[0].finding;
+    assert.equal(finding.subject, target);
+    assert.equal(finding.subject_root, root);
+    assert.equal(finding.state, 'FAIL');
+    assert.equal(finding.receipt.expected, expected);
+    assert.equal(finding.receipt.observed, createHash('sha256').update(readFileSync(file)).digest('hex'));
+    assert.notEqual(finding.receipt.observed, expected);
+    assert.equal(existsSync(path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl')), false);
+    assert.equal(existsSync(path.join(stateRoot, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl')), false);
   });
 });
 

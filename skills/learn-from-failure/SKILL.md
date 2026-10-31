@@ -73,6 +73,15 @@ Artifact: {type} at {path}
 
 Per [[Self-Learning Doctrine]]: a failure logged without an artifact is a false resolution. The ledger grows, the failure recurs, the system learns nothing.
 
+## Bounded procedure experiment (fixture only)
+
+A Finding is an observation, not a verified cause or authority to edit a procedure.
+The [fixture mechanics](../../evals/procedure-experiment/README.md) use a declarative grammar and a pinned historical corpus.
+Freeze the candidate, evidence, corpus, size budgets and rollback before evaluating.
+Require a passing verdict and a caller-supplied approval bound to the candidate and base.
+Distinct identity strings are not authenticated review.
+This proves mechanics on a fixture, not natural-language procedure compliance or live behavior.
+
 ## Related
 
 - [[concepts/Self-Learning Doctrine]] — the doctrine this skill implements
