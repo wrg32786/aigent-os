@@ -13,7 +13,7 @@
 //   .deps-failed-<root>   a live tree that did not work
 //
 // THE ONE RULE: a leftover tree is deleted only when a tree in the live position
-// was just probed good. A verdict about the tree being deleted never decides
+// was just proven good, by its probe and its lockfile. A verdict about the tree being deleted never decides
 // it, because a probe can fail for reasons that have nothing to do with the
 // tree. Otherwise a leftover is kept, reported, and moved to a dated name if a
 // swap needs its slot, so it blocks nothing.
@@ -22,7 +22,7 @@
 //   prev, no live      -                prev moves to live
 //   prev, live bad     prev good        live to failed, prev to live
 //   prev, live bad     prev bad         both kept, the update table decides
-//   live good          -                leftovers deleted
+//   live good, matches lock  -          leftovers deleted
 //
 //   live tree          update           result
 //   good, matches lock not attempted    unchanged
@@ -238,10 +238,12 @@ export function updateDependencyRoot({
   }
 
   const hadTree = fsImpl.existsSync(live);
-  const leftover = liveGood ? clearLeftovers() : '';
-  if (liveGood && lockedTreeProblem(root, { fsImpl }) === null) {
-    return { outcome: 'unchanged', reason: leftover };
-  }
+  const lockProblem = lockedTreeProblem(root, { fsImpl });
+  // Imports can pass on a tree missing a locked package, or resolve from an
+  // ancestor, so a leftover needs the lockfile to agree too. An older version
+  // of everything still works, which is what a pending lockfile bump looks like.
+  if (liveGood && lockProblem === null) return { outcome: 'unchanged', reason: clearLeftovers() };
+  if (String(lockProblem).endsWith('is missing')) liveGood = false;
 
   const kept = (reason) => ({
     outcome: liveGood ? 'kept-previous' : 'kept-unusable',

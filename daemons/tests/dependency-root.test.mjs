@@ -476,6 +476,18 @@ test('dr-11o. the probe drives node-pty, because an import alone never loads its
   assert.equal(probeImports(root), null);
 }));
 
+test('dr-11q. a live tree that imports but lacks a locked package proves nothing: the complete old tree is kept and it reads unusable', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', prevVersion: '1.0.0' });
+  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  lock.packages['node_modules/also-required'] = { version: '1.0.0' };
+  fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify(lock));
+
+  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')) });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.equal(result.usable, false);
+  assert.equal(fs.existsSync(prevTreeOf(root)), true, 'imports alone must not clear a leftover');
+}));
+
 test('dr-12. a native rebuild runs in the stage, never in the live root, and ignore-scripts stays on', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
   const calls = [];
