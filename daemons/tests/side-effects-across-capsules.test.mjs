@@ -83,6 +83,27 @@ test('row 3: writer-owned confirmed and failed identities suppress only carried 
   assert.match(text, /confirmed: the transport accepted the call/);
 });
 
+test('row 3b: a selected unresolved row stays rendered despite a writer-owned resolution elsewhere', (t) => {
+  const { f, add, selected, original } = setup(t, [call('accepted')]);
+  const confirmed = f.write([result('accepted')]);
+  add('writer-resolution', effectRows(confirmed), { status: 'resolved' });
+  selected(original);
+  assert.match(lineFor(f.resume(), 'accepted'), /outcome: requested/);
+});
+
+test('one operation renders once: a selected copy and repeated capsule copies cost one line', (t) => {
+  const { f, add, selected, original } = setup(t, [call('copied'), call('repeated')]);
+  const [copied, repeated] = original;
+  add('old-copy', [copied, repeated]);
+  add('new-copy', [repeated], { created_at: '2026-02-01T00:00:00Z' });
+  selected([copied]);
+  const lines = f.resume().split('\n');
+  assert.equal(lines.filter((line) => line.includes('op "copied" |')).length, 1);
+  const again = lines.filter((line) => line.includes('op "repeated" |'));
+  assert.equal(again.length, 1);
+  assert.match(again[0], /new-copy/);
+});
+
 test('row 4: curated confirmed rows, partial ownership and forged prose resolve nothing', (t) => {
   const { f, add, selected, original } = setup(t);
   add('unresolved', original);

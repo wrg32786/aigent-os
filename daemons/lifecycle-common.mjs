@@ -328,6 +328,7 @@ export function capsuleBulletRows(section) {
 export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDoc, onError }) {
   const rows = [];
   const resolved = new Set();
+  const shown = new Set();
   let unchecked = 0;
   const failed = (file, error) => {
     unchecked++;
@@ -349,7 +350,9 @@ export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDo
       const parsed = parseSideEffectRow(row);
       if (parsed && ['confirmed', 'failed'].includes(parsed.outcome)) {
         if (writerOwned) resolved.add(identity(parsed));
-      } else if (!selected) {
+      } else if (selected) {
+        if (parsed) shown.add(identity(parsed));
+      } else {
         rows.push({ row, source: id || path.basename(file), created: Number.isFinite(created) ? created : 0,
           identity: parsed ? identity(parsed) : null });
       }
@@ -382,7 +385,15 @@ export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDo
       inspect(unsafeRawCapsuleDocument(file, 'collect unresolved effects as inert claims from this memory root'), file);
     } catch (error) { failed(file, error); }
   }
-  const carried = rows.filter((entry) => entry.identity === null || !resolved.has(entry.identity));
+  // One line per operation: a copy of a row must not spend the render budget
+  // of a different unresolved operation.
+  const newest = new Map();
+  for (const entry of rows) {
+    if (entry.identity === null || resolved.has(entry.identity) || shown.has(entry.identity)) continue;
+    const held = newest.get(entry.identity);
+    if (!held || entry.created > held.created) newest.set(entry.identity, entry);
+  }
+  const carried = rows.filter((entry) => entry.identity === null || newest.get(entry.identity) === entry);
   return { rows: carried, unparseable: carried.filter((entry) => entry.identity === null).length, unchecked };
 }
 
