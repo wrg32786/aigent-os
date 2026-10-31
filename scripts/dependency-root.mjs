@@ -4,23 +4,49 @@
 //
 // `npm ci` deletes node_modules before it installs. Run in place on a seat, a
 // DLL held by a live process made it fail halfway: 69 packages became 6. So npm
-// never runs in the live root. A tree that matches its lockfile and imports is
-// left alone. Anything else is built in a sibling stage, imported there, and
-// swapped in by rename. A failure at any step leaves the previous tree.
+// never runs in a live root.
+//
+// Three holders sit beside the root, each a directory with its own package.json
+// and node_modules, so any tree can be probed where it lies:
+//   .deps-stage-<root>    the candidate being built
+//   .deps-prev-<root>     the tree the last swap replaced
+//   .deps-failed-<root>   a live tree proven not to load
+//
+// THE ONE RULE: a tree is deleted only if it was just probed bad, or a tree in
+// the live position was just probed good. Every row below follows from it.
+//
+//   on disk at start            probe                exit
+//   no prev                     -                    the update table
+//   prev, no live               -                    prev moves to live
+//   prev, live good             live good            prev deleted
+//   prev, live bad              prev good            live to failed, prev to live
+//   prev, live bad              prev bad             prev deleted, live stays
+//   rename refused above        -                    nothing deleted; reason names
+//                                                    where the good tree is
+//
+//   live tree                   update               result
+//   matches lock and works      not attempted        unchanged
+//   anything else               npm fails            kept-previous / kept-unusable
+//   anything else               stage does not work  kept-previous / kept-unusable
+//   anything else               rename refused       kept-previous / kept-unusable
+//   anything else               fails in final place rolled back, same outcomes
+//   anything else               works in both places updated
+//   none                        works                updated
+//   none                        does not work        installed-unverified
+//   none                        npm fails            failed
 //
 // Measured on Windows with sharp's DLLs loaded by a live process: the rename
 // succeeds, that process keeps running from the mapped files, and only deleting
-// the old tree stops partway. So a swap does not disturb a running server, it
-// picks the new tree up on its next start, and the part it still holds stays in
-// node_modules.prev until then; the next run removes it. A refused rename, as
-// antivirus can cause, keeps the old tree in place.
+// the old tree stops partway. A running server is not disturbed and picks up
+// the new tree on its next start. What it still holds stays in the prev holder;
+// a later run moves it aside if it must, and removes it.
 //
 //   node scripts/dependency-root.mjs <root> [package-to-rebuild]
 //
-// Prints `<outcome>|<reason>`. Exit 0: a tree is in place, and `kept-unusable`
-// or `installed-unverified` say it does not load. Exit 1: nothing was
-// installed. Exit 2: rollback failed; the old tree is preserved at the path in
-// the reason.
+// Prints `<outcome>|<reason>`. Exit 0: node_modules is in place, and
+// `kept-unusable` or `installed-unverified` say it does not work. Exit 1:
+// nothing was installed. Exit 2: no node_modules is in place; the reason says
+// where the good tree is, and rerunning restores it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -57,8 +83,28 @@ export function lockedTreeProblem(root, { fsImpl = fs } = {}) {
   return null;
 }
 
-// Null when every declared dependency imports from `root`. Files on disk prove
-// nothing: an unbuilt native binding installs cleanly and throws on import.
+// The line that says what went wrong: an Error line if there is one, else the
+// last line with anything on it. The first line of a stack is a source line.
+function reasonFrom(text, fallback) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const named = lines.find((line) => /^(npm error |\w*Error\b)/.test(line));
+  return (named || lines.at(-1) || fallback).slice(0, 200);
+}
+
+// Importing node-pty on Windows does not load conpty.node, so a tree with its
+// binding deleted imports cleanly. Only a spawn touches the binding.
+const PROBE_SCRIPT = `
+for (const name of process.argv.slice(1)) {
+  const loaded = await import(name);
+  if (name !== 'node-pty') continue;
+  const child = (loaded.default ?? loaded).spawn(process.execPath, ['-e', ''], {});
+  await new Promise((resolve) => { child.onExit(resolve); });
+}
+process.exit(0);
+`;
+
+// Null when every declared dependency works from root. Files on disk prove
+// nothing: an unbuilt native binding installs cleanly and throws when used.
 export function probeImports(root, { fsImpl = fs, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   let names;
   try {
@@ -66,22 +112,18 @@ export function probeImports(root, { fsImpl = fs, timeoutMs = PROBE_TIMEOUT_MS }
   } catch (error) {
     return `no readable package.json: ${error.message}`;
   }
-  const script = 'for (const name of process.argv.slice(1)) await import(name);';
-  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script, '--', ...names], {
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', PROBE_SCRIPT, '--', ...names], {
     cwd: root,
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
   });
   if (run.status === 0) return null;
-  const line = String(run.stderr || run.error?.message || 'import failed')
-    .split(/\r?\n/)
-    .find((text) => /error/i.test(text));
-  return (line || 'import failed').trim().slice(0, 200);
+  return reasonFrom(run.stderr || run.error?.message, 'probe failed');
 }
 
 function runNpm(args, cwd) {
-  const run = spawnSync('npm', args, {
+  const run = spawnSync('npm', [...args, '--loglevel=error'], {
     cwd,
     encoding: 'utf8',
     timeout: NPM_TIMEOUT_MS,
@@ -89,10 +131,7 @@ function runNpm(args, cwd) {
     windowsHide: true,
   });
   if (run.status === 0) return { ok: true };
-  const line = String(run.stderr || run.error?.message || `npm exited ${run.status}`)
-    .split(/\r?\n/)
-    .find((text) => text.trim());
-  return { ok: false, reason: (line || 'npm failed').trim().slice(0, 200) };
+  return { ok: false, reason: reasonFrom(run.stderr || run.error?.message, `npm exited ${run.status}`) };
 }
 
 function sleep(milliseconds) {
@@ -114,28 +153,39 @@ function moveTree(from, to, { fsImpl, retryDelayMs }) {
 function removeTree(target, fsImpl) {
   try {
     fsImpl.rmSync(target, { recursive: true, force: true });
-  } catch { /* a leftover is cleaned by the next run; the tree in place is what matters */ }
+  } catch { /* the caller checks what is left */ }
+  return !fsImpl.existsSync(target);
 }
 
-function restorePrevious({
-  live, previous, failed, root, probe, fsImpl, moveOptions,
-}) {
-  const stuck = (error) => ({ outcome: 'rollback-failed', preserved: previous, reason: error.message });
+function holder(root, target, fsImpl) {
+  fsImpl.mkdirSync(target, { recursive: true });
+  fsImpl.copyFileSync(path.join(root, 'package.json'), path.join(target, 'package.json'));
+  return path.join(target, 'node_modules');
+}
+
+// Applies the first table. Returns a result only when the run must stop.
+function settleLeftovers({ live, prev, prevTree, failed }, { root, probe, fsImpl, moveOptions }) {
+  if (!fsImpl.existsSync(prevTree)) return null;
+  const noTree = (error) => ({
+    outcome: 'rollback-failed',
+    preserved: prevTree,
+    reason: `the good tree is in ${prevTree}: ${error.message}`,
+  });
   if (!fsImpl.existsSync(live)) {
-    const error = moveTree(previous, live, moveOptions);
-    return error ? stuck(error) : null;
+    const error = moveTree(prevTree, live, moveOptions);
+    return error ? noTree(error) : null;
   }
-  if (probe(root) === null) return null;
-  removeTree(failed, fsImpl);
-  const aside = moveTree(live, failed, moveOptions);
-  if (aside) return stuck(aside);
-  const back = moveTree(previous, live, moveOptions);
-  if (back) return stuck(back);
-  if (probe(root) === null) return null;
-  // Neither loads, and a partly deleted previous tree can look like this. Put
-  // the newer one back; the ordinary path below decides what happens next.
-  const moved = moveTree(live, previous, moveOptions) ?? moveTree(failed, live, moveOptions);
-  return moved ? stuck(moved) : null;
+  if (probe(root) === null || probe(prev) !== null) return null;
+  const aside = moveTree(live, holder(root, failed, fsImpl), moveOptions);
+  if (aside) {
+    return {
+      outcome: 'kept-unusable',
+      usable: false,
+      reason: `the good tree could not be restored (${aside.code || aside.message}); it is in ${prevTree}`,
+    };
+  }
+  const back = moveTree(prevTree, live, moveOptions);
+  return back ? noTree(back) : null;
 }
 
 export function updateDependencyRoot({
@@ -146,97 +196,125 @@ export function updateDependencyRoot({
   fsImpl = fs,
   retryDelayMs = 250,
 }) {
+  const parent = path.dirname(root);
+  const name = path.basename(root);
   const live = path.join(root, 'node_modules');
-  const previous = path.join(root, 'node_modules.prev');
-  const failed = path.join(root, 'node_modules.failed');
-  // A sibling, not a child: inside the root, a package missing from the stage
-  // would resolve up into the live tree and the probe would pass.
-  const stage = path.join(path.dirname(root), `.deps-stage-${path.basename(root)}`);
+  const stage = path.join(parent, `.deps-stage-${name}`);
+  const prev = path.join(parent, `.deps-prev-${name}`);
+  const failed = path.join(parent, `.deps-failed-${name}`);
   const stageTree = path.join(stage, 'node_modules');
+  const prevTree = path.join(prev, 'node_modules');
   const moveOptions = { fsImpl, retryDelayMs };
 
-  // A leftover previous tree is deleted only once the live one is proven: a run
-  // killed between the swap and the final probe leaves the only good tree here.
-  if (fsImpl.existsSync(previous)) {
-    const restored = restorePrevious({
-      live, previous, failed, root, probe, fsImpl, moveOptions,
-    });
-    if (restored) return restored;
-  }
+  const settled = settleLeftovers({ live, prev, prevTree, failed }, {
+    root, probe, fsImpl, moveOptions,
+  });
+  if (settled) return settled;
   removeTree(stage, fsImpl);
-  removeTree(previous, fsImpl);
   removeTree(failed, fsImpl);
+  // Past this point the prev holder is proven bad, or a good tree is live. An
+  // undeletable leftover must not block the next swap, so it moves aside under
+  // a name a later run also clears.
+  for (const entry of fsImpl.readdirSync(parent)) {
+    if (entry.startsWith(`.deps-prev-${name}.`)) removeTree(path.join(parent, entry), fsImpl);
+  }
+  let leftover = '';
+  if (!removeTree(prev, fsImpl)) {
+    leftover = `old files still in use remain in ${prev}; a later run removes them`;
+    moveTree(prev, `${prev}.${Date.now()}`, moveOptions);
+  }
 
   const hadTree = fsImpl.existsSync(live);
   const previousProblem = hadTree ? (lockedTreeProblem(root, { fsImpl }) ?? probe(root)) : 'no tree';
-  if (previousProblem === null) return { outcome: 'unchanged' };
+  if (previousProblem === null) return { outcome: 'unchanged', reason: leftover };
   const previousUsable = hadTree && probe(root) === null;
 
+  const kept = (reason) => ({
+    outcome: previousUsable ? 'kept-previous' : 'kept-unusable',
+    usable: previousUsable,
+    reason,
+  });
   const abandon = (reason) => {
     removeTree(stage, fsImpl);
-    return hadTree
-      ? { outcome: previousUsable ? 'kept-previous' : 'kept-unusable', usable: previousUsable, reason }
-      : { outcome: 'failed', reason };
+    return hadTree ? kept(reason) : { outcome: 'failed', reason };
   };
 
   const hasLock = fsImpl.existsSync(path.join(root, 'package-lock.json'));
   try {
-    fsImpl.mkdirSync(stage, { recursive: true });
-    for (const name of hasLock ? ['package.json', 'package-lock.json'] : ['package.json']) {
-      fsImpl.copyFileSync(path.join(root, name), path.join(stage, name));
-    }
+    holder(root, stage, fsImpl);
+    if (hasLock) fsImpl.copyFileSync(path.join(root, 'package-lock.json'), path.join(stage, 'package-lock.json'));
   } catch (error) {
     return abandon(`the stage could not be prepared: ${error.message}`);
   }
-  const install = npm([hasLock ? 'ci' : 'install', '--silent', '--ignore-scripts'], stage);
+  const install = npm([hasLock ? 'ci' : 'install', '--ignore-scripts'], stage);
   if (!install.ok) return abandon(install.reason);
-  if (rebuild) {
-    const rebuilt = npm(['rebuild', '--silent', rebuild], stage);
-    if (!rebuilt.ok) return abandon(rebuilt.reason);
-  }
+  // Only the named package's own build runs. Whether it mattered is the
+  // probe's call: a tree that works without it is a good tree.
+  const rebuilt = rebuild ? npm(['rebuild', rebuild], stage) : { ok: true };
   if (!fsImpl.existsSync(stageTree)) {
     removeTree(stage, fsImpl);
-    return hadTree ? abandon('npm produced no tree') : { outcome: 'installed-unverified', reason: 'npm produced no tree' };
+    return hadTree ? kept('npm produced no tree') : { outcome: 'installed-unverified', reason: 'npm produced no tree' };
   }
 
   const stageProblem = probe(stage);
-  if (stageProblem !== null && hadTree) return abandon(`the update does not load: ${stageProblem}`);
+  const whyNot = () => [stageProblem, rebuilt.ok ? null : `rebuild ${rebuild}: ${rebuilt.reason}`]
+    .filter(Boolean).join('; ');
+  if (stageProblem !== null && hadTree) return abandon(`the update does not work: ${whyNot()}`);
 
   if (hadTree) {
-    const error = moveTree(live, previous, moveOptions);
-    if (error) return abandon(`the tree is in use (${error.code || error.message})`);
+    let prevSlot;
+    try {
+      prevSlot = holder(root, prev, fsImpl);
+    } catch (error) {
+      return abandon(`the old tree has nowhere to go: ${error.message}`);
+    }
+    const error = moveTree(live, prevSlot, moveOptions);
+    if (error) {
+      removeTree(prev, fsImpl);
+      return abandon(`the tree could not be moved (${error.code || error.message})`);
+    }
   }
   const placed = moveTree(stageTree, live, moveOptions);
   if (placed) {
     if (hadTree) {
-      const restore = moveTree(previous, live, moveOptions);
-      if (restore) return { outcome: 'rollback-failed', preserved: previous, reason: restore.message };
+      const restore = moveTree(prevTree, live, moveOptions);
+      if (restore) {
+        return {
+          outcome: 'rollback-failed',
+          preserved: prevTree,
+          reason: `the good tree is in ${prevTree}: ${restore.message}`,
+        };
+      }
     }
     return abandon(`the new tree could not be placed (${placed.code || placed.message})`);
   }
   removeTree(stage, fsImpl);
   if (!hadTree) {
     return stageProblem === null
-      ? { outcome: 'updated' }
-      : { outcome: 'installed-unverified', reason: stageProblem };
+      ? { outcome: 'updated', reason: leftover }
+      : { outcome: 'installed-unverified', reason: whyNot() };
   }
 
   const finalProblem = probe(root);
   if (finalProblem !== null) {
-    const aside = moveTree(live, failed, moveOptions);
-    const restore = aside ?? moveTree(previous, live, moveOptions);
-    if (restore) return { outcome: 'rollback-failed', preserved: previous, reason: restore.message };
+    const aside = moveTree(live, holder(root, failed, fsImpl), moveOptions);
+    if (aside) return kept(`rollback refused (${aside.code || aside.message}); the good tree is in ${prevTree}`);
+    const restore = moveTree(prevTree, live, moveOptions);
+    if (restore) {
+      return {
+        outcome: 'rollback-failed',
+        preserved: prevTree,
+        reason: `the good tree is in ${prevTree}: ${restore.message}`,
+      };
+    }
     removeTree(failed, fsImpl);
-    return {
-      outcome: previousUsable ? 'kept-previous' : 'kept-unusable',
-      usable: previousUsable,
-      reason: `rolled back: ${finalProblem}`,
-    };
+    removeTree(prev, fsImpl);
+    return kept(`rolled back: ${finalProblem}`);
   }
-  removeTree(previous, fsImpl);
-  return fsImpl.existsSync(previous)
-    ? { outcome: 'updated', reason: `old files still in use remain in ${previous}; the next run removes them` }
-    : { outcome: 'updated' };
+  if (!removeTree(prev, fsImpl)) {
+    leftover = `old files still in use remain in ${prev}; a later run removes them`;
+  }
+  return { outcome: 'updated', reason: leftover };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
@@ -245,8 +323,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     console.error('usage: dependency-root.mjs <root> [package-to-rebuild]');
     process.exit(1);
   }
-  const result = updateDependencyRoot({ root: path.resolve(root), rebuild });
-  console.log(`${result.outcome}|${result.preserved ?? result.reason ?? ''}`);
+  let result;
+  try {
+    result = updateDependencyRoot({ root: path.resolve(root), rebuild });
+  } catch (error) {
+    result = { outcome: 'failed', reason: error.message };
+  }
+  console.log(`${result.outcome}|${result.reason ?? ''}`);
   if (result.outcome === 'failed') process.exitCode = 1;
   if (result.outcome === 'rollback-failed') process.exitCode = 2;
 }

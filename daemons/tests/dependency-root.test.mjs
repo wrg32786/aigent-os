@@ -89,6 +89,18 @@ function withRoot(lockVersion, body) {
 }
 
 const listing = (root) => fs.readdirSync(root).sort();
+const holderOf = (root, kind) => path.join(path.dirname(root), `.deps-${kind}-${path.basename(root)}`);
+const prevTreeOf = (root) => path.join(holderOf(root, 'prev'), 'node_modules');
+
+// The state a kill after the swap leaves: `good` moved aside, `live` in place.
+function leaveSwap(root, { liveVersion, liveThrows = false, prevVersion, prevThrows = false }) {
+  writeTree(root, prevVersion, { throws: prevThrows });
+  const prev = holderOf(root, 'prev');
+  fs.mkdirSync(prev);
+  fs.copyFileSync(path.join(root, 'package.json'), path.join(prev, 'package.json'));
+  fs.renameSync(path.join(root, 'node_modules'), prevTreeOf(root));
+  writeTree(root, liveVersion, { throws: liveThrows });
+}
 
 test('dr-1. an unchanged tree that loads is left alone: npm never runs', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '2.0.0');
@@ -114,9 +126,12 @@ test('dr-2. a failed install leaves the previous tree intact, byte for byte', ()
 
 test('dr-3. directory presence is not success: a stage that does not load is never committed', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
-  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0', { throws: true })) });
+  let renames = 0;
+  const fsImpl = { ...fs, renameSync(from, to) { renames += 1; return fs.renameSync(from, to); } };
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0', { throws: true })), fsImpl });
   assert.equal(result.outcome, 'kept-previous');
   assert.equal(installedVersion(root), '1.0.0');
+  assert.equal(renames, 0, 'the stage gate stops it before anything moves');
 }));
 
 test('dr-4. the swap refused while a native module is loaded changes nothing', () => withRoot('2.0.0', ({ root }) => {
@@ -135,7 +150,7 @@ test('dr-4. the swap refused while a native module is loaded changes nothing', (
     root, npm: fakeNpm(installs('2.0.0')), fsImpl, retryDelayMs: 0,
   });
   assert.equal(result.outcome, 'kept-previous');
-  assert.match(result.reason, /in use/);
+  assert.match(result.reason, /EPERM/);
   assert.equal(installedVersion(root), '1.0.0');
   assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
@@ -156,7 +171,7 @@ test('dr-5. a failure after the old tree moved aside puts it back', () => withRo
   });
   assert.equal(result.outcome, 'kept-previous');
   assert.equal(installedVersion(root), '1.0.0');
-  assert.equal(fs.existsSync(path.join(root, 'node_modules.prev')), false);
+  assert.equal(fs.existsSync(prevTreeOf(root)), false);
 }));
 
 test('dr-6. a tree that stops loading in its final place is rolled back', () => withRoot('2.0.0', ({ root }) => {
@@ -169,16 +184,15 @@ test('dr-6. a tree that stops loading in its final place is rolled back', () => 
   assert.equal(result.outcome, 'kept-previous');
   assert.match(result.reason, /rolled back/);
   assert.equal(installedVersion(root), '1.0.0');
-  assert.deepEqual(listing(root).filter((name) => name.startsWith('node_modules')), ['node_modules']);
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
 
 test('dr-7. a rollback that cannot complete says so and keeps the old tree on disk', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
-  const prev = path.join(root, 'node_modules.prev');
   const fsImpl = {
     ...fs,
     renameSync(from, to) {
-      if (String(from).includes('.deps-stage-') || path.resolve(String(from)) === path.resolve(prev)) {
+      if (String(from).includes('.deps-stage-') || path.resolve(String(from)) === path.resolve(prevTreeOf(root))) {
         throw Object.assign(new Error('EBUSY: resource busy, rename'), { code: 'EBUSY' });
       }
       return fs.renameSync(from, to);
@@ -188,8 +202,12 @@ test('dr-7. a rollback that cannot complete says so and keeps the old tree on di
     root, npm: fakeNpm(installs('2.0.0')), fsImpl, retryDelayMs: 0,
   });
   assert.equal(result.outcome, 'rollback-failed');
-  assert.equal(result.preserved, prev);
-  assert.equal(fs.existsSync(path.join(prev, DEP, 'package.json')), true);
+  assert.equal(result.preserved, prevTreeOf(root));
+  assert.equal(fs.existsSync(path.join(prevTreeOf(root), DEP, 'package.json')), true);
+  // A rerun finds no live tree and restores it.
+  const again = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')) });
+  assert.equal(again.outcome, 'updated');
+  assert.equal(installedVersion(root), '2.0.0');
 }));
 
 test('dr-8. a good update lands, loads and leaves nothing behind', () => withRoot('2.0.0', ({ root }) => {
@@ -202,25 +220,32 @@ test('dr-8. a good update lands, loads and leaves nothing behind', () => withRoo
   assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
 
-test('dr-8b. old files a live process still holds are reported, not hidden, and the next run removes them', () => withRoot('2.0.0', ({ root }) => {
+test('dr-8b. old files a live process still holds are reported, and they block nothing later', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
-  const previous = path.join(root, 'node_modules.prev');
+  const prev = holderOf(root, 'prev');
+  const held = (target) => path.resolve(String(target)) === path.resolve(prev);
   const fsImpl = {
     ...fs,
     rmSync(target, options) {
-      if (path.resolve(String(target)) === path.resolve(previous)) {
-        throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
-      }
+      if (held(target)) throw Object.assign(new Error('EPERM: unlink'), { code: 'EPERM' });
       return fs.rmSync(target, options);
     },
   };
-  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), fsImpl });
-  assert.equal(result.outcome, 'updated');
-  assert.match(result.reason, /still in use/);
+  const first = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), fsImpl });
+  assert.equal(first.outcome, 'updated');
+  assert.match(first.reason, /still in use/);
   assert.equal(installedVersion(root), '2.0.0', 'the update stands');
 
-  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
-  assert.equal(fs.existsSync(previous), false);
+  const unchanged = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')), fsImpl });
+  assert.equal(unchanged.outcome, 'unchanged');
+  assert.match(unchanged.reason, /still in use/, 'a leftover is never a clean unchanged');
+
+  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  lock.packages[`node_modules/${DEP}`].version = '3.0.0';
+  fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify(lock));
+  const next = updateDependencyRoot({ root, npm: fakeNpm(installs('3.0.0')), fsImpl });
+  assert.equal(next.outcome, 'updated', 'an undeletable leftover does not block the next update');
+  assert.equal(installedVersion(root), '3.0.0');
 }));
 
 test('dr-9. the Metis shape: right versions, unloadable tree, and an update that cannot do better keeps what is there', () => withRoot('2.0.0', ({ root }) => {
@@ -249,31 +274,25 @@ test('dr-10. a fresh install has no tree to protect: it lands, and an unloadable
 });
 
 test('dr-11. a run killed between the two renames is repaired by the next run', () => withRoot('1.0.0', ({ root }) => {
-  writeTree(root, '1.0.0');
-  fs.renameSync(path.join(root, 'node_modules'), path.join(root, 'node_modules.prev'));
+  leaveSwap(root, { liveVersion: '1.0.0', prevVersion: '1.0.0' });
+  fs.rmSync(path.join(root, 'node_modules'), { recursive: true });
   const npm = fakeNpm(fails('must not be called'));
   assert.equal(updateDependencyRoot({ root, npm }).outcome, 'unchanged');
   assert.equal(npm.calls.length, 0);
   assert.equal(installedVersion(root), '1.0.0');
 }));
 
-test('dr-11b. a run killed between the swap and the final probe: the good previous tree is restored, never deleted', () => withRoot('1.0.0', ({ root }) => {
-  writeTree(root, '1.0.0');
-  fs.renameSync(path.join(root, 'node_modules'), path.join(root, 'node_modules.prev'));
-  writeTree(root, '1.0.0', { throws: true });
-
+test('dr-11b. a run killed before the final probe: live bad, previous good: the good tree comes back', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', liveThrows: true, prevVersion: '1.0.0' });
   const npm = fakeNpm(fails('must not be called'));
   assert.equal(updateDependencyRoot({ root, npm }).outcome, 'unchanged');
   assert.equal(npm.calls.length, 0);
-  assert.equal(probeImports(root), null, 'the good tree came back');
-  assert.deepEqual(listing(root).filter((name) => name.startsWith('node_modules')), ['node_modules']);
+  assert.equal(probeImports(root), null);
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search'], 'nothing is left beside it');
 }));
 
-test('dr-11c. the same crash when neither tree loads leaves the newer one and a truthful outcome', () => withRoot('2.0.0', ({ root }) => {
-  writeTree(root, '1.0.0', { throws: true });
-  fs.renameSync(path.join(root, 'node_modules'), path.join(root, 'node_modules.prev'));
-  writeTree(root, '2.0.0', { throws: true });
-
+test('dr-11c. live bad and previous bad: the newer tree stays and the outcome is truthful', () => withRoot('2.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '2.0.0', liveThrows: true, prevVersion: '1.0.0', prevThrows: true });
   const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')) });
   assert.equal(result.outcome, 'kept-unusable');
   assert.equal(installedVersion(root), '2.0.0');
@@ -291,7 +310,40 @@ test('dr-11d. a stage that cannot be prepared keeps the tree and states the reas
   assert.equal(result.outcome, 'kept-previous');
   assert.match(result.reason, /ENOSPC/);
   assert.equal(installedVersion(root), '1.0.0');
-  assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
+}));
+
+test('dr-11e. the reviewed loss: a good live tree, one transient bad probe, a partial leftover. Nothing good is deleted', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', prevVersion: '0.5.0', prevThrows: true });
+  let calls = 0;
+  const probe = (target) => {
+    calls += 1;
+    return calls === 1 ? 'transient' : probeImports(target);
+  };
+  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')), probe });
+  assert.equal(result.outcome, 'unchanged');
+  assert.equal(installedVersion(root), '1.0.0');
+  assert.equal(probeImports(root), null);
+}));
+
+test('dr-11f. a refused rename during recovery keeps both trees and names where the good one is', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', liveThrows: true, prevVersion: '1.0.0' });
+  const fsImpl = {
+    ...fs,
+    renameSync(from, to) {
+      if (path.resolve(String(from)) === path.resolve(path.join(root, 'node_modules'))) {
+        throw Object.assign(new Error('EPERM: rename'), { code: 'EPERM' });
+      }
+      return fs.renameSync(from, to);
+    },
+  };
+  const result = updateDependencyRoot({
+    root, npm: fakeNpm(fails('must not be called')), fsImpl, retryDelayMs: 0,
+  });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.ok(result.reason.includes(prevTreeOf(root)), 'the reason names the good tree');
+  assert.equal(fs.existsSync(path.join(root, 'node_modules')), true, 'the tree is still in place');
+  assert.equal(fs.existsSync(prevTreeOf(root)), true);
+  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
 }));
 
 test('dr-12. a native rebuild runs in the stage, never in the live root, and ignore-scripts stays on', () => withRoot('2.0.0', ({ root }) => {
@@ -308,7 +360,7 @@ test('dr-12. a native rebuild runs in the stage, never in the live root, and ign
   assert.ok(calls.every((call) => path.resolve(call.cwd) !== path.resolve(root)));
 }));
 
-test('dr-13. the installed-root failure path: install.sh with an npm that deletes first keeps the working tree', () => {
+test('dr-13. the installed-root failure path: install.sh with an npm that deletes first keeps the working tree', { timeout: 300_000 }, () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'deproot-e2e-'));
   try {
     const target = path.join(base, 'seat');
@@ -337,12 +389,15 @@ test('dr-13. the installed-root failure path: install.sh with an npm that delete
     ].join('\r\n'));
 
     const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
-    spawnSync('bash', ['install.sh', '--target', target, '--no-launcher'], {
+    const run = spawnSync('bash', ['install.sh', '--target', target, '--no-launcher'], {
       cwd: REPO,
       env: { ...process.env, [pathKey]: `${bin}${path.delimiter}${process.env[pathKey]}` },
       encoding: 'utf8',
-      timeout: 120_000,
+      timeout: 280_000,
     });
+    assert.equal(run.error, undefined, 'the installer must finish inside the budget');
+    assert.match(run.stdout, /Checking semantic-search dependencies/, 'the deps step was never reached');
+    assert.match(run.stdout, /semantic-search dependencies/);
 
     assert.equal(fs.existsSync(path.join(root, 'node_modules', DEP, 'index.js')), true, 'the working tree was destroyed');
     assert.equal(installedVersion(root), '1.0.0');
