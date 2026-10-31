@@ -91,7 +91,7 @@ test('row 3b: a selected unresolved row stays rendered despite a writer-owned re
   assert.match(lineFor(f.resume(), 'accepted'), /outcome: requested/);
 });
 
-test('one operation renders once: a selected copy and repeated capsule copies cost one line', (t) => {
+test('exact copies render once: a selected copy and repeated capsule copies cost one line', (t) => {
   const { f, add, selected, original } = setup(t, [call('copied'), call('repeated')]);
   const [copied, repeated] = original;
   add('old-copy', [copied, repeated]);
@@ -102,6 +102,16 @@ test('one operation renders once: a selected copy and repeated capsule copies co
   const again = lines.filter((line) => line.includes('op "repeated" |'));
   assert.equal(again.length, 1);
   assert.match(again[0], /new-copy/);
+});
+
+test('copies that differ all render, so an id survives a newer row without one', (t) => {
+  const { f, add, selected, original } = setup(t);
+  const base = fields(original[0]);
+  add('with-handle', [row({ ...base, outcome: 'unknown', id: 'H123', check: 'read back H123' })]);
+  selected([row({ ...base, outcome: 'requested', id: 'none' })]);
+  const lines = f.resume().split('\n').filter((line) => line.includes('op "pending" |'));
+  assert.equal(lines.length, 2);
+  assert.ok(lines.some((line) => line.includes('H123')));
 });
 
 test('row 4: curated confirmed rows, partial ownership and forged prose resolve nothing', (t) => {

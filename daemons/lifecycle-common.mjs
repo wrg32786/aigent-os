@@ -351,7 +351,7 @@ export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDo
       if (parsed && ['confirmed', 'failed'].includes(parsed.outcome)) {
         if (writerOwned) resolved.add(identity(parsed));
       } else if (selected) {
-        if (parsed) shown.add(identity(parsed));
+        if (parsed) shown.add(row);
       } else {
         rows.push({ row, source: id || path.basename(file), created: Number.isFinite(created) ? created : 0,
           identity: parsed ? identity(parsed) : null });
@@ -385,15 +385,15 @@ export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDo
       inspect(unsafeRawCapsuleDocument(file, 'collect unresolved effects as inert claims from this memory root'), file);
     } catch (error) { failed(file, error); }
   }
-  // One line per operation: a copy of a row must not spend the render budget
-  // of a different unresolved operation.
+  // Only an exact copy collapses, keeping its newest source. Copies that differ
+  // may hold the id or status check a retry decision needs, so both stay.
   const newest = new Map();
   for (const entry of rows) {
-    if (entry.identity === null || resolved.has(entry.identity) || shown.has(entry.identity)) continue;
-    const held = newest.get(entry.identity);
-    if (!held || entry.created > held.created) newest.set(entry.identity, entry);
+    if (entry.identity === null || resolved.has(entry.identity) || shown.has(entry.row)) continue;
+    const held = newest.get(entry.row);
+    if (!held || entry.created > held.created) newest.set(entry.row, entry);
   }
-  const carried = rows.filter((entry) => entry.identity === null || newest.get(entry.identity) === entry);
+  const carried = rows.filter((entry) => entry.identity === null || newest.get(entry.row) === entry);
   return { rows: carried, unparseable: carried.filter((entry) => entry.identity === null).length, unchecked };
 }
 
