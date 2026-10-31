@@ -1,6 +1,6 @@
 # Native pointer: the Room as the record, the engine as the doorbell
 
-*fleet-delivery mod 0.4.2, 2026-10-30.*
+*fleet-delivery mod 0.4.3, 2026-10-30.*
 
 ## The problem it removes
 
@@ -55,8 +55,8 @@ The first six rounds of review were spent on a design where the mod carried the 
 
 ## Rollout (fleet of four, staged like the cf08677 cutover)
 
-1. Merge; the mod is a user-scope plugin read from `C:\dev\aigent-os-wt-mods`: `git -C C:/dev/aigent-os-wt-mods checkout --detach <merge-commit>` then `claude plugin update fleet-delivery@aigent-os`; `claude plugin list` must read 0.4.2. The submit wait bound is a 60-minute turn wait plus up to six `submitTimeoutMinutes` windows.
-2. Each seat loads 0.4.2 at its own relaunch (park, Will closes the window, relaunch through the seat's shortcut). Order: Titus, Metis, DaVinci, Pheme in her newsletter-safe window. A seat on 0.3.0 and a seat on 0.4.2 interoperate: a 0.3.0 recipient publishes no marker, so it is never announced to; its tick delivers the file as before.
+1. Merge; the mod is a user-scope plugin read from `C:\dev\aigent-os-wt-mods`: `git -C C:/dev/aigent-os-wt-mods checkout --detach <merge-commit>` then `claude plugin update fleet-delivery@aigent-os`; `claude plugin list` must read 0.4.3. The submit wait bound is a 60-minute turn wait plus up to six `submitTimeoutMinutes` windows.
+2. Each seat loads 0.4.3 at its own relaunch (park, Will closes the window, relaunch through the seat's shortcut). Order: Titus, Metis, DaVinci, Pheme in her newsletter-safe window. A seat on 0.3.0 and a seat on 0.4.3 interoperate: a 0.3.0 recipient publishes no marker, so it is never announced to; its tick delivers the file as before.
 3. Receipt per seat on aigent-os-program #49: `claude plugin list` version, one labelled Room message each way with the sender's `pointer queued` log line, the recipient's transcript rows showing the pointer and its `room_drain` call returning the file, and one message sent while the recipient is mid-turn. The `pointer queued` line alone is not delivery evidence.
 4. Not in this change: the supervisor's inbox freeze and the runner's refresh hold stay as they are; they govern the fallback path. Repointing the legacy-runtime hooks on the supervisor seats remains a separate follow-up.
 

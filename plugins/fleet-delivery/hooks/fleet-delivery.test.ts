@@ -213,6 +213,8 @@ function seat(on: On, world: World = {}) {
     const held = slot('generation')
     slots.set('generation', { value: Number(held.value ?? 0) + 1, version: held.version + 1 })
   }
+  // What the host does at every session end, a /clear included: empties $.state, module alive.
+  const wipe = () => slots.clear()
   on('prompt.read', async () => {
     log.push('prompt.read')
     if (world.beforeRead) {
@@ -364,7 +366,7 @@ function seat(on: On, world: World = {}) {
   const beforeRead = (run: () => void) => {
     world.beforeRead = run
   }
-  return { pidChecks, onLogRead, setHeld, writes, dirs, sweeps, beforeMove, beforeRead, files, inboxAtSubmit, claimedAtSubmit, processedAtSubmit, runs, moves, logAtMove, store, storeCalls, storeUp, reload, failNext, held, log, box, clock, ledger, lastStatus }
+  return { wipe, pidChecks, onLogRead, setHeld, writes, dirs, sweeps, beforeMove, beforeRead, files, inboxAtSubmit, claimedAtSubmit, processedAtSubmit, runs, moves, logAtMove, store, storeCalls, storeUp, reload, failNext, held, log, box, clock, ledger, lastStatus }
 }
 
 const submits = (log: string[]) => log.filter(line => line.startsWith('submit '))
@@ -1804,6 +1806,63 @@ test('after a reload or /clear: a submitting claim from an older module generati
   expect(settled[0]?.detail).toContain('generation 1')
   expect(w.lastStatus()).toContain('1 unresolved')
   expect(w.lastStatus()).toContain('/delivery-reconcile room:alpha:a.json')
+})
+
+test('#136 the host empties $.state while a submit is out (a /clear): the answer still lands, nothing holds', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => { enter = done })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/a.json`]: ENVELOPE }, queue: [late] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitting')
+  w.wipe()
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(statuses(w.ledger().filter(entry => entry.id === 'room:alpha:a.json'))).toEqual(['submitting', 'submitted'])
+  expect(w.files.has(`${PROCESSED}/a.json`)).toBe(true)
+  w.files.set(`${INBOX}/b.json`, ENVELOPE)
+  await w.turn()
+  expect(submits(w.log)).toHaveLength(2)
+  expect(w.lastStatus()).not.toContain('unresolved')
+})
+
+test('#136 a reload after the wipe is a real successor: the old module records nothing', CONFIGURED, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => { enter = done })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/a.json`]: ENVELOPE }, queue: [late] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  w.wipe()
+  w.reload()
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(statuses(w.ledger().filter(entry => entry.id === 'room:alpha:a.json'))).toEqual(['submitting'])
+})
+
+test('#136 wipe, then a timed-out submit, then the late answer: recorded submitted', { options: { ...CONFIGURED.options, submitTimeoutMinutes: 1 } }, async ($, on) => {
+  let enter: (value: PromptSubmitResult) => void = () => {}
+  const late = new Promise<PromptSubmitResult>(done => { enter = done })
+  const w = world(on, $, { files: { ...READY, [`${INBOX}/a.json`]: ENVELOPE }, queue: [late] })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  w.wipe()
+  await w.clock.advance(60_001)
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitting:unresolved')
+  enter({ text: 'entered' })
+  await w.clock.settle()
+  expect(w.held('room:alpha:a.json')?.status).toBe('submitted')
+})
+
+test('a failed tick is logged, not swallowed', CONFIGURED, async ($, on) => {
+  const w = world(on, $, { files: READY, submit: new Promise<PromptSubmitResult>(() => {}) })
+  void $.turn.complete(TURN)
+  await w.clock.settle()
+  // The unresolved line is the next log write, and nothing catches it but the tick.
+  w.failNext(1)
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  expect(w.log.filter(entry => entry.startsWith('log fleet-delivery: tick failed:'))).toHaveLength(1)
 })
 
 test('a long-held submitting claim past the submit timeout, pid alive, nothing in flight here, becomes unresolved', CONFIGURED, async ($, on) => {

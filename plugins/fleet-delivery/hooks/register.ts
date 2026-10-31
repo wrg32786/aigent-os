@@ -164,6 +164,8 @@ let jobScript: 'unchecked' | 'present' | 'absent' = 'unchecked'
 let timer: Timer | undefined
 let lastTickAt = 0
 let isTicking = false
+// A repeating tick failure is logged once, and again after a good tick.
+let lastTickError: string | undefined
 let hasWarnedBareOwner = false
 // Serializes this module's log appends.
 let logWrites: Promise<void> = Promise.resolve()
@@ -443,7 +445,9 @@ async function claimGeneration($: $, reclaim = false): Promise<void> {
   if (generation !== undefined && (!reclaim || (await $.state.get(GENERATION)).value === generation)) return
   for (let i = 0; i < CAS_TRIES; i++) {
     const held = await $.state.get(GENERATION)
-    const next = (held.value ?? 0) + 1
+    // Empty state (#136): this module keeps its number; a new one takes the
+    // clock, so a reload after a wipe never shares the number it replaces.
+    const next = held.value !== undefined ? held.value + 1 : generation ?? (await $.clock.now())
     if ((await $.state.set(GENERATION, next, { ifVersion: held.version })).isSet) {
       generation = next
       return
@@ -454,8 +458,13 @@ async function claimGeneration($: $, reclaim = false): Promise<void> {
 
 class Superseded extends Error {}
 
+// Every session end, a /clear included, the host empties $.state while this
+// module lives on (#136). No value is no successor: this module takes its
+// generation back, so a submit that straddled the edge can still be recorded.
 async function assertCurrent($: $): Promise<void> {
-  if ((await $.state.get(GENERATION)).value !== generation) throw new Superseded('superseded by a reloaded module')
+  const held = (await $.state.get(GENERATION)).value
+  if (held === undefined) await claimGeneration($, true)
+  else if (held !== generation) throw new Superseded('superseded by a reloaded module')
 }
 
 // Where a Room file lives. Invariant: inbox/ = unclaimed (room_drain may take
@@ -734,7 +743,11 @@ async function transition(
     const held = await $.state.get(LEDGER)
     const all = held.value ?? {}
     const entries = all[w.seat]
-    if (!entries) throw new Error('ledger not loaded')
+    if (!entries) {
+      // The host emptied $.state (#136): the log has the ledger.
+      if (!(await loadLedger($, w, await readLog($, w)))) throw new Error('ledger not loaded')
+      continue
+    }
     const prior = entries[id]
     const next = decide(prior)
     if (next === null) return null
@@ -1191,6 +1204,7 @@ async function resolve($: $): Promise<{ w: Where } | { off: true; release?: Wher
 async function tick($: $): Promise<void> {
   if (isTicking || !config.installRoot) return
   isTicking = true
+  let failed: string | undefined
   try {
     await begin($)
     const where = await resolve($)
@@ -1578,9 +1592,14 @@ async function tick($: $): Promise<void> {
       show('', queue.filter(one => !isFinal(now[one.id])).length)
       return
     }
-  } catch {
+  } catch (error) {
     // A failed tick leaves the ledger as it stood; the next one retries.
+    if (!(error instanceof Superseded)) {
+      failed = clean((error as Error)?.message, 160)
+      if (failed !== lastTickError) try { $.ui.log(`fleet-delivery: tick failed: ${failed}`) } catch {}
+    }
   } finally {
+    lastTickError = failed
     isTicking = false
   }
 }
