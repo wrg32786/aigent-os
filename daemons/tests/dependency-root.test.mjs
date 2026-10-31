@@ -233,12 +233,12 @@ test('dr-8b. old files a live process still holds are reported, and they block n
   };
   const first = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), fsImpl });
   assert.equal(first.outcome, 'updated');
-  assert.match(first.reason, /still in use/);
+  assert.match(first.reason, /old trees kept/);
   assert.equal(installedVersion(root), '2.0.0', 'the update stands');
 
   const unchanged = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')), fsImpl });
   assert.equal(unchanged.outcome, 'unchanged');
-  assert.match(unchanged.reason, /still in use/, 'a leftover is never a clean unchanged');
+  assert.match(unchanged.reason, /old trees kept/, 'a leftover is never a clean unchanged');
 
   const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   lock.packages[`node_modules/${DEP}`].version = '3.0.0';
@@ -291,11 +291,13 @@ test('dr-11b. a run killed before the final probe: live bad, previous good: the 
   assert.deepEqual(listing(path.dirname(root)), ['semantic-search'], 'nothing is left beside it');
 }));
 
-test('dr-11c. live bad and previous bad: the newer tree stays and the outcome is truthful', () => withRoot('2.0.0', ({ root }) => {
+test('dr-11c. live bad and previous bad: both are kept and the outcome is truthful', () => withRoot('2.0.0', ({ root }) => {
   leaveSwap(root, { liveVersion: '2.0.0', liveThrows: true, prevVersion: '1.0.0', prevThrows: true });
   const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')) });
   assert.equal(result.outcome, 'kept-unusable');
   assert.equal(installedVersion(root), '2.0.0');
+  assert.equal(fs.existsSync(prevTreeOf(root)), true, 'nothing proved a good tree, so nothing is deleted');
+  assert.match(result.reason, /old trees kept/);
 }));
 
 test('dr-11d. a stage that cannot be prepared keeps the tree and states the reason', () => withRoot('2.0.0', ({ root }) => {
@@ -312,17 +314,25 @@ test('dr-11d. a stage that cannot be prepared keeps the tree and states the reas
   assert.equal(installedVersion(root), '1.0.0');
 }));
 
-test('dr-11e. the reviewed loss: a good live tree, one transient bad probe, a partial leftover. Nothing good is deleted', () => withRoot('1.0.0', ({ root }) => {
-  leaveSwap(root, { liveVersion: '1.0.0', prevVersion: '0.5.0', prevThrows: true });
-  let calls = 0;
+test('dr-11e. the rule: no verdict about a leftover deletes it. A false bad on a complete old tree loses nothing', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', liveThrows: true, prevVersion: '1.0.0' });
+  const prev = holderOf(root, 'prev');
+  let asked = 0;
   const probe = (target) => {
-    calls += 1;
-    return calls === 1 ? 'transient' : probeImports(target);
+    if (path.resolve(target) === path.resolve(prev) && asked < 2) {
+      asked += 1;
+      return 'false bad';
+    }
+    return probeImports(target);
   };
-  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')), probe });
-  assert.equal(result.outcome, 'unchanged');
-  assert.equal(installedVersion(root), '1.0.0');
-  assert.equal(probeImports(root), null);
+  const first = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')), probe });
+  assert.equal(first.outcome, 'kept-unusable');
+  assert.equal(fs.existsSync(prevTreeOf(root)), true, 'the only good tree survived a wrong answer');
+
+  const again = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) });
+  assert.equal(again.outcome, 'unchanged');
+  assert.equal(probeImports(root), null, 'the next run restores it');
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
 
 test('dr-11f. a refused rename during recovery keeps both trees and names where the good one is', () => withRoot('1.0.0', ({ root }) => {
@@ -346,49 +356,37 @@ test('dr-11f. a refused rename during recovery keeps both trees and names where 
   assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
 }));
 
-test('dr-11g. live bad, previous good, one probe that could not finish: the only good tree is not deleted', () => withRoot('1.0.0', ({ root }) => {
-  leaveSwap(root, { liveVersion: '1.0.0', liveThrows: true, prevVersion: '1.0.0' });
-  const prev = holderOf(root, 'prev');
-  let timedOut = false;
-  const probe = (target) => {
-    if (path.resolve(target) === path.resolve(prev) && !timedOut) {
-      timedOut = true;
-      return { unknown: 'spawnSync node ETIMEDOUT' };
-    }
-    return probeImports(target);
-  };
-  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')), probe });
-  assert.equal(result.outcome, 'kept-unusable');
-  assert.match(result.reason, /could not be checked/);
-  assert.equal(fs.existsSync(prevTreeOf(root)), true, 'could not check is not bad');
-
-  const again = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) });
-  assert.equal(again.outcome, 'unchanged');
-  assert.equal(probeImports(root), null, 'the next run restores it');
-}));
-
-test('dr-11h. a live tree that could not be checked is not touched at all', () => withRoot('2.0.0', ({ root }) => {
+test('dr-11g. a tree that crashes or hangs its probe is repaired in a stage, not left alone by a wrong answer', () => withRoot('1.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
-  const npm = fakeNpm(fails('must not be called'));
-  const result = updateDependencyRoot({ root, npm, probe: () => ({ unknown: 'ETIMEDOUT' }) });
-  assert.equal(result.outcome, 'kept-unusable');
-  assert.equal(npm.calls.length, 0);
-  assert.equal(installedVersion(root), '1.0.0');
+  const probe = (target) => (
+    path.resolve(target) === path.resolve(root) && installedVersion(root) === '1.0.0' && !fs.existsSync(path.join(path.dirname(root), '.deps-stage-semantic-search', 'x'))
+      && probe.first !== false
+      ? (probe.first = false, 'probe ended with SIGSEGV')
+      : probeImports(target));
+  const npm = fakeNpm(installs('1.0.0'));
+  const result = updateDependencyRoot({ root, npm, probe });
+  assert.equal(npm.calls[0].args[0], 'ci', 'the stage ran');
+  assert.equal(result.outcome, 'updated');
+  assert.equal(probeImports(root), null);
 }));
 
-test('dr-11i. one bad answer is not a verdict: a tree that passes on the second ask is good', () => withRoot('1.0.0', ({ root }) => {
-  writeTree(root, '1.0.0');
-  let calls = 0;
-  const probe = (target) => {
-    calls += 1;
-    return calls === 1 ? 'flaky' : probeImports(target);
-  };
-  const npm = fakeNpm(fails('must not be called'));
-  assert.equal(updateDependencyRoot({ root, npm, probe }).outcome, 'unchanged');
-  assert.equal(npm.calls.length, 0);
+test('dr-11h. a real signal death reads as not good', () => withRoot('1.0.0', ({ root }) => {
+  const dir = path.join(root, 'node_modules', DEP);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: DEP, version: '1.0.0', main: 'index.js' }));
+  fs.writeFileSync(path.join(dir, 'index.js'), "process.kill(process.pid, 'SIGTERM');\nsetTimeout(() => {}, 5000);\n");
+  assert.notEqual(probeImports(root), null);
 }));
 
-test('dr-11j. bad old tree, good stage, one transient failure in place: the good new tree is kept', () => withRoot('2.0.0', ({ root }) => {
+test('dr-11i. a tree that hangs the probe is not good, and the timeout is ours', () => withRoot('1.0.0', ({ root }) => {
+  const dir = path.join(root, 'node_modules', DEP);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: DEP, version: '1.0.0', main: 'index.js' }));
+  fs.writeFileSync(path.join(dir, 'index.js'), "setInterval(() => {}, 1000); const end = Date.now() + 20000; while (Date.now() < end);\n");
+  assert.notEqual(probeImports(root, { timeoutMs: 1500 }), null);
+}));
+
+test('dr-11j. bad old tree, good stage, one false bad in place: the good new tree stays and the run says it is unproven', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0', { throws: true });
   let inPlace = 0;
   const probe = (target) => {
@@ -399,22 +397,28 @@ test('dr-11j. bad old tree, good stage, one transient failure in place: the good
     return probeImports(target);
   };
   const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), probe });
-  assert.equal(result.outcome, 'updated');
+  assert.equal(result.outcome, 'kept-unusable', 'it never reads as usable on a failed check');
   assert.equal(installedVersion(root), '2.0.0');
+  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search']);
 }));
 
-test('dr-11k. an update that could not be confirmed in place keeps the old tree for a later run to settle', () => withRoot('2.0.0', ({ root }) => {
+test('dr-11k. a good old tree, a good stage, a false bad in place: rolled back, nothing lost, and the next run can retry', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
-  const probe = (target) => (
-    path.resolve(target) === path.resolve(root) && installedVersion(root) === '2.0.0'
-      ? { unknown: 'ETIMEDOUT' }
-      : probeImports(target));
+  let inPlace = 0;
+  const probe = (target) => {
+    if (path.resolve(target) === path.resolve(root) && installedVersion(root) === '2.0.0') {
+      inPlace += 1;
+      if (inPlace === 1) return 'transient';
+    }
+    return probeImports(target);
+  };
   const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), probe });
-  assert.equal(result.outcome, 'updated');
-  assert.match(result.reason, /could not be confirmed/);
-  assert.equal(fs.existsSync(prevTreeOf(root)), true);
-  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
-  assert.equal(fs.existsSync(prevTreeOf(root)), false);
+  assert.equal(result.outcome, 'kept-previous');
+  assert.equal(installedVersion(root), '1.0.0');
+  assert.equal(probeImports(root), null);
+  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')) }).outcome, 'updated');
+  assert.equal(installedVersion(root), '2.0.0');
 }));
 
 test('dr-11l. rollback refused with a good old tree reports the truth: the live tree does not work', () => withRoot('2.0.0', ({ root }) => {
@@ -439,6 +443,14 @@ test('dr-11l. rollback refused with a good old tree reports the truth: the live 
   assert.equal(result.outcome, 'kept-unusable');
   assert.equal(result.usable, false);
   assert.ok(result.reason.includes(prevTreeOf(root)));
+}));
+
+test('dr-11p. repeated failures never block a swap: an occupied slot moves to a dated name, and all clear once a tree is proven', () => withRoot('3.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '2.0.0', liveThrows: true, prevVersion: '1.0.0', prevThrows: true });
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('3.0.0')) });
+  assert.equal(result.outcome, 'updated');
+  assert.equal(installedVersion(root), '3.0.0');
+  assert.deepEqual(listing(path.dirname(root)), ['semantic-search'], 'a proven live tree clears every leftover');
 }));
 
 test('dr-11m. npm that succeeds and leaves no tree on a fresh root is a failure, not a quiet pass', () => withRoot('2.0.0', ({ root }) => {

@@ -6,48 +6,41 @@
 // DLL held by a live process made it fail halfway: 69 packages became 6. So npm
 // never runs in a live root.
 //
-// Three holders sit beside the root, each a directory with its own package.json
-// and node_modules, so any tree can be probed where it lies:
+// Holders sit beside the root, each a directory with its own package.json and
+// node_modules, so any tree can be probed where it lies:
 //   .deps-stage-<root>    the candidate being built
 //   .deps-prev-<root>     the tree the last swap replaced
-//   .deps-failed-<root>   a live tree proven not to load
+//   .deps-failed-<root>   a live tree that did not work
 //
-// THE ONE RULE: a tree is deleted only if it is proven bad, or a tree in the
-// live position is proven good. A probe has three answers: good, bad, and could
-// not check, which proves nothing. A bad answer is asked twice before it counts.
+// THE ONE RULE: a leftover tree is deleted only when a tree in the live position
+// was just probed good. A verdict about the tree being deleted never decides
+// it, because a probe can fail for reasons that have nothing to do with the
+// tree. Otherwise a leftover is kept, reported, and moved to a dated name if a
+// swap needs its slot, so it blocks nothing.
 //
-//   on disk at start            probe                exit
-//   no prev                     -                    the update table
-//   prev, no live               -                    prev moves to live
-//   prev, live good             live good            prev deleted
-//   prev, live could not check  -                    stop, nothing deleted
-//   prev, live bad              prev good            live to failed, prev to live
-//   prev, live bad              prev bad             prev deleted, live stays
-//   prev, live bad              prev could not check stop, nothing deleted
-//   rename refused above        -                    stop, nothing deleted; the
-//                                                    reason names the good tree
+//   on disk at start   probe            exit
+//   prev, no live      -                prev moves to live
+//   prev, live bad     prev good        live to failed, prev to live
+//   prev, live bad     prev bad         both kept, the update table decides
+//   live good          -                leftovers deleted
 //
-//   live tree                   update               result
-//   matches lock and works      not attempted        unchanged
-//   could not check             not attempted        kept-unusable, nothing moved
-//   anything else               npm fails            kept-previous / kept-unusable
-//   anything else               stage does not work  kept-previous / kept-unusable
-//   anything else               rename refused       kept-previous / kept-unusable
-//   worked                      bad in final place   rolled back: kept-previous
-//   worked                      rollback refused     kept-unusable, reason names it
-//   did not work                bad in final place   the new tree stays: kept-unusable
-//   anything else               could not check      updated, prev kept for a later run
-//   anything else               works in both places updated
-//   none                        works in place       updated
-//   none                        does not work        installed-unverified
-//   none                        npm leaves no tree   failed
-//   none                        npm fails            failed
+//   live tree          update           result
+//   good, matches lock not attempted    unchanged
+//   any other          npm fails        kept-previous / kept-unusable
+//   any other          stage bad        kept-previous / kept-unusable
+//   any other          rename refused   kept-previous / kept-unusable
+//   any other          good in place    updated, leftovers deleted
+//   good               bad in place     rolled back: kept-previous
+//   bad                bad in place     new tree stays: kept-unusable
+//   none               good in place    updated
+//   none               bad in place     installed-unverified
+//   none               npm fails        failed
 //
 // Measured on Windows with sharp's DLLs loaded by a live process: the rename
 // succeeds, that process keeps running from the mapped files, and only deleting
 // the old tree stops partway. A running server is not disturbed and picks up
-// the new tree on its next start. What it still holds stays in the prev holder;
-// a later run moves it aside if it must, and removes it.
+// the new tree on its next start. What it still holds is reported, and a later
+// run removes it.
 //
 //   node scripts/dependency-root.mjs <root> [package-to-rebuild]
 //
@@ -111,9 +104,10 @@ for (const name of process.argv.slice(1)) {
 process.exit(0);
 `;
 
-// Null when every declared dependency works from root, a reason when one does
-// not, { unknown } when the check itself failed. Files on disk prove nothing: an
-// unbuilt native binding installs cleanly and throws when used.
+// Null when every declared dependency works from root. Anything else, a crash
+// or a timeout included, means it was not proven good, and that is all a caller
+// may conclude. Files on disk prove nothing: an unbuilt native binding installs
+// cleanly and throws when used.
 export function probeImports(root, { fsImpl = fs, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   let names;
   try {
@@ -128,20 +122,7 @@ export function probeImports(root, { fsImpl = fs, timeoutMs = PROBE_TIMEOUT_MS }
     windowsHide: true,
   });
   if (run.status === 0) return null;
-  // No exit status: it timed out or never ran, which says nothing about the tree.
-  if (run.status === null) return { unknown: run.error?.message || 'the probe did not finish' };
-  return reasonFrom(run.stderr, 'probe failed');
-}
-
-// One verdict from a probe: null, a string, or { unknown }. Bad is confirmed.
-function verdictOf(probe, target) {
-  const first = probe(target);
-  if (first === null) return { state: 'good' };
-  if (typeof first !== 'string') return { state: 'unknown', reason: first.unknown };
-  const second = probe(target);
-  if (second === null) return { state: 'good' };
-  if (typeof second !== 'string') return { state: 'unknown', reason: second.unknown };
-  return { state: 'bad', reason: second };
+  return reasonFrom(run.stderr || run.error?.message, `probe ended with ${run.signal ?? run.status}`);
 }
 
 function runNpm(args, cwd) {
@@ -175,48 +156,13 @@ function moveTree(from, to, { fsImpl, retryDelayMs }) {
 function removeTree(target, fsImpl) {
   try {
     fsImpl.rmSync(target, { recursive: true, force: true });
-  } catch { /* the caller checks what is left */ }
-  return !fsImpl.existsSync(target);
+  } catch { /* the caller reports what is left */ }
 }
 
 function holder(root, target, fsImpl) {
   fsImpl.mkdirSync(target, { recursive: true });
   fsImpl.copyFileSync(path.join(root, 'package.json'), path.join(target, 'package.json'));
   return path.join(target, 'node_modules');
-}
-
-// Applies the first table. Returns a result only when the run must stop.
-function settleLeftovers({ live, prev, prevTree, failed }, { root, probe, fsImpl, moveOptions }) {
-  if (!fsImpl.existsSync(prevTree)) return null;
-  const noTree = (error) => ({
-    outcome: 'rollback-failed',
-    preserved: prevTree,
-    reason: `the good tree is in ${prevTree}: ${error.message}`,
-  });
-  const stop = (reason) => ({ outcome: 'kept-unusable', usable: false, reason });
-  if (!fsImpl.existsSync(live)) {
-    const error = moveTree(prevTree, live, moveOptions);
-    return error ? noTree(error) : null;
-  }
-  const current = verdictOf(probe, root);
-  if (current.state === 'good') return null;
-  if (current.state === 'unknown') {
-    return stop(`the tree could not be checked (${current.reason}); nothing was changed`);
-  }
-  const older = verdictOf(probe, prev);
-  if (older.state === 'bad') return null;
-  if (older.state === 'unknown') {
-    return stop(`the previous tree could not be checked (${older.reason}); it stays in ${prevTree}`);
-  }
-  let aside;
-  try {
-    aside = moveTree(live, holder(root, failed, fsImpl), moveOptions);
-  } catch (error) {
-    aside = error;
-  }
-  if (aside) return stop(`the good tree could not be restored (${aside.code || aside.message}); it is in ${prevTree}`);
-  const back = moveTree(prevTree, live, moveOptions);
-  return back ? noTree(back) : null;
 }
 
 export function updateDependencyRoot({
@@ -237,42 +183,70 @@ export function updateDependencyRoot({
   const prevTree = path.join(prev, 'node_modules');
   const moveOptions = { fsImpl, retryDelayMs };
 
-  const settled = settleLeftovers({ live, prev, prevTree, failed }, {
-    root, probe, fsImpl, moveOptions,
+  const leftovers = () => fsImpl.readdirSync(parent)
+    .filter((entry) => entry.startsWith(`.deps-prev-${name}`) || entry.startsWith(`.deps-failed-${name}`))
+    .map((entry) => path.join(parent, entry));
+  const leftoverNote = () => {
+    const left = leftovers();
+    return left.length ? `old trees kept in ${left.join(', ')}; a later run removes them` : '';
+  };
+  const withNote = (reason) => [reason, leftoverNote()].filter(Boolean).join('; ');
+  // The only delete of a leftover. Every caller just proved the live tree good.
+  const clearLeftovers = () => {
+    for (const target of leftovers()) removeTree(target, fsImpl);
+    return leftoverNote();
+  };
+  // Park a tree in a holder, first moving any tree there to a dated name.
+  const park = (from, slot) => {
+    try {
+      if (fsImpl.existsSync(path.join(slot, 'node_modules'))) {
+        const freed = moveTree(slot, `${slot}.${Date.now()}`, moveOptions);
+        if (freed) return freed;
+      }
+      const moved = moveTree(from, holder(root, slot, fsImpl), moveOptions);
+      if (moved && !fsImpl.existsSync(path.join(slot, 'node_modules'))) removeTree(slot, fsImpl);
+      return moved;
+    } catch (error) {
+      return error;
+    }
+  };
+  const noTree = (error) => ({
+    outcome: 'rollback-failed',
+    preserved: prevTree,
+    reason: `the good tree is in ${prevTree}: ${error.message}`,
   });
-  if (settled) return settled;
+
   removeTree(stage, fsImpl);
-  removeTree(failed, fsImpl);
-  // Past this point the prev holder is proven bad, or a good tree is live. An
-  // undeletable leftover must not block the next swap, so it moves aside under
-  // a name a later run also clears.
-  for (const entry of fsImpl.readdirSync(parent)) {
-    if (entry.startsWith(`.deps-prev-${name}.`)) removeTree(path.join(parent, entry), fsImpl);
+
+  if (!fsImpl.existsSync(live) && fsImpl.existsSync(prevTree)) {
+    const error = moveTree(prevTree, live, moveOptions);
+    if (error) return noTree(error);
   }
-  let leftover = '';
-  if (!removeTree(prev, fsImpl)) {
-    leftover = `old files still in use remain in ${prev}; a later run removes them`;
-    moveTree(prev, `${prev}.${Date.now()}`, moveOptions);
+  let liveGood = fsImpl.existsSync(live) && probe(root) === null;
+  if (!liveGood && fsImpl.existsSync(live) && fsImpl.existsSync(prevTree) && probe(prev) === null) {
+    const aside = park(live, failed);
+    if (aside) {
+      return {
+        outcome: 'kept-unusable',
+        usable: false,
+        reason: `the good tree could not be restored (${aside.code || aside.message}); it is in ${prevTree}`,
+      };
+    }
+    const back = moveTree(prevTree, live, moveOptions);
+    if (back) return noTree(back);
+    liveGood = probe(root) === null;
   }
 
   const hadTree = fsImpl.existsSync(live);
-  const current = hadTree ? verdictOf(probe, root) : { state: 'none' };
-  if (current.state === 'unknown') {
-    return {
-      outcome: 'kept-unusable',
-      usable: false,
-      reason: `the tree could not be checked (${current.reason}); nothing was changed`,
-    };
-  }
-  const previousUsable = current.state === 'good';
-  if (previousUsable && lockedTreeProblem(root, { fsImpl }) === null) {
+  const leftover = liveGood ? clearLeftovers() : '';
+  if (liveGood && lockedTreeProblem(root, { fsImpl }) === null) {
     return { outcome: 'unchanged', reason: leftover };
   }
 
   const kept = (reason) => ({
-    outcome: previousUsable ? 'kept-previous' : 'kept-unusable',
-    usable: previousUsable,
-    reason,
+    outcome: liveGood ? 'kept-previous' : 'kept-unusable',
+    usable: liveGood,
+    reason: withNote(reason),
   });
   const abandon = (reason) => {
     removeTree(stage, fsImpl);
@@ -291,91 +265,57 @@ export function updateDependencyRoot({
   // Only the named package's own build runs. Whether it mattered is the
   // probe's call: a tree that works without it is a good tree.
   const rebuilt = rebuild ? npm(['rebuild', rebuild], stage) : { ok: true };
-  if (!fsImpl.existsSync(stageTree)) {
-    removeTree(stage, fsImpl);
-    return hadTree ? kept('npm produced no tree') : { outcome: 'failed', reason: 'npm produced no tree' };
-  }
+  if (!fsImpl.existsSync(stageTree)) return abandon('npm produced no tree');
 
-  const staged = verdictOf(probe, stage);
-  const whyNot = () => [staged.reason, rebuilt.ok ? null : `rebuild ${rebuild}: ${rebuilt.reason}`]
+  const stageProblem = probe(stage);
+  const whyNot = () => [stageProblem, rebuilt.ok ? null : `rebuild ${rebuild}: ${rebuilt.reason}`]
     .filter(Boolean).join('; ');
-  if (staged.state !== 'good' && hadTree) return abandon(`the update does not work: ${whyNot()}`);
+  if (stageProblem !== null && hadTree) return abandon(`the update does not work: ${whyNot()}`);
 
   if (hadTree) {
-    let prevSlot;
-    try {
-      prevSlot = holder(root, prev, fsImpl);
-    } catch (error) {
-      return abandon(`the old tree has nowhere to go: ${error.message}`);
-    }
-    const error = moveTree(live, prevSlot, moveOptions);
-    if (error) {
-      removeTree(prev, fsImpl);
-      return abandon(`the tree could not be moved (${error.code || error.message})`);
-    }
+    const parked = park(live, prev);
+    if (parked) return abandon(`the tree could not be moved (${parked.code || parked.message})`);
   }
   const placed = moveTree(stageTree, live, moveOptions);
   if (placed) {
     if (hadTree) {
       const restore = moveTree(prevTree, live, moveOptions);
-      if (restore) {
-        return {
-          outcome: 'rollback-failed',
-          preserved: prevTree,
-          reason: `the good tree is in ${prevTree}: ${restore.message}`,
-        };
-      }
+      if (restore) return noTree(restore);
     }
     return abandon(`the new tree could not be placed (${placed.code || placed.message})`);
   }
   removeTree(stage, fsImpl);
-  const placedVerdict = verdictOf(probe, root);
-  if (!hadTree) {
-    return placedVerdict.state === 'good'
-      ? { outcome: 'updated', reason: leftover }
-      : { outcome: 'installed-unverified', reason: placedVerdict.reason || whyNot() };
-  }
-  if (placedVerdict.state === 'unknown') {
+
+  const finalProblem = probe(root);
+  if (finalProblem === null) return { outcome: 'updated', reason: clearLeftovers() };
+  if (!hadTree) return { outcome: 'installed-unverified', reason: finalProblem };
+  if (!liveGood) {
     return {
-      outcome: 'updated',
-      reason: `the new tree could not be confirmed (${placedVerdict.reason}); the previous tree stays in ${prevTree} until a later run proves it`,
+      outcome: 'kept-unusable',
+      usable: false,
+      reason: withNote(`the update does not work in place: ${finalProblem}`),
     };
   }
-  if (placedVerdict.state === 'bad') {
-    if (!previousUsable) {
-      // Neither works, and the old one was proven bad before the swap.
-      removeTree(prev, fsImpl);
-      return { outcome: 'kept-unusable', usable: false, reason: `the update does not work in place: ${placedVerdict.reason}` };
-    }
-    let aside;
-    try {
-      aside = moveTree(live, holder(root, failed, fsImpl), moveOptions);
-    } catch (error) {
-      aside = error;
-    }
-    if (aside) {
-      return {
-        outcome: 'kept-unusable',
-        usable: false,
-        reason: `the bad new tree could not be moved (${aside.code || aside.message}); the good tree is in ${prevTree}`,
-      };
-    }
-    const restore = moveTree(prevTree, live, moveOptions);
-    if (restore) {
-      return {
-        outcome: 'rollback-failed',
-        preserved: prevTree,
-        reason: `the good tree is in ${prevTree}: ${restore.message}`,
-      };
-    }
-    removeTree(failed, fsImpl);
-    removeTree(prev, fsImpl);
-    return { outcome: 'kept-previous', usable: true, reason: `rolled back: ${placedVerdict.reason}` };
+
+  const aside = park(live, failed);
+  if (aside) {
+    return {
+      outcome: 'kept-unusable',
+      usable: false,
+      reason: `the bad new tree could not be moved (${aside.code || aside.message}); the good tree is in ${prevTree}`,
+    };
   }
-  if (!removeTree(prev, fsImpl)) {
-    leftover = `old files still in use remain in ${prev}; a later run removes them`;
+  const restore = moveTree(prevTree, live, moveOptions);
+  if (restore) return noTree(restore);
+  if (probe(root) === null) {
+    clearLeftovers();
+    return { outcome: 'kept-previous', usable: true, reason: `rolled back: ${finalProblem}` };
   }
-  return { outcome: 'updated', reason: leftover };
+  return {
+    outcome: 'kept-unusable',
+    usable: false,
+    reason: withNote(`rolled back, but the old tree no longer works: ${finalProblem}`),
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
