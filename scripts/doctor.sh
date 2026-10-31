@@ -2,18 +2,19 @@
 # aigent-OS Doctor
 # Diagnoses install health. Exit 0 = no FAILs. Exit 1 = at least one FAIL.
 # Usage: bash scripts/doctor.sh [aigent-root-path] [--fix]
-#        bash scripts/doctor.sh [aigent-root-path] --attest
+#        bash scripts/doctor.sh [aigent-root-path] --attest [--finding]
 #
 # By default this script is READ-ONLY -- it reports missing dirs/files as WARN but does not create them.
 # Pass --fix to enable mutation (mkdir for missing vault dirs, etc.).
 #
 # --attest compares this tree against scripts/fleet-baseline-manifest.json and
 # prints exactly one terminal class: COMPLIANT, DEGRADED, NONCOMPLIANT, or
-# UNKNOWN. It is strictly read-only -- no writes anywhere (not even a temp
+# UNKNOWN. By default it is read-only -- no writes anywhere (not even a temp
 # file), no repairs, no network -- and returns before the diagnostic pass
 # below, so --fix can never run alongside it. Exit 0 = COMPLIANT or DEGRADED,
 # 1 = NONCOMPLIANT, 2 = UNKNOWN (the tree could not be measured, which is not
 # the same as measuring it and finding it broken).
+# --finding explicitly opts hash mismatches into local ledger Finding capture.
 #
 # Checks:
 #   - aigent-OS root detected
@@ -35,6 +36,7 @@ set -euo pipefail
 ROOT=""
 FIX=0
 ATTEST=0
+FINDING=0
 # --component <name>: one optional component's state (absent, unloadable,
 # functioning) on one line, exit 0 only for functioning. The same classifier
 # --attest uses; install.sh calls this after its dependency step (issue #107).
@@ -45,6 +47,7 @@ for arg in "$@"; do
   case "$arg" in
     --fix) FIX=1 ;;
     --attest) ATTEST=1 ;;
+    --finding) FINDING=1 ;;
     --component) COMPONENT_NEXT=1 ;;
     -*) ;;  # ignore unknown flags
     *) [ -z "$ROOT" ] && ROOT="$arg" ;;
@@ -107,8 +110,7 @@ if [ -z "$ROOT" ]; then
 fi
 
 # -- Baseline attestation (--attest) -------------------------------------------
-# Returns before the diagnostic pass below. Everything here reads; nothing
-# writes, so this mode is safe to point at a live seat.
+# Returns before the diagnostic pass below; writes require --finding.
 #
 # The manifest is read with python3 (the same runtime checks 7b and 11 below
 # already depend on) via a stdin heredoc rather than a mktemp scratch file --
@@ -167,7 +169,7 @@ if [ "$ATTEST" -eq 1 ]; then
   export AIGENT_DOCTOR_MEMORY_REL AIGENT_DOCTOR_MEMORY_ERROR
 
   ATTEST_RC=0
-  ATTEST_OUT="$(AIGENT_DOCTOR_COMPONENT="$COMPONENT" python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
+  ATTEST_OUT="$(AIGENT_DOCTOR_COMPONENT="$COMPONENT" AIGENT_DOCTOR_FINDING="$FINDING" python3 - "$MANIFEST" "$ROOT" <<'ATTESTPY'
 import hashlib
 import json
 import os
@@ -267,6 +269,8 @@ for relative, expected in ([] if component_probe else manifest["required_files"]
         continue
     core_owned += 1
     findings.append("required file changed: %s" % relative)
+    if os.environ.get("AIGENT_DOCTOR_FINDING") == "1":
+        print("ledger-finding:" + json.dumps({"target": relative, "expected": expected}))
 
 # Missing is its own bucket so the three numbers add up to the population line
 # above. Folding absences into either ownership class would make the summary a
@@ -724,6 +728,16 @@ ATTESTPY
     # as unavailable on every Windows install.
     line="${line%$'\r'}"
     case "$line" in
+      ledger-finding:*)
+        if ! node --input-type=module -e '
+          import { pathToFileURL } from "node:url";
+          const { observeLedgerFinding } = await import(pathToFileURL(process.argv[2]));
+          const result = observeLedgerFinding({ root: process.argv[1], ...JSON.parse(process.argv[3]) });
+          console.log(`LEDGER_FINDING ${JSON.stringify(result)}`);
+        ' "$ROOT" "$DOCTOR_DIR/../daemons/nightly-ledger-stage.mjs" "${line#ledger-finding:}"; then
+          ATTEST_UNMEASURABLE="ledger Finding capture failed"
+        fi
+        ;;
       optional:*)
         opt="${line#optional:}"; opt_name="${opt%%:*}"; opt="${opt#*:}"; opt_state="${opt%%:*}"; opt_why="${opt#*:}"
         OPT_RECORDS+=("$opt_name|$opt_state|$opt_why||")

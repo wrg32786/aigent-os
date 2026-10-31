@@ -7,6 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { receiptHash, runLedgerPredicate } from '../nightly-ledger-predicate.mjs';
+import { observeLedgerFinding } from '../nightly-ledger-stage.mjs';
+import { reviewNightlyLedgers } from '../nightly-ledger-review.mjs';
+import { stagedNightlyCandidateCount } from '../nightly-pass.mjs';
+import { resolveNightlyPaths } from '../nightly-paths.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CLI = path.join(ROOT, 'daemons/nightly-ledger-predicate.mjs');
@@ -22,10 +26,10 @@ function fixture(t) {
   return root;
 }
 
-function run(root, { expectedHash = expected, at = now, target = 'control.txt' } = {}) {
+function run(root, { expectedHash = expected, at, target = 'control.txt' } = {}) {
   const result = spawnSync(process.execPath, [CLI, '--root', root,
     '--type', 'file_sha256_equals', '--path', target, '--expected', expectedHash,
-    '--now', at, '--finding'], {
+    ...(at === undefined ? [] : ['--now', at]), '--finding'], {
     encoding: 'utf8', windowsHide: true, timeout: 20_000,
     env: { ...process.env, AIGENT_STATE_HOME_DIR: root },
   });
@@ -39,6 +43,107 @@ function rows(root) {
   const file = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
   return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : [];
 }
+
+test('Finding time is producer-owned, with only a function clock injection', (t) => {
+  const root = fixture(t);
+  writeFileSync(path.join(root, 'control.txt'), 'red');
+  const before = Date.now();
+  const cli = run(root, { at: 'not-a-date' });
+  const stamped = Date.parse(cli.output.finding.created_at);
+  assert.ok(stamped >= before && stamped <= Date.now());
+  const injected = observeLedgerFinding({
+    root, target: 'other.txt', expected, clock: () => new Date(now),
+  });
+  assert.equal(injected.observed_at, now);
+  assert.equal(injected.finding.created_at, now);
+});
+
+test('Finding identity normalizes subject and expectation but excludes Node version', (t) => {
+  const root = fixture(t);
+  writeFileSync(path.join(root, 'control.txt'), 'red');
+  const first = observeLedgerFinding({ root, target: './dir/../control.txt', expected: expected.toUpperCase() });
+  assert.equal(first.finding.finding.subject, 'control.txt');
+  assert.equal(first.expected, expected);
+  assert.equal(first.finding.finding.product.node, process.version);
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'version');
+  try {
+    Object.defineProperty(process, 'version', { ...descriptor, value: 'v0.0.0' });
+    const second = observeLedgerFinding({ root, target: '.\\control.txt', expected });
+    assert.equal(second.duplicate, true);
+    assert.deepEqual(second.finding, first.finding);
+  } finally {
+    Object.defineProperty(process, 'version', descriptor);
+  }
+  assert.equal(rows(root).length, 1);
+});
+
+test('invalid Finding inputs throw without writes and receipt errors expose only a code', (t) => {
+  const root = fixture(t);
+  const ledger = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
+  for (const target of [undefined, null, 3, {}, '', '../outside.txt', path.join(root, 'control.txt')]) {
+    assert.throws(() => observeLedgerFinding({ root, target, expected }), /target/);
+    assert.equal(existsSync(ledger), false);
+  }
+  for (const invalid of [undefined, null, 3, {}, 'not-a-hash']) {
+    assert.throws(() => observeLedgerFinding({ root, target: 'control.txt', expected: invalid }), /SHA-256/);
+    assert.equal(existsSync(ledger), false);
+  }
+  mkdirSync(path.join(root, 'directory'));
+  const result = observeLedgerFinding({ root, target: 'directory', expected });
+  assert.equal(result.finding.finding.state, 'UNKNOWN');
+  assert.match(result.error, /^[A-Z][A-Z0-9_]*$/);
+  assert.equal(result.finding.finding.receipt.error, result.error);
+  assert.equal(result.receipt_hash, receiptHash(result.finding.finding.receipt));
+  const bytes = readFileSync(ledger);
+  assert.throws(() => observeLedgerFinding({ root, target: 'control.txt', expected: 'bad' }));
+  assert.deepEqual(readFileSync(ledger), bytes);
+});
+
+test('both nightly readers count Findings separately from staged pressure', (t) => {
+  const root = fixture(t);
+  for (const name of ['HONESTY_LEDGER', 'TRUST_DECAY', 'FAILURE_MODES', 'DECISION_OUTCOMES']) {
+    writeFileSync(path.join(root, `vault/memory/${name}.md`), '');
+  }
+  const ledger = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
+  const candidateRows = [
+    { status: 'staged', finding: { state: 'FAIL' } },
+    { status: 'staged', finding: { state: 'UNKNOWN' } },
+    { status: 'staged' }, { status: 'closed' },
+  ];
+  writeFileSync(ledger, candidateRows.map(JSON.stringify).join('\n') + '\n');
+  const review = reviewNightlyLedgers({ root, now, timeZone: 'UTC' });
+  assert.equal(review.findings, 2);
+  assert.equal(review.staged_candidates, 1);
+  assert.equal(review.resolution_candidates, 0);
+  assert.match(review.output, /staged_candidates=1 findings=2/);
+  assert.deepEqual(stagedNightlyCandidateCount(resolveNightlyPaths(root)), { staged: 1, findings: 2 });
+});
+
+test('identical failure after recovery retains the original row and documents the recurrence limit', (t) => {
+  const root = fixture(t);
+  const observe = () => observeLedgerFinding({ root, target: 'control.txt', expected });
+  writeFileSync(path.join(root, 'control.txt'), 'red');
+  const first = observe();
+  writeFileSync(path.join(root, 'control.txt'), approved);
+  assert.equal(observe().finding, null);
+  writeFileSync(path.join(root, 'control.txt'), 'red');
+  const recurrence = observe();
+  assert.equal(recurrence.duplicate, true);
+  assert.deepEqual(recurrence.finding, first.finding);
+  assert.equal(rows(root).length, 1);
+  assert.ok(readFileSync(path.join(ROOT, 'skills/nightly-ledger-capture/SKILL.md'), 'utf8')
+    .includes('An identical failure after a healthy run still returns the original row, so recurrence is not counted.'));
+});
+
+test('capture skill omits archaeology and pre-implementation test output', () => {
+  const skill = readFileSync(path.join(ROOT, 'skills/nightly-ledger-capture/SKILL.md'), 'utf8');
+  assert.doesNotMatch(skill, /Archaeology:|Before the\s+implementation|0 !== 1|0 passed, 3 failed/);
+});
+
+test('capture skill states the unchanged single-writer limit', () => {
+  const skill = readFileSync(path.join(ROOT, 'skills/nightly-ledger-capture/SKILL.md'), 'utf8');
+  assert.ok(skill.includes('This retains the existing single-writer scope; concurrent writers are not supported.'));
+});
 
 test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run healthy control', (t) => {
   const root = fixture(t);
@@ -54,8 +159,8 @@ test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run hea
   assert.deepEqual(red.output.finding, row);
   assert.equal(row.status, 'staged');
   assert.equal(row.ledger, 'trust_decay');
-  assert.equal(row.created_at, now);
-  assert.match(row.candidate_id, /^nc-20261031-\d+$/);
+  assert.equal(row.created_at, row.finding.receipt.observed_at);
+  assert.match(row.candidate_id, /^nc-\d{8}-\d+$/);
   assert.match(row.dedupe_key, /^[a-f0-9]{64}$/);
   assert.equal(row.finding.state, 'FAIL');
   assert.equal(row.finding.producer, 'daemons/nightly-ledger-predicate.mjs#file_sha256_equals');
@@ -74,7 +179,7 @@ test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run hea
   assert.equal(row.predicate_receipt, null);
   assert.equal(row.predicate_proposal, null);
   assert.equal(row.evidence_class, 'judgment');
-  const rerun = run(root, { at: '2026-11-01T12:00:00.000Z' });
+  const rerun = run(root);
   assert.equal(rerun.output.duplicate, true);
   assert.deepEqual(rerun.output.finding, row);
   assert.equal(rows(root).length, 1);
@@ -86,9 +191,9 @@ test('real hash evaluator: red witness, one Finding, rerun dedupes, same-run hea
   console.log('CONTROL: FAIL=1 duplicate=1 healthy=0 new findings');
 });
 
-test('unresolvable and malformed evidence stay UNKNOWN without a defect claim', (t) => {
+test('unresolvable file evidence stays UNKNOWN without a defect claim', (t) => {
   const root = fixture(t);
-  for (const target of ['missing.txt', '../outside.txt']) {
+  for (const target of ['missing.txt', 'other-missing.txt']) {
     const result = run(root, { target });
     assert.equal(result.status, 1);
     assert.equal(result.output.finding?.finding.state, 'UNKNOWN');
@@ -98,10 +203,6 @@ test('unresolvable and malformed evidence stay UNKNOWN without a defect claim', 
       receiptHash(result.output.finding.finding.receipt));
   }
   assert.equal(rows(root).length, 2);
-  writeFileSync(path.join(root, 'control.txt'), approved);
-  const malformed = run(root, { expectedHash: 'not-a-hash' });
-  assert.equal(malformed.output.finding.finding.state, 'UNKNOWN');
-  assert.equal(rows(root).length, 3);
 });
 
 test('forged evidence stays data and cannot supply verdict, target, or authority', (t) => {

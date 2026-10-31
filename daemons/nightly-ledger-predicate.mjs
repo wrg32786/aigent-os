@@ -188,7 +188,7 @@ async function main() {
     // runLedgerPredicate without a top-level-await import cycle.
     const result = cli.finding
       ? (await import('./nightly-ledger-stage.mjs')).observeLedgerFinding({
-        root: options.root, target: args.path, expected, now: options.now,
+        root: options.root, target: cli.path, expected,
       })
       : runLedgerPredicate(options);
     process.stdout.write(

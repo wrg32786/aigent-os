@@ -215,8 +215,9 @@ export function reviewNightlyLedgers({
     open_gt_7d: countOpenOlderThan(honestyRows, local.date, 7)
       + countOpenOlderThan(trustRows, local.date, 7),
     repeated_classes: repeated.length,
-    staged_candidates: candidates.filter((row) => row.status === 'staged').length,
-    resolution_candidates: candidates.filter(executableResolutionCandidate).length,
+    findings: candidates.filter((row) => row.finding).length,
+    staged_candidates: candidates.filter((row) => !row.finding && row.status === 'staged').length,
+    resolution_candidates: candidates.filter((row) => !row.finding && executableResolutionCandidate(row)).length,
   };
   const fields = [
     'LEDGER_REVIEW PASS',
@@ -225,6 +226,7 @@ export function reviewNightlyLedgers({
     `open_gt_7d=${result.open_gt_7d}`,
     `repeated_classes=${result.repeated_classes}`,
     `staged_candidates=${result.staged_candidates}`,
+    `findings=${result.findings}`,
     `resolution_candidates=${result.resolution_candidates}`,
   ];
   if (result.friday) {

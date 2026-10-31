@@ -128,8 +128,10 @@ function buildInstall({ settingsRootFor = (root) => root } = {}) {
   return root;
 }
 
-function attest(root) {
-  const result = spawnSync('bash', [DOCTOR, root, '--attest'], { encoding: 'utf8' });
+function attest(root, extra = []) {
+  const result = spawnSync('bash', [DOCTOR, root, '--attest', ...extra], {
+    encoding: 'utf8', env: { ...process.env, AIGENT_STATE_HOME_DIR: root },
+  });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
   const verdicts = output
     .split('\n')
@@ -223,6 +225,36 @@ test('a byte changed in a required file attests NONCOMPLIANT', () => {
 
     const { verdict, output } = attest(root);
     assert.equal(verdict, 'NONCOMPLIANT', output);
+  });
+});
+
+test('attest hash mismatch captures a Finding only on opt-in with the manifest expectation', () => {
+  withInstall((root) => {
+    const manifest = readManifest();
+    const [target, expected] = Object.entries(manifest.required_files)[0];
+    const file = path.join(root, ...target.split('/'));
+    const original = readFileSync(file);
+    const ledger = path.join(root, 'vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl');
+    assert.equal(attest(root, ['--finding']).verdict, 'COMPLIANT');
+    assert.equal(existsSync(ledger), false);
+    writeFileSync(file, Buffer.concat([original, Buffer.from('\nFinding red witness\n')]));
+    const plain = attest(root);
+    assert.equal(plain.verdict, 'NONCOMPLIANT');
+    assert.equal(plain.status, 1);
+    assert.equal(existsSync(ledger), false);
+    const opted = attest(root, ['--finding']);
+    assert.equal(opted.verdict, 'NONCOMPLIANT', opted.output);
+    assert.equal(opted.status, 1);
+    assert.equal(opted.output.replace(/^LEDGER_FINDING .*\r?\n/gm, ''), plain.output);
+    const rows = readFileSync(ledger, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].finding.state, 'FAIL');
+    assert.equal(rows[0].finding.subject, target);
+    assert.equal(rows[0].finding.receipt.expected, expected);
+    assert.equal(rows[0].finding.receipt.observed, createHash('sha256').update(readFileSync(file)).digest('hex'));
+    assert.notEqual(rows[0].finding.receipt.observed, expected);
+    assert.equal(attest(root).output, plain.output);
+    console.log(`ATTEST RED WITNESS: target=${target} verdict=${opted.verdict} exit=${opted.status} findings=${rows.length}`);
   });
 });
 

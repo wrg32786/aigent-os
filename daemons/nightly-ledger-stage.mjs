@@ -114,11 +114,30 @@ export function observeLedgerFinding({
   root = defaultNightlyRoot(),
   target,
   expected,
-  now = new Date(),
+  clock = () => new Date(),
 } = {}) {
+  if (typeof target !== 'string' || !target.trim()) {
+    throw new Error('Finding target must be a non-empty relative path');
+  }
+  const portable = target.trim().replace(/\\/g, '/');
+  target = path.posix.normalize(portable);
+  if (path.posix.isAbsolute(target) || path.win32.isAbsolute(portable)
+      || /^[a-z]:/i.test(portable) || target === '.' || target === '..'
+      || target.startsWith('../')) {
+    throw new Error('Finding target must stay relative to its root');
+  }
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected)) {
+    throw new Error('expected SHA-256 must be 64 hexadecimal characters');
+  }
+  expected = expected.toLowerCase();
+  const now = clock();
   const receipt = runLedgerPredicate({
     root, type: 'file_sha256_equals', args: { path: target }, expected, now,
   });
+  if (receipt.error) {
+    receipt.error = 'PREDICATE_ERROR';
+    receipt.receipt_hash = receiptHash(receipt);
+  }
   if (receipt.exit_code === 0) return { ...receipt, finding: null, duplicate: false };
 
   const sourceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -138,7 +157,7 @@ export function observeLedgerFinding({
   const finding = {
     producer: 'daemons/nightly-ledger-predicate.mjs#file_sha256_equals',
     product,
-    subject: String(target),
+    subject: target,
     subject_root: path.resolve(root),
     state,
     receipt,
@@ -212,7 +231,10 @@ function appendCandidate({
   // expectation, subject and exact evaluator sources, not the observation time.
   const dedupeKey = hash(finding ? {
     producer: finding.producer,
-    product: finding.product,
+    product: {
+      name: finding.product.name,
+      source_sha256: finding.product.source_sha256,
+    },
     subject: finding.subject,
     subject_root: finding.subject_root,
     state: finding.state,
