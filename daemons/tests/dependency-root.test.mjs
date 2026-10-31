@@ -360,14 +360,41 @@ test('dr-12. a native rebuild runs in the stage, never in the live root, and ign
   assert.ok(calls.every((call) => path.resolve(call.cwd) !== path.resolve(root)));
 }));
 
-test('dr-13. the installed-root failure path: install.sh with an npm that deletes first keeps the working tree', { timeout: 300_000 }, () => {
+test('dr-13. the installed-root failure path: install.sh with an npm that deletes first keeps the working tree', { timeout: 180_000 }, () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'deproot-e2e-'));
   try {
+    // A minimal source, as the installer suites build: the real install.sh and
+    // the real helper, without the minutes a full product copy takes on Windows.
+    const source = path.join(base, 'source');
+    const write = (relative, text) => {
+      const file = path.join(source, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    };
+    fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
+    fs.copyFileSync(path.join(REPO, 'install.sh'), path.join(source, 'install.sh'));
+    for (const name of ['dependency-root.mjs', 'doctor.sh']) {
+      fs.copyFileSync(path.join(REPO, 'scripts', name), path.join(source, 'scripts', name));
+    }
+    write('system/00_identity.md', '# Identity\n');
+    write('CLAUDE.md', '# Claude source\n');
+    write('skills/demo/SKILL.md', '---\nname: demo\n---\n');
+    write('vault/agents/scout.md', '---\nname: scout\ntools: [Read]\n---\n');
+    write('.claude/rules/post-compact-critical.md', '# critical\n');
+    write('.claude/settings.json.template', '{"env":{"AIGENT_ROOT":"__AIGENT_ROOT__","AIGENT_VAULT":"__AIGENT_ROOT__"}}\n');
+    write('.claude/skill-index.json', '[]\n');
+    write('hooks/example-hook.sh', '#!/bin/sh\necho trusted\n');
+    write('daemons/statusline-ctx.sh', '#!/usr/bin/env bash\nexit 0\n');
+    write('daemons/transport-deps/package.json', '{"name":"transport-deps","version":"1.0.0"}\n');
+
+    const fixture = makeRoot('2.0.0');
+    const copyRoot = path.join(source, 'daemons', 'semantic-search');
+    fs.cpSync(fixture.root, copyRoot, { recursive: true });
+    fs.rmSync(fixture.base, { recursive: true, force: true });
+
     const target = path.join(base, 'seat');
     const root = path.join(target, 'daemons', 'semantic-search');
-    fs.mkdirSync(root, { recursive: true });
-    fs.copyFileSync(path.join(REPO, 'daemons/semantic-search/package.json'), path.join(root, 'package.json'));
-    fs.copyFileSync(path.join(REPO, 'daemons/semantic-search/package-lock.json'), path.join(root, 'package-lock.json'));
+    fs.cpSync(copyRoot, root, { recursive: true });
     writeTree(root, '1.0.0');
 
     const bin = path.join(base, 'bin');
@@ -390,14 +417,14 @@ test('dr-13. the installed-root failure path: install.sh with an npm that delete
 
     const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     const run = spawnSync('bash', ['install.sh', '--target', target, '--no-launcher'], {
-      cwd: REPO,
+      cwd: source,
       env: { ...process.env, [pathKey]: `${bin}${path.delimiter}${process.env[pathKey]}` },
       encoding: 'utf8',
-      timeout: 280_000,
+      timeout: 170_000,
     });
     assert.equal(run.error, undefined, 'the installer must finish inside the budget');
     assert.match(run.stdout, /Checking semantic-search dependencies/, 'the deps step was never reached');
-    assert.match(run.stdout, /semantic-search dependencies/);
+    assert.match(run.stdout, /semantic-search dependencies not updated \(EPERM/, 'npm must have failed and been reported');
 
     assert.equal(fs.existsSync(path.join(root, 'node_modules', DEP, 'index.js')), true, 'the working tree was destroyed');
     assert.equal(installedVersion(root), '1.0.0');
