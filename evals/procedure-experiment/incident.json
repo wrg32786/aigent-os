@@ -1,0 +1,18 @@
+{
+  "source_refs": [
+    "git:127816e69f416dbae0283d6088995e4ebea9db6c#commit-message",
+    "git:3ecc1c3d176029e1cdafb2c2a89d9fa449e4ef43:daemons/tests/side-effects-across-capsules.test.mjs#row-2"
+  ],
+  "observation": "A newer selected artifact omitted an unresolved operation present in an older artifact. Sanitized replay of the incident documented in #134; not a new production observation.",
+  "proposed_explanation": "Selecting one artifact may have restricted the unresolved-state search to that artifact.",
+  "observed": [],
+  "expected": ["pending"],
+  "origin": {
+    "id": "origin", "class": "origin", "scope": "local", "selected": "new",
+    "artifacts": [
+      { "id": "old", "scope": "local", "writer": true, "rows": [{ "op": "pending", "outcome": "unknown" }] },
+      { "id": "new", "scope": "local", "writer": false, "rows": [] }
+    ],
+    "expected": ["pending"]
+  }
+}

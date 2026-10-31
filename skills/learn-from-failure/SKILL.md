@@ -73,6 +73,54 @@ Artifact: {type} at {path}
 
 Per [[Self-Learning Doctrine]]: a failure logged without an artifact is a false resolution. The ledger grows, the failure recurs, the system learns nothing.
 
+## Bounded procedure experiment (fixture only)
+
+A Finding is an observation, not a verified cause or permission to edit a
+procedure. Keep the observed outcome separate from a proposed explanation.
+The local #140 exercise is runnable with
+`node --test daemons/tests/procedure-experiment.test.mjs`. Its ten tests cover
+intake through rollback using a sanitized reconstruction of the #134 incident.
+No installed skill is changed and no candidate is activated.
+
+The exercise reuses `observeLedgerFinding` for intake and deduplication,
+the `/dream` proposed candidate fields, and `validateMetaGate` for the operator
+evidence check. It retains the proposal object's observation, hypothesis,
+success predicate, falsifying result and disposition fields, and the existing
+eval packet fields (`preregistration`, `packet_sha256`, `instrument_sha256`,
+`terminal`, `results` with `id`, `class`, `status`, `detail`). The adapter under
+`evals/procedure-experiment/` adds only the missing fixture boundaries: immutable
+preregistration, exact delta hashes, independent deterministic verdict,
+explicit fixture approval, unrelated-region hashes and a pre-recorded rollback.
+The existing eval runner scores other capabilities; the skill-loop draft judge
+uses a model and whole-draft promotion, so neither executes these boundaries.
+
+One origin, three held-out variants and three healthy controls run against
+both versions. Origin failure must become a pass; every candidate case must
+pass within zero model tokens, 1000 ms evaluator time and 128 bytes growth.
+The stopping rule is one paired pass without tuning or retries. Missing or
+ambiguous evidence holds; altered frozen records refuse. An overfit delta,
+instruction text and an exceeded budget produce recorded rejections. Model
+notes and helpful/harmful votes cannot produce a verdict. Approval is separate
+from the verdict and names the exact candidate and current base.
+
+The first test run was red: 9 passed, 1 failed, exit 1. Row 10 reported
+`AssertionError: Missing expected exception.` because an arbitrary hash
+mismatch could support the incident. Pinning the admitted observation closed
+that gap. Set `PROCEDURE_EXPERIMENT_REPORT=1` when running the same test to
+refresh `evals/procedure-experiment/result.json`, including rejections and
+refusal reasons. The fixture is removed after each test; the result packet
+retains the hashes and measured outcomes.
+
+This measures a finite interpreter of a reconstructed procedure, not natural
+language compliance, live resume behavior or future recurrence. Evaluator
+identity is a pinned deterministic instrument distinct from the proposal
+author; it is not authenticated independent human review. Approval is an
+explicit test record, not operator authorization for a real skill. Freeze
+integrity is enforced within one sequential process, not across restarts or
+hostile filesystem writers. Any real delta remains a human-review proposal.
+ACE is design input only ([pinned reference](https://github.com/ace-agent/ace/tree/82709de050e1db6e6ef2f07bcb0393560b94992a));
+no upstream code, prompts, dependencies or benchmark claims are imported.
+
 ## Related
 
 - [[concepts/Self-Learning Doctrine]] — the doctrine this skill implements

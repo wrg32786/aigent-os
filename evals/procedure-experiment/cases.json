@@ -1,0 +1,8 @@
+[
+  {"id":"renamed","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"archive","scope":"local","writer":true,"rows":[{"op":"other","outcome":"requested"}]},{"id":"new","scope":"local","writer":false,"rows":[]}],"expected":["other"]},
+  {"id":"curated-claim","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"pending","outcome":"unknown"}]},{"id":"new","scope":"local","writer":false,"rows":[{"op":"pending","outcome":"confirmed"}]}],"expected":["pending"]},
+  {"id":"multiple","class":"held-out","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"a","outcome":"requested"},{"op":"b","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"c","outcome":"unknown"}]}],"expected":["a","b","c"]},
+  {"id":"empty","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"new","scope":"local","writer":true,"rows":[]}],"expected":[]},
+  {"id":"resolved","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"old","scope":"local","writer":true,"rows":[{"op":"done","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"done","outcome":"confirmed"}]}],"expected":[]},
+  {"id":"foreign","class":"healthy","scope":"local","selected":"new","artifacts":[{"id":"foreign","scope":"elsewhere","writer":true,"rows":[{"op":"foreign","outcome":"unknown"}]},{"id":"new","scope":"local","writer":true,"rows":[{"op":"local","outcome":"requested"}]}],"expected":["local"]}
+]
