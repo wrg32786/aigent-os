@@ -56,8 +56,9 @@ test('row 2: case A curated selection and case B second session retain all spent
   assert.match(a, /id: "selected"/);
   for (const s of sources) carried(a, s.r, `source-${s.status}`);
   // A second real writer session supplies the selected capsule, in this root.
-  const second = fixture(t);
+  const second = fixture(t, { sessionId: 'second-session' });
   const secondDoc = second.write([user('Inspect the new delivery'), call('second-session')]);
+  assert.match(secondDoc, /^id: \S+-auto-second-s$/m);
   f.edit(() => stamp(secondDoc, { id: 'second-session', created_at: '2099-01-01T00:00:00Z',
     objective: 'Inspect delivery', next_valid_action: 'Inspect delivery status' }));
   const b = f.resume();
