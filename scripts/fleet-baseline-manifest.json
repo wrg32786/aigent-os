@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-31-4aeafa26",
-  "public_product_commit": "4aeafa2647b8d982bba9dc9e9f061f2797d57371",
+  "baseline_id": "aigent-os-2026-10-31-a651901f",
+  "public_product_commit": "a651901f2e30c4148b3bdfbdb63725fc958cd9be",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -37,7 +37,8 @@
     "v8 recut for #81 (redact fix) (6b2e13e3): pins that moved: daemons/resume-verb.mjs, daemons/stop-capsule-writer.mjs, daemons/redact.cjs. redact.cjs moved: its prefix group could backtrack exponentially. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #139 cycle read (19fce78b): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: a failed read of the cycle file no longer persists a hold or overwrites durable state. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #139 round 2 (eed1ed9c): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: recovery proof and intent knowledge from the #141 review. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for #139 round 3 (4aeafa26): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: every cycle hold has a stated exit, from the #141 review. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for #139 round 3 (4aeafa26): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: every cycle hold has a stated exit, from the #141 review. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #139 round 4 (a651901f): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: unknown intent stays unknown, cross-session ambiguity has an exit. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -64,7 +65,7 @@
     ".claude/settings.json.template": "c49eb305549d4f76477e0ea7565eea1ecb41b2d3c2105e39550ae295250e8734",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "d592fce7a187f2b29e9aa27ff10849ff23a48a565b586f0581fd199ff76aee0e",
-    "daemons/auto-clear-transport.mjs": "0225c7d9dc3ec40e5b5b3a4f269411a223f1ab526127423ca2e1e8d459fc0fdc",
+    "daemons/auto-clear-transport.mjs": "bb576782a9a8387d1824f16b3ef15c2bcbef3ad6d2463ef4bc1c1b1ed42fbeb7",
     "daemons/lifecycle-common.mjs": "460c435dd0f168bce7fdba09505ffff7bf2875ca4b53d9bb72ee014cd7be2cf2",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
