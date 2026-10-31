@@ -174,7 +174,7 @@ Common checks:
 
 - **Hooks are missing:** inspect `.claude/settings.json`, then restart Claude Code because hook configuration loads at session start.
 - **Settings are invalid:** repair the existing file using `.claude/settings.aigent.json` as the proposed aigent block.
-- **Semantic search is unavailable:** verify Node.js 18 or newer, then run `npm install` in `daemons/semantic-search/` and rebuild the index.
+- **Semantic search is unavailable:** verify Node.js 18 or newer, then rerun `install.sh`. It repairs the dependency tree in a separate folder and keeps a working tree in place.
 - **Runtime state appears empty:** run `python3 daemons/runtime/update-active-state.py --print-vault` and confirm it resolves to the project's `vault/` directory.
 - **Setup repeats:** inspect `.aigent/state.json`, `.aigent/first-run-done`, and `memory/about-you.md` for an interrupted first-run write.
 

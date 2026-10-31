@@ -346,6 +346,124 @@ test('dr-11f. a refused rename during recovery keeps both trees and names where 
   assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
 }));
 
+test('dr-11g. live bad, previous good, one probe that could not finish: the only good tree is not deleted', () => withRoot('1.0.0', ({ root }) => {
+  leaveSwap(root, { liveVersion: '1.0.0', liveThrows: true, prevVersion: '1.0.0' });
+  const prev = holderOf(root, 'prev');
+  let timedOut = false;
+  const probe = (target) => {
+    if (path.resolve(target) === path.resolve(prev) && !timedOut) {
+      timedOut = true;
+      return { unknown: 'spawnSync node ETIMEDOUT' };
+    }
+    return probeImports(target);
+  };
+  const result = updateDependencyRoot({ root, npm: fakeNpm(fails('offline')), probe });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.match(result.reason, /could not be checked/);
+  assert.equal(fs.existsSync(prevTreeOf(root)), true, 'could not check is not bad');
+
+  const again = updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) });
+  assert.equal(again.outcome, 'unchanged');
+  assert.equal(probeImports(root), null, 'the next run restores it');
+}));
+
+test('dr-11h. a live tree that could not be checked is not touched at all', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  const npm = fakeNpm(fails('must not be called'));
+  const result = updateDependencyRoot({ root, npm, probe: () => ({ unknown: 'ETIMEDOUT' }) });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.equal(npm.calls.length, 0);
+  assert.equal(installedVersion(root), '1.0.0');
+}));
+
+test('dr-11i. one bad answer is not a verdict: a tree that passes on the second ask is good', () => withRoot('1.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  let calls = 0;
+  const probe = (target) => {
+    calls += 1;
+    return calls === 1 ? 'flaky' : probeImports(target);
+  };
+  const npm = fakeNpm(fails('must not be called'));
+  assert.equal(updateDependencyRoot({ root, npm, probe }).outcome, 'unchanged');
+  assert.equal(npm.calls.length, 0);
+}));
+
+test('dr-11j. bad old tree, good stage, one transient failure in place: the good new tree is kept', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0', { throws: true });
+  let inPlace = 0;
+  const probe = (target) => {
+    if (path.resolve(target) === path.resolve(root) && installedVersion(root) === '2.0.0') {
+      inPlace += 1;
+      if (inPlace === 1) return 'transient';
+    }
+    return probeImports(target);
+  };
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), probe });
+  assert.equal(result.outcome, 'updated');
+  assert.equal(installedVersion(root), '2.0.0');
+}));
+
+test('dr-11k. an update that could not be confirmed in place keeps the old tree for a later run to settle', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  const probe = (target) => (
+    path.resolve(target) === path.resolve(root) && installedVersion(root) === '2.0.0'
+      ? { unknown: 'ETIMEDOUT' }
+      : probeImports(target));
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), probe });
+  assert.equal(result.outcome, 'updated');
+  assert.match(result.reason, /could not be confirmed/);
+  assert.equal(fs.existsSync(prevTreeOf(root)), true);
+  assert.equal(updateDependencyRoot({ root, npm: fakeNpm(fails('must not be called')) }).outcome, 'unchanged');
+  assert.equal(fs.existsSync(prevTreeOf(root)), false);
+}));
+
+test('dr-11l. rollback refused with a good old tree reports the truth: the live tree does not work', () => withRoot('2.0.0', ({ root }) => {
+  writeTree(root, '1.0.0');
+  const live = path.resolve(path.join(root, 'node_modules'));
+  const probe = (target) => (
+    path.resolve(target) === path.resolve(root) && installedVersion(root) === '2.0.0'
+      ? 'broken in place'
+      : probeImports(target));
+  const fsImpl = {
+    ...fs,
+    renameSync(from, to) {
+      if (path.resolve(String(from)) === live && String(to).includes('.deps-failed-')) {
+        throw Object.assign(new Error('EPERM: rename'), { code: 'EPERM' });
+      }
+      return fs.renameSync(from, to);
+    },
+  };
+  const result = updateDependencyRoot({
+    root, npm: fakeNpm(installs('2.0.0')), probe, fsImpl, retryDelayMs: 0,
+  });
+  assert.equal(result.outcome, 'kept-unusable');
+  assert.equal(result.usable, false);
+  assert.ok(result.reason.includes(prevTreeOf(root)));
+}));
+
+test('dr-11m. npm that succeeds and leaves no tree on a fresh root is a failure, not a quiet pass', () => withRoot('2.0.0', ({ root }) => {
+  const result = updateDependencyRoot({ root, npm: fakeNpm(() => ({ ok: true })) });
+  assert.equal(result.outcome, 'failed');
+}));
+
+test('dr-11n. a fresh install is proven in its final place too', () => withRoot('2.0.0', ({ root }) => {
+  const probe = (target) => (path.resolve(target) === path.resolve(root) ? 'addon path baked into the stage' : probeImports(target));
+  const result = updateDependencyRoot({ root, npm: fakeNpm(installs('2.0.0')), probe });
+  assert.equal(result.outcome, 'installed-unverified');
+  assert.match(result.reason, /baked/);
+}));
+
+test('dr-11o. the probe drives node-pty, because an import alone never loads its Windows binding', () => withRoot('1.0.0', ({ root }) => {
+  const dir = path.join(root, 'node_modules', 'node-pty');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'node-pty', version: '1.1.0', main: 'index.js' }));
+  fs.writeFileSync(path.join(dir, 'index.js'), "exports.spawn = () => { throw new Error('Failed to load native module: conpty.node'); };\n");
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x', dependencies: { 'node-pty': '*' } }));
+  assert.match(probeImports(root), /conpty/);
+  fs.writeFileSync(path.join(dir, 'index.js'), "exports.spawn = () => ({ onExit(done) { done({ exitCode: 0 }); } });\n");
+  assert.equal(probeImports(root), null);
+}));
+
 test('dr-12. a native rebuild runs in the stage, never in the live root, and ignore-scripts stays on', () => withRoot('2.0.0', ({ root }) => {
   writeTree(root, '1.0.0');
   const calls = [];

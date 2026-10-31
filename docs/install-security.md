@@ -136,19 +136,22 @@ Only the marked aigent generated-state block is refreshed. Existing ignore rules
 
 The core copy and configuration steps use local files only.
 
-Unless `--no-deps` is supplied, the installer may run:
+Unless `--no-deps` is supplied, the installer checks `daemons/semantic-search/` and `daemons/transport-deps/`, two independent optional dependency roots. A tree that matches its lockfile and works is left alone, and npm does not run.
+
+Otherwise it builds a replacement in a separate folder beside the root, never in the live one, with:
 
 ```bash
-npm ci --silent --ignore-scripts
+npm ci --ignore-scripts
 ```
 
-or:
+or, without a lockfile, `npm install --ignore-scripts`, followed by one named rebuild:
 
 ```bash
-npm install --silent --ignore-scripts
+npm rebuild sharp      # semantic search
+npm rebuild node-pty   # managed transport
 ```
 
-inside `daemons/semantic-search/` and `daemons/transport-deps/` (two independent optional dependency roots: the embeddings feature and the auto-clear transport's node-pty, respectively). npm may contact configured registries and resolve each dependency lock. `--ignore-scripts` disables lifecycle scripts (`preinstall`/`install`/`postinstall`) for each package and every transitive dependency, so a compromised transitive dependency -- or a package.json under `daemons/` that already existed in the target before this install ran -- cannot execute arbitrary code as a side effect of dependency resolution. Neither bundled package has lifecycle scripts of its own, so this changes nothing for a normal install. Review each `package.json` and lock file before enabling this step in a high-trust environment regardless.
+**That rebuild runs the named package's own install script, and only that package's.** The version comes from the lockfile. `sharp`'s script downloads its libvips binary from GitHub, not from the npm registry, so it needs that network path, and a proxy that blocks it makes the rebuild fail. That download's hash is not verified by this installer. All other dependency scripts stay off. A replacement that does not work is never put in place.
 
 Skip it with:
 

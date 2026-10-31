@@ -1574,8 +1574,8 @@ else
       PROBE_WHY="${PROBE#*-- }"; [ -n "$PROBE" ] || PROBE_WHY="doctor gave no answer"
       case "$PROBE_RC" in
         0) printf '  [ok] %s dependencies installed and loadable -- %s\n' "$DEP_DIR" "$PROBE_WHY" ;;
-        1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun the installer\n' "$DEP_DIR" "$PROBE_WHY" "$DEP_DIR" ;;
-        2) printf '  [warn] %s dependencies reported installed but node_modules is absent -- rerun the installer\n' "$DEP_DIR" "$DEP_DIR" ;;
+        1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun the installer\n' "$DEP_DIR" "$PROBE_WHY" ;;
+        2) printf '  [warn] %s dependencies reported installed but node_modules is absent -- rerun the installer\n' "$DEP_DIR" ;;
         *) printf '  [warn] %s dependencies installed; loadability could not be measured (%s)\n' "$DEP_DIR" "$PROBE_WHY" ;;
       esac
     else
