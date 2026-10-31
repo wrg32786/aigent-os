@@ -1539,18 +1539,33 @@ else
       printf '  [skip] No %s package found\n' "$DEP_DIR"
       continue
     fi
-    printf '  Installing %s dependencies (network access may occur)...\n' "$DEP_DIR"
-    pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
-    if [[ -f package-lock.json ]]; then
-      npm ci --silent --ignore-scripts
-    else
-      npm install --silent --ignore-scripts
+    printf '  Checking %s dependencies (network access may occur)...\n' "$DEP_DIR"
+    # npm never runs in the live root (issue #138): a verified tree is left
+    # alone, and anything else is staged, proven to load, then swapped in.
+    # Only the named package's build script runs; --ignore-scripts stays on.
+    DEP_REBUILD="sharp"
+    [[ "$DEP_DIR" == "transport-deps" ]] && DEP_REBUILD="node-pty"
+    DEP_RC=0
+    DEP_OUT="$(node "$SRC/scripts/dependency-root.mjs" "$TARGET/daemons/$DEP_DIR" "$DEP_REBUILD")" || DEP_RC=$?
+    DEP_WHY="${DEP_OUT#*|}"
+    case "$DEP_RC" in
+      0) ;;
+      2) fail "$DEP_DIR has no node_modules in place ($DEP_WHY). Rerun the installer to restore the previous tree." ;;
+      *) fail "$DEP_DIR dependencies could not be installed ($DEP_WHY). Fix the reported error and rerun, or pass --no-deps for the unmanaged fallback." ;;
+    esac
+    DEP_RESULT="${DEP_OUT%%|*}"
+    case "$DEP_RESULT" in
+      unchanged) printf '  [ok] %s dependencies match the lockfile and load; npm not run\n' "$DEP_DIR" ;;
+      kept-previous) printf '  [warn] %s dependencies not updated (%s); the existing tree was kept\n' "$DEP_DIR" "$DEP_WHY" ;;
+      kept-unusable|installed-unverified)
+        [[ "$DEP_DIR" != "transport-deps" ]] \
+          || fail "node-pty is not usable ($DEP_WHY). Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
+        printf '  [warn] %s dependencies are in place but do not load (%s)\n' "$DEP_DIR" "$DEP_WHY"
+        ;;
+    esac
+    if [[ -n "$DEP_WHY" && ( "$DEP_RESULT" == "updated" || "$DEP_RESULT" == "unchanged" ) ]]; then
+      printf '  [warn] %s: %s\n' "$DEP_DIR" "$DEP_WHY"
     fi
-    if [[ "$DEP_DIR" == "transport-deps" ]]; then
-      npm rebuild --silent node-pty \
-        || fail "node-pty failed to build. Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
-    fi
-    popd >/dev/null
     if [[ "$DEP_DIR" == "semantic-search" ]]; then
       # Installed is not loadable (issue #107): a tree whose package holds only a
       # stale .cache used to pass here and attest COMPLIANT. One bounded,
@@ -1559,8 +1574,8 @@ else
       PROBE_WHY="${PROBE#*-- }"; [ -n "$PROBE" ] || PROBE_WHY="doctor gave no answer"
       case "$PROBE_RC" in
         0) printf '  [ok] %s dependencies installed and loadable -- %s\n' "$DEP_DIR" "$PROBE_WHY" ;;
-        1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun npm install in daemons/%s\n' "$DEP_DIR" "$PROBE_WHY" "$DEP_DIR" ;;
-        2) printf '  [warn] %s dependencies reported installed but node_modules is absent -- rerun npm install in daemons/%s\n' "$DEP_DIR" "$DEP_DIR" ;;
+        1) printf '  [warn] %s dependencies installed but NOT loadable (%s) -- semantic search will not run; rerun the installer\n' "$DEP_DIR" "$PROBE_WHY" "$DEP_DIR" ;;
+        2) printf '  [warn] %s dependencies reported installed but node_modules is absent -- rerun the installer\n' "$DEP_DIR" "$DEP_DIR" ;;
         *) printf '  [warn] %s dependencies installed; loadability could not be measured (%s)\n' "$DEP_DIR" "$PROBE_WHY" ;;
       esac
     else
