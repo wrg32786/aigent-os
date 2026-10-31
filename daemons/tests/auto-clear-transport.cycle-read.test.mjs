@@ -507,6 +507,91 @@ test('ccr-13c. a hold with no marker comes from a build no running code can vouc
   assert.equal(next.tick().state.state, 'idle');
 }));
 
+test('row: content bad at load, this process owns the lock: nothing was in flight, so it need not wait for a relaunch', () => withFixture('r1', (fixture) => {
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  writeJson(path.join(fixture.memRoot, 'runtime', 'auto-clear-transport.lock'), { pid: process.pid });
+  const transport = createTransport(fixture);
+  assert.equal(transport.state.state, 'HOLD:cycle-state-invalid');
+  assert.equal(transport.tick().state.state, 'HOLD:clear-ambiguous', 'the file could not vouch for its intent');
+  bootAgain(fixture, 11);
+  assert.equal(transport.tick().state.state, 'idle');
+}));
+
+test('row: content bad at load but known to hold no intent recovers straight to idle under the lock', () => withFixture('r2', (fixture) => {
+  writeJson(cyclePath(fixture), {
+    state: 'not-a-state',
+    cycle_id: null,
+    session_id: SESSION_ID,
+    boot_sequence_at_start: null,
+    clear_intent: null,
+    entered_at: new Date(fixture.clock.ms()).toISOString(),
+    hold: null,
+    ack_boundary: null,
+    ack_classification: null,
+  });
+  fixture.pressure.pct = 10;
+  writeJson(path.join(fixture.memRoot, 'runtime', 'auto-clear-transport.lock'), { pid: process.pid });
+  const transport = createTransport(fixture);
+  assert.equal(transport.state.hold.detail.intent_known, true);
+  assert.equal(transport.tick().status, 'cycle-hold-recovered');
+}));
+
+test('row: clear-ambiguous with no baseline because the receipt was unreadable gets one, and then its exit', () => withFixture('r3', (fixture) => {
+  const receipt = path.join(fixture.memRoot, 'runtime', 'boot-receipt.json');
+  fs.rmSync(receipt);
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  createTransport(fixture);
+  const next = nextProcess(fixture);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+  assert.equal(disk(fixture).boot_sequence_at_start, null);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous', 'still no receipt, still held');
+
+  bootAgain(fixture, 10);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+  assert.equal(disk(fixture).boot_sequence_at_start, 10, 'the baseline is stamped when a receipt exists');
+  bootAgain(fixture, 11);
+  assert.equal(next.tick().state.state, 'idle');
+}));
+
+test('row: recovered ambiguity with no intent, relaunched into a new session, is superseded', () => withFixture('r4', (fixture) => {
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  createTransport(fixture);
+  assert.equal(nextProcess(fixture).tick().state.state, 'HOLD:clear-ambiguous');
+
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+    boot_sequence: 11,
+    session_id: 'session-new',
+    source: 'startup',
+    observed_at: new Date(fixture.clock.ms() + 1000).toISOString(),
+  });
+  const relaunched = nextProcess(fixture, { sessionId: 'session-new' });
+  const result = relaunched.tick();
+  assert.equal(result.status, 'inherited-cycle-superseded');
+  assert.equal(disk(fixture).state, 'idle');
+  assert.equal(disk(fixture).session_id, 'session-new');
+}));
+
+test('row: a real intent held across sessions is never superseded: no receipt speaks for the dead session', () => withFixture('r5', (fixture) => {
+  legacyHold(fixture, {
+    cycleId: 'cycle-inflight',
+    bootAtStart: 10,
+    clearIntent: { written_at: new Date(fixture.clock.ms()).toISOString(), submitted: true },
+  });
+  assert.equal(createTransport(fixture).tick().state.state, 'HOLD:clear-ambiguous');
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+    boot_sequence: 11,
+    session_id: 'session-new',
+    source: 'startup',
+    observed_at: new Date(fixture.clock.ms() + 1000).toISOString(),
+  });
+  const relaunched = nextProcess(fixture, { sessionId: 'session-new' });
+  assert.equal(relaunched.tick().state.state, 'HOLD:clear-ambiguous');
+  assert.equal(disk(fixture).clear_intent.submitted, true);
+}));
+
 test('ccr-14. a recovered hold under the kill switch starts nothing', () => withFixture('c14', (fixture) => {
   legacyHold(fixture);
   writeText(path.join(fixture.memRoot, 'runtime', 'auto-clear-off'), 'off\n');

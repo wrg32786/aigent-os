@@ -1087,7 +1087,7 @@ export class AutoClearTransport {
       const held = holdState(
         base,
         'cycle-state-invalid',
-        this._cycleHoldDetail(error?.message || String(error), false),
+        this._cycleHoldDetail(error?.message || String(error), false, true),
         clockIso(this.now),
         'idle',
       );
@@ -1112,7 +1112,7 @@ export class AutoClearTransport {
     const held = holdState(
       base,
       problem.code,
-      this._cycleHoldDetail(problem.detail, intentKnown),
+      this._cycleHoldDetail(problem.detail, intentKnown, true),
       clockIso(this.now),
       'idle',
     );
@@ -1494,11 +1494,16 @@ export class AutoClearTransport {
     return { ack_boundary: null, ack_classification: null };
   }
 
-  _cycleHoldDetail(detail, intentKnown) {
+  _cycleHoldDetail(detail, intentKnown, atLoad = false) {
     const carried = detail && typeof detail === 'object' && !Array.isArray(detail)
       ? detail
       : { value: detail };
-    return { ...carried, raised_by: this.processInstance, intent_known: intentKnown };
+    return {
+      ...carried,
+      raised_by: this.processInstance,
+      raised_at_load: atLoad,
+      intent_known: intentKnown,
+    };
   }
 
   _bootSequenceNow() {
@@ -1516,18 +1521,35 @@ export class AutoClearTransport {
     }
   }
 
-  // A cycle-state hold is recoverable on evidence, not on a timer. A persisted
-  // read error said nothing about content (#139). Anything else needs proof
-  // that the process that raised it is gone, because an in-flight submission
-  // dies with that process: another process raised it, and this one holds the
-  // runner lock. A rebind in the raising process proves neither. A hold with
-  // no raised_by predates the marker, so no running code raised it.
+  // EVERY HOLD ON THE CYCLE FILE AND ITS EXIT (#139). Each row has a test in
+  // auto-clear-transport.cycle-read.test.mjs. No exit needs file surgery.
+  //
+  //   hold                         evidence                        exit
+  //   unreadable (never persisted) the read succeeds               the same state
+  //   persisted read error         none needed: says nothing       idle, or ambiguity
+  //                                about content                   if it has an intent
+  //   content bad during a tick    raiser gone: another process    idle, or ambiguity
+  //                                AND this one owns the lock      if it has an intent
+  //   content bad at load          this process owns the lock:     idle if the intent
+  //                                nothing was in flight at load   is known, else ambiguity
+  //   hold with no marker          as above, older build           ambiguity
+  //   clear-ambiguous, no baseline a receipt is readable           stamped, row below
+  //   clear-ambiguous              same session, later boot        idle
+  //                                or a new clear receipt          clear-verified
+  //   clear-ambiguous, recovered   the live session differs and    idle (superseded)
+  //   with no intent               a newer boot proves it
+  //
+  // A real intent held across sessions is left alone: no receipt can speak for
+  // the dead session. Bad content in a live tick stays held until a relaunch,
+  // because the process that met it may hold a submission.
   _recoverableCycleHold() {
     const hold = this.state.hold;
     if (!this.state.state.startsWith('HOLD:cycle-state-') || !hold) return null;
     if (hold.code === 'cycle-state-invalid'
       && READ_ERROR_HOLD_VALUE.test(String(hold.detail?.value ?? ''))) return 'read-error';
-    if (hold.detail?.raised_by === this.processInstance) return null;
+    if (hold.detail?.raised_by === this.processInstance && hold.detail?.raised_at_load !== true) {
+      return null;
+    }
     return this._ownsRunnerLock() ? 'previous-process' : null;
   }
 
@@ -1683,7 +1705,8 @@ export class AutoClearTransport {
       && typeof this.state.session_id === 'string'
       && this.state.session_id !== this.sessionId
       && this.state.state !== 'released'
-      && this.state.state !== 'HOLD:clear-ambiguous') {
+      && (this.state.state !== 'HOLD:clear-ambiguous'
+        || typeof this.state.hold?.detail?.recovered_from === 'string')) {
       const bootNow = this._readBootReceipt();
       if (bootNow.ok
         && bootNow.receipt.session_id === this.sessionId
@@ -1739,6 +1762,12 @@ export class AutoClearTransport {
     }
 
     if (this.state.state === 'HOLD:clear-ambiguous') {
+      if (!Number.isSafeInteger(this.state.boot_sequence_at_start)) {
+        const baseline = this._bootSequenceNow();
+        if (baseline !== null) {
+          this._transition(this.state.state, { boot_sequence_at_start: baseline, hold: this.state.hold });
+        }
+      }
       // The hold exists because a submitted clear MIGHT have landed. For a
       // SAME-SESSION cycle that is answerable, not ambiguous: a clear always
       // mints a new session, so the same session id at a LATER boot proves the
