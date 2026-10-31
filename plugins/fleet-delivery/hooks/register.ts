@@ -164,6 +164,8 @@ let jobScript: 'unchecked' | 'present' | 'absent' = 'unchecked'
 let timer: Timer | undefined
 let lastTickAt = 0
 let isTicking = false
+// A tick failure is logged once, not every 30 s.
+let lastTickError: string | undefined
 let hasWarnedBareOwner = false
 // Serializes this module's log appends.
 let logWrites: Promise<void> = Promise.resolve()
@@ -454,8 +456,13 @@ async function claimGeneration($: $, reclaim = false): Promise<void> {
 
 class Superseded extends Error {}
 
+// Every session end, a /clear included, the host empties $.state while this
+// module lives on (#136). No value is no successor: this module takes its
+// generation back, so a submit that straddled the edge can still be recorded.
 async function assertCurrent($: $): Promise<void> {
-  if ((await $.state.get(GENERATION)).value !== generation) throw new Superseded('superseded by a reloaded module')
+  const held = (await $.state.get(GENERATION)).value
+  if (held === undefined) await claimGeneration($, true)
+  else if (held !== generation) throw new Superseded('superseded by a reloaded module')
 }
 
 // Where a Room file lives. Invariant: inbox/ = unclaimed (room_drain may take
@@ -734,7 +741,11 @@ async function transition(
     const held = await $.state.get(LEDGER)
     const all = held.value ?? {}
     const entries = all[w.seat]
-    if (!entries) throw new Error('ledger not loaded')
+    if (!entries) {
+      // The host emptied $.state (#136): the log has the ledger.
+      if (!(await loadLedger($, w, await readLog($, w)))) throw new Error('ledger not loaded')
+      continue
+    }
     const prior = entries[id]
     const next = decide(prior)
     if (next === null) return null
@@ -1578,8 +1589,11 @@ async function tick($: $): Promise<void> {
       show('', queue.filter(one => !isFinal(now[one.id])).length)
       return
     }
-  } catch {
+  } catch (error) {
     // A failed tick leaves the ledger as it stood; the next one retries.
+    const why = clean((error as Error)?.message, 160)
+    if (why !== lastTickError) $.ui.log(`fleet-delivery: tick failed: ${why}`)
+    lastTickError = why
   } finally {
     isTicking = false
   }
