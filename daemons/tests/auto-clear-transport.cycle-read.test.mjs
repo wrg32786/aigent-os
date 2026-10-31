@@ -574,10 +574,34 @@ test('row: recovered ambiguity with no intent, relaunched into a new session, is
   assert.equal(disk(fixture).session_id, 'session-new');
 }));
 
-test('row: a real intent held across sessions is never superseded: no receipt speaks for the dead session', () => withFixture('r5', (fixture) => {
+test('row: a real intent held across sessions is not superseded, but the live session at a newer boot under the lock releases it', () => withFixture('r5', (fixture) => {
   legacyHold(fixture, {
     cycleId: 'cycle-inflight',
     bootAtStart: 10,
+    clearIntent: { written_at: new Date(fixture.clock.ms()).toISOString(), submitted: true },
+  });
+  assert.equal(createTransport(fixture).tick().state.state, 'HOLD:clear-ambiguous');
+  const newSession = {
+    boot_sequence: 11,
+    session_id: 'session-new',
+    source: 'startup',
+    observed_at: new Date(fixture.clock.ms() + 1000).toISOString(),
+  };
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), newSession);
+  const unlocked = createTransport(fixture, { sessionId: 'session-new', processInstance: 'p2' });
+  assert.equal(unlocked.tick().state.state, 'HOLD:clear-ambiguous', 'no lock, no proof the old runner is gone');
+  assert.equal(disk(fixture).clear_intent.submitted, true);
+
+  const relaunched = nextProcess(fixture, { sessionId: 'session-new' });
+  assert.equal(relaunched.tick().state.state, 'idle');
+  assert.equal(disk(fixture).session_id, 'session-new');
+  assert.equal(disk(fixture).clear_intent, null);
+}));
+
+test('row: across sessions a replayed receipt is not news: the boot must be newer than the baseline', () => withFixture('r5b', (fixture) => {
+  legacyHold(fixture, {
+    cycleId: 'cycle-inflight',
+    bootAtStart: 12,
     clearIntent: { written_at: new Date(fixture.clock.ms()).toISOString(), submitted: true },
   });
   assert.equal(createTransport(fixture).tick().state.state, 'HOLD:clear-ambiguous');
@@ -589,7 +613,52 @@ test('row: a real intent held across sessions is never superseded: no receipt sp
   });
   const relaunched = nextProcess(fixture, { sessionId: 'session-new' });
   assert.equal(relaunched.tick().state.state, 'HOLD:clear-ambiguous');
-  assert.equal(disk(fixture).clear_intent.submitted, true);
+}));
+
+test('row: a new clear receipt ends an ambiguity hold as released', () => withFixture('r6', (fixture) => {
+  legacyHold(fixture, {
+    cycleId: 'cycle-inflight',
+    bootAtStart: 10,
+    clearIntent: { written_at: new Date(fixture.clock.ms()).toISOString(), submitted: true },
+  });
+  const transport = createTransport(fixture);
+  assert.equal(transport.tick().state.state, 'HOLD:clear-ambiguous');
+  writeJson(path.join(fixture.memRoot, 'runtime', 'boot-receipt.json'), {
+    boot_sequence: 11,
+    session_id: 'session-after-clear',
+    source: 'clear',
+    observed_at: new Date(fixture.clock.ms() + 1000).toISOString(),
+  });
+  transport.tick();
+  assert.equal(transport.tick().state.state, 'released');
+}));
+
+test('row: a hold with an unknown intent stays unknown when its own record goes bad', () => withFixture('r7', (fixture) => {
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  createTransport(fixture);
+  assert.equal(nextProcess(fixture).tick().state.state, 'HOLD:clear-ambiguous');
+
+  const damaged = disk(fixture);
+  delete damaged.entered_at;
+  writeJson(cyclePath(fixture), damaged);
+  const next = nextProcess(fixture);
+  assert.equal(next.state.hold.detail.intent_known, false);
+  const result = next.tick();
+  assert.notEqual(result.status, 'cycle-hold-recovered');
+  assert.equal(result.state.state, 'HOLD:clear-ambiguous');
+}));
+
+test('row: bad content over an unknown intent during a tick does not launder it into a known one', () => withFixture('r8', (fixture) => {
+  writeText(cyclePath(fixture), 'not json');
+  fixture.pressure.pct = 10;
+  createTransport(fixture);
+  const next = nextProcess(fixture);
+  assert.equal(next.tick().state.state, 'HOLD:clear-ambiguous');
+  fs.writeFileSync(cyclePath(fixture), 'garbage again');
+  next.tick();
+  assert.equal(disk(fixture).hold.detail.intent_known, false);
+  assert.equal(nextProcess(fixture, { processInstance: 'third' }).tick().state.state, 'HOLD:clear-ambiguous');
 }));
 
 test('ccr-14. a recovered hold under the kill switch starts nothing', () => withFixture('c14', (fixture) => {

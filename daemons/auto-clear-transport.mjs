@@ -802,6 +802,18 @@ const READ_ERROR_HOLD_VALUE = /^(?!ENOENT)[A-Z][A-Z0-9_]*: .*\bread\b/;
 // object is no evidence that the raiser is gone (#141 review).
 const PROCESS_INSTANCE = `${process.pid}:${randomUUID()}`;
 
+// True only when a record says outright that no clear exists. A null can also
+// mean the intent was lost, and the record that lost it says so.
+function vouchesForNoIntent(record) {
+  return record !== null
+    && typeof record === 'object'
+    && hasOwn(record, 'clear_intent')
+    && record.clear_intent === null
+    && record.state !== 'clear-submitted'
+    && record.state !== 'HOLD:clear-ambiguous'
+    && record.hold?.detail?.intent_known !== false;
+}
+
 function invalidStateReason(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { code: 'cycle-state-invalid', detail: 'root object missing' };
@@ -1106,9 +1118,7 @@ export class AutoClearTransport {
     // base.clear_intent is null because this record cannot be trusted, not
     // because no clear exists. Only an explicit null outside clear-submitted
     // says there was none.
-    const intentKnown = hasOwn(parsed ?? {}, 'clear_intent')
-      && parsed.clear_intent === null
-      && parsed.state !== 'clear-submitted';
+    const intentKnown = vouchesForNoIntent(parsed);
     const held = holdState(
       base,
       problem.code,
@@ -1128,17 +1138,18 @@ export class AutoClearTransport {
     }
     const read = this._readCycleFile();
     if (read.unreadable) return this.state;
-    // These three hold from this.state, the last verified state, so whatever
-    // intent it carries is the real one.
+    // These three hold from this.state, the last verified state, which knows
+    // as much about its intent as anything does.
+    const known = vouchesForNoIntent(this.state);
     if (read.missing) {
-      return this._hold('cycle-state-invalid', this._cycleHoldDetail(read.missing.message || String(read.missing), true), 'idle');
+      return this._hold('cycle-state-invalid', this._cycleHoldDetail(read.missing.message || String(read.missing), known), 'idle');
     }
     let parsed;
     try { parsed = JSON.parse(read.text); } catch (error) {
-      return this._hold('cycle-state-invalid', this._cycleHoldDetail(error?.message || String(error), true), 'idle');
+      return this._hold('cycle-state-invalid', this._cycleHoldDetail(error?.message || String(error), known), 'idle');
     }
     const problem = invalidStateReason(parsed);
-    if (problem) return this._hold(problem.code, this._cycleHoldDetail(problem.detail, true), 'idle');
+    if (problem) return this._hold(problem.code, this._cycleHoldDetail(problem.detail, known), 'idle');
     this.state = parsed;
     return this.state;
   }
@@ -1528,20 +1539,23 @@ export class AutoClearTransport {
   //   unreadable (never persisted) the read succeeds               the same state
   //   persisted read error         none needed: says nothing       idle, or ambiguity
   //                                about content                   if it has an intent
-  //   content bad during a tick    raiser gone: another process    idle, or ambiguity
-  //                                AND this one owns the lock      if it has an intent
+  //   content bad during a tick    raiser gone: another process    idle if the intent
+  //                                AND this one owns the lock      is known, else ambiguity
   //   content bad at load          this process owns the lock:     idle if the intent
   //                                nothing was in flight at load   is known, else ambiguity
-  //   hold with no marker          as above, older build           ambiguity
+  //   hold with no marker, same    the lock                        ambiguity
+  //   session
+  //   any null-intent hold from    the live session at a newer     idle (superseded)
+  //   another session              boot
   //   clear-ambiguous, no baseline a receipt is readable           stamped, row below
-  //   clear-ambiguous              same session, later boot        idle
-  //                                or a new clear receipt          clear-verified
-  //   clear-ambiguous, recovered   the live session differs and    idle (superseded)
-  //   with no intent               a newer boot proves it
+  //   clear-ambiguous              same session, boot later than   idle
+  //                                its baseline
+  //   clear-ambiguous              a new clear receipt             released
+  //   clear-ambiguous, from        the live session at a newer     idle: an old clear
+  //   another session              boot, and the lock              cannot reach it
   //
-  // A real intent held across sessions is left alone: no receipt can speak for
-  // the dead session. Bad content in a live tick stays held until a relaunch,
-  // because the process that met it may hold a submission.
+  // Bad content in a live tick stays held until a relaunch, because the process
+  // that met it may hold a submission.
   _recoverableCycleHold() {
     const hold = this.state.hold;
     if (!this.state.state.startsWith('HOLD:cycle-state-') || !hold) return null;
@@ -1774,15 +1788,22 @@ export class AutoClearTransport {
       // clear never took. Evidence, not a guess -- so release instead of
       // holding forever. Measured live 2026-08-05: a seat killed mid-clear
       // re-entered this hold on every relaunch and could never lap again.
-      // Cross-session inheritance is untouched (ids-2): there the sessions
-      // differ, no receipt can speak for the dead one, and the hold still owns it.
+      // Across sessions no receipt can say whether the old clear landed, and it
+      // no longer matters (ids-2 still enters this hold): the live session at a
+      // newer boot, with this process owning the runner lock, means the runner
+      // that held that clear is gone and it cannot reach this session.
       const boot = this._readBootReceipt();
+      const sameSession = boot.ok && boot.receipt.session_id === this.state.session_id;
+      const freshSession = boot.ok
+        && boot.receipt.session_id === this.sessionId
+        && this.state.session_id !== this.sessionId
+        && this._ownsRunnerLock();
       if (boot.ok
-        && boot.receipt.session_id === this.state.session_id
+        && (sameSession || freshSession)
         && boot.receipt.source !== 'clear'
         && Number.isSafeInteger(this.state.boot_sequence_at_start)
         && boot.receipt.boot_sequence > this.state.boot_sequence_at_start) {
-        this.log(`clear-ambiguous released: same session at boot ${boot.receipt.boot_sequence} proves the clear never landed`);
+        this.log(`clear-ambiguous released: ${sameSession ? 'same session' : 'a newer session'} at boot ${boot.receipt.boot_sequence} means the old clear can no longer land`);
         this._abandonCycleAck('clear-ambiguous-released');
         const next = this._atomicWrite({
           ...initialState(this.sessionId, clockIso(this.now)),
