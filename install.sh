@@ -1539,18 +1539,24 @@ else
       printf '  [skip] No %s package found\n' "$DEP_DIR"
       continue
     fi
-    printf '  Installing %s dependencies (network access may occur)...\n' "$DEP_DIR"
-    pushd "$TARGET/daemons/$DEP_DIR" >/dev/null
-    if [[ -f package-lock.json ]]; then
-      npm ci --silent --ignore-scripts
-    else
-      npm install --silent --ignore-scripts
-    fi
-    if [[ "$DEP_DIR" == "transport-deps" ]]; then
-      npm rebuild --silent node-pty \
-        || fail "node-pty failed to build. Install platform build tools and rerun, or pass --no-deps for the unmanaged fallback."
-    fi
-    popd >/dev/null
+    printf '  Checking %s dependencies (network access may occur)...\n' "$DEP_DIR"
+    # npm never runs in the live root (issue #138): a verified tree is left
+    # alone, and anything else is staged, proven to load, then swapped in.
+    DEP_REBUILD=""
+    [[ "$DEP_DIR" == "transport-deps" ]] && DEP_REBUILD="node-pty"
+    DEP_RC=0
+    DEP_OUT="$(node "$SRC/scripts/dependency-root.mjs" "$TARGET/daemons/$DEP_DIR" "$DEP_REBUILD")" || DEP_RC=$?
+    DEP_WHY="${DEP_OUT#*|}"
+    case "$DEP_RC" in
+      0) ;;
+      2) fail "$DEP_DIR rollback failed: the previous tree is preserved at $DEP_WHY. Rename it back to node_modules and rerun." ;;
+      *) fail "$DEP_DIR dependencies could not be installed ($DEP_WHY). Fix the reported error and rerun, or pass --no-deps for the unmanaged fallback." ;;
+    esac
+    case "${DEP_OUT%%|*}" in
+      unchanged) printf '  [ok] %s dependencies match the lockfile and load; npm not run\n' "$DEP_DIR" ;;
+      kept-previous) printf '  [warn] %s dependencies not updated (%s); the existing tree was kept\n' "$DEP_DIR" "$DEP_WHY" ;;
+      updated) [ -z "$DEP_WHY" ] || printf '  [warn] %s dependencies updated; %s\n' "$DEP_DIR" "$DEP_WHY" ;;
+    esac
     if [[ "$DEP_DIR" == "semantic-search" ]]; then
       # Installed is not loadable (issue #107): a tree whose package holds only a
       # stale .cache used to pass here and attest COMPLIANT. One bounded,
