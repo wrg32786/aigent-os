@@ -43,9 +43,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const AIGENT_ROOT = process.env.AIGENT_ROOT || join(__dirname, '..', '..');
-const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
 // Same resolver, same tree as the indexer and every hook.
-const EMBEDDINGS_PATH = join(resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT), 'embeddings.json');
+const MEMORY_ROOT = resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT);
+const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || dirname(MEMORY_ROOT);
+const EMBEDDINGS_PATH = join(MEMORY_ROOT, 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_TOP_K = 5;
 

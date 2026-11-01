@@ -33,16 +33,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const AIGENT_ROOT = process.env.AIGENT_ROOT || join(__dirname, '..', '..');
-const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
 // The index lives in the seat's memory root, resolved by the one resolver the
 // rest of core uses (declared in .aigent/state.json, default vault/memory).
 // A broken declaration throws at startup, which is the fail-closed direction
 // this indexer already takes for a missing registry.
 const MEMORY_ROOT = resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT);
+// The vault is the tree holding the memory root. A fixed <root>/vault read the
+// starter tree on a seat whose notes sit at its root, and reported success.
+const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || dirname(MEMORY_ROOT);
 const EMBEDDINGS_PATH = join(MEMORY_ROOT, 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const MAX_CHUNK_CHARS = 1800; // ~512 tokens at ~3.5 chars/token
 const CHUNK_OVERLAP_CHARS = 200;
+// One archive took 12,072 of 15,054 entries and outranked a title-exact note.
+// Past this a file is sampled evenly, so all of it stays reachable.
+const MAX_ENTRIES_PER_FILE = 400;
 
 // Directories/files to skip
 const SKIP_DIRS = new Set([
@@ -243,6 +248,13 @@ async function main() {
   const files = collectFiles();
   console.log(`Found ${files.length} markdown files to consider.`);
 
+  // An entry whose file is no longer in scope has nothing left to refresh it.
+  const inScope = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
+  const beforeScope = existing.notes.length;
+  existing.notes = existing.notes.filter((note) => inScope.has(note.path));
+  const outOfScope = beforeScope - existing.notes.length;
+  if (outOfScope > 0) console.log(`[scope] dropped ${outOfScope} entries for files no longer in scope`);
+
   // Determine which files to (re-)embed
   let toEmbed = files;
   if (changedOnly && lastUpdated > 0) {
@@ -250,7 +262,7 @@ async function main() {
     console.log(`--changed-only: ${toEmbed.length} files modified since last index.`);
   }
 
-  if (toEmbed.length === 0 && !carriedForwardPurged) {
+  if (toEmbed.length === 0 && !carriedForwardPurged && outOfScope === 0) {
     console.log('Nothing to embed. Index is up to date.');
     return;
   }
@@ -286,8 +298,14 @@ async function main() {
 
     const derivedTitle = title || basename(fullPath, '.md');
     const chunks = chunkText(text);
+    const indices = chunks.length <= MAX_ENTRIES_PER_FILE
+      ? chunks.map((_, i) => i)
+      : Array.from({ length: MAX_ENTRIES_PER_FILE }, (_, n) => Math.round((n * (chunks.length - 1)) / (MAX_ENTRIES_PER_FILE - 1)));
+    if (indices.length < chunks.length) {
+      console.log(`[cap] capped ${relPath} at ${indices.length} of ${chunks.length} entries`);
+    }
 
-    for (let i = 0; i < chunks.length; i++) {
+    for (const i of indices) {
       const chunk = chunks[i];
       try {
         const embedding = await embedText(chunk);
@@ -320,7 +338,8 @@ async function main() {
   const output = {
     model: MODEL_NAME,
     updated: new Date().toISOString(),
-    noteCount: files.length,
+    vaultRoot: relative(AIGENT_ROOT, VAULT_ROOT).replace(/\\/g, '/') || '.',
+    noteCount: new Set(finalNotes.map((note) => note.path)).size,
     entryCount: finalNotes.length,
     notes: finalNotes,
   };

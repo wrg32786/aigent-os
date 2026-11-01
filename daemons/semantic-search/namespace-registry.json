@@ -11,6 +11,17 @@
     { "path": "feedback",  "disposition": "INDEX" },
     { "path": "reference", "disposition": "INDEX" },
     { "path": "templates", "disposition": "SKIP", "reason": "boilerplate scaffolding, not authored memory" },
-    { "path": "examples",  "disposition": "SKIP", "reason": "illustrative starter content, not operator signal" }
+    { "path": "examples",  "disposition": "SKIP", "reason": "illustrative starter content, not operator signal" },
+    { "path": ".aigent", "disposition": "SKIP", "reason": "installer state" },
+    { "path": "docs", "disposition": "SKIP", "reason": "product docs" },
+    { "path": "evals", "disposition": "SKIP", "reason": "product evals" },
+    { "path": "handoffs", "disposition": "SKIP", "reason": "transient handoff files" },
+    { "path": "hooks", "disposition": "SKIP", "reason": "product code" },
+    { "path": "launcher", "disposition": "SKIP", "reason": "product code" },
+    { "path": "loops", "disposition": "SKIP", "reason": "product code" },
+    { "path": "scripts", "disposition": "SKIP", "reason": "product code" },
+    { "path": "skills", "disposition": "SKIP", "reason": "product skills" },
+    { "path": "system", "disposition": "SKIP", "reason": "product identity files" },
+    { "path": "vault", "disposition": "SKIP", "reason": "starter tree on a seat whose notes sit at its root" }
   ]
 }
