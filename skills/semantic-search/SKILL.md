@@ -24,8 +24,8 @@ node daemons/semantic-search/embed-vault.js --changed-only
 ## Setup
 
 ```bash
-cd daemons/semantic-search && npm install
-node embed-vault.js  # Initial index (~30 seconds)
+bash install.sh --target <vault>  # installs or repairs the dependencies safely
+cd daemons/semantic-search && node embed-vault.js  # Initial index (~30 seconds)
 ```
 
 ## Confidential-class deny list

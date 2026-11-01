@@ -43,8 +43,8 @@ Semantic search lets you query the vault by meaning, not keywords. Requires Node
 
 **Install:**
 ```bash
+bash install.sh --target <vault>   # installs or repairs the dependencies safely
 cd daemons/semantic-search
-npm install
 node embed-vault.js   # builds initial index (~30s for a full vault)
 ```
 

@@ -9,7 +9,7 @@
 // frontmatter created_at value. No secondary pointer or cross-session close
 // bookkeeping competes with that selection.
 
-import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, writeSync, readdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import frontmatterReader from './frontmatter-reader.cjs';
@@ -165,6 +165,18 @@ function normalizedSelectorPath(candidate) {
 // pick — placeholder or not, newer curated capsule or not. Omit the option and
 // this function is BYTE-IDENTICAL to before this parameter existed; every
 // caller that never heard of session binding never triggers this branch.
+// The one read of a capsule's identity fields, shared by selection and the
+// side-effect scan so both judge a capsule by the same values.
+function capsuleHead(doc) {
+  const createdRaw = scalar(doc, 'created_at');
+  return {
+    id: scalar(doc, 'id'),
+    createdRaw,
+    created: Date.parse(String(createdRaw)),
+    status: scalar(doc, 'status'),
+  };
+}
+
 export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
   const sessionTarget = typeof sessionCapsulePath === 'string' && sessionCapsulePath.trim().length
     ? normalizedSelectorPath(sessionCapsulePath)
@@ -201,10 +213,7 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
       doc = unsafeRawCapsuleDocument(full, 'capsule selection needs the complete document for shared field readers');
     } catch { note(name, 'unreadable'); continue; }
     if (!hasFrontmatter(doc)) { note(name, 'no-frontmatter'); continue; }
-    const id = scalar(doc, 'id');
-    const createdRaw = scalar(doc, 'created_at');
-    const created = Date.parse(String(createdRaw));
-    const status = scalar(doc, 'status');
+    const { id, createdRaw, created, status } = capsuleHead(doc);
     const objective = capsuleValue(doc, 'objective');
     const nextAction = capsuleValue(doc, 'next_valid_action');
 
@@ -301,6 +310,99 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
   // resume-verb brands it "*** AUTOSAVE, NOT A CURATED CAPSULE ***" on the way out.
   if (fallback) return { capsule: fallback, rejected, fellBackToPlaceholder: true };
   return { capsule: null, rejected, unavailable: entries.length ? 'all-candidates-rejected' : 'no-capsules-on-disk' };
+}
+
+// Only adjacent indented continuations belong to a bullet. Shared by the
+// selected-capsule reader and the read-only effects collector.
+export function capsuleBulletRows(section) {
+  const rows = [];
+  let current = -1;
+  for (const line of section.split(/\r?\n/)) {
+    if (/^[ \t]*(?:[-*+][ \t]+|\d+\.[ \t]+)/.test(line)) {
+      current = rows.push(line) - 1;
+    } else if (!line.trim() || line.match(HEADING_SCAN) || /^[ \t]*<!--/.test(line)) {
+      current = -1;
+    } else if (current !== -1 && /^[ \t]/.test(line)) {
+      rows[current] += `\n${line}`;
+    } else {
+      current = -1;
+    }
+  }
+  return rows;
+}
+
+// Selection and consumption remain selectCapsule/loadCapsule's responsibility.
+// This scan never writes another capsule and never traverses another memory root.
+// Structured writer resolutions alone retire carried rows; prose and age do not.
+export function collectCapsuleSideEffects(memoryRoot, { selectedPath, selectedDoc, onError }) {
+  const rows = [];
+  const resolved = new Set();
+  const shown = new Set();
+  let unchecked = 0;
+  const failed = (file, error) => {
+    unchecked++;
+    onError(file, error);
+  };
+  const identity = (r) => JSON.stringify([r.op, r.kind.replace(/^(?:sidechain:)+/, ''), r.target]);
+  const inspect = (doc, file, selected = false) => {
+    const { id, created, status } = capsuleHead(doc);
+    const valid = hasFrontmatter(doc) && id?.trim() && Number.isFinite(created) && status;
+    if (!valid) failed(file, new Error('malformed capsule frontmatter'));
+    // Match the Stop writer's ownership test, including exact tag tokens.
+    const autosaveTag = (scalar(doc, 'tags') || '').replace(/^\[|\]$/g, '').split(',')
+      .map((tag) => tag.trim().replace(/^['"]|['"]$/g, '').toLowerCase()).includes('autosave');
+    const writerOwned = valid && autosaveTag && (scalar(doc, 'trigger') || '').toLowerCase() === 'stop-delta';
+    const section = locateCapsuleSection(doc, 'effects');
+    if (!section) return;
+    for (const row of capsuleBulletRows(doc.slice(section.start, section.end))) {
+      const parsed = parseSideEffectRow(row);
+      if (parsed && ['confirmed', 'failed'].includes(parsed.outcome)) {
+        if (writerOwned) resolved.add(identity(parsed));
+      } else if (selected) {
+        if (parsed) shown.add(row);
+      } else {
+        rows.push({ row, source: id || path.basename(file), created: Number.isFinite(created) ? created : 0,
+          identity: parsed ? identity(parsed) : null });
+      }
+    }
+  };
+  // Selected rows keep their current rendering, but a selected writer-owned
+  // resolution can suppress an older copy in another capsule.
+  inspect(selectedDoc, selectedPath, true);
+  const dir = path.join(memoryRoot, 'capsules');
+  let entries, scope;
+  try {
+    scope = realpathSync(memoryRoot);
+    const relative = path.relative(scope, realpathSync(dir));
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('capsules directory is outside this memory root');
+    }
+    entries = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.md')).sort();
+  } catch (error) {
+    failed(dir, error);
+    return { rows: [], unparseable: 0, unchecked };
+  }
+  for (const name of entries) {
+    const file = path.join(dir, name);
+    if (normalizedSelectorPath(file) === normalizedSelectorPath(selectedPath)) continue;
+    try {
+      const relative = path.relative(scope, realpathSync(file));
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error('capsule is outside this memory root');
+      }
+      inspect(unsafeRawCapsuleDocument(file, 'collect unresolved effects as inert claims from this memory root'), file);
+    } catch (error) { failed(file, error); }
+  }
+  // Only an exact copy collapses, keeping its newest source. Copies that differ
+  // may hold the id or status check a retry decision needs, so both stay.
+  const newest = new Map();
+  for (const entry of rows) {
+    if (entry.identity === null || resolved.has(entry.identity) || shown.has(entry.row)) continue;
+    const held = newest.get(entry.row);
+    if (!held || entry.created > held.created) newest.set(entry.row, entry);
+  }
+  const carried = rows.filter((entry) => entry.identity === null || newest.get(entry.row) === entry);
+  return { rows: carried, unparseable: carried.filter((entry) => entry.identity === null).length, unchecked };
 }
 
 // Backward-compatible wrapper for callers that only need the selection. The
@@ -459,7 +561,9 @@ export const effectKey = (row) => parseSideEffectRow(row)?.op ?? row;
 // within each tier explicit kinds precede defaults, newest first in each group.
 export function orderSideEffectRows(rows) {
   const priority = (row) => {
-    const parsed = parseSideEffectRow(row);
+    // Collected entries retain provenance while using the same ordering as
+    // stored string rows. Both inputs are chronological within each tier.
+    const parsed = parseSideEffectRow(typeof row === 'string' ? row : row.row);
     const kind = parsed?.kind.replace(/^sidechain:/, '');
     const explicit = kind === 'shell' || kind === 'SendMessage' || classifyMcpEffect(kind) === 'write';
     return (['confirmed', 'failed'].includes(parsed?.outcome) ? 2 : 0) + (explicit ? 0 : 1);

@@ -75,7 +75,7 @@ For an external target, the installer:
 - Preserves invalid existing settings and writes the proposed aigent configuration to `.claude/settings.aigent.json` for manual repair.
 - Creates `.aigent/state.json` for machine-readable first-run state.
 - Adds a marked generated-state block to `.gitignore`.
-- Runs `npm ci` or `npm install` for semantic search and the managed PTY transport, rebuilds and load-verifies `node-pty`, unless `--no-deps` was supplied.
+- Checks the semantic search and managed PTY dependency trees. A working tree is left alone; anything else is built and proven in a separate folder before it replaces the old one.
 - Wires `aigent` into the user's PATH and creates the platform app/shortcut where supported, unless `--no-launcher` was supplied or the target resolves under the system temp directory (treated the same as `--no-launcher`, so a scratch install never repoints a machine's real front door).
 
 The npm step can use the network. Launcher wiring writes the user-level PATH/profile or platform shortcut; the remaining installer work stays inside the target directory.
@@ -174,7 +174,7 @@ Common checks:
 
 - **Hooks are missing:** inspect `.claude/settings.json`, then restart Claude Code because hook configuration loads at session start.
 - **Settings are invalid:** repair the existing file using `.claude/settings.aigent.json` as the proposed aigent block.
-- **Semantic search is unavailable:** verify Node.js 18 or newer, then run `npm install` in `daemons/semantic-search/` and rebuild the index.
+- **Semantic search is unavailable:** verify Node.js 18 or newer, then rerun `install.sh`. It repairs the dependency tree in a separate folder and keeps a working tree in place.
 - **Runtime state appears empty:** run `python3 daemons/runtime/update-active-state.py --print-vault` and confirm it resolves to the project's `vault/` directory.
 - **Setup repeats:** inspect `.aigent/state.json`, `.aigent/first-run-done`, and `memory/about-you.md` for an interrupted first-run write.
 

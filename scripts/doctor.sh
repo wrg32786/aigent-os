@@ -1157,8 +1157,8 @@ if [ "$NODE_OK" -eq 1 ]; then
   SEM_WHY="${SEM_LINE#*-- }"
   case "$SEM_RC" in
     0) pass "semantic search loadable -- $SEM_WHY" ;;
-    1) warn "semantic search present but NOT loadable -- $SEM_WHY -- run: cd daemons/semantic-search && npm install" ;;
-    2) warn "daemons/semantic-search/node_modules missing -- run: cd daemons/semantic-search && npm install" ;;
+    1) warn "semantic search present but NOT loadable -- $SEM_WHY -- rerun install.sh, which never touches a working tree" ;;
+    2) warn "daemons/semantic-search/node_modules missing -- rerun install.sh" ;;
     *) warn "semantic search could not be measured -- $SEM_WHY" ;;
   esac
 else

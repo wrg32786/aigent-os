@@ -32,7 +32,7 @@ export function fields(line) {
   assert.ok(outcome, line);
   return { op, kind, target, requested, outcome, id, check };
 }
-export function fixture(t, { writer = path.join(daemons, 'stop-capsule-writer.mjs') } = {}) {
+export function fixture(t, { writer = path.join(daemons, 'stop-capsule-writer.mjs'), sessionId = 'synthetic-session' } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'capsule-effects-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(path.join(root, 'memory', 'capsules'), { recursive: true });
@@ -44,7 +44,7 @@ export function fixture(t, { writer = path.join(daemons, 'stop-capsule-writer.mj
     CLAUDE_PROJECT_DIR: root, AIGENT_SEAT_ID: '', LIFECYCLE_KILL_STOP_WRITER: '0' };
   let capsulePath;
   let lastOutput;
-  const statePath = path.join(root, 'memory', 'runtime', 'stop-writer', 'synthetic-session.json');
+  const statePath = path.join(root, 'memory', 'runtime', 'stop-writer', `${sessionId}.json`);
   const run = (args, input) => {
     const r = spawnSync(process.execPath, args, { env, input, encoding: 'utf8', windowsHide: true,
       timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
@@ -61,15 +61,15 @@ export function fixture(t, { writer = path.join(daemons, 'stop-capsule-writer.mj
       try { return readFileSync(path.join(root, 'memory', '.daemon-errors.log'), 'utf8'); } catch { return ''; }
     },
     sessionstart() {
-      return run([path.join(daemons, 'sessionstart-reinject.mjs')], JSON.stringify({ source: 'startup', session_id: 'synthetic-session', cwd: root }));
+      return run([path.join(daemons, 'sessionstart-reinject.mjs')], JSON.stringify({ source: 'startup', session_id: sessionId, cwd: root }));
     },
     write(events) {
       appendFileSync(transcript, events.map((ev) => JSON.stringify(ev)).join('\n') + '\n');
       const output = run([writer, '--worker',
-        JSON.stringify({ __root: root, session_id: 'synthetic-session', transcript_path: transcript })]);
+        JSON.stringify({ __root: root, session_id: sessionId, transcript_path: transcript })]);
       assert.match(output, /SWE_OUTCOME:(flushed|noop:no-delta)/);
       lastOutput = output;
-      capsulePath = JSON.parse(readFileSync(path.join(root, 'memory', 'runtime', 'stop-writer', 'synthetic-session.json'))).capsule_path;
+      capsulePath = JSON.parse(readFileSync(statePath)).capsule_path;
       return readFileSync(capsulePath, 'utf8');
     },
     resume() {
@@ -77,7 +77,7 @@ export function fixture(t, { writer = path.join(daemons, 'stop-capsule-writer.mj
         `import { runResumeVerb } from ${JSON.stringify(new URL('../../resume-verb.mjs', import.meta.url).href)};
          console.log(runResumeVerb({projectRoot:process.env.AIGENT_ROOT, source:'clear', sessionId:'fresh-session'}).prompt);`]);
     },
-    precompact() { return run([path.join(daemons, 'precompact-flush.mjs')], JSON.stringify({ session_id: 'synthetic-session', cwd: root })); },
+    precompact() { return run([path.join(daemons, 'precompact-flush.mjs')], JSON.stringify({ session_id: sessionId, cwd: root })); },
     edit(transform) { writeFileSync(capsulePath, transform(readFileSync(capsulePath, 'utf8'))); },
     effects(rows) {
       this.edit((doc) => {
