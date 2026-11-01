@@ -106,6 +106,14 @@ if [ -z "$ROOT" ]; then
   fi
 fi
 
+# Everything below hands ROOT to node and python, and node's createRequire throws
+# on a relative path. Only a relative root is rewritten: an absolute one keeps the
+# form its caller gave, which the settings comparison depends on.
+case "$ROOT" in
+  ""|/*|[A-Za-z]:*) ;;
+  *) [ ! -d "$ROOT" ] || ROOT="$(cd "$ROOT" && pwd)" ;;
+esac
+
 # -- Baseline attestation (--attest) -------------------------------------------
 # Returns before the diagnostic pass below. Everything here reads; nothing
 # writes, so this mode is safe to point at a live seat.
@@ -779,11 +787,20 @@ ATTESTPY
   if [ -n "$RUNNER_ROOT" ]; then
     if ! command -v node >/dev/null 2>&1; then
       ATTEST_FINDINGS+=("managed runner unavailable: node not found, so node-pty cannot load")
-    elif ! node -e '
+    else
+      PTY_RC=0
+      PTY_OUT="$(node -e '
 const { createRequire } = require("node:module");
-createRequire(process.argv[1])("node-pty");
-' "$RUNNER_ROOT/package.json" >/dev/null 2>&1; then
-      ATTEST_FINDINGS+=("managed runner unavailable: node-pty could not be loaded from $RUNNER_ROOT")
+try {
+  createRequire(process.argv[1])("node-pty");
+} catch (error) {
+  console.log(String((error && error.message) || error).split("\n")[0]);
+  process.exit(1);
+}
+' "$RUNNER_ROOT/package.json" 2>&1)" || PTY_RC=$?
+      if [ "$PTY_RC" -ne 0 ]; then
+        ATTEST_FINDINGS+=("managed runner unavailable: node-pty could not be loaded from $RUNNER_ROOT ($PTY_OUT)")
+      fi
     fi
   fi
 
