@@ -9,7 +9,7 @@
  */
 
 import { pipeline } from '@xenova/transformers';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
@@ -46,7 +46,8 @@ const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const MAX_CHUNK_CHARS = 1800; // ~512 tokens at ~3.5 chars/token
 const CHUNK_OVERLAP_CHARS = 200;
 // One archive took 12,072 of 15,054 entries and outranked a title-exact note.
-// Past this a file is sampled evenly, so all of it stays reachable.
+// Past this a file is sampled evenly across its length. The rest of that file
+// is not searchable, and the sample shifts as the file grows.
 const MAX_ENTRIES_PER_FILE = 400;
 
 // Directories/files to skip
@@ -122,11 +123,15 @@ function chunkText(text, maxChars = MAX_CHUNK_CHARS, overlap = CHUNK_OVERLAP_CHA
 }
 
 // ── File scanner ─────────────────────────────────────────────────────────────
+// A scan that could not see everything cannot say what is gone.
+const scanFailures = [];
+
 function scanDirectory(dir, fileList = []) {
   let entries;
   try {
     entries = readdirSync(dir);
   } catch {
+    scanFailures.push(dir);
     return fileList;
   }
 
@@ -137,6 +142,7 @@ function scanDirectory(dir, fileList = []) {
     try {
       stat = statSync(fullPath);
     } catch {
+      scanFailures.push(fullPath);
       continue;
     }
 
@@ -202,6 +208,8 @@ async function main() {
   // implicit exemptions (enforced by the shared registry module).
   requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT, 'embed-vault');
 
+  const vaultRootLabel = relative(AIGENT_ROOT, VAULT_ROOT).replace(/\\/g, '/') || '.';
+
   // Load existing embeddings if present
   let existing = { model: MODEL_NAME, updated: null, notes: [] };
   if (existsSync(EMBEDDINGS_PATH)) {
@@ -211,6 +219,13 @@ async function main() {
     } catch (e) {
       console.warn('Could not parse existing embeddings.json, starting fresh.');
     }
+  }
+
+  // An index covers one tree. Merging another into it, or dropping its entries
+  // because they are absent from this tree, would destroy it quietly.
+  if (existing.vaultRoot && existing.vaultRoot !== vaultRootLabel) {
+    console.error(`[embed-vault] REFUSING to run: this index was built from ${existing.vaultRoot}, and this run reads ${vaultRootLabel}. Point AIGENT_VAULT_ROOT back, or remove ${EMBEDDINGS_PATH} to rebuild.`);
+    process.exit(1);
   }
 
   // Purge chunks that no longer belong to an INDEX namespace. This covers SKIP,
@@ -249,11 +264,17 @@ async function main() {
   console.log(`Found ${files.length} markdown files to consider.`);
 
   // An entry whose file is no longer in scope has nothing left to refresh it.
-  const inScope = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
-  const beforeScope = existing.notes.length;
-  existing.notes = existing.notes.filter((note) => inScope.has(note.path));
-  const outOfScope = beforeScope - existing.notes.length;
-  if (outOfScope > 0) console.log(`[scope] dropped ${outOfScope} entries for files no longer in scope`);
+  // Only a complete scan can say a file is gone.
+  let outOfScope = 0;
+  if (scanFailures.length > 0 || files.length === 0) {
+    console.warn(`[scope] kept all entries: the scan was incomplete (${scanFailures.length} unreadable, ${files.length} found)`);
+  } else {
+    const inScope = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
+    const beforeScope = existing.notes.length;
+    existing.notes = existing.notes.filter((note) => inScope.has(note.path));
+    outOfScope = beforeScope - existing.notes.length;
+    if (outOfScope > 0) console.log(`[scope] dropped ${outOfScope} entries for files no longer in scope`);
+  }
 
   // Determine which files to (re-)embed
   let toEmbed = files;
@@ -338,7 +359,7 @@ async function main() {
   const output = {
     model: MODEL_NAME,
     updated: new Date().toISOString(),
-    vaultRoot: relative(AIGENT_ROOT, VAULT_ROOT).replace(/\\/g, '/') || '.',
+    vaultRoot: vaultRootLabel,
     noteCount: new Set(finalNotes.map((note) => note.path)).size,
     entryCount: finalNotes.length,
     notes: finalNotes,
@@ -348,7 +369,10 @@ async function main() {
   const memDir = MEMORY_ROOT;
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
 
-  writeFileSync(EMBEDDINGS_PATH, JSON.stringify(output, null, 0));
+  // A killed run must never leave a half-written index.
+  const partial = `${EMBEDDINGS_PATH}.tmp-${process.pid}`;
+  writeFileSync(partial, JSON.stringify(output, null, 0));
+  renameSync(partial, EMBEDDINGS_PATH);
   const sizeKB = (readFileSync(EMBEDDINGS_PATH).length / 1024).toFixed(1);
   console.log(`\nSaved embeddings.json — ${finalNotes.length} entries, ${sizeKB} KB`);
   console.log(`Index updated: ${output.updated}`);

@@ -72,17 +72,6 @@ const STOCK_ROWS = [
   { path: 'reference', disposition: 'INDEX' },
   { path: 'templates', disposition: 'SKIP', reason: 'boilerplate scaffolding, not authored memory' },
   { path: 'examples', disposition: 'SKIP', reason: 'illustrative starter content, not operator signal' },
-  { path: '.aigent', disposition: 'SKIP', reason: 'installer state' },
-  { path: 'docs', disposition: 'SKIP', reason: 'product docs' },
-  { path: 'evals', disposition: 'SKIP', reason: 'product evals' },
-  { path: 'handoffs', disposition: 'SKIP', reason: 'transient handoff files' },
-  { path: 'hooks', disposition: 'SKIP', reason: 'product code' },
-  { path: 'launcher', disposition: 'SKIP', reason: 'product code' },
-  { path: 'loops', disposition: 'SKIP', reason: 'product code' },
-  { path: 'scripts', disposition: 'SKIP', reason: 'product code' },
-  { path: 'skills', disposition: 'SKIP', reason: 'product skills' },
-  { path: 'system', disposition: 'SKIP', reason: 'product identity files' },
-  { path: 'vault', disposition: 'SKIP', reason: 'starter tree on a seat whose notes sit at its root' },
 ];
 
 const HEALTHY = 'CANARY-NAMESPACE-INDEX-a27c91-feedback-body';
@@ -320,11 +309,11 @@ function assertInvalidRegistryMutation(name, mutate, detailPattern) {
     JSON.stringify(shipped) === JSON.stringify({ schema: SCHEMA, namespaces: STOCK_ROWS }),
   );
   check('stock registry contains 9 INDEX rows', shipped.namespaces.filter((row) => row.disposition === 'INDEX').length === 9);
-  check('stock registry contains 13 SKIP rows', shipped.namespaces.filter((row) => row.disposition === 'SKIP').length === 13);
+  check('stock registry contains 2 SKIP rows', shipped.namespaces.filter((row) => row.disposition === 'SKIP').length === 2);
   check('stock registry contains 0 DENY rows', shipped.namespaces.filter((row) => row.disposition === 'DENY').length === 0);
 
   const loaded = loadNamespaceRegistry(SEM);
-  check('loader returns all stock rows', loaded.rows.length === 22);
+  check('loader returns all stock rows', loaded.rows.length === 11);
   check('loader builds a case-insensitive byPath map', loaded.byPath.get('feedback')?.path === 'feedback');
   check('namespaceDisposition is case-insensitive', namespaceDisposition(loaded, 'FEEDBACK') === 'INDEX');
   check('namespaceDispositionForPath normalizes backslash separators', namespaceDispositionForPath(loaded, 'Templates\\starter.md') === 'SKIP');

@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -49,9 +49,37 @@ function makeSeat({ memoryRoot = null, deep = '' } = {}) {
   }));
   write(path.join(root, 'node_modules', '@xenova', 'transformers', 'index.js'),
     'export async function pipeline() { return async () => ({ data: Float32Array.from([1, 0, 0, 0]) }); }\n');
-  if (memoryRoot) write(path.join(root, '.aigent', 'state.json'), JSON.stringify({ memory_root: memoryRoot }));
+  if (memoryRoot) {
+    write(path.join(root, '.aigent', 'state.json'), JSON.stringify({ memory_root: memoryRoot }));
+    mkdirSync(path.join(root, ...memoryRoot.split('/')), { recursive: true });
+  }
   const base = deep ? path.join(root, deep) : root;
-  return { root, sem, base };
+  const seat = { root, sem, base };
+  if (memoryRoot === 'memory') declareLocal(seat, []);
+  return seat;
+}
+
+// What a root-layout seat declares for itself: core does not know its folders.
+function declareLocal(seat, rows) {
+  const all = rows.some(([name]) => name === '.aigent') ? rows : [['.aigent', 'SKIP'], ...rows];
+  write(path.join(seat.sem, 'namespace-registry.local.json'), JSON.stringify({
+    schema: 'MemoryNamespaceRegistry/v1',
+    namespaces: all.map(([name, disposition]) => ({
+      path: name,
+      disposition,
+      ...(disposition === 'SKIP' ? { reason: 'seat folder' } : {}),
+    })),
+  }));
+}
+
+// Make a directory unreadable to this process; returns the way back.
+function denyRead(dir) {
+  if (process.platform === 'win32') {
+    spawnSync('icacls', [dir, '/deny', `${process.env.USERNAME}:(RX)`], { encoding: 'utf8' });
+    return () => spawnSync('icacls', [dir, '/remove:d', process.env.USERNAME], { encoding: 'utf8' });
+  }
+  chmodSync(dir, 0o000);
+  return () => chmodSync(dir, 0o755);
 }
 
 function run(seat, script, args = [], env = {}) {
@@ -81,9 +109,9 @@ test('sis-1. a root-layout seat indexes its own notes with no override, not the 
   write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
   write(path.join(seat.root, 'concepts', 'own.md'), note('own concept'));
   write(path.join(seat.root, 'vault', 'concepts', 'starter.md'), note('starter text'));
-  for (const product of ['docs', 'evals', 'hooks', 'launcher', 'loops', 'scripts', 'skills', 'system', 'handoffs', '.aigent']) {
-    write(path.join(seat.root, product, 'file.md'), note('product file'));
-  }
+  const product = ['docs', 'evals', 'hooks', 'launcher', 'loops', 'scripts', 'skills', 'system', 'handoffs', '.aigent', 'vault'];
+  for (const name of product) write(path.join(seat.root, name, 'file.md'), note('product file'));
+  declareLocal(seat, product.map((name) => [name, 'SKIP']));
 
   const result = run(seat, 'embed-vault.js');
   assert.equal(result.status, 0, result.all);
@@ -160,8 +188,84 @@ test('sis-8. noteCount counts what is in the index', () => withSeat({ memoryRoot
 test('sis-9. search reads the same tree with no override', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
   write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
   write(path.join(seat.root, 'docs', 'file.md'), note('product file'));
+  declareLocal(seat, [['docs', 'SKIP']]);
   run(seat, 'embed-vault.js');
   const result = run(seat, 'search-vault.js', ['lesson']);
   assert.equal(result.status, 0, result.all);
   assert.match(result.all, /memory\/lesson\.md/);
+}));
+
+test('sis-10. an undeclared folder still refuses, names itself, and leaves the index alone', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  run(seat, 'embed-vault.js');
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  const before = readFileSync(file, 'utf8');
+  write(path.join(seat.root, 'docs', 'authored.md'), note('a real authored note'));
+  const result = run(seat, 'embed-vault.js');
+  assert.notEqual(result.status, 0);
+  assert.match(result.all, /undeclared vault namespace.*docs/);
+  assert.equal(readFileSync(file, 'utf8'), before);
+}));
+
+test('sis-11. a seat can opt its own folder in', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'docs', 'authored.md'), note('a real authored note'));
+  declareLocal(seat, [['docs', 'INDEX']]);
+  const result = run(seat, 'embed-vault.js');
+  assert.equal(result.status, 0, result.all);
+  assert.deepEqual(paths(readIndex(path.join(seat.root, 'memory', 'embeddings.json'))), ['docs/authored.md']);
+}));
+
+test('sis-12. an incomplete scan keeps every entry: an unreadable folder is not a deleted one', {
+  skip: process.getuid?.() === 0 && 'root reads everything',
+}, () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  const sub = path.join(seat.root, 'memory', 'sub');
+  write(path.join(sub, 'one.md'), note('nested one'));
+  write(path.join(sub, 'two.md'), note('nested two'));
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  run(seat, 'embed-vault.js');
+  assert.equal(paths(readIndex(file)).length, 3);
+
+  const restore = denyRead(sub);
+  try {
+    write(path.join(seat.root, 'memory', 'newer.md'), note('a changed note'));
+    const result = run(seat, 'embed-vault.js', ['--changed-only']);
+    assert.equal(result.status, 0, result.all);
+    assert.match(result.all, /scan was incomplete/);
+  } finally {
+    restore();
+  }
+  assert.ok(paths(readIndex(file)).includes('memory/sub/one.md'), 'a healthy index was emptied');
+}));
+
+test('sis-13. a run from another tree refuses and loses nothing', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  run(seat, 'embed-vault.js');
+  const before = readFileSync(file, 'utf8');
+  mkdirSync(path.join(seat.root, 'empty'));
+  const result = run(seat, 'embed-vault.js', [], { AIGENT_VAULT_ROOT: path.join(seat.root, 'empty') });
+  assert.notEqual(result.status, 0);
+  assert.match(result.all, /REFUSING to run: this index was built from/);
+  assert.equal(readFileSync(file, 'utf8'), before);
+}));
+
+test('sis-14. an index from before vaultRoot still sheds stale entries on a complete scan', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  run(seat, 'embed-vault.js');
+  const index = readIndex(file);
+  delete index.vaultRoot;
+  index.notes.push({ ...index.notes[0], path: 'concepts/starter.md' });
+  writeFileSync(file, JSON.stringify(index));
+  assert.equal(run(seat, 'embed-vault.js', ['--changed-only']).status, 0);
+  assert.deepEqual(paths(readIndex(file)), ['memory/lesson.md']);
+}));
+
+test('sis-15. a finished run leaves no partial file behind', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  run(seat, 'embed-vault.js');
+  const left = readdirSync(path.join(seat.root, 'memory')).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(left, []);
+  assert.ok(existsSync(path.join(seat.root, 'memory', 'embeddings.json')));
 }));
