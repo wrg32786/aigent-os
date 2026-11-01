@@ -250,7 +250,7 @@ test('sis-13. a run from another tree refuses and loses nothing', () => withSeat
   assert.equal(readFileSync(file, 'utf8'), before);
 }));
 
-test('sis-14. an index from before vaultRoot still sheds stale entries on a complete scan', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+test('sis-14. an index from before vaultRoot keeps everything on its first run, then sheds on the next', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
   write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
   const file = path.join(seat.root, 'memory', 'embeddings.json');
   run(seat, 'embed-vault.js');
@@ -259,7 +259,24 @@ test('sis-14. an index from before vaultRoot still sheds stale entries on a comp
   index.notes.push({ ...index.notes[0], path: 'concepts/starter.md' });
   writeFileSync(file, JSON.stringify(index));
   assert.equal(run(seat, 'embed-vault.js', ['--changed-only']).status, 0);
+  assert.deepEqual(paths(readIndex(file)), ['concepts/starter.md', 'memory/lesson.md']);
+  assert.equal(readIndex(file).vaultRoot, '.');
+  assert.equal(run(seat, 'embed-vault.js', ['--changed-only']).status, 0);
   assert.deepEqual(paths(readIndex(file)), ['memory/lesson.md']);
+}));
+
+test('sis-18. a legacy index sharing one file with a wrong tree is not cut down to that file', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'MEMORY.md'), note('index of notes'));
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  run(seat, 'embed-vault.js');
+  const index = readIndex(file);
+  delete index.vaultRoot;
+  const template = index.notes[0];
+  for (let i = 0; i < 20; i += 1) index.notes.push({ ...template, path: `concepts/real-${i}.md` });
+  writeFileSync(file, JSON.stringify(index));
+  assert.equal(paths(readIndex(file)).length, 21);
+  assert.equal(run(seat, 'embed-vault.js').status, 0);
+  assert.equal(paths(readIndex(file)).length, 21, 'one shared file must not decide which tree an index belongs to');
 }));
 
 test('sis-15. a finished run leaves no partial file behind', () => withSeat({ memoryRoot: 'memory' }, (seat) => {

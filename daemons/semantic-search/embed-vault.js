@@ -277,8 +277,12 @@ async function main() {
 
   // An entry whose file is no longer in scope has nothing left to refresh it.
   // Only a complete scan can say a file is gone.
+  // An index from before vaultRoot cannot prove which tree it belongs to, so
+  // this run keeps all of it and stamps the root; the next run sheds.
   let outOfScope = 0;
-  if (scanFailures.length > 0 || files.length === 0) {
+  if (!existing.vaultRoot && existing.notes.length > 0) {
+    console.warn('[scope] kept all entries: this index predates vaultRoot, so the next run sheds stale ones');
+  } else if (scanFailures.length > 0 || files.length === 0) {
     console.warn(`[scope] kept all entries: the scan was incomplete (${scanFailures.length} unreadable, ${files.length} found)`);
   } else {
     const inScope = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
@@ -295,7 +299,8 @@ async function main() {
     console.log(`--changed-only: ${toEmbed.length} files modified since last index.`);
   }
 
-  if (toEmbed.length === 0 && !carriedForwardPurged && outOfScope === 0) {
+  // An index without vaultRoot is written once so the root gets stamped.
+  if (toEmbed.length === 0 && !carriedForwardPurged && outOfScope === 0 && existing.vaultRoot) {
     console.log('Nothing to embed. Index is up to date.');
     return;
   }

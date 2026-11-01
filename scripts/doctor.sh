@@ -1375,7 +1375,7 @@ NAMESPACEPY
           pass "$namespace_label $namespace_path"
           ;;
         NAMESPACE_UNDECLARED)
-          fail "$namespace_label $namespace_path"
+          fail "$namespace_label $namespace_path -- declare it in daemons/semantic-search/namespace-registry.local.json"
           ;;
         *)
           fail "namespace registry check failed: unexpected extractor record: $namespace_label $namespace_path"
