@@ -187,6 +187,28 @@ test('an exact install attests COMPLIANT against the shipped manifest', () => {
   });
 });
 
+test('a relative root attests the same as an absolute one: `.` is not a load failure', () => {
+  withInstall((root) => {
+    const result = spawnSync('bash', [DOCTOR, '.', '--attest'], { encoding: 'utf8', cwd: root });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.doesNotMatch(output, /node-pty could not be loaded/, output);
+    assert.match(output, /ATTEST: COMPLIANT/, output);
+  });
+});
+
+test('a node-pty that truly fails to load is reported with its own error, not a guess', () => {
+  withInstall((root) => {
+    const dir = path.join(root, 'daemons', 'transport-deps', 'node_modules', 'node-pty');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'node-pty', version: '1.1.0', main: 'index.js' }));
+    writeFileSync(path.join(dir, 'index.js'), "throw new Error('the real load failure');\n");
+    const { verdict, output } = attest(root);
+    assert.equal(verdict, 'NONCOMPLIANT', output);
+    assert.match(output, /node-pty could not be loaded/, output);
+    assert.match(output, /the real load failure/, output);
+  });
+});
+
 test('a settings fixture rendered with a lowercase Windows root attests COMPLIANT', {
   skip: process.platform !== 'win32' && 'Windows drive-letter canonicalization only',
 }, () => {
