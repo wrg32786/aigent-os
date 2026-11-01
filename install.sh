@@ -1463,6 +1463,7 @@ cat > "$GI_BLOCK" <<EOF_GI
 $GI_START
 .aigent/
 $MEMORY_REL/embeddings.json
+$MEMORY_REL/embeddings.json.tmp-*
 $MEMORY_REL/HEAT_INDEX.json
 $MEMORY_REL/HEAT_INDEX.json.tmp-*
 $MEMORY_REL/.daemon-errors.log

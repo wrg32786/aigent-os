@@ -269,3 +269,29 @@ test('sis-15. a finished run leaves no partial file behind', () => withSeat({ me
   assert.deepEqual(left, []);
   assert.ok(existsSync(path.join(seat.root, 'memory', 'embeddings.json')));
 }));
+
+test('sis-16. a pre-vaultRoot index from another tree refuses: one local file must not replace it', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  const file = path.join(seat.root, 'memory', 'embeddings.json');
+  run(seat, 'embed-vault.js');
+  const index = readIndex(file);
+  delete index.vaultRoot;
+  index.notes = index.notes.map((entry) => ({ ...entry, path: 'concepts/elsewhere.md' }));
+  writeFileSync(file, JSON.stringify(index));
+  const before = readFileSync(file, 'utf8');
+
+  const result = run(seat, 'embed-vault.js');
+  assert.notEqual(result.status, 0);
+  assert.match(result.all, /REFUSING to run: none of the/);
+  assert.equal(readFileSync(file, 'utf8'), before);
+}));
+
+test('sis-17. a save that cannot complete says so and strands no partial file', () => withSeat({ memoryRoot: 'memory' }, (seat) => {
+  write(path.join(seat.root, 'memory', 'lesson.md'), note('real lesson'));
+  write(path.join(seat.root, 'memory', 'embeddings.json', 'blocks-the-rename'), 'x');
+  const result = run(seat, 'embed-vault.js');
+  assert.notEqual(result.status, 0);
+  assert.match(result.all, /index not saved/);
+  const left = readdirSync(path.join(seat.root, 'memory')).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(left, []);
+}));

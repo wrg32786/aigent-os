@@ -9,7 +9,7 @@
  */
 
 import { pipeline } from '@xenova/transformers';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
@@ -49,6 +49,8 @@ const CHUNK_OVERLAP_CHARS = 200;
 // Past this a file is sampled evenly across its length. The rest of that file
 // is not searchable, and the sample shifts as the file grows.
 const MAX_ENTRIES_PER_FILE = 400;
+const RENAME_ATTEMPTS = 8;
+const RENAME_RETRY_MS = 1000;
 
 // Directories/files to skip
 const SKIP_DIRS = new Set([
@@ -263,6 +265,16 @@ async function main() {
   const files = collectFiles();
   console.log(`Found ${files.length} markdown files to consider.`);
 
+  // An index from before vaultRoot cannot say where it came from. If this tree
+  // holds none of it, this is the wrong tree, not an index full of stale entries.
+  if (!existing.vaultRoot && existing.notes.length > 0 && scanFailures.length === 0) {
+    const here = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
+    if (!existing.notes.some((note) => here.has(note.path))) {
+      console.error(`[embed-vault] REFUSING to run: none of the ${existing.notes.length} indexed entries exist under ${vaultRootLabel}. Point AIGENT_VAULT_ROOT at the right tree, or remove ${EMBEDDINGS_PATH} to rebuild.`);
+      process.exit(1);
+    }
+  }
+
   // An entry whose file is no longer in scope has nothing left to refresh it.
   // Only a complete scan can say a file is gone.
   let outOfScope = 0;
@@ -370,9 +382,23 @@ async function main() {
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
 
   // A killed run must never leave a half-written index.
+  // On Windows a reader holding the file refuses the rename, so it is retried,
+  // and a partial never stays behind: this file is too large to reach git.
   const partial = `${EMBEDDINGS_PATH}.tmp-${process.pid}`;
   writeFileSync(partial, JSON.stringify(output, null, 0));
-  renameSync(partial, EMBEDDINGS_PATH);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      renameSync(partial, EMBEDDINGS_PATH);
+      break;
+    } catch (error) {
+      if (attempt >= RENAME_ATTEMPTS || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
+        rmSync(partial, { force: true });
+        console.error(`[embed-vault] index not saved, the old one stands: ${error.code || error.message}`);
+        process.exit(1);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_RETRY_MS);
+    }
+  }
   const sizeKB = (readFileSync(EMBEDDINGS_PATH).length / 1024).toFixed(1);
   console.log(`\nSaved embeddings.json — ${finalNotes.length} entries, ${sizeKB} KB`);
   console.log(`Index updated: ${output.updated}`);
