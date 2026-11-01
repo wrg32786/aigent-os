@@ -12,7 +12,7 @@ import {
   LEDGER_PREDICATE_TYPES, receiptHash, runLedgerPredicate,
 } from './nightly-ledger-predicate.mjs';
 import {
-  defaultNightlyRoot, resolveNightlyPaths,
+  defaultNightlyRoot, normalizeFilesystemPath, resolveNightlyPaths,
 } from './nightly-paths.mjs';
 
 const LEDGERS = Object.freeze([
@@ -108,12 +108,105 @@ function validateReceipt(receipt, proposal, root, now) {
   return stable(rerun);
 }
 
-export function stageLedgerCandidate({
+// No caller-supplied receipt or source text can manufacture a Finding. Execute
+// the existing evaluator here, and retain its receipt as an observation only.
+export function observeLedgerFinding({
+  root = defaultNightlyRoot(),
+  target,
+  expected,
+  clock = () => new Date(),
+} = {}) {
+  if (typeof target !== 'string' || !target.trim()) {
+    throw new Error('Finding target must be a non-empty relative path');
+  }
+  const portable = target.trim().replace(/\\/g, '/');
+  target = path.posix.normalize(portable);
+  if (path.posix.isAbsolute(target) || path.win32.isAbsolute(portable)
+      || /^[a-z]:/i.test(portable) || target === '.' || target === '..'
+      || target.startsWith('../')) {
+    throw new Error('Finding target must stay relative to its root');
+  }
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected)) {
+    throw new Error('expected SHA-256 must be 64 hexadecimal characters');
+  }
+  expected = expected.toLowerCase();
+  root = path.resolve(normalizeFilesystemPath(root));
+  const now = clock();
+  const receipt = runLedgerPredicate({
+    root, type: 'file_sha256_equals', args: { path: target }, expected, now,
+    repositoryOnly: true,
+  });
+  if (receipt.error) {
+    receipt.error = 'PREDICATE_ERROR';
+    receipt.receipt_hash = receiptHash(receipt);
+  }
+  if (receipt.exit_code === 0) return { ...receipt, finding: null, duplicate: false };
+
+  const sourceDir = path.dirname(fileURLToPath(import.meta.url));
+  const product = {
+    name: 'aigent-OS',
+    node: process.version,
+    source_sha256: Object.fromEntries([
+      'nightly-ledger-predicate.mjs', 'nightly-ledger-stage.mjs',
+      'nightly-paths.mjs', 'nightly-freshness.mjs', 'memory-root.cjs',
+    ].map((name) => [
+      `daemons/${name}`,
+      createHash('sha256').update(readFileSync(path.join(sourceDir, name))).digest('hex'),
+    ])),
+  };
+  const state = !receipt.error && /^[a-f0-9]{64}$/.test(receipt.observed)
+    ? 'FAIL' : 'UNKNOWN';
+  const finding = {
+    producer: 'daemons/nightly-ledger-predicate.mjs#file_sha256_equals',
+    product,
+    subject: target,
+    subject_root: path.resolve(root),
+    state,
+    receipt,
+    scope: 'One local file compared with a caller-pinned SHA-256 at observed_at.',
+    exclusions: ['cause', 'defect verification', 'obligation', 'owner', 'authority',
+      'approval', 'closure', 'other files', 'release attestation'],
+  };
+  const result = appendCandidate({
+    root, date: receipt.observed_at.slice(0, 10), now,
+    candidate: {
+      ledger: 'trust_decay',
+      claim: state === 'FAIL'
+        ? 'Observed file bytes differ from the caller-pinned SHA-256.'
+        : 'File evidence could not be resolved for the requested hash comparison; HOLD.',
+      source_refs: [
+        `receipt:sha256=${receipt.receipt_hash}`,
+        ...(state === 'FAIL' ? [receipt.artifact_ref] : []),
+      ],
+      // This is not a green resolution predicate or a verified diagnosis.
+      evidence_class: 'judgment',
+    },
+  }, finding);
+  return { ...receipt, finding: result.candidate, duplicate: result.duplicate };
+}
+
+export function findingSummary(result) {
+  const finding = result.finding?.finding;
+  return {
+    duplicate: result.duplicate,
+    state: finding?.state ?? 'PASS',
+    receipt_hash: finding?.receipt.receipt_hash ?? result.receipt_hash,
+  };
+}
+
+export function stageLedgerCandidate(options = {}) {
+  if (options.candidate && Object.hasOwn(options.candidate, 'finding')) {
+    throw new Error('finding metadata is producer-owned');
+  }
+  return appendCandidate(options);
+}
+
+function appendCandidate({
   root = defaultNightlyRoot(),
   date,
   candidate,
   now = new Date(),
-} = {}) {
+} = {}, finding = null) {
   if (!root || !validDateKey(date)) {
     throw new Error('root and valid YYYY-MM-DD date are required');
   }
@@ -145,7 +238,20 @@ export function stageLedgerCandidate({
   const normalizedSources = [
     ...new Set(candidate.source_refs.map((ref) => String(ref).trim())),
   ].sort();
-  const dedupeKey = hash({
+  // Receipt timestamps differ on replay. Identity binds the measured bytes,
+  // expectation, subject and exact evaluator sources, not the observation time.
+  const dedupeKey = hash(finding ? {
+    producer: finding.producer,
+    product: {
+      name: finding.product.name,
+      source_sha256: finding.product.source_sha256,
+    },
+    subject: finding.subject,
+    subject_root: finding.subject_root,
+    state: finding.state,
+    expected: finding.receipt.expected,
+    observed: finding.receipt.observed,
+  } : {
     ledger: candidate.ledger,
     normalized_claim: claim.toLowerCase().replace(/\s+/g, ' '),
     source_refs: normalizedSources,
@@ -184,6 +290,7 @@ export function stageLedgerCandidate({
     status: 'staged',
     created_at: instant.toISOString(),
     dedupe_key: dedupeKey,
+    ...(finding ? { finding } : {}),
   };
   mkdirSync(path.dirname(file), { recursive: true });
   appendFileSync(file, JSON.stringify(row) + '\n', 'utf8');

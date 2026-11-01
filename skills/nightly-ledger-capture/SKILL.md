@@ -115,6 +115,81 @@ only a proposed predicate.
 
 ## Direct mutation predicate
 
+### Local hash-comparison Finding (Stage 1)
+
+Opt in on the existing baseline attestation failure path:
+
+```text
+bash scripts/doctor.sh <aigent-root> --attest --finding
+```
+
+Only an undeclared required-file hash mismatch invokes capture, using the expected
+hash from the baseline manifest; default attestation output stays unchanged.
+Capture never changes the measured attestation class; if storage fails, one detail
+line says the Finding was not recorded, and NONCOMPLIANT still exits 1.
+UNKNOWN and COMPLIANT attestations emit no Finding.
+The predicate evaluator also supports explicit capture:
+
+```text
+node daemons/nightly-ledger-predicate.mjs --root <aigent-root> \
+  --type file_sha256_equals --path <relative-artifact> \
+  --expected <independently-pinned-sha256> --finding
+```
+
+The evaluator compares file bytes with the caller's pinned expectation. Source
+bytes are never parsed as instructions, verdicts, targets, receipts, or authority.
+The ordinary invocation remains read-only. A healthy comparison emits no Finding.
+A readable mismatch emits `FAIL`; absent or unreadable file evidence emits
+`UNKNOWN` with a HOLD statement. Missing or non-string targets, escaping paths,
+and malformed expected hashes throw before writing. Both states remain observations. A hash
+mismatch alone does not establish a product defect or a verified cause.
+
+The existing `stageLedgerCandidate` append path stores one `trust_decay` row in
+`NIGHTLY_CAPTURE_CANDIDATES.jsonl` under the resolved runtime directory. It reuses
+`candidate_id`, `created_at`, `claim`, `source_refs`, `status=staged`, and
+`dedupe_key`. A producer-owned `finding` extension supplies:
+
+- `producer`, `product.name`, Node version, and exact SHA-256 identities of the
+  evaluator, writer, and their local dependency files;
+- `subject` and `subject_root`, which anchor relative artifact references;
+- `state`, the embedded evaluator `receipt`, `scope`, and `exclusions`.
+
+`--root` selects the attested tree for hashing (including literal `memory/` paths), while the Finding row goes to the resolved runtime of the process's own state root selected by `AIGENT_STATE_HOME_DIR` when set.
+Finding stdout contains only `duplicate`, `state`, and `receipt_hash`; the full
+row and absolute paths remain in the local ledger.
+
+`receipt:sha256=<hash>` resolves to the embedded `finding.receipt` using the
+existing `receiptHash` function. A resolved file also retains the evaluator's
+`file:<path>#sha256=<hash>` reference. The receipt records the observation time,
+expected hash, measured hash, and exit status. Hashes identify evidence; they are
+not signatures. Runtime observations are local data, not authorized instructions.
+The producer stamps time; `--now` is ignored for Findings, and tests inject a clock
+through the function argument. Subjects are normalized POSIX-relative paths and
+expected hashes are lowercase; Node version remains metadata outside the dedupe key.
+Receipt errors contain only an error code, never an absolute path.
+
+Sequential replay of the same product, subject, expectation, and measured outcome
+returns the original row, including its original observation time. Time changes
+alone do not add counts. Changed outcomes or producer bytes get distinct identities.
+An identical failure after a healthy run still returns the original row, so recurrence is not counted.
+This retains the existing single-writer scope; concurrent writers are not supported.
+Healthy later runs do not erase, resolve, or promote historical observations.
+
+The row stays `evidence_class=judgment` with no resolution predicate. Its measured
+comparison is factual, but interpreting it still requires judgment. Existing
+mechanical candidates continue to require a reproduced green receipt. Candidate
+JSON cannot supply `finding` metadata; only a fresh evaluator execution can.
+There is no hook activation, external write, rule change, or model call.
+Nightly review and capture postconditions count Findings separately from staged
+candidate pressure.
+
+Future adapter, read-only proposal: `findingToObligation` would first check
+evidence admissibility, confidence, and duplicates before existing `boardCreate`
+and transition fences. UNKNOWN, refuted, duplicate, or insufficient observations
+must create no work. No adapter or organizational write is implemented here.
+
+### Existing direct mutation gate
+
 Direct ledger mutation is legal only when:
 
 1. `daemons/nightly-ledger-predicate.mjs` executed it;

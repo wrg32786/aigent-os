@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   defaultNightlyRoot,
   isFullCommitSha,
+  normalizeFilesystemPath,
   pathInside,
   pathInsideOperationalRoots,
   resolveNightlyPaths,
@@ -40,8 +41,10 @@ function hash(value) {
   ).digest('hex');
 }
 
-function targetInside(paths, requested) {
-  const target = resolveRepositoryOrMemoryPath(paths, requested);
+function targetInside(paths, requested, repositoryOnly = false) {
+  const target = repositoryOnly
+    ? path.resolve(paths.repositoryRoot, requested)
+    : resolveRepositoryOrMemoryPath(paths, requested);
   if (!requested || !target || !pathInsideOperationalRoots(paths, target)) {
     throw new Error(`predicate target escapes operational roots: ${requested}`);
   }
@@ -81,12 +84,16 @@ export function runLedgerPredicate({
   args = {},
   expected,
   now = new Date(),
+  repositoryOnly = false,
 } = {}) {
   if (!root) throw new Error('root is required');
   if (!LEDGER_PREDICATE_TYPES.includes(type)) {
     throw new Error(`predicate type not allowlisted: ${type}`);
   }
-  const paths = resolveNightlyPaths(root);
+  const repositoryRoot = path.resolve(normalizeFilesystemPath(root));
+  const paths = repositoryOnly
+    ? { repositoryRoot, stateRoot: repositoryRoot }
+    : resolveNightlyPaths(root);
   const instant = now instanceof Date ? now : new Date(now);
   if (!Number.isFinite(instant.getTime())) throw new Error(`invalid now value: ${now}`);
   const observedAt = instant.toISOString();
@@ -100,7 +107,7 @@ export function runLedgerPredicate({
       if (!/^[0-9a-f]{64}$/i.test(String(expected))) {
         throw new Error('expected SHA-256 must be 64 hexadecimal characters');
       }
-      const target = targetInside(paths, args.path);
+      const target = targetInside(paths, args.path, repositoryOnly);
       observed = existsSync(target) ? hash(readFileSync(target)) : 'missing';
       artifactRef = `file:${String(args.path).replace(/\\/g, '/')}#sha256=${observed}`;
       ok = observed.toLowerCase() === String(expected).toLowerCase();
@@ -160,7 +167,7 @@ function parseArgs(argv) {
 
 const direct = process.argv[1]
   && path.resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
-if (direct) {
+async function main() {
   try {
     const cli = parseArgs(process.argv.slice(2));
     const type = String(cli.type || '');
@@ -174,16 +181,27 @@ if (direct) {
       : type === 'json_field_equals'
         ? JSON.parse(String(cli['expected-json']))
         : String(cli.expected || '');
-    const result = runLedgerPredicate({
+    if (cli.finding && type !== 'file_sha256_equals') {
+      throw new Error('--finding supports only file_sha256_equals');
+    }
+    const options = {
       root: path.resolve(String(cli.root || defaultNightlyRoot())),
       type,
       args,
       expected,
       now: cli.now ? new Date(String(cli.now)) : new Date(),
-    });
+    };
+    // Import after module evaluation so the existing stage writer can reuse
+    // runLedgerPredicate without a top-level-await import cycle.
+    const stage = cli.finding ? await import('./nightly-ledger-stage.mjs') : null;
+    const result = cli.finding
+      ? stage.observeLedgerFinding({
+        root: options.root, target: cli.path, expected,
+      })
+      : runLedgerPredicate(options);
     process.stdout.write(
       `LEDGER_PREDICATE ${result.exit_code === 0 ? 'PASS' : 'FAIL'}`
-      + ` ${JSON.stringify(result)}\n`,
+      + ` ${JSON.stringify(cli.finding ? stage.findingSummary(result) : result)}\n`,
     );
     process.exit(result.exit_code);
   } catch (error) {
@@ -193,3 +211,4 @@ if (direct) {
     process.exit(2);
   }
 }
+if (direct) main();

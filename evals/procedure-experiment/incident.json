@@ -1,0 +1,16 @@
+{
+  "source_refs": [
+    "issue:134",
+    "git-blob:d5c1e98e609ad712d13ef6768581f148df6b3bc0#row-2"
+  ],
+  "observed": [],
+  "expected": ["pending"],
+  "origin": {
+    "id": "origin", "class": "origin", "scope": "local", "selected": "new",
+    "artifacts": [
+      { "id": "old", "scope": "local", "writer": true, "rows": [{ "op": "pending", "outcome": "unknown" }] },
+      { "id": "new", "scope": "local", "writer": false, "rows": [] }
+    ],
+    "expected": ["pending"]
+  }
+}

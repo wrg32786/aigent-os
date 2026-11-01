@@ -212,7 +212,7 @@ function stagedMemoryCandidateCount(paths) {
   return (maskMarkdownFences(text).match(/\|[ \t]*staged[ \t]*\|/gi) || []).length;
 }
 
-function stagedNightlyCandidateCount(paths) {
+export function stagedNightlyCandidateCount(paths) {
   const text = optionalText(
     paths,
     'runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl',
@@ -225,8 +225,10 @@ function stagedNightlyCandidateCount(paths) {
     } catch (error) {
       throw new Error(`nightly candidate line ${index + 1} invalid: ${error?.message || error}`);
     }
-    return count + (row.status === 'staged' ? 1 : 0);
-  }, 0);
+    if (row.finding) count.findings += 1;
+    else if (row.status === 'staged') count.staged += 1;
+    return count;
+  }, { staged: 0, findings: 0 });
 }
 
 function parseArgs(argv) {
@@ -388,11 +390,12 @@ function commandPostcondition(root, checkpoint, state, exitCode, now) {
       ));
       const ok = exitCode === 0
         && current >= Number(state.ledger_snapshot?.candidate_lines || 0);
+      const counts = stagedNightlyCandidateCount(paths);
       return {
         ok,
         output: `LEDGER_CAPTURE_POSTCONDITION ${ok ? 'PASS' : 'FAIL'}`
           + ` before=${state.ledger_snapshot?.candidate_lines || 0}`
-          + ` after=${current} staged=${stagedNightlyCandidateCount(paths)}`,
+          + ` after=${current} staged=${counts.staged} findings=${counts.findings}`,
         actualExit: ok ? 0 : 1,
       };
     }
