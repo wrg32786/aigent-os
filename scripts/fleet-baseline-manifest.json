@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-31-8d4ffe2b",
-  "public_product_commit": "8d4ffe2b4a20d6df577f5c1368fbead153343868",
+  "baseline_id": "aigent-os-2026-11-01-2a48a03c",
+  "public_product_commit": "2a48a03c466c3bd2735ae755b14fcf5ed8a19d60",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -42,7 +42,8 @@
     "v8 recut for #139 round 5 (b398af96): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: an unmarked older hold never vouches for its intent. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #134 (ca2fd620): pins that moved: daemons/resume-verb.mjs, daemons/lifecycle-common.mjs. lifecycle-common.mjs and resume-verb.mjs moved: unresolved items across capsules (#142). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #134 round 2 (694de18e): pins that moved: daemons/lifecycle-common.mjs. lifecycle-common.mjs moved: shared capsule head read, audited readers (#142). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for #45/#140 (8d4ffe2b): pins that moved: none. pins moved by the nightly and doctor changes in #144. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for #45/#140 (8d4ffe2b): pins that moved: none. pins moved by the nightly and doctor changes in #144. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #148 (2a48a03c): pins that moved: daemons/semantic-search/namespace-registry.json. namespace-registry.json moved: product folders declared SKIP so a root-layout seat can index. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -82,7 +83,7 @@
     "launcher/aigent.ps1": "6b127d2f62e3f979627181e86b99a3647bd00d000e208f55810fb7fbb8062d70",
     "launcher/install.sh": "ca3799b4642558556be2b2062b714d33ede481487b526dbed01548536319dfeb",
     "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
-    "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
+    "daemons/semantic-search/namespace-registry.json": "74a1dfb059d7e55d9cffe5ec858820a1b2c6c69cbb9df206da0510a858a4ddeb",
     "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b"
   },
   "required_settings": {
