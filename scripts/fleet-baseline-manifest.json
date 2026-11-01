@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-10-31-694de18e",
-  "public_product_commit": "694de18e213399f1b29165347d13d6fd90f1d7c0",
+  "baseline_id": "aigent-os-2026-10-31-8d4ffe2b",
+  "public_product_commit": "8d4ffe2b4a20d6df577f5c1368fbead153343868",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -41,7 +41,8 @@
     "v8 recut for #139 round 4 (a651901f): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: unknown intent stays unknown, cross-session ambiguity has an exit. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #139 round 5 (b398af96): pins that moved: daemons/auto-clear-transport.mjs. auto-clear-transport.mjs moved: an unmarked older hold never vouches for its intent. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for #134 (ca2fd620): pins that moved: daemons/resume-verb.mjs, daemons/lifecycle-common.mjs. lifecycle-common.mjs and resume-verb.mjs moved: unresolved items across capsules (#142). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for #134 round 2 (694de18e): pins that moved: daemons/lifecycle-common.mjs. lifecycle-common.mjs moved: shared capsule head read, audited readers (#142). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for #134 round 2 (694de18e): pins that moved: daemons/lifecycle-common.mjs. lifecycle-common.mjs moved: shared capsule head read, audited readers (#142). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for #45/#140 (8d4ffe2b): pins that moved: none. pins moved by the nightly and doctor changes in #144. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
