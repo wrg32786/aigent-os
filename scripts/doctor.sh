@@ -1358,7 +1358,10 @@ NAMESPACEPY
 
   NAMESPACE_OUTPUT=""
   NAMESPACE_RC=0
-  NAMESPACE_OUTPUT="$(python3 "$_NAMESPACE_PY" "$NAMESPACE_REGISTRY" "$ROOT/vault" "$NAMESPACE_LOCAL_REGISTRY" 2>&1)" || NAMESPACE_RC=$?
+  # The tree holding the memory root, the same one the indexer audits.
+  NAMESPACE_VAULT="$ROOT/vault"
+  [ -z "$MEMORY_ROOT" ] || NAMESPACE_VAULT="$(dirname "$MEMORY_ROOT")"
+  NAMESPACE_OUTPUT="$(python3 "$_NAMESPACE_PY" "$NAMESPACE_REGISTRY" "$NAMESPACE_VAULT" "$NAMESPACE_LOCAL_REGISTRY" 2>&1)" || NAMESPACE_RC=$?
   rm -f "$_NAMESPACE_PY"
 
   if [ "$NAMESPACE_RC" -ne 0 ]; then
@@ -1372,7 +1375,7 @@ NAMESPACEPY
           pass "$namespace_label $namespace_path"
           ;;
         NAMESPACE_UNDECLARED)
-          fail "$namespace_label $namespace_path"
+          fail "$namespace_label $namespace_path -- declare it in daemons/semantic-search/namespace-registry.local.json"
           ;;
         *)
           fail "namespace registry check failed: unexpected extractor record: $namespace_label $namespace_path"

@@ -9,7 +9,7 @@
  */
 
 import { pipeline } from '@xenova/transformers';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import { join, relative, extname, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { requireDenyPrefixes, deniedPath } from './deny-list.mjs';
@@ -33,16 +33,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const AIGENT_ROOT = process.env.AIGENT_ROOT || join(__dirname, '..', '..');
-const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || join(AIGENT_ROOT, 'vault');
 // The index lives in the seat's memory root, resolved by the one resolver the
 // rest of core uses (declared in .aigent/state.json, default vault/memory).
 // A broken declaration throws at startup, which is the fail-closed direction
 // this indexer already takes for a missing registry.
 const MEMORY_ROOT = resolveMemoryRoot(process.env.AIGENT_STATE_HOME_DIR || AIGENT_ROOT);
+// The vault is the tree holding the memory root. A fixed <root>/vault read the
+// starter tree on a seat whose notes sit at its root, and reported success.
+const VAULT_ROOT = process.env.AIGENT_VAULT_ROOT || dirname(MEMORY_ROOT);
 const EMBEDDINGS_PATH = join(MEMORY_ROOT, 'embeddings.json');
 const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2';
 const MAX_CHUNK_CHARS = 1800; // ~512 tokens at ~3.5 chars/token
 const CHUNK_OVERLAP_CHARS = 200;
+// One archive took 12,072 of 15,054 entries and outranked a title-exact note.
+// Past this a file is sampled evenly across its length. The rest of that file
+// is not searchable, and the sample shifts as the file grows.
+const MAX_ENTRIES_PER_FILE = 400;
+const RENAME_ATTEMPTS = 8;
+const RENAME_RETRY_MS = 1000;
 
 // Directories/files to skip
 const SKIP_DIRS = new Set([
@@ -117,11 +125,15 @@ function chunkText(text, maxChars = MAX_CHUNK_CHARS, overlap = CHUNK_OVERLAP_CHA
 }
 
 // ── File scanner ─────────────────────────────────────────────────────────────
+// A scan that could not see everything cannot say what is gone.
+const scanFailures = [];
+
 function scanDirectory(dir, fileList = []) {
   let entries;
   try {
     entries = readdirSync(dir);
   } catch {
+    scanFailures.push(dir);
     return fileList;
   }
 
@@ -132,6 +144,7 @@ function scanDirectory(dir, fileList = []) {
     try {
       stat = statSync(fullPath);
     } catch {
+      scanFailures.push(fullPath);
       continue;
     }
 
@@ -197,6 +210,8 @@ async function main() {
   // implicit exemptions (enforced by the shared registry module).
   requireDeclaredNamespaceDirectories(NAMESPACE_REGISTRY, VAULT_ROOT, 'embed-vault');
 
+  const vaultRootLabel = relative(AIGENT_ROOT, VAULT_ROOT).replace(/\\/g, '/') || '.';
+
   // Load existing embeddings if present
   let existing = { model: MODEL_NAME, updated: null, notes: [] };
   if (existsSync(EMBEDDINGS_PATH)) {
@@ -206,6 +221,13 @@ async function main() {
     } catch (e) {
       console.warn('Could not parse existing embeddings.json, starting fresh.');
     }
+  }
+
+  // An index covers one tree. Merging another into it, or dropping its entries
+  // because they are absent from this tree, would destroy it quietly.
+  if (existing.vaultRoot && existing.vaultRoot !== vaultRootLabel) {
+    console.error(`[embed-vault] REFUSING to run: this index was built from ${existing.vaultRoot}, and this run reads ${vaultRootLabel}. Point AIGENT_VAULT_ROOT back, or remove ${EMBEDDINGS_PATH} to rebuild.`);
+    process.exit(1);
   }
 
   // Purge chunks that no longer belong to an INDEX namespace. This covers SKIP,
@@ -243,6 +265,33 @@ async function main() {
   const files = collectFiles();
   console.log(`Found ${files.length} markdown files to consider.`);
 
+  // An index from before vaultRoot cannot say where it came from. If this tree
+  // holds none of it, this is the wrong tree, not an index full of stale entries.
+  if (!existing.vaultRoot && existing.notes.length > 0 && scanFailures.length === 0) {
+    const here = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
+    if (!existing.notes.some((note) => here.has(note.path))) {
+      console.error(`[embed-vault] REFUSING to run: none of the ${existing.notes.length} indexed entries exist under ${vaultRootLabel}. Point AIGENT_VAULT_ROOT at the right tree, or remove ${EMBEDDINGS_PATH} to rebuild.`);
+      process.exit(1);
+    }
+  }
+
+  // An entry whose file is no longer in scope has nothing left to refresh it.
+  // Only a complete scan can say a file is gone.
+  // An index from before vaultRoot cannot prove which tree it belongs to, so
+  // this run keeps all of it and stamps the root; the next run sheds.
+  let outOfScope = 0;
+  if (!existing.vaultRoot && existing.notes.length > 0) {
+    console.warn('[scope] kept all entries: this index predates vaultRoot, so the next run sheds stale ones');
+  } else if (scanFailures.length > 0 || files.length === 0) {
+    console.warn(`[scope] kept all entries: the scan was incomplete (${scanFailures.length} unreadable, ${files.length} found)`);
+  } else {
+    const inScope = new Set(files.map((f) => relative(VAULT_ROOT, f.fullPath).replace(/\\/g, '/')));
+    const beforeScope = existing.notes.length;
+    existing.notes = existing.notes.filter((note) => inScope.has(note.path));
+    outOfScope = beforeScope - existing.notes.length;
+    if (outOfScope > 0) console.log(`[scope] dropped ${outOfScope} entries for files no longer in scope`);
+  }
+
   // Determine which files to (re-)embed
   let toEmbed = files;
   if (changedOnly && lastUpdated > 0) {
@@ -250,7 +299,8 @@ async function main() {
     console.log(`--changed-only: ${toEmbed.length} files modified since last index.`);
   }
 
-  if (toEmbed.length === 0 && !carriedForwardPurged) {
+  // An index without vaultRoot is written once so the root gets stamped.
+  if (toEmbed.length === 0 && !carriedForwardPurged && outOfScope === 0 && existing.vaultRoot) {
     console.log('Nothing to embed. Index is up to date.');
     return;
   }
@@ -286,8 +336,14 @@ async function main() {
 
     const derivedTitle = title || basename(fullPath, '.md');
     const chunks = chunkText(text);
+    const indices = chunks.length <= MAX_ENTRIES_PER_FILE
+      ? chunks.map((_, i) => i)
+      : Array.from({ length: MAX_ENTRIES_PER_FILE }, (_, n) => Math.round((n * (chunks.length - 1)) / (MAX_ENTRIES_PER_FILE - 1)));
+    if (indices.length < chunks.length) {
+      console.log(`[cap] capped ${relPath} at ${indices.length} of ${chunks.length} entries`);
+    }
 
-    for (let i = 0; i < chunks.length; i++) {
+    for (const i of indices) {
       const chunk = chunks[i];
       try {
         const embedding = await embedText(chunk);
@@ -320,7 +376,8 @@ async function main() {
   const output = {
     model: MODEL_NAME,
     updated: new Date().toISOString(),
-    noteCount: files.length,
+    vaultRoot: vaultRootLabel,
+    noteCount: new Set(finalNotes.map((note) => note.path)).size,
     entryCount: finalNotes.length,
     notes: finalNotes,
   };
@@ -329,7 +386,24 @@ async function main() {
   const memDir = MEMORY_ROOT;
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
 
-  writeFileSync(EMBEDDINGS_PATH, JSON.stringify(output, null, 0));
+  // A killed run must never leave a half-written index.
+  // On Windows a reader holding the file refuses the rename, so it is retried,
+  // and a partial never stays behind: this file is too large to reach git.
+  const partial = `${EMBEDDINGS_PATH}.tmp-${process.pid}`;
+  writeFileSync(partial, JSON.stringify(output, null, 0));
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      renameSync(partial, EMBEDDINGS_PATH);
+      break;
+    } catch (error) {
+      if (attempt >= RENAME_ATTEMPTS || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
+        rmSync(partial, { force: true });
+        console.error(`[embed-vault] index not saved, the old one stands: ${error.code || error.message}`);
+        process.exit(1);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_RETRY_MS);
+    }
+  }
   const sizeKB = (readFileSync(EMBEDDINGS_PATH).length / 1024).toFixed(1);
   console.log(`\nSaved embeddings.json — ${finalNotes.length} entries, ${sizeKB} KB`);
   console.log(`Index updated: ${output.updated}`);

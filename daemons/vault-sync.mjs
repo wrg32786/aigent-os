@@ -509,6 +509,7 @@ export function syncInstalledVault(start, { reason = 'capsule-cycle close' } = {
     const pathspecFor = (scope) => [
       scope.relative,
       `:(exclude,glob)${scope.relative}/.daemon-errors.log*`,
+      `:(exclude,glob)${scope.relative}/embeddings.json.tmp-*`,
       `:(exclude,glob)${scope.relative}/runtime/stop-writer/**`,
       `:(exclude,glob)${scope.relative}/runtime/utterance-journal*.jsonl`,
     ];
