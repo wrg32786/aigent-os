@@ -2,9 +2,9 @@
 
 <h1><img src="assets/aigent-os-logo.png" alt="aigent-OS" width="560"></h1>
 
-**Claude Code harness for long-running agents: an alternative to Claude Code context compaction that clears and resumes with persistent memory.**
+**Turn Claude Code into a team of agents that runs a real business, with 73 skills, 9 specialist sub-agents and memory that survives every /clear.**
 
-aigent-OS is an open-source (MIT) Claude Code harness that replaces Claude Code context compaction with auto-clear and resume, for one long-running Claude Code session with persistent memory in git. With Managed Auto-Refresh, when context reaches a threshold it saves a verified capsule, runs /clear, and resumes the work in a fresh session. No summary of a summary, no re-briefing. Around that loop sits an operator layer: skill routing, guarded memory and specialist sub-agents that help with the work itself.
+aigent-OS is an open-source (MIT) Claude Code harness. It replaces Claude Code context compaction with auto-clear and resume, so a long-running session keeps its memory in git instead of losing it. With Managed Auto-Refresh, when context reaches a threshold it saves a verified capsule, runs /clear, and resumes the work in a fresh session. No summary of a summary, no re-briefing. Around that loop sits an operator layer: skill routing, guarded memory and specialist sub-agents that help with the work itself.
 
 What I actually run every day: four Claude Code agents on aigent-os. Titus is the overseer, Pheme owns the newsletter business, Davinci is the builder and architect, and Metis handles job task assignments and clerical work. They write [The AIgent](https://theaigent.xyz) newsletter every day (close to 9,000 subscribers), build my courses, run a video engine that posts to Instagram, set up ad deals and build email funnels. aigent-os is what keeps them from forgetting: at 80% context each one writes a capsule, runs /clear and picks up right where it left off. *(Will)*
 
