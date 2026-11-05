@@ -154,33 +154,23 @@ async function heldSeat($: $, seat: string): Promise<FleetBandHeld> {
 
 const RESUME_STATES = ['waiting', 'submitted', 'failed']
 const RESUME_DETAIL_CAP = 300
+const STALE_RESUME_MS = 60 * 60_000
 
 const ageText = (ms: number) => {
   const m = Math.max(0, Math.floor(ms / 60_000))
   return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
 }
 
-// shortcut: the mod sandbox has no `process`, so liveness cannot be probed
-// there and a pid is assumed alive; a host that exposes process.kill gets the
-// real signal-0 check (EPERM = alive). Upgrade when the engine offers a probe.
-function pidAlive(pid: unknown): boolean {
-  const kill = (globalThis as { process?: { kill?: (pid: number, sig: number) => unknown } }).process?.kill
-  if (typeof pid !== 'number' || typeof kill !== 'function') return true
-  try {
-    kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as { code?: string }).code === 'EPERM'
-  }
-}
-
 // The line for one parsed resume-pending row (supervisor contract v1), or
-// undefined when the row is not v1; liveness is a parameter so tests can drive it.
-export function resumeLine(row: any, now: number, isAlive: (pid: unknown) => boolean): string | undefined {
+// undefined when the row is not v1. `pid` is in the file but unused here: the
+// mod sandbox has no `process`, so stale is an age rule instead (waiting or
+// submitted older than STALE_RESUME_MS). failed always shows.
+export function resumeLine(row: any, now: number): string | undefined {
   if (row?.v !== 1 || !RESUME_STATES.includes(row.state)) return undefined
-  if (!isAlive(row.pid)) return 'resume: stale'
   if (row.state === 'failed') return 'resume: FAILED'
-  const age = ageText(now - Date.parse(row.since))
+  const ms = now - Date.parse(row.since)
+  const age = ageText(ms)
+  if (ms > STALE_RESUME_MS) return `resume: stale (${age})`
   if (row.state === 'submitted') return `resume: submitted (${age})`
   const detail = String(row.detail ?? '').slice(0, RESUME_DETAIL_CAP).replace(/^(mod ledger |door: )/, '')
   return `resume: waiting (${detail}, ${age})`
@@ -198,7 +188,7 @@ async function resumePending($: $, seat: string, now: number): Promise<string | 
   let line: string | undefined
   let why = 'not v1 or unknown state'
   try {
-    line = resumeLine(JSON.parse(text), now, pidAlive)
+    line = resumeLine(JSON.parse(text), now)
   } catch (error) {
     why = `malformed (${(error as Error).message})`
   }
