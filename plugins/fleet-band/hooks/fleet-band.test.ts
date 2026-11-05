@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { resumeLine } from './register'
+
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
 const ROOM = 'C:/example/room'
@@ -102,6 +104,7 @@ function fleet(on: On, world: World = {}) {
   })
   on('ui.log', ($, e) => {
     world.logs?.push({ text: e.text, to: e.to })
+    return { value: undefined }
   })
   return clock
 }
@@ -238,19 +241,6 @@ const pending = (over: Record<string, unknown> = {}) =>
     ...over,
   })
 
-// The module has no Node, so a host that exposes process.kill is faked here.
-// ESRCH = gone, EPERM = alive but not ours, anything else returns = alive.
-function fakeKill(dead: number[] = []) {
-  const g = globalThis as { process?: unknown }
-  g.process = {
-    kill: (pid: number) => {
-      if (dead.includes(pid)) throw Object.assign(new Error('x'), { code: 'ESRCH' })
-      if (pid === 77) throw Object.assign(new Error('x'), { code: 'EPERM' })
-      return true
-    },
-  }
-}
-
 async function bandText($: Parameters<Parameters<typeof test>[2]>[0]) {
   await $.command.run({ command: 'held', ...RUN }) // a refresh fills the snapshot the band draws
   const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
@@ -269,32 +259,30 @@ const RESUME_CASES: [string, Record<string, unknown>, string][] = [
 
 for (const [name, over, want] of RESUME_CASES) {
   test(`resume-pending ${name} renders ${want}`, { options: CONFIGURED.options }, async ($, on) => {
-    fakeKill()
     fleet(on, { now: NOW, resume: pending(over) })
     expect(await bandText($)).toContain(`main · ctx 42% · ${want} · room 3 unread`)
   })
 }
 
-test('resume-pending with a dead pid renders stale, EPERM counts as alive', CONFIGURED, async ($, on) => {
-  fakeKill([12540])
-  fleet(on, { now: NOW, resume: pending() })
-  expect(await bandText($)).toContain('main · ctx 42% · resume: stale · room 3 unread')
-  fakeKill()
-  ;(globalThis as { process?: { kill: (p: number) => void } }).process!.kill = () => {
-    throw Object.assign(new Error('x'), { code: 'EPERM' })
-  }
-  await $.command.run({ command: 'held', ...RUN })
-  expect(await bandText($)).toContain('resume: waiting (')
+// The mod sandbox has no process.kill, so liveness is driven through resumeLine.
+test('resume-pending with a dead pid renders stale; a live or unprobed pid does not', () => {
+  const row = JSON.parse(pending())
+  expect(resumeLine(row, NOW, () => false)).toBe('resume: stale')
+  expect(resumeLine({ ...row, state: 'failed' }, NOW, () => false)).toBe('resume: stale')
+  expect(resumeLine(row, NOW, pid => pid === 12540)).toBe('resume: waiting (deferred:composer-busy, 2h)')
+})
+
+test('resume-pending detail is capped at 300 chars', () => {
+  const line = resumeLine(JSON.parse(pending({ detail: 'x'.repeat(500) })), NOW, () => true)
+  expect(line).toBe(`resume: waiting (${'x'.repeat(300)}, 2h)`)
 })
 
 test('resume-pending absent shows nothing', CONFIGURED, async ($, on) => {
-  fakeKill()
   fleet(on, { now: NOW })
   expect(await bandText($)).not.toContain('resume')
 })
 
 test('resume-pending v other than 1 shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
-  fakeKill()
   const logs: { text: string; to: string }[] = []
   fleet(on, { now: NOW, resume: pending({ v: 2 }), logs })
   expect(await bandText($)).not.toContain('resume')
@@ -302,7 +290,6 @@ test('resume-pending v other than 1 shows nothing and logs one debug line', CONF
 })
 
 test('resume-pending malformed shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
-  fakeKill()
   const logs: { text: string; to: string }[] = []
   fleet(on, { now: NOW, resume: '{not json', logs })
   expect(await bandText($)).not.toContain('resume')
@@ -310,7 +297,6 @@ test('resume-pending malformed shows nothing and logs one debug line', CONFIGURE
 })
 
 test('resume-pending is never read when roomRoot is unset', async ($, on) => {
-  fakeKill()
   fleet(on, { now: NOW, resume: pending() })
   expect(await bandText($)).toBe('main · ctx 42%')
 })
