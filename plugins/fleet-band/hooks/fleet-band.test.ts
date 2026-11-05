@@ -281,9 +281,12 @@ test('resume-pending stale is age only: 61m is stale, 60m is not, failed never',
   expect(resumeLine(at(3000, { state: 'failed' }), NOW)).toBe('resume: FAILED')
 })
 
-test('resume-pending detail is capped at 300 chars', () => {
+test('resume-pending shows at most 40 chars of detail: 39 plus an ellipsis', () => {
   const since = new Date(NOW - 5 * 60_000).toISOString()
-  expect(resumeLine(JSON.parse(pending({ detail: 'x'.repeat(500), since })), NOW)).toBe(`resume: waiting (${'x'.repeat(300)}, 5m)`)
+  const line = (detail: string) => resumeLine(JSON.parse(pending({ detail, since })), NOW)
+  expect(line('x'.repeat(500))).toBe(`resume: waiting (${'x'.repeat(39)}…, 5m)`)
+  expect(line('mod ledger ' + 'x'.repeat(41))).toBe(`resume: waiting (${'x'.repeat(39)}…, 5m)`)
+  expect(line('x'.repeat(40))).toBe(`resume: waiting (${'x'.repeat(40)}, 5m)`)
 })
 
 test('resume-pending absent shows nothing', CONFIGURED, async ($, on) => {
@@ -331,4 +334,9 @@ test('resume-pending at the 4 KiB limit is still read', CONFIGURED, async ($, on
 test('resume survives the 100 column fit with a normal detail', CONFIGURED, async ($, on) => {
   fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }) })
   expect(await bandText($)).toContain('resume: waiting (deferred:composer-busy, 1m) · room 3 unread')
+})
+
+test('resume survives the 100 column fit with a 120 char detail', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString(), detail: 'y'.repeat(120) }) })
+  expect(await bandText($)).toContain(`resume: waiting (${'y'.repeat(39)}…, 1m)`)
 })
