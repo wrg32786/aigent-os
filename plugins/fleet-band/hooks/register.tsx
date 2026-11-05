@@ -154,6 +154,8 @@ async function heldSeat($: $, seat: string): Promise<FleetBandHeld> {
 
 const RESUME_STATES = ['waiting', 'submitted', 'failed']
 const RESUME_DETAIL_CAP = 300
+// Shown detail: 39 chars plus an ellipsis, so the field survives a 100 column fit.
+const RESUME_DETAIL_SHOWN = 40
 // A real file is under 1 KiB (detail is capped at 300); skip anything bigger.
 const RESUME_READ_CAP = 4096
 const STALE_RESUME_MS = 60 * 60_000
@@ -176,7 +178,8 @@ export function resumeLine(row: any, now: number): string | undefined {
   const age = ageText(ms)
   if (ms > STALE_RESUME_MS) return `resume: stale (${age})`
   if (row.state === 'submitted') return `resume: submitted (${age})`
-  const detail = String(row.detail ?? '').slice(0, RESUME_DETAIL_CAP).replace(/^(mod ledger |door: )/, '')
+  let detail = String(row.detail ?? '').slice(0, RESUME_DETAIL_CAP).replace(/^(mod ledger |door: )/, '')
+  if (detail.length > RESUME_DETAIL_SHOWN) detail = `${detail.slice(0, RESUME_DETAIL_SHOWN - 1)}…`
   return `resume: waiting (${detail}, ${age})`
 }
 
