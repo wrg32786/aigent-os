@@ -38,6 +38,7 @@ An empty setting means the field is skipped and its command says "not configured
 | room unread | count of `*.json` files directly in `<roomRoot>/inbox/<seat>/` |
 | results pending | `node <installRoot>/daemons/job-results.mjs pending`, run with `JOB_RESULTS_ROOT=<installRoot>`. The script's existence is checked once per session; when it is missing, nothing is ever spawned. |
 | needs-you | length of `needs_you[]` in `<eodPath>` |
+| resume | `<roomRoot>/state/<seat>.resume-pending`, a small JSON file the Room supervisor writes while a resume is pending. It is read only when `roomRoot` is set, and skipped when over 4 KiB. A file that is absent, unreadable, not version 1 or has no valid `since` time shows nothing. Waiting shows `resume: waiting (<detail>, <age>)` and submitted shows `resume: submitted (<age>)`. Either one older than 60 minutes shows `resume: stale (<age>)`. Failed always shows `resume: FAILED`. The file's `pid` is not read, since the mod cannot check whether a process is alive. The field sits right after ctx. |
 | held | the last 50 lines of `<roomRoot>/state/<seat>.supervisor.log` for each watched seat. A seat is held when its newest `[refresh-cycle] HOLD` line has no later `[refresh-cycle] … released` line. |
 
 **Next fire is not shown.** No cheap local source has the next scheduled fire.
