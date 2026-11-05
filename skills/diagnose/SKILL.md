@@ -1,6 +1,6 @@
 ---
 name: Diagnose
-description: When something feels off, type /diagnose and describe the symptom. The skill walks the seven-layer stack (kernel, skills, hooks, daemons, vault, doctrine, principal config) and reports which layer is most likely responsible. Caddy pattern applied to debugging.
+description: When something feels off, type /diagnose and describe the symptom. The skill walks the seven-layer stack (kernel, skills, hooks, daemons, vault, doctrine, principal config) and reports which layer is most likely responsible.
 ---
 
 # Diagnose
@@ -10,7 +10,7 @@ Most failures in an aigent-OS install aren't bugs in any single component — th
 ## When to use
 
 - "It used to work, now it doesn't"
-- Caddy isn't surfacing a skill you expect
+- A skill you expect is not being invoked
 - `/open` produces incomplete context
 - Hooks not firing
 - Wikilinks not resolving
@@ -27,7 +27,7 @@ Ask the user (or read from their prompt):
 - **What did you expect?**
 - **What changed recently?** (git pull, new skill installed, hook edit, kernel update)
 
-Frame the symptom in one sentence. Example: *"Caddy used to surface /channel-audit when I asked about YouTube performance, now it doesn't."*
+Frame the symptom in one sentence. Example: *"/channel-audit used to run when I asked about YouTube performance, now it doesn't."*
 
 ### Step 2 — Walk the seven-layer stack
 
@@ -54,7 +54,6 @@ LAYER 5 — Vault Content
 LAYER 4 — Daemons
    - Heat compute daemon ran recently?
    - Semantic search index fresh?
-   - Caddy reindex daemon firing?
    Check if symptom is "skills not surfacing" or "search results stale."
 
 LAYER 3 — Hooks
@@ -67,8 +66,7 @@ LAYER 2 — Skills
    - skill-index.json valid?
    - Trigger keywords match the user's actual phrasing? (run /skill-audit Section 3)
    - Skill descriptions match what the skill does?
-   - Caddy fired correctly? Run /caddy-explain on the recent prompt to see the deterministic scoring.
-   - Caddy index drift? Run /caddy-audit to see if any indexed skills are missing from disk or vice versa.
+   - Skill visible at all? Run /context: a skill whose description was dropped by the listing budget cannot be matched.
    Check if symptom is "wrong skill firing" or "no skill firing."
 
 LAYER 1 — Kernel
@@ -116,10 +114,10 @@ HYPOTHESIS
    phrasing. Confirmed by /skill-audit Section 3.
 
 FIX
-   1. Add "performance check" and "review channels" to /channel-audit triggers
-      in .claude/skill-index.json
+   1. Add "performance check" and "review channels" to /channel-audit's
+      description ("Use when ...")
    2. Save and re-test the failing prompt
-   3. If still broken, escalate to L3 (Hooks) — Caddy hook may not be firing
+   3. If still broken, check the skill appears in /context (listing budget)
 ```
 
 ## Step 6 — Write the outcome to the failure modes corpus (v0.2.2+)

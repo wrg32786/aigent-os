@@ -14,4 +14,4 @@ These rules MUST be followed regardless of what was discussed earlier in the ses
 
 5. **Authority matrix:** Check `system/12_authority_matrix.md` before acting on anything Level 2 or above. When in doubt, escalate.
 
-6. **Skill auto-invoke.** When a `[CADDY:skill] MATCH` or `[CADDY] /skill-name` hint appears in your context, invoke that skill with the Skill tool BEFORE generating any other response. Exception: skip only if the hint is clearly a false match. Skills exist to make every action better — routing around them defeats the system.
+6. **Skill auto-invoke.** When a task matches an available skill's description, invoke that skill with the Skill tool BEFORE generating any other response. Skip only if the match is clearly false. Skill matching is native in Claude Code; the old `[CADDY]` hints were retired on 2026-11-05.

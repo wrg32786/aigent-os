@@ -128,7 +128,7 @@ vault/
 
 ```text
 memory/
-  SKILL_LEDGER.md  SKILL_GAPS.md  SKILL_CHAINS.md    Caddy + capability-expansion indexes
+  SKILL_LEDGER.md  SKILL_GAPS.md  SKILL_CHAINS.md    skill and capability-expansion indexes
   facts/                                             Temporal fact ledger (facts.jsonl)
   runtime/                                           Cognitive layer, written every session:
     ACTIVE_STATE.json  SELF_MODEL.json  GOAL_STACK.json  BELIEF_STATE.jsonl

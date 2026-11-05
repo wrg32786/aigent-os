@@ -49,7 +49,6 @@
     "daemons/sessionstart-reinject.mjs": "3d8eda506714ffbf8e04a5c7e428252fedba0d01f2153b22e9f256b642de641e",
     "daemons/resume-verb.mjs": "9486500ddb3cd6cc95f267a0eab5a90617c398bb146ffada7f45e9f681dc3442",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
-    "daemons/caddy.sh": "cd74fa887812973c879624ca8649fe93814a91f9cc27cc6772687f70939cd811",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
     "daemons/precompact-flush.mjs": "ca15f11ba5d6f47b9519525d7463f0046ba6e418ed3533fca7f770856b966e51",
     "daemons/ctx-refresh-sensor.mjs": "0978848f6fac08f66fa7c6842e666c19eed6d05b82836a316b9c3c2be49e6cfb",
@@ -60,7 +59,6 @@
     "hooks/suggest-compact.sh": "a7aaf8d9eee7f2c7d5269167566a51677f22319f8343cb904ea82ba2390197f4",
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
-    "daemons/caddy-detect-new-skill.sh": "d2cde2f1585636be41107f8ec9992d9ee2b36a644cd129397401baa799ebfd1b",
     "daemons/stop-capsule-writer.mjs": "890779002c07d18b8529765058efbc1ab365c7bacbb2d1915d966691c2d4666c",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
@@ -83,7 +81,8 @@
     "launcher/install.sh": "ca3799b4642558556be2b2062b714d33ede481487b526dbed01548536319dfeb",
     "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
-    "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b"
+    "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b",
+    "daemons/prompt-context.sh": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "required_settings": {
     "path": ".claude/settings.json",
@@ -93,7 +92,7 @@
       "daemons/statusline-ctx.sh",
       "daemons/sessionstart-reinject.mjs",
       "daemons/resume-verb.mjs",
-      "daemons/caddy.sh",
+      "daemons/prompt-context.sh",
       "daemons/userpromptsubmit-journal.mjs",
       "daemons/precompact-flush.mjs",
       "daemons/pre-permission-interlock.mjs",
@@ -104,7 +103,6 @@
       "hooks/suggest-compact.sh",
       "hooks/auto-capture.sh",
       "hooks/security-scan.sh",
-      "daemons/caddy-detect-new-skill.sh",
       "daemons/stop-capsule-writer.mjs",
       "daemons/discipline-check.mjs",
       "hooks/session-capture-summary.sh",

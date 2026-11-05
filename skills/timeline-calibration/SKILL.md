@@ -6,7 +6,7 @@ description: SELF-CORRECT timeline estimates. About to quote hours / days / week
 # Timeline Calibration
 
 > [!danger] HARD RULE — fires whenever you're about to quote a timeline
-> If the Caddy hint for this skill surfaces, you are about to quote a timeline using human-developer anchors. **STOP. Recalibrate.**
+> If this skill is invoked, you are about to quote a timeline using human-developer anchors. **STOP. Recalibrate.**
 
 ## The recalibration table
 
@@ -59,7 +59,7 @@ Quoting an estimate at all should be rare. Most cases: just say "ON IT" and ship
 
 ## Output format when surfaced
 
-When this Caddy hint fires, before responding to the principal, internally check:
+When this skill fires, before responding to the principal, internally check:
 - Did I just write/draft a phrase like "X hours"/"~Y days"/"a few weeks"?
 - If yes → recalibrate per the table above
 - If estimate is for external waiting → keep human-clock, but label it as such

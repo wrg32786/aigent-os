@@ -51,8 +51,7 @@ jobs:
           npx --yes node@24.15.0 --test plugins/fleet-delivery/tests/supervisor-hold.test.mjs
           node --test plugins/context-capsule/tests/context-capsule.test.mjs
           python3 -m unittest discover -s tests -p 'test_*.py' -v
-          bash tests/test-caddy.sh
-          bash tests/test-caddy-detect-new-skill.sh
+          bash tests/test-prompt-context.sh
           node evals/run-evals.mjs
 
       - name: fleet-delivery mod (engine typings, validate, plugin test)
@@ -152,6 +151,7 @@ jobs:
           bash tests/test-installer-fast.sh
           bash tests/test-installer-drift.sh
           bash tests/test-installer-operator-owned.sh
+          bash tests/test-installer-retired-hooks.sh
           bash tests/test-installer-slow-smoke.sh
           bash tests/test-web-install.sh
 

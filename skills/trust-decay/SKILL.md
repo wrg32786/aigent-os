@@ -14,13 +14,13 @@ The two-phase ledger that tracks confident agent claims and their eventual outco
 - An agent declared something "fixed", "tested", "verified", "complete", "deployed"
 - The claim is unhedged or treated as ground truth
 - The claim is consequential enough that being wrong about it would matter
-- Triggered by Caddy on prompts like: "/trust-decay capture", "log this claim", "capture confidence", "agent claimed", "I claimed", "the agent said it was fixed", "another agent verified"
+- Use on prompts like: "/trust-decay capture", "log this claim", "capture confidence", "agent claimed", "I claimed", "the agent said it was fixed", "another agent verified"
 
 ### Phase 2 — Resolve a claim
 
 - A previously-captured claim has been confirmed (right) or revealed wrong
 - The principal noticed a discrepancy between an earlier claim and reality
-- Triggered by Caddy on prompts like: "/trust-decay resolve", "the bug came back", "that wasn't actually fixed", "trust event", "wrong claim", "confidence was wrong"
+- Use on prompts like: "/trust-decay resolve", "the bug came back", "that wasn't actually fixed", "trust event", "wrong claim", "confidence was wrong"
 
 ## How to execute
 

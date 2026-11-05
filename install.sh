@@ -1189,6 +1189,18 @@ def hook_identity(hook):
         return ""
     return "/".join(parts[-2:])
 
+# Hooks the framework once shipped and has since removed, by the same dir/basename identity. The
+# merge only ever added or replaced template hooks, so a removed hook stayed wired in every
+# existing install forever. Each identity here is dropped from the old settings on merge and
+# reported as "[merge] retired". Only framework-owned script paths belong here, never an
+# operator's. The node merger below carries the identical list.
+# 2026-11-05: Caddy (13 to 22 s per prompt, cancelled at its limit; replaced by
+# daemons/prompt-context.sh, skill matching is native in Claude Code).
+RETIRED_HOOK_IDENTITIES = {
+    "daemons/caddy.sh",
+    "daemons/caddy-detect-new-skill.sh",
+}
+
 def merge_hook_groups(old_groups, new_groups):
     # new_groups is the freshly rendered template: it always wins for any
     # hook it ships. old_groups keeps only the hooks the template does NOT
@@ -1209,6 +1221,9 @@ def merge_hook_groups(old_groups, new_groups):
         remaining = []
         for hook in group.get("hooks", []):
             identity = hook_identity(hook)
+            if identity and identity in RETIRED_HOOK_IDENTITIES:
+                print(f"  [merge] retired {hook.get('command', hook) if isinstance(hook, dict) else hook}")
+                continue
             if identity and identity in template_identities:
                 print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
                 continue
@@ -1343,6 +1358,11 @@ const hookIdentity = hook => {
 // by whole-group equality). Ports the same algorithm so both mergers stay
 // behaviorally identical. An empty identity never matches anything, so
 // ambiguous (e.g. commandless) hooks are never deduped against each other.
+// Retired framework hooks: identical to RETIRED_HOOK_IDENTITIES in the python merger above.
+const RETIRED_HOOK_IDENTITIES = new Set([
+  'daemons/caddy.sh',
+  'daemons/caddy-detect-new-skill.sh',
+]);
 const mergeHookGroups = (oldGroups, newGroups) => {
   const templateIdentities = new Set();
   for (const group of newGroups) {
@@ -1356,6 +1376,11 @@ const mergeHookGroups = (oldGroups, newGroups) => {
     const remaining = [];
     for (const hook of group.hooks || []) {
       const identity = hookIdentity(hook);
+      if (identity && RETIRED_HOOK_IDENTITIES.has(identity)) {
+        const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
+        console.log(`  [merge] retired ${label}`);
+        continue;
+      }
       if (identity && templateIdentities.has(identity)) {
         const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
         console.log(`  [merge] dropped ${label}`);

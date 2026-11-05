@@ -5,6 +5,9 @@ aliases: [Caddy skill recall, skill-recall caddy wiring]
 created: 2026-05-08
 ---
 
+> **Retired 2026-11-05.** Caddy was removed from aigent-OS: on a Windows host its hook took 13 to 22 s per prompt and was cancelled on nearly every prompt. Claude Code now matches skills natively from each skill's `description`; see `docs/advanced-setup.md#skill-matching`. This note is kept as history.
+
+
 # Caddy Skill Recall Integration
 
 How `/skill-recall` and the SKILL_LEDGER taxonomy are wired into Caddy's prompt-matching loop. **SHIPPED in S39**: taxonomy fallback and chain recall are live in `daemons/caddy.sh` (re-verified against source and by live runs, 2026-08-02; see the implementation record below). One item remains open: the `taxonomy` mute class is not implemented, so these hints are currently always-on.
