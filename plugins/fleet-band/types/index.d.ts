@@ -28,6 +28,8 @@ export type FleetBandSnapshot = {
   seat: string
   ctxPercent: number | null
   roomUnread?: number | null
+  // Rendered resume-pending text; left out when nothing is pending.
+  resume?: string
   pending?: FleetBandPending[] | null
   needsYou?: string[] | null
   held?: FleetBandHeld[]

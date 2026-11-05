@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { resumeLine } from './register'
+
 // Example install; no real machine's paths or seats.
 const ROOT = 'C:/example/aigent'
 const ROOM = 'C:/example/room'
@@ -52,11 +54,16 @@ type World = {
   isScriptMissing?: boolean
   isTimerRefused?: boolean
   root?: string
+  now?: number
+  // Raw text of room/state/main.resume-pending; absent means no file.
+  resume?: string
+  resumeSize?: number
+  logs?: { text: string; to: string }[]
 }
 
 function fleet(on: On, world: World = {}) {
   // A refused timer needs a hand-rolled clock: mock.clock owns clock.every.
-  let now = 1_000
+  let now = world.now ?? 1_000
   const clock = world.isTimerRefused ? { advance: async (ms: number) => void (now += ms) } : mock.clock(on, { now })
   if (world.isTimerRefused) {
     on('clock.now', () => ({ value: now }))
@@ -75,12 +82,18 @@ function fleet(on: On, world: World = {}) {
   })
   on('fs.stat', ($, e) => {
     if (world.isScriptMissing && norm(e.path).endsWith('job-results.mjs')) return { deny: 'ENOENT' }
+    if (norm(e.path).endsWith('.resume-pending') && world.resumeSize) {
+      return { value: { kind: 'file' as const, size: world.resumeSize, mtimeMs: 1, isLink: false } }
+    }
     const size = norm(e.path).includes('gamma') ? 900 * MIB : 1_000
     return { value: { kind: 'file' as const, size, mtimeMs: 1, isLink: false } }
   })
   on('fs.read', ($, e) => {
     if (norm(e.path) === EOD) {
       return { value: JSON.stringify({ needs_you: [{ title: 'Approve the draft' }, { title: 'Clear a pane' }] }) }
+    }
+    if (norm(e.path) === `${ROOM}/state/main.resume-pending`) {
+      return world.resume === undefined ? { deny: 'ENOENT' } : { value: world.resume }
     }
     const log = LOGS[norm(e.path)]
     return log === undefined ? { deny: 'ENOENT' } : { value: log }
@@ -92,6 +105,10 @@ function fleet(on: On, world: World = {}) {
     expect(e.init?.env).toEqual({ JOB_RESULTS_ROOT: ROOT })
     const rows = [{ id: 'r1', job: 'triage', summary: 'secret free text', produced_at: '2026-10-07T15:00:00Z' }]
     return ran(0, JSON.stringify(rows))
+  })
+  on('ui.log', ($, e) => {
+    world.logs?.push({ text: e.text, to: e.to })
+    return { value: undefined }
   })
   return clock
 }
@@ -213,4 +230,113 @@ test('a refused timer leaves the snapshot to age into (stale)', CONFIGURED, asyn
   await clock.advance(4 * 60_000)
   const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
   expect((await band.find({ type: 'Text', text: /main/ }))?.text).toMatch(/ \(stale\)$/)
+})
+
+// Resume-pending: room/state/<seat>.resume-pending, written by the supervisor.
+const NOW = Date.parse('2026-11-04T05:44:19.056Z')
+const pending = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    v: 1,
+    state: 'waiting',
+    since: '2026-11-04T03:44:19.056Z',
+    capsule: '2026-11-03-example-capsule',
+    detail: 'mod ledger deferred:composer-busy',
+    pid: 12540,
+    ...over,
+  })
+
+async function bandText($: Parameters<Parameters<typeof test>[2]>[0]) {
+  await $.command.run({ command: 'held', ...RUN }) // a refresh fills the snapshot the band draws
+  const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
+  const text = (await band.find({ type: 'Text', text: /main/ }))?.text ?? ''
+  await band.unmount()
+  return text
+}
+
+const RESUME_CASES: [string, Record<string, unknown>, string][] = [
+  ['waiting', { since: '2026-11-04T05:14:19.056Z' }, 'resume: waiting (deferred:composer-busy, 30m)'],
+  ['waiting at 59m', { since: '2026-11-04T04:45:19.056Z' }, 'resume: waiting (deferred:composer-busy, 59m)'],
+  ['waiting past 60m', {}, 'resume: stale (2h)'],
+  ['submitted past 60m', { state: 'submitted', since: '2026-11-04T03:44:19.056Z' }, 'resume: stale (2h)'],
+  ['failed however old', { state: 'failed', pid: 1 }, 'resume: FAILED'],
+  ['waiting door', { detail: 'door: held by lock', since: '2026-11-04T05:43:00.000Z' }, 'resume: waiting (held by lock, 1m)'],
+  ['submitted', { state: 'submitted', detail: 'mod ledger submitted', since: '2026-11-04T05:42:00.000Z' }, 'resume: submitted (2m)'],
+  ['null capsule', { capsule: null, since: '2026-11-04T05:14:19.056Z' }, 'resume: waiting (deferred:composer-busy, 30m)'],
+  ['failed', { state: 'failed', detail: 'refused by the mod (error:submit-failed)' }, 'resume: FAILED'],
+]
+
+for (const [name, over, want] of RESUME_CASES) {
+  test(`resume-pending ${name} renders ${want}`, { options: CONFIGURED.options }, async ($, on) => {
+    fleet(on, { now: NOW, resume: pending(over) })
+    expect(await bandText($)).toContain(`main · ctx 42% · ${want} · room 3 unread`)
+  })
+}
+
+// The mod sandbox has no process, so stale is an age rule and pid is not read.
+test('resume-pending stale is age only: 61m is stale, 60m is not, failed never', () => {
+  const at = (min: number, over = {}) => JSON.parse(pending({ since: new Date(NOW - min * 60_000).toISOString(), ...over }))
+  expect(resumeLine(at(60), NOW)).toBe('resume: waiting (deferred:composer-busy, 1h)')
+  expect(resumeLine(at(61), NOW)).toBe('resume: stale (1h)')
+  expect(resumeLine(at(61, { pid: 1 }), NOW)).toBe('resume: stale (1h)')
+  expect(resumeLine(at(3000, { state: 'failed' }), NOW)).toBe('resume: FAILED')
+})
+
+test('resume-pending shows at most 40 chars of detail: 39 plus an ellipsis', () => {
+  const since = new Date(NOW - 5 * 60_000).toISOString()
+  const line = (detail: string) => resumeLine(JSON.parse(pending({ detail, since })), NOW)
+  expect(line('x'.repeat(500))).toBe(`resume: waiting (${'x'.repeat(39)}…, 5m)`)
+  expect(line('mod ledger ' + 'x'.repeat(41))).toBe(`resume: waiting (${'x'.repeat(39)}…, 5m)`)
+  expect(line('x'.repeat(40))).toBe(`resume: waiting (${'x'.repeat(40)}, 5m)`)
+})
+
+test('resume-pending absent shows nothing', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW })
+  expect(await bandText($)).not.toContain('resume')
+})
+
+test('resume-pending v other than 1 shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
+  const logs: { text: string; to: string }[] = []
+  fleet(on, { now: NOW, resume: pending({ v: 2 }), logs })
+  expect(await bandText($)).not.toContain('resume')
+  expect(logs.filter(one => one.to === 'debug' && /resume-pending/.test(one.text))).toHaveLength(1)
+})
+
+test('resume-pending malformed shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
+  const logs: { text: string; to: string }[] = []
+  fleet(on, { now: NOW, resume: '{not json', logs })
+  expect(await bandText($)).not.toContain('resume')
+  expect(logs.filter(one => one.to === 'debug' && /resume-pending/.test(one.text))).toHaveLength(1)
+})
+
+test('resume-pending is never read when roomRoot is unset', async ($, on) => {
+  fleet(on, { now: NOW, resume: pending() })
+  expect(await bandText($)).toBe('main · ctx 42%')
+})
+
+test('resume-pending with a bad since shows nothing', () => {
+  const row = JSON.parse(pending())
+  for (const since of [undefined, null, 5, '', 'not a date']) {
+    expect(resumeLine({ ...row, since }, NOW)).toBeUndefined()
+  }
+  expect(resumeLine({ ...row, state: 'failed', since: null }, NOW)).toBeUndefined()
+})
+
+test('resume-pending over 4 KiB is skipped unread', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }), resumeSize: 4097 })
+  expect(await bandText($)).not.toContain('resume')
+})
+
+test('resume-pending at the 4 KiB limit is still read', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }), resumeSize: 4096 })
+  expect(await bandText($)).toContain('resume: waiting (')
+})
+
+test('resume survives the 100 column fit with a normal detail', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }) })
+  expect(await bandText($)).toContain('resume: waiting (deferred:composer-busy, 1m) · room 3 unread')
+})
+
+test('resume survives the 100 column fit with a 120 char detail', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString(), detail: 'y'.repeat(120) }) })
+  expect(await bandText($)).toContain(`resume: waiting (${'y'.repeat(39)}…, 1m)`)
 })
