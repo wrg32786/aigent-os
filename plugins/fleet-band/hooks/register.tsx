@@ -154,6 +154,8 @@ async function heldSeat($: $, seat: string): Promise<FleetBandHeld> {
 
 const RESUME_STATES = ['waiting', 'submitted', 'failed']
 const RESUME_DETAIL_CAP = 300
+// A real file is under 1 KiB (detail is capped at 300); skip anything bigger.
+const RESUME_READ_CAP = 4096
 const STALE_RESUME_MS = 60 * 60_000
 
 const ageText = (ms: number) => {
@@ -167,6 +169,8 @@ const ageText = (ms: number) => {
 // submitted older than STALE_RESUME_MS). failed always shows.
 export function resumeLine(row: any, now: number): string | undefined {
   if (row?.v !== 1 || !RESUME_STATES.includes(row.state)) return undefined
+  // A row with no usable timestamp is not trusted, whatever its state.
+  if (typeof row.since !== 'string' || !Number.isFinite(Date.parse(row.since))) return undefined
   if (row.state === 'failed') return 'resume: FAILED'
   const ms = now - Date.parse(row.since)
   const age = ageText(ms)
@@ -180,8 +184,10 @@ export function resumeLine(row: any, now: number): string | undefined {
 // only a file that is there but wrong logs one debug line.
 async function resumePending($: $, seat: string, now: number): Promise<string | undefined> {
   let text: string
+  const file = `${config.roomRoot}/state/${seat}.resume-pending`
   try {
-    text = await $.fs.read(`${config.roomRoot}/state/${seat}.resume-pending`)
+    if ((await $.fs.stat(file)).size > RESUME_READ_CAP) return undefined
+    text = await $.fs.read(file)
   } catch {
     return undefined
   }
