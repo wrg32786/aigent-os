@@ -52,11 +52,15 @@ type World = {
   isScriptMissing?: boolean
   isTimerRefused?: boolean
   root?: string
+  now?: number
+  // Raw text of room/state/main.resume-pending; absent means no file.
+  resume?: string
+  logs?: { text: string; to: string }[]
 }
 
 function fleet(on: On, world: World = {}) {
   // A refused timer needs a hand-rolled clock: mock.clock owns clock.every.
-  let now = 1_000
+  let now = world.now ?? 1_000
   const clock = world.isTimerRefused ? { advance: async (ms: number) => void (now += ms) } : mock.clock(on, { now })
   if (world.isTimerRefused) {
     on('clock.now', () => ({ value: now }))
@@ -82,6 +86,9 @@ function fleet(on: On, world: World = {}) {
     if (norm(e.path) === EOD) {
       return { value: JSON.stringify({ needs_you: [{ title: 'Approve the draft' }, { title: 'Clear a pane' }] }) }
     }
+    if (norm(e.path) === `${ROOM}/state/main.resume-pending`) {
+      return world.resume === undefined ? { deny: 'ENOENT' } : { value: world.resume }
+    }
     const log = LOGS[norm(e.path)]
     return log === undefined ? { deny: 'ENOENT' } : { value: log }
   })
@@ -92,6 +99,9 @@ function fleet(on: On, world: World = {}) {
     expect(e.init?.env).toEqual({ JOB_RESULTS_ROOT: ROOT })
     const rows = [{ id: 'r1', job: 'triage', summary: 'secret free text', produced_at: '2026-10-07T15:00:00Z' }]
     return ran(0, JSON.stringify(rows))
+  })
+  on('ui.log', ($, e) => {
+    world.logs?.push({ text: e.text, to: e.to })
   })
   return clock
 }
@@ -213,4 +223,94 @@ test('a refused timer leaves the snapshot to age into (stale)', CONFIGURED, asyn
   await clock.advance(4 * 60_000)
   const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
   expect((await band.find({ type: 'Text', text: /main/ }))?.text).toMatch(/ \(stale\)$/)
+})
+
+// Resume-pending: room/state/<seat>.resume-pending, written by the supervisor.
+const NOW = Date.parse('2026-11-04T05:44:19.056Z')
+const pending = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    v: 1,
+    state: 'waiting',
+    since: '2026-11-04T03:44:19.056Z',
+    capsule: '2026-11-03-land-everything-davinci',
+    detail: 'mod ledger deferred:composer-busy',
+    pid: 12540,
+    ...over,
+  })
+
+// The module has no Node, so a host that exposes process.kill is faked here.
+// ESRCH = gone, EPERM = alive but not ours, anything else returns = alive.
+function fakeKill(dead: number[] = []) {
+  const g = globalThis as { process?: unknown }
+  g.process = {
+    kill: (pid: number) => {
+      if (dead.includes(pid)) throw Object.assign(new Error('x'), { code: 'ESRCH' })
+      if (pid === 77) throw Object.assign(new Error('x'), { code: 'EPERM' })
+      return true
+    },
+  }
+}
+
+async function bandText($: Parameters<Parameters<typeof test>[2]>[0]) {
+  await $.command.run({ command: 'held', ...RUN }) // a refresh fills the snapshot the band draws
+  const band = await $.ui.mount({ plugin: 'fleet-band', surface: 'terminal', ...BAND })
+  const text = (await band.find({ type: 'Text', text: /main/ }))?.text ?? ''
+  await band.unmount()
+  return text
+}
+
+const RESUME_CASES: [string, Record<string, unknown>, string][] = [
+  ['waiting', {}, 'resume: waiting (deferred:composer-busy, 2h)'],
+  ['waiting door', { detail: 'door: held by lock', since: '2026-11-04T05:43:00.000Z' }, 'resume: waiting (held by lock, 1m)'],
+  ['submitted', { state: 'submitted', detail: 'mod ledger submitted', since: '2026-11-04T05:42:00.000Z' }, 'resume: submitted (2m)'],
+  ['null capsule', { capsule: null }, 'resume: waiting (deferred:composer-busy, 2h)'],
+  ['failed', { state: 'failed', detail: 'refused by the mod (error:submit-failed)' }, 'resume: FAILED'],
+]
+
+for (const [name, over, want] of RESUME_CASES) {
+  test(`resume-pending ${name} renders ${want}`, { options: CONFIGURED.options }, async ($, on) => {
+    fakeKill()
+    fleet(on, { now: NOW, resume: pending(over) })
+    expect(await bandText($)).toContain(`main · ctx 42% · ${want} · room 3 unread`)
+  })
+}
+
+test('resume-pending with a dead pid renders stale, EPERM counts as alive', CONFIGURED, async ($, on) => {
+  fakeKill([12540])
+  fleet(on, { now: NOW, resume: pending() })
+  expect(await bandText($)).toContain('main · ctx 42% · resume: stale · room 3 unread')
+  fakeKill()
+  ;(globalThis as { process?: { kill: (p: number) => void } }).process!.kill = () => {
+    throw Object.assign(new Error('x'), { code: 'EPERM' })
+  }
+  await $.command.run({ command: 'held', ...RUN })
+  expect(await bandText($)).toContain('resume: waiting (')
+})
+
+test('resume-pending absent shows nothing', CONFIGURED, async ($, on) => {
+  fakeKill()
+  fleet(on, { now: NOW })
+  expect(await bandText($)).not.toContain('resume')
+})
+
+test('resume-pending v other than 1 shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
+  fakeKill()
+  const logs: { text: string; to: string }[] = []
+  fleet(on, { now: NOW, resume: pending({ v: 2 }), logs })
+  expect(await bandText($)).not.toContain('resume')
+  expect(logs.filter(one => one.to === 'debug' && /resume-pending/.test(one.text))).toHaveLength(1)
+})
+
+test('resume-pending malformed shows nothing and logs one debug line', CONFIGURED, async ($, on) => {
+  fakeKill()
+  const logs: { text: string; to: string }[] = []
+  fleet(on, { now: NOW, resume: '{not json', logs })
+  expect(await bandText($)).not.toContain('resume')
+  expect(logs.filter(one => one.to === 'debug' && /resume-pending/.test(one.text))).toHaveLength(1)
+})
+
+test('resume-pending is never read when roomRoot is unset', async ($, on) => {
+  fakeKill()
+  fleet(on, { now: NOW, resume: pending() })
+  expect(await bandText($)).toBe('main · ctx 42%')
 })
