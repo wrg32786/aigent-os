@@ -152,10 +152,71 @@ async function heldSeat($: $, seat: string): Promise<FleetBandHeld> {
   }
 }
 
+const RESUME_STATES = ['waiting', 'submitted', 'failed']
+const RESUME_DETAIL_CAP = 300
+// Shown detail: 39 chars plus an ellipsis, so the field survives a 100 column fit.
+const RESUME_DETAIL_SHOWN = 40
+// A real file is under 1 KiB (detail is capped at 300); skip anything bigger.
+const RESUME_READ_CAP = 4096
+const STALE_RESUME_MS = 60 * 60_000
+
+const ageText = (ms: number) => {
+  const m = Math.max(0, Math.floor(ms / 60_000))
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
+}
+
+// The line for one parsed resume-pending row (supervisor contract v1), or
+// undefined when the row is not v1. `pid` is in the file but unused here: the
+// mod sandbox has no `process`, so stale is an age rule instead (waiting or
+// submitted older than STALE_RESUME_MS). failed always shows.
+export function resumeLine(row: any, now: number): string | undefined {
+  if (row?.v !== 1 || !RESUME_STATES.includes(row.state)) return undefined
+  // A row with no usable timestamp is not trusted, whatever its state.
+  if (typeof row.since !== 'string' || !Number.isFinite(Date.parse(row.since))) return undefined
+  if (row.state === 'failed') return 'resume: FAILED'
+  const ms = now - Date.parse(row.since)
+  const age = ageText(ms)
+  if (ms > STALE_RESUME_MS) return `resume: stale (${age})`
+  if (row.state === 'submitted') return `resume: submitted (${age})`
+  let detail = String(row.detail ?? '').slice(0, RESUME_DETAIL_CAP).replace(/^(mod ledger |door: )/, '')
+  if (detail.length > RESUME_DETAIL_SHOWN) detail = `${detail.slice(0, RESUME_DETAIL_SHOWN - 1)}…`
+  return `resume: waiting (${detail}, ${age})`
+}
+
+// room/state/<seat>.resume-pending. Absent or unreadable: nothing on the band;
+// only a file that is there but wrong logs one debug line.
+async function resumePending($: $, seat: string, now: number): Promise<string | undefined> {
+  let text: string
+  const file = `${config.roomRoot}/state/${seat}.resume-pending`
+  try {
+    if ((await $.fs.stat(file)).size > RESUME_READ_CAP) return undefined
+    text = await $.fs.read(file)
+  } catch {
+    return undefined
+  }
+  let line: string | undefined
+  let why = 'not v1 or unknown state'
+  try {
+    line = resumeLine(JSON.parse(text), now)
+  } catch (error) {
+    why = `malformed (${(error as Error).message})`
+  }
+  if (line === undefined) {
+    try {
+      await $.ui.log(`fleet-band: resume-pending ignored: ${why}`, { to: 'debug' })
+    } catch {}
+  }
+  return line
+}
+
 async function collect($: $): Promise<FleetBandSnapshot> {
   const seat = await seatName($)
   const s: FleetBandSnapshot = { at: await $.clock.now(), seat, ctxPercent: await ctxPercent($) }
-  if (config.roomRoot) s.roomUnread = await roomUnread($, seat)
+  if (config.roomRoot) {
+    s.roomUnread = await roomUnread($, seat)
+    const resume = await resumePending($, seat, s.at)
+    if (resume) s.resume = resume
+  }
   if (await hasJobScript($)) s.pending = await pendingResults($)
   if (config.eodPath) s.needsYou = await needsYou($)
   if (config.roomRoot && config.watchedSeats.length > 0) {
@@ -199,6 +260,7 @@ const shown = (n: number | null | undefined) => (n === null || n === undefined ?
 // right until it fits.
 export function bandFields(s: FleetBandSnapshot): string[] {
   const fields = [s.seat, `ctx ${s.ctxPercent === null ? '?' : `${s.ctxPercent}%`}`]
+  if (s.resume) fields.push(s.resume)
   if ('roomUnread' in s) fields.push(`room ${shown(s.roomUnread)} unread`)
   if ('pending' in s) fields.push(`results ${shown(s.pending?.length)} pending`)
   if ('needsYou' in s) fields.push(`needs-you ${shown(s.needsYou?.length)}`)
