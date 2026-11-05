@@ -250,10 +250,14 @@ async function bandText($: Parameters<Parameters<typeof test>[2]>[0]) {
 }
 
 const RESUME_CASES: [string, Record<string, unknown>, string][] = [
-  ['waiting', {}, 'resume: waiting (deferred:composer-busy, 2h)'],
+  ['waiting', { since: '2026-11-04T05:14:19.056Z' }, 'resume: waiting (deferred:composer-busy, 30m)'],
+  ['waiting at 59m', { since: '2026-11-04T04:45:19.056Z' }, 'resume: waiting (deferred:composer-busy, 59m)'],
+  ['waiting past 60m', {}, 'resume: stale (2h)'],
+  ['submitted past 60m', { state: 'submitted', since: '2026-11-04T03:44:19.056Z' }, 'resume: stale (2h)'],
+  ['failed however old', { state: 'failed', pid: 1 }, 'resume: FAILED'],
   ['waiting door', { detail: 'door: held by lock', since: '2026-11-04T05:43:00.000Z' }, 'resume: waiting (held by lock, 1m)'],
   ['submitted', { state: 'submitted', detail: 'mod ledger submitted', since: '2026-11-04T05:42:00.000Z' }, 'resume: submitted (2m)'],
-  ['null capsule', { capsule: null }, 'resume: waiting (deferred:composer-busy, 2h)'],
+  ['null capsule', { capsule: null, since: '2026-11-04T05:14:19.056Z' }, 'resume: waiting (deferred:composer-busy, 30m)'],
   ['failed', { state: 'failed', detail: 'refused by the mod (error:submit-failed)' }, 'resume: FAILED'],
 ]
 
@@ -264,17 +268,18 @@ for (const [name, over, want] of RESUME_CASES) {
   })
 }
 
-// The mod sandbox has no process.kill, so liveness is driven through resumeLine.
-test('resume-pending with a dead pid renders stale; a live or unprobed pid does not', () => {
-  const row = JSON.parse(pending())
-  expect(resumeLine(row, NOW, () => false)).toBe('resume: stale')
-  expect(resumeLine({ ...row, state: 'failed' }, NOW, () => false)).toBe('resume: stale')
-  expect(resumeLine(row, NOW, pid => pid === 12540)).toBe('resume: waiting (deferred:composer-busy, 2h)')
+// The mod sandbox has no process, so stale is an age rule and pid is not read.
+test('resume-pending stale is age only: 61m is stale, 60m is not, failed never', () => {
+  const at = (min: number, over = {}) => JSON.parse(pending({ since: new Date(NOW - min * 60_000).toISOString(), ...over }))
+  expect(resumeLine(at(60), NOW)).toBe('resume: waiting (deferred:composer-busy, 1h)')
+  expect(resumeLine(at(61), NOW)).toBe('resume: stale (1h)')
+  expect(resumeLine(at(61, { pid: 1 }), NOW)).toBe('resume: stale (1h)')
+  expect(resumeLine(at(3000, { state: 'failed' }), NOW)).toBe('resume: FAILED')
 })
 
 test('resume-pending detail is capped at 300 chars', () => {
-  const line = resumeLine(JSON.parse(pending({ detail: 'x'.repeat(500) })), NOW, () => true)
-  expect(line).toBe(`resume: waiting (${'x'.repeat(300)}, 2h)`)
+  const since = new Date(NOW - 5 * 60_000).toISOString()
+  expect(resumeLine(JSON.parse(pending({ detail: 'x'.repeat(500), since })), NOW)).toBe(`resume: waiting (${'x'.repeat(300)}, 5m)`)
 })
 
 test('resume-pending absent shows nothing', CONFIGURED, async ($, on) => {
