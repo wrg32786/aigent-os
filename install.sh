@@ -280,6 +280,7 @@ printf '  Launch: %s\n' "$([[ "$NO_LAUNCHER" -eq 1 ]] && printf 'files only' || 
 OPERATOR_OWNED_REL=".aigent/operator-owned.json"
 OPERATOR_OWNED_FILE="$TARGET/$OPERATOR_OWNED_REL"
 OPERATOR_OWNED_KEEP=$'\n'
+STALE_DOCS_COUNT=0   # issue #147: installed docs that differ from this source (copy_missing_file)
 
 read_operator_owned_declaration() {
   python3 - \
@@ -613,6 +614,14 @@ copy_missing_file() {
     printf '  [operator-owned] keep %s\n' "${dest_file#"$TARGET"/}"
     return 0
   fi
+  # Issue #147 (docs half): docs/ is never overwritten, since an operator may have edited
+  # it, but a doc that differs from this source is named rather than kept in silence.
+  # The summary prints once, after the copy (STALE_DOCS_COUNT).
+  if [[ "$sensitive" -eq 0 && "$dest_file" == "$TARGET/docs/"* ]] && ! cmp -s "$source_file" "$dest_file" 2>/dev/null; then
+    printf '  [stale-doc] %s differs from this source; kept as installed\n' "${dest_file#"$TARGET"/}"
+    STALE_DOCS_COUNT=$((STALE_DOCS_COUNT + 1))
+    return 0
+  fi
   [[ "$sensitive" -eq 1 && "$TRUST_EXISTING" -eq 0 ]] || return 0
   cmp -s "$source_file" "$dest_file" 2>/dev/null && return 0
 
@@ -803,7 +812,13 @@ if [[ "$MODE" == "copy" ]]; then
           copy_missing_tree "$SRC/$dir" "$TARGET/$MEMORY_REL" 0
         fi
         ;;
-      docs) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "$DOCS_SITE_EXCLUDES" ;;
+      docs)
+        copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "$DOCS_SITE_EXCLUDES"
+        if [[ "$STALE_DOCS_COUNT" -gt 0 ]]; then
+          printf '  [info] %d installed doc(s) differ from this source and were kept. To take the shipped copy, delete the doc and re-run the installer, or compare against %s/docs/.\n' \
+            "$STALE_DOCS_COUNT" "$SRC"
+        fi
+        ;;
       *)             copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 ;;
     esac
     printf '  [ok] %s/\n' "$dir"
