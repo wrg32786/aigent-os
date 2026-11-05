@@ -57,6 +57,7 @@ type World = {
   now?: number
   // Raw text of room/state/main.resume-pending; absent means no file.
   resume?: string
+  resumeSize?: number
   logs?: { text: string; to: string }[]
 }
 
@@ -81,6 +82,9 @@ function fleet(on: On, world: World = {}) {
   })
   on('fs.stat', ($, e) => {
     if (world.isScriptMissing && norm(e.path).endsWith('job-results.mjs')) return { deny: 'ENOENT' }
+    if (norm(e.path).endsWith('.resume-pending') && world.resumeSize) {
+      return { value: { kind: 'file' as const, size: world.resumeSize, mtimeMs: 1, isLink: false } }
+    }
     const size = norm(e.path).includes('gamma') ? 900 * MIB : 1_000
     return { value: { kind: 'file' as const, size, mtimeMs: 1, isLink: false } }
   })
@@ -235,7 +239,7 @@ const pending = (over: Record<string, unknown> = {}) =>
     v: 1,
     state: 'waiting',
     since: '2026-11-04T03:44:19.056Z',
-    capsule: '2026-11-03-land-everything-davinci',
+    capsule: '2026-11-03-example-capsule',
     detail: 'mod ledger deferred:composer-busy',
     pid: 12540,
     ...over,
@@ -304,4 +308,27 @@ test('resume-pending malformed shows nothing and logs one debug line', CONFIGURE
 test('resume-pending is never read when roomRoot is unset', async ($, on) => {
   fleet(on, { now: NOW, resume: pending() })
   expect(await bandText($)).toBe('main · ctx 42%')
+})
+
+test('resume-pending with a bad since shows nothing', () => {
+  const row = JSON.parse(pending())
+  for (const since of [undefined, null, 5, '', 'not a date']) {
+    expect(resumeLine({ ...row, since }, NOW)).toBeUndefined()
+  }
+  expect(resumeLine({ ...row, state: 'failed', since: null }, NOW)).toBeUndefined()
+})
+
+test('resume-pending over 4 KiB is skipped unread', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }), resumeSize: 4097 })
+  expect(await bandText($)).not.toContain('resume')
+})
+
+test('resume-pending at the 4 KiB limit is still read', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }), resumeSize: 4096 })
+  expect(await bandText($)).toContain('resume: waiting (')
+})
+
+test('resume survives the 100 column fit with a normal detail', CONFIGURED, async ($, on) => {
+  fleet(on, { now: NOW, resume: pending({ since: new Date(NOW - 60_000).toISOString() }) })
+  expect(await bandText($)).toContain('resume: waiting (deferred:composer-busy, 1m) · room 3 unread')
 })
