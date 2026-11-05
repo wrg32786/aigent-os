@@ -88,7 +88,10 @@ jobs:
 
           for file in "${files[@]}"; do
             echo "::group::$file"
-            out="$(node "$file" 2>&1)" || {
+            # The skip guard below parses TAP ("# SKIP <Platform> ... only"). Pin the reporter: the
+            # runner image's newer Node defaults to the spec reporter, which prints skips without
+            # "SKIP", and every PR failed this step from 2026-11-05.
+            out="$(node --test-reporter=tap "$file" 2>&1)" || {
               printf '%s\n' "$out"
               echo '::endgroup::'
               exit 1
