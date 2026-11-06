@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Configure or reconfigure aigent-OS identity, priorities, authority, projects, people, and decision logic
+description: "Configure aigent-OS identity, priorities, authority, projects, people, and decision logic. Use when running setup, reconfiguring settings, or changing authority levels."
 trigger: /setup
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: Trust Decay
-description: Capture a confident agent claim (Phase 1) or resolve one as right/wrong (Phase 2) in vault/memory/TRUST_DECAY.md. Builds the longitudinal record of agent calibration over time. Pairs with /honesty-check (which should reduce Phase 1 frequency) and /diagnose (which surfaces causes that often reveal Phase 2 events).
+description: "Log confident agent claims and resolve them as right or wrong in TRUST_DECAY.md. Use when capturing confidence, tracking wrong claims, or a supposedly fixed bug returns."
 ---
 
 # Trust Decay

@@ -1,7 +1,7 @@
 ---
 name: compact-note
 agent: mnemosyne
-description: Mnemosyne's note compaction skill. Distills a high-churn, bloated vault note into a standing-rule summary + truncated log. Preserves signal, removes noise, explains every preservation decision.
+description: "Compact vault notes into standing rules and a shortened log. Use when a note is bloated, a log needs trimming, or memory needs distilling."
 allowed-tools: Read, Write, Edit, Grep, Glob
 user-invocable: true
 triggers:

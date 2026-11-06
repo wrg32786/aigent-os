@@ -1,6 +1,6 @@
 ---
 name: First 10 Moves
-description: The exact operational recon sequence for an unfamiliar codebase or unfamiliar area. Replaces "ask the human to clarify" with "read the code first." Most clarification questions are answered by 5 minutes in the relevant file - this skill enforces reading before asking.
+description: "Read and explore unfamiliar code before asking questions. Use when new to a repo, orienting in an unfamiliar codebase, or finding where to start."
 ---
 
 # First 10 Moves

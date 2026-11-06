@@ -1,6 +1,6 @@
 ---
 name: semantic-search
-description: Search vault notes by meaning using local embeddings
+description: "Search vault notes by meaning with local embeddings. Use when finding similar notes, searching notes semantically, or recalling what you wrote about."
 trigger: /search
 ---
 

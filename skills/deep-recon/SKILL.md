@@ -1,6 +1,6 @@
 ---
 name: deep-recon
-description: Run extended multi-agent reconnaissance sessions. Use when asked to brainstorm deeply, explore ideas from multiple angles, or generate a structured recon document.
+description: "Run extended multi-agent reconnaissance and produce a structured recon document. Use when brainstorming deeply or exploring ideas from multiple angles."
 allowed-tools: Read, Grep, Glob, Write, Edit, WebSearch, WebFetch, Task, AskUserQuestion
 user-invocable: true
 ---

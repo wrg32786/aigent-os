@@ -1,7 +1,7 @@
 ---
 name: agent-fitness
 agent: none
-description: Track and surface sub-agent dispatch calibration ratios. Extract from JSONL transcript or read existing ledger. Per-agent clean/blocked/errored/partial trends.
+description: "Track sub-agent dispatch calibration from JSONL or ledgers. Use when checking agent fitness, clean/blocked/error trends, or which agents work."
 allowed-tools: Bash, Read
 user-invocable: true
 triggers:

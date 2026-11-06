@@ -1,3 +1,8 @@
+---
+name: learn-from-failure
+description: "Convert failures into reusable artifacts and check repetition. Use when analyzing a failure mode or a recurring failure."
+---
+
 # /learn-from-failure — Convert failure to reusable artifact
 
 When a failure occurs, classify it, check for repetition, and produce a durable artifact that prevents recurrence.

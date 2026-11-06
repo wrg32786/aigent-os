@@ -1,7 +1,7 @@
 ---
 name: context-hygiene
 agent: none
-description: Nightly context trim for ACTIVE_PRIORITIES and the dated SESSION_LOG schema. Archives before removal, uses content-hash compare-and-swap, and refuses unknown shapes.
+description: "Archive and trim ACTIVE_PRIORITIES and dated SESSION_LOG entries. Use when cleaning active priorities, trimming session logs, or running context hygiene."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 status: PRODUCTION - bounded archive writer

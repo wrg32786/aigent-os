@@ -1,7 +1,7 @@
 ---
 name: sweep-heat
 agent: hestia
-description: Hestia's HEAT_INDEX dormant flip skill. Reads HEAT_INDEX.md, finds the cold bottom-20 notes, and sets status:dormant in their frontmatter. Edit-only. Returns counts.
+description: "Mark cold bottom-20 HEAT_INDEX.md notes dormant and report counts. Use when sweeping cold notes, checking the heat index, or flipping dormant status."
 allowed-tools: Read, Edit, Grep, Glob
 user-invocable: true
 triggers:

@@ -1,7 +1,7 @@
 ---
 name: nightly
 agent: none
-description: Canonical seven-leg nightly close-parity protocol. Eleven independently evidenced checkpoints cover synthesis, reconciliation, context hygiene, sweeps, heat, digest, runtime health, cognitive state, ledger capture/review, and vault sync.
+description: "Run canonical nightly close-parity maintenance across synthesis, hygiene, sweeps, health, ledgers, and vault sync. Use when running the full nightly protocol."
 allowed-tools: Read, Write, Bash
 user-invocable: false
 status: PRODUCTION - invoke through /nightly-close-parity

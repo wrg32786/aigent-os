@@ -1,7 +1,7 @@
 ---
 name: cognitive-update
 agent: none
-description: Conservative close-parity updates to GOAL_STACK, BELIEF_STATE, SELF_MODEL, and PROCEDURES. Writes only explicit or mechanically evidenced deltas; ambiguity means no write.
+description: "Update GOAL_STACK, BELIEF_STATE, SELF_MODEL, and PROCEDURES from explicit evidence. Use when updating cognitive state or runtime state."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 status: PRODUCTION - conservative and source-referenced

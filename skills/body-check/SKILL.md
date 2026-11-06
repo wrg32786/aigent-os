@@ -1,7 +1,7 @@
 ---
 name: body-check
 agent: none
-description: Compose the AIgent's body state by reading existing signals. Lazy compute. Never polled. Reports the five pressures + recommended reflex.
+description: "Report body state, five pressures, and a recommended reflex from existing signals. Use when checking context pressure, memory pressure, or vital signs."
 allowed-tools: Read, Bash
 user-invocable: true
 triggers:

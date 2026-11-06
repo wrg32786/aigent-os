@@ -1,6 +1,6 @@
 ---
 name: decide
-description: Run a decision through the 12-lens framework
+description: "Apply a 12-lens decision framework. Use when weighing options, making a call, or asking for help deciding."
 trigger: /decide
 ---
 

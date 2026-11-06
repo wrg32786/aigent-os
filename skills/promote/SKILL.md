@@ -1,6 +1,6 @@
 ---
 name: Promote
-description: Take a slice of the current conversation and promote it to a durable vault artifact — concept note, project update, person profile, or doctrine entry. Pairs with /close. /close writes the daily note (transient outcome record); /promote elevates specific insights to permanent vault content the framework can refer back to.
+description: "Promote conversation insights into durable vault notes, project updates, profiles, or doctrine. Use when saving an insight permanently or turning chat into a note."
 ---
 
 # Promote

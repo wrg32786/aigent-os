@@ -1,7 +1,7 @@
 ---
 name: ship-adapter
 agent: lyra
-description: Lyra's adapter-shipping skill. Ports a schema, interface, or API contract from one shape to another — DB adapters, API client wrappers, data transformers. Bounded scope, honesty ledger on delivery.
+description: "Port schemas, interfaces, and API contracts into adapters. Use when writing a DB adapter, API client wrapper, interface adapter, or data transformer."
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 user-invocable: true
 triggers:

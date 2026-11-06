@@ -1,6 +1,6 @@
 ---
 name: operator-setup
-description: The AIgent first-run operator-business interview. Learn the operator's business in three plain questions, write the first memory, and play back a briefing that reads personal, not templated. This is the "it remembers me" moment. A distinct skill that LAYERS ON TOP of the base /setup (which is left intact), it does not replace it. The first-run flow (/start) calls this, not the generic /setup.
+description: "Interview the AIgent operator about their business, save initial memory, and give a briefing. Use when onboarding, setting up a business, or running the first interview."
 trigger: /operator-setup
 ---
 

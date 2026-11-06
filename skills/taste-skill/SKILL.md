@@ -1,6 +1,6 @@
 ---
 name: taste-skill
-description: Senior UI/UX Engineer. Architect digital interfaces overriding default LLM biases. Enforces metric-based rules, strict component architecture, CSS hardware acceleration, and balanced design engineering.
+description: "Engineer UI/UX with component rules, design metrics, and CSS hardware acceleration. Use when improving design quality, frontend architecture, or interface performance."
 ---
 
 # High-Agency Frontend Skill

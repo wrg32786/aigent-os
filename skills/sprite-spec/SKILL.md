@@ -1,7 +1,7 @@
 ---
 name: sprite-spec
 agent: iris
-description: Iris's sprite design specification skill. Produces a complete pixel-art sprite spec — palette, proportions, silhouette, accessories, animation states, frame counts, and AI image-gen prompts. Returns honesty ledger.
+description: "Specify pixel-art sprites: palette, proportions, animation states, frame counts, and AI image prompts. Use when designing a character sprite or sprite sheet spec."
 allowed-tools: Read, Write, Edit, WebFetch, Grep, Glob, Agent
 user-invocable: true
 triggers:

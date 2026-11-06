@@ -1,6 +1,6 @@
 ---
 name: Timeline Calibration
-description: SELF-CORRECT timeline estimates. About to quote hours / days / weeks of work? Stop. Divide by 30-60x. AI execution speed is not what training data anchors expected. Estimate in tool calls and session cycles, not human-developer hours.
+description: "Calibrate AI work estimates in tool calls and session cycles. Use when estimating timelines, hours, days, or how long a coding task will take."
 ---
 
 # Timeline Calibration

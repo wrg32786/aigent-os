@@ -1,7 +1,7 @@
 ---
 name: nightly-close-parity
 agent: none
-description: Unique project-local fire verb for the seven-leg nightly close-parity pass. Proves and loads the canonical top-level skill.
+description: "Load the canonical seven-leg nightly close-parity pass. Use when invoking project-local nightly maintenance through nightly-close-parity."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 disable-model-invocation: true

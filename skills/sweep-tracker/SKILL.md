@@ -1,7 +1,7 @@
 ---
 name: sweep-tracker
 agent: hestia
-description: Hestia's delegation tracker sweep skill. Reads DELEGATION_TRACKER.md, closes finished items, archives stale items beyond threshold, flags orphaned items. Returns counts. Edit-only on status fields.
+description: "Update DELEGATION_TRACKER.md: close finished items, archive stale ones, flag orphans. Use when sweeping delegation status or cleaning the tracker."
 allowed-tools: Read, Edit, Grep, Glob
 user-invocable: true
 triggers:

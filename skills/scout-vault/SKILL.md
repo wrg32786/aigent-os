@@ -1,7 +1,7 @@
 ---
 name: scout-vault
 agent: echo
-description: Echo's vault traversal skill. Read-only graph walk — find all notes related to a topic, trace wikilink chains, inventory a directory, or spelunk a codebase for definitions and call chains.
+description: "Trace vault wikilinks, inventory notes, or explore code definitions and call chains. Use when finding related notes, references, or scouting a vault. Read-only."
 allowed-tools: Read, Grep, Glob
 user-invocable: true
 triggers:

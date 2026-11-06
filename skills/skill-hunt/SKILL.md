@@ -1,3 +1,8 @@
+---
+name: skill-hunt
+description: "Search external sources and rank skills for missing capabilities. Use when hunting for a skill to fill a capability gap."
+---
+
 # /skill-hunt — Search externally for missing capabilities
 
 When `/skill-recall` finds no match, this skill searches GitHub, skill marketplaces, and awesome-lists for a portable Claude Code skill that fills the gap.

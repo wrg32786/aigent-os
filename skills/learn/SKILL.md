@@ -1,6 +1,6 @@
 ---
 name: Learn
-description: When the principal is in learning mode (reading a repo, watching a talk, processing a new tool), /learn takes a brief input and produces a structured note in vault/concepts/learning/ with category, modern-stack location, relevance verdict, and reconsideration triggers. Captures the value of every learning sweep without requiring it to immediately translate to building.
+description: "Capture structured learning notes in the vault with relevance and reconsideration triggers. Use when reading a repo, watching a talk, or learning a tool."
 ---
 
 # Learn

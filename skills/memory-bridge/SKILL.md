@@ -1,6 +1,6 @@
 ---
 name: memory-bridge
-description: Explicitly retain, recall, or reflect with the optional source-governed Hindsight and Jev bridge.
+description: "Retain, recall, or reflect through the optional Hindsight and Jev memory bridge. Use when explicitly requesting these memory actions through that bridge."
 disable-model-invocation: true
 ---
 

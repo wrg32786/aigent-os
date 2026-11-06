@@ -1,6 +1,6 @@
 ---
 name: Self-Review
-description: Spawn a reviewer subagent with 4-6 specific verification questions before declaring non-trivial code work done. Triggers when changes are >30 LOC, multi-file, hot-path, prompt-affecting, or genuinely uncertain. Bad asks produce bad answers — this skill forces structured verification questions, not "is this good?"
+description: "Spawn a reviewer with specific verification questions. Use when reviewing code changes over 30 lines, across files, in hot paths or prompts, or with uncertainty."
 ---
 
 # Self-Review

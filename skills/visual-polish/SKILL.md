@@ -1,7 +1,7 @@
 ---
 name: visual-polish
 agent: iris
-description: Iris's UI visual polish review skill. Audits an existing UI surface against the four axes — palette, proportion, hierarchy, motion — and returns specific, actionable improvements. No code. Spec output only.
+description: "Audit UI palette, proportion, hierarchy, and motion; return improvement specs without code. Use when reviewing an existing UI, polishing visuals, or seeking design feedback."
 allowed-tools: Read, Write, Edit, WebFetch, Grep, Glob, Agent
 user-invocable: true
 triggers:

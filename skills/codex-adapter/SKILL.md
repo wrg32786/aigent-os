@@ -1,6 +1,6 @@
 ---
 name: codex-adapter
-description: Route ONE bounded, mechanical task to the Codex CLI as a non-Claude executor, under the same review-before-merge gate as any other agent-produced diff. Use when the user explicitly asks to hand a task to Codex, or names OpenAI Codex / a non-Claude executor for a mechanical change (rename a symbol across files, add a config entry, apply a scripted find/replace). Not for open-ended or strategic work -- that stays with the operating Claude session.
+description: "Route one mechanical task to OpenAI Codex CLI with review before merge. Use when explicitly asked to hand Codex a rename, config edit, or scripted replacement."
 allowed-tools: Read, Bash
 user-invocable: true
 triggers:

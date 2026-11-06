@@ -1,6 +1,6 @@
 ---
 name: Stuck
-description: Walk the 6-rung escalation ladder before declaring stuck or asking the principal. Most "stuck" is actually "haven't tried the next approach." Stopping is the last resort, not the first response.
+description: "Walk a six-rung escalation ladder before declaring stuck. Use when out of ideas, hitting a wall, or unsure what approach to try before asking for help."
 ---
 
 # Stuck

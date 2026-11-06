@@ -1,3 +1,8 @@
+---
+name: pause
+description: "Pause current work with resumable state. Use when pausing a task or stopping work temporarily before returning to it."
+---
+
 # /pause — Pause current work with resumable state
 
 Create a Capsule v2 with `status: paused` capturing full execution state for later resume.
