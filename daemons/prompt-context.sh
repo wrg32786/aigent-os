@@ -13,7 +13,13 @@
 # is a Windows process start (0.1 to 0.7 s each on the measured host); printf %(...)T and read start
 # nothing. tests/test-prompt-context.sh runs the synchronous path with an empty PATH to hold this.
 # Never fails the prompt: every branch exits 0.
-printf '[CLOCK] %(%A %Y-%m-%d %I:%M %p %Z)T\n' -1
+# printf %(...)T is bash 4.2+. macOS ships /bin/bash 3.2, where process starts are cheap, so one
+# date call there is fine (tests/test-prompt-context.sh holds both branches).
+if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2) )); then
+  printf '[CLOCK] %(%A %Y-%m-%d %I:%M %p %Z)T\n' -1
+else
+  printf '[CLOCK] %s\n' "$(date +'%A %Y-%m-%d %I:%M %p %Z')"
+fi
 
 IFS= read -r -d '' INPUT || true
 ROOT="${AIGENT_ROOT:-}"

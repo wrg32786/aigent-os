@@ -24,9 +24,15 @@ printf '[1/%d] prints the clock line only\n' "$TOTAL"
 
 # 2. Built-ins only before the capture: no external command may run on the synchronous path.
 #    A PATH with nothing on it makes any external command fail; the hook must still print the clock.
-OUT="$(printf '{"prompt":"hello"}' | PATH=/nonexistent AIGENT_ROOT="$WORK/none" "$BASH" "$HOOK" 2>&1)"
-[[ "$OUT" == \[CLOCK\]* ]] || fail "the synchronous path needed an external command: $OUT"
-printf '[2/%d] the synchronous path uses bash built-ins only\n' "$TOTAL"
+#    Bash 3.2 (macOS /bin/bash) has no printf %(...)T, so the hook uses one date call there by
+#    design, where process starts are cheap; this scenario applies to bash 4.2+ only.
+if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2) )); then
+  OUT="$(printf '{"prompt":"hello"}' | PATH=/nonexistent AIGENT_ROOT="$WORK/none" "$BASH" "$HOOK" 2>&1)"
+  [[ "$OUT" == \[CLOCK\]* ]] || fail "the synchronous path needed an external command: $OUT"
+  printf '[2/%d] the synchronous path uses bash built-ins only\n' "$TOTAL"
+else
+  printf '[2/%d] skipped on bash %s: no printf %%(...)T, the clock uses one date call\n' "$TOTAL" "$BASH_VERSION"
+fi
 
 # 3. It runs the install's memory capture, detached, with the prompt on stdin.
 FAKE="$WORK/install"

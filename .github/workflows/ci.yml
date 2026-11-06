@@ -152,6 +152,7 @@ jobs:
           bash tests/test-installer-drift.sh
           bash tests/test-installer-operator-owned.sh
           bash tests/test-installer-retired-hooks.sh
+          bash tests/test-prompt-context.sh
           bash tests/test-installer-slow-smoke.sh
           bash tests/test-web-install.sh
 
