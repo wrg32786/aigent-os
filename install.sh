@@ -812,17 +812,17 @@ if [[ "$MODE" == "copy" ]]; then
           copy_missing_tree "$SRC/$dir" "$TARGET/$MEMORY_REL" 0
         fi
         ;;
-      docs)
-        copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "$DOCS_SITE_EXCLUDES"
-        if [[ "$STALE_DOCS_COUNT" -gt 0 ]]; then
-          printf '  [info] %d installed doc(s) differ from this source and were kept. To take the shipped copy, delete the doc and re-run the installer, or compare against %s/docs/.\n' \
-            "$STALE_DOCS_COUNT" "$SRC"
-        fi
-        ;;
+      docs) copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 "$DOCS_SITE_EXCLUDES" ;;
       *)             copy_missing_tree "$SRC/$dir" "$TARGET/$dir" 0 ;;
     esac
     printf '  [ok] %s/\n' "$dir"
   done
+  # Issue #147: one summary for the [stale-doc] lines copy_missing_file printed above. Kept out of
+  # the docs case so that case stays the exact one-line call render-boundary-guard audits.
+  if [[ "$STALE_DOCS_COUNT" -gt 0 ]]; then
+    printf '  [info] %d installed doc(s) differ from this source and were kept. To take the shipped copy, delete the doc and re-run the installer, or compare against %s/docs/.\n' \
+      "$STALE_DOCS_COUNT" "$SRC"
+  fi
   # Git records this front door as 100644; launcher/install.sh makes it
   # executable too. Restore that contract only for a newly copied file.
   if [[ "$launcher_shell_missing" -eq 1 && -f "$launcher_shell" ]] \
