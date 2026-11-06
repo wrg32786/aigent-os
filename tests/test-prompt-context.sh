@@ -39,15 +39,23 @@ FAKE="$WORK/install"
 mkdir -p "$FAKE/daemons" "$FAKE/memory"
 # Deterministic, not timed: the fake capture blocks until the test creates a release file, which
 # it does only AFTER the hook has returned. A hook that waited for its capture would never return,
-# and the 30 s timeout fails it. (A wall-clock bound failed under load: process starts alone took 7 s.)
+# and the 30 s bound fails it. (A wall-clock bound failed under load: process starts alone took 7 s.)
+# The bound is a portable poll, not timeout(1), which macOS does not ship.
 cat > "$FAKE/daemons/memory-capture.sh" <<'EOF'
 #!/bin/bash
 input=$(cat)
 while [ ! -f "$AIGENT_ROOT/memory/release" ]; do sleep 0.2; done
 printf '%s' "$input" > "$AIGENT_ROOT/memory/captured.json"
 EOF
-printf '{"prompt":"remember that the gate is X"}' | AIGENT_ROOT="$FAKE" timeout 30 bash "$HOOK" >/dev/null \
-  || fail "the hook did not return while its capture was still running (it waited for the capture)"
+printf '{"prompt":"remember that the gate is X"}' > "$WORK/prompt.json"
+AIGENT_ROOT="$FAKE" bash "$HOOK" < "$WORK/prompt.json" > /dev/null &
+HOOK_PID=$!
+for _ in $(seq 1 150); do kill -0 "$HOOK_PID" 2>/dev/null || break; sleep 0.2; done
+if kill -0 "$HOOK_PID" 2>/dev/null; then
+  kill "$HOOK_PID" 2>/dev/null; : > "$FAKE/memory/release"
+  fail "the hook did not return while its capture was still running (it waited for the capture)"
+fi
+wait "$HOOK_PID" || fail "the hook exited non-zero"
 [[ -e "$FAKE/memory/captured.json" ]] && fail "the capture finished before release: it did not run detached"
 : > "$FAKE/memory/release"
 for _ in $(seq 1 60); do [[ -s "$FAKE/memory/captured.json" ]] && break; sleep 0.5; done
