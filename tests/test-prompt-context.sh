@@ -31,16 +31,20 @@ printf '[2/%d] the synchronous path uses bash built-ins only\n' "$TOTAL"
 # 3. It runs the install's memory capture, detached, with the prompt on stdin.
 FAKE="$WORK/install"
 mkdir -p "$FAKE/daemons" "$FAKE/memory"
+# Deterministic, not timed: the fake capture blocks until the test creates a release file, which
+# it does only AFTER the hook has returned. A hook that waited for its capture would never return,
+# and the 30 s timeout fails it. (A wall-clock bound failed under load: process starts alone took 7 s.)
 cat > "$FAKE/daemons/memory-capture.sh" <<'EOF'
 #!/bin/bash
-sleep 2
-cat > "$AIGENT_ROOT/memory/captured.json"
+input=$(cat)
+while [ ! -f "$AIGENT_ROOT/memory/release" ]; do sleep 0.2; done
+printf '%s' "$input" > "$AIGENT_ROOT/memory/captured.json"
 EOF
-t0=$(date +%s)
-printf '{"prompt":"remember that the gate is X"}' | AIGENT_ROOT="$FAKE" bash "$HOOK" >/dev/null
-t1=$(date +%s)
-(( t1 - t0 < 2 )) || fail "the hook waited for the capture ($((t1 - t0)) s)"
-for _ in $(seq 1 30); do [[ -s "$FAKE/memory/captured.json" ]] && break; sleep 0.5; done
+printf '{"prompt":"remember that the gate is X"}' | AIGENT_ROOT="$FAKE" timeout 30 bash "$HOOK" >/dev/null \
+  || fail "the hook did not return while its capture was still running (it waited for the capture)"
+[[ -e "$FAKE/memory/captured.json" ]] && fail "the capture finished before release: it did not run detached"
+: > "$FAKE/memory/release"
+for _ in $(seq 1 60); do [[ -s "$FAKE/memory/captured.json" ]] && break; sleep 0.5; done
 grep -q 'remember that the gate is X' "$FAKE/memory/captured.json" || fail "the capture did not receive the prompt"
 printf '[3/%d] memory capture runs detached and receives the prompt\n' "$TOTAL"
 
