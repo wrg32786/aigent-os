@@ -44,7 +44,7 @@ Most AI productivity advice optimizes the wrong layer. People spend hours hand-c
 
 You don't get good at prompts. You get good at building a system that gets better while you sleep.
 
-The Caddy pattern is the canonical example: every skill registers itself with a small index of trigger patterns. A non-blocking hook runs on every prompt and surfaces the matching skill, like a golf caddy handing you the right club. You stop forgetting your own toolbox. You stop falling back to grep when you've written a code-navigation skill. The system gets smarter the more skills you add, and the user effort stays flat.
+Skill matching is the canonical example: every skill states in its description when it should be used, and Claude Code picks the one that fits the prompt. You stop forgetting your own toolbox. You stop falling back to grep when you've written a code-navigation skill. The system gets smarter the more skills you add, and the user effort stays flat.
 
 Compounding > cleverness. Always.
 

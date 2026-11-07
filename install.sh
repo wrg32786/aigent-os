@@ -1267,7 +1267,7 @@ def sweep_retired_hooks(settings, root):
                         print(f"  [merge] retired {command}")
                         continue
                     else:
-                        print(f"  [merge] WARNING kept {command}: it has a retired hook's name but is not this install's copy")
+                        print(f"  [merge] WARNING kept {command}: it has a retired hook's name but is not this install's copy. If it is yours, leave it; if it is an old install's, remove this hook from settings.json by hand")
                 remaining.append(hook)
             if remaining:
                 kept.append({**group, "hooks": remaining})
@@ -1473,7 +1473,7 @@ const sweepRetiredHooks = (settings, root) => {
             console.log(`  [merge] retired ${command}`);
             continue;
           } else {
-            console.log(`  [merge] WARNING kept ${command}: it has a retired hook's name but is not this install's copy`);
+            console.log(`  [merge] WARNING kept ${command}: it has a retired hook's name but is not this install's copy. If it is yours, leave it; if it is an old install's, remove this hook from settings.json by hand`);
           }
         }
         remaining.push(hook);

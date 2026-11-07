@@ -22,8 +22,11 @@ cp "$ROOT/scripts/fleet-baseline-manifest.json" "$FIXTURE/scripts/"
 printf '# Identity\n' > "$FIXTURE/system/00_identity.md"
 printf '# Claude source\n' > "$FIXTURE/CLAUDE.md"
 
+# The mergers resolve the settings path to a native path, so on Git Bash the fixture must use one
+# too: a /tmp/... spelling is not this install's path, and the hook would rightly be kept.
 TARGET="$WORK/target"
 mkdir -p "$TARGET/.claude"
+if command -v cygpath >/dev/null 2>&1; then TARGET="$(cygpath -m "$TARGET")"; fi
 # An install from before the retirement: both Caddy hooks wired, plus the operator's own hook.
 cat > "$TARGET/.claude/settings.json" <<JSON
 {
@@ -102,6 +105,7 @@ check_merger() {
   local name="$1" merged="$2" output="$3"
   grep -q '/mine/daemons/caddy.sh' "$merged" || fail "$name retired an operator's own script of the same name"
   grep -q 'not this install' <<<"$output" || fail "$name kept the operator's script without saying so"
+  grep -q 'by hand' <<<"$output" || fail "$name did not say what to do about a kept hook"
   grep -q 'chained-work' "$merged" || fail "$name dropped a compound command and its chained work"
   grep -q 'chained-work-2' "$merged" || fail "$name dropped a compound command that ends in the retired script"
   grep -q 'compound command' <<<"$output" || fail "$name kept the compound command without a warning"

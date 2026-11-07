@@ -33,14 +33,29 @@ NOTICES="$ROOT/.aigent/capture-notices"
 if [[ -s $NOTICES ]]; then
   # A notice the capture appends between this read and the truncate is lost. Each one repeats on
   # the next capture while its cause stands, so that costs one prompt's delay at most.
-  IFS= read -r -d '' PENDING <"$NOTICES" || true
-  printf '%s' "${PENDING:0:2000}"
+  # Inert, as daemons/render_boundary.py renders persisted text, in built-ins: each line loses its
+  # control and line-separator characters and is cut to 500 characters, at most 5 lines.
+  SHOWN=0
+  while IFS= read -r LINE && (( SHOWN < 5 )); do
+    LINE="${LINE//[[:cntrl:]]/ }"
+    LINE="${LINE//$'\xe2\x80\xa8'/ }"
+    LINE="${LINE//$'\xe2\x80\xa9'/ }"
+    printf '%s\n' "${LINE:0:500}"
+    SHOWN=$((SHOWN + 1))
+  done <"$NOTICES"
   : >"$NOTICES"
 fi
 CAPTURE="$ROOT/daemons/memory-capture.sh"
 [[ -f $CAPTURE ]] || exit 0
 [[ -d $ROOT/.aigent ]] || mkdir -p "$ROOT/.aigent" 2>/dev/null   # once per install, so one process start is fine
-# Detached: the prompt on stdin; stdout and stderr to files so the hook returns at once.
-AIGENT_ROOT="$ROOT" bash "$CAPTURE" <<<"$INPUT" >>"$NOTICES" 2>>"$ROOT/.aigent/capture-errors.log" &
+# Detached: the prompt on stdin; stdout and stderr to files so the hook returns at once. The group's
+# own streams go nowhere so it holds nothing of the hook's open. The error log stays under 1 MiB.
+ERRORS="$ROOT/.aigent/capture-errors.log"
+{
+  AIGENT_ROOT="$ROOT" bash "$CAPTURE" <<<"$INPUT" >>"$NOTICES" 2>>"$ERRORS"
+  if [[ -s $ERRORS ]] && (( $(wc -c <"$ERRORS") > 1048576 )); then
+    tail -c 524288 "$ERRORS" >"$ERRORS.tmp" && mv -f "$ERRORS.tmp" "$ERRORS"
+  fi
+} </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null
 exit 0

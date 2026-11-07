@@ -14,10 +14,10 @@ created: 2026-05-08
 
 S39 shipped the infrastructure layer that S40 builds on top of:
 
-- **[[concepts/Skill Taxonomy]]**: skills enrolled in the Caddy runtime index (`.claude/skill-index.json`) with multi-word triggers; not every on-disk skill is enrolled, and the category taxonomy and fallback chains live separately in `SKILL_LEDGER.md` and `SKILL_CHAINS.md` (which `caddy.sh` consults alongside the index), not as index fields
+- **[[concepts/Skill Taxonomy]]**: skills are matched natively from each `description`; the category taxonomy and fallback chains live separately in `SKILL_LEDGER.md` and `SKILL_CHAINS.md`, which `/skill-recall` reads
 - **[[concepts/Self-Learning Doctrine]]**: classify → artifact → prevent recurrence pipeline; /learn-from-failure skill
 - **[[concepts/Temporal Fact Ledger]]**: facts.jsonl with provenance + supersede chains; 10 seed facts
-- **Caddy upgrade**: trigger-phrase matching + taxonomy fallback, catches skills missed by either alone
+- **Native skill matching**: replaced the Caddy keyword router, retired 2026-11-05
 - **Capsule v2**: resumable execution state across sessions
 - **aigent-OS sanitization**: vault synced to public repo with zero personal path leakage
 - **SVG README**: visual identity for public repo, 14px+ font floor locked in after iteration

@@ -56,7 +56,7 @@ Before a cognitive layer change is merged via `/meta-improve`, run all affected 
 
 ## Future: eval daemon
 
-A `/run-evals` skill will automate scoring by replaying test inputs through sub-agents and comparing outputs to expected values. Scorecard written to `results/`. Caddy reflex fires if regression score drops below threshold after a `/meta-improve` merge.
+A `/run-evals` skill will automate scoring by replaying test inputs through sub-agents and comparing outputs to expected values. Scorecard written to `results/`.
 
 ## Related
 

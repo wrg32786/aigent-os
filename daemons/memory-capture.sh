@@ -236,7 +236,7 @@ for m in row_re.finditer(content):
 
 # ── Hard cap check (spec §3) ───────────────────────────────────────────────
 if staged_count >= 50:
-    print("[memory] CAP — MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
+    print("[memory] CAP: MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
     sys.exit(0)
 
 # ── Match trigger patterns ─────────────────────────────────────────────────
@@ -266,7 +266,7 @@ for pattern, ptype, confidence, label in PATTERNS:
     if staged_count + len(rows_to_append) >= 50:
         if is_tier2:
             log_tier2_obs(label, confidence, source_phrase, banked=False)
-        print("[memory] CAP — MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
+        print("[memory] CAP: MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
         break
 
     dest = suggested_destination(ptype, phrase_stem)

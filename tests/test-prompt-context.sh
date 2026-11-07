@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 HOOK="$ROOT/daemons/prompt-context.sh"
-TOTAL=9
+TOTAL=11
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 [[ -f "$HOOK" ]] || fail "no hook at $HOOK"
@@ -117,5 +117,34 @@ done
 grep -rlE '\[CADDY|Router: NOT WIRED|CADDY_MUTES' "$ROOT/daemons" --include='*.sh' --include='*.py' --include='*.mjs' --include='*.cjs' --exclude-dir=tests --exclude-dir=node_modules > "$WORK/caddy-left" || true
 [[ ! -s "$WORK/caddy-left" ]] || fail "Caddy output is still emitted by: $(cat "$WORK/caddy-left")"
 printf '[9/%d] system-check requires only shipped skills, and no daemon emits Caddy output\n' "$TOTAL"
+
+# 10. A notice is rendered inert: control and line-separator characters go, lines and length are capped.
+FAKE4="$WORK/install4"
+mkdir -p "$FAKE4/.aigent"
+{
+  printf 'esc\033[31mred sep\xe2\x80\xa8tail\n'
+  printf 'L%.0s' $(seq 1 700); printf '\n'
+  for n in 3 4 5 6 7; do printf 'line%s\n' "$n"; done
+} > "$FAKE4/.aigent/capture-notices"
+OUT="$(printf '{}' | AIGENT_ROOT="$FAKE4" bash "$HOOK")"
+[[ "$OUT" != *$'\033'* ]] || fail "an escape character reached the session"
+[[ "$OUT" != *$'\xe2\x80\xa8'* ]] || fail "a line separator reached the session"
+grep -q 'sep tail' <<<"$OUT" || fail "the notice text was lost: $OUT"
+grep -qE '^L{500}$' <<<"$OUT" || fail "a long line was not cut to 500 characters"
+grep -q 'line5' <<<"$OUT" || fail "the fifth line was lost"
+grep -q 'line6' <<<"$OUT" && fail "more than 5 lines were shown"
+[[ ! -s "$FAKE4/.aigent/capture-notices" ]] || fail "shown notices were kept"
+printf '[10/%d] notices are inert and capped\n' "$TOTAL"
+
+# 11. The capture error log stays bounded.
+FAKE5="$WORK/install5"
+mkdir -p "$FAKE5/daemons" "$FAKE5/.aigent" "$FAKE5/memory"
+head -c 1100000 /dev/zero | tr '\0' 'x' > "$FAKE5/.aigent/capture-errors.log"
+printf '#!/bin/bash\necho newest-error >&2\n' > "$FAKE5/daemons/memory-capture.sh"
+printf '{}' | AIGENT_ROOT="$FAKE5" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do (( $(wc -c <"$FAKE5/.aigent/capture-errors.log") <= 1048576 )) && break; sleep 0.5; done
+(( $(wc -c <"$FAKE5/.aigent/capture-errors.log") <= 1048576 )) || fail "the error log was not capped"
+grep -q newest-error "$FAKE5/.aigent/capture-errors.log" || fail "capping lost the newest error"
+printf '[11/%d] the capture error log stays under its cap\n' "$TOTAL"
 
 printf 'PASS: %d/%d prompt-context scenarios\n' "$TOTAL" "$TOTAL"
