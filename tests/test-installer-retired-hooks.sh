@@ -10,7 +10,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
-TOTAL=7
+TOTAL=10
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 FIXTURE="$WORK/src"
@@ -124,5 +124,48 @@ if command -v python3 >/dev/null 2>&1; then
 else
   printf '[7/%d] skipped: no python3\n' "$TOTAL"
 fi
+
+# 8 to 10. One file, two spellings. An older install may have written the hook path through a
+#    symlink (macOS /var -> /private/var) or, on Windows, as C:/ or /c/ or an 8.3 short name; the
+#    mergers must see those as this install's own copy. A different real directory stays foreign.
+retire_spelling() {
+  local label="$1" entry_root="$2" want="$3" tag="$4" merger out
+  node -e '
+const [out, root] = process.argv.slice(1);
+require("fs").writeFileSync(out, JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [
+  { type: "command", command: `bash "${root}/daemons/caddy.sh"` } ] }] } }));
+' "$INST/.claude/settings.json" "$entry_root"
+  for merger in node python; do
+    if [[ $merger == node ]]; then out="$(node "$WORK/merge-settings.cjs" "$INST/.claude/settings.json" "$WORK/new2.json" "$WORK/m-$tag.json")"
+    elif command -v python3 >/dev/null 2>&1; then out="$(python3 "$WORK/merge-settings.py" "$INST/.claude/settings.json" "$WORK/new2.json" "$WORK/m-$tag.json")"
+    else continue; fi
+    if [[ $want == retired ]]; then
+      grep -q 'daemons/caddy.sh' "$WORK/m-$tag.json" && fail "$merger merger kept $label: $out"
+      grep -q '\[merge\] retired' <<<"$out" || fail "$merger merger did not report retiring $label"
+    else
+      grep -q 'daemons/caddy.sh' "$WORK/m-$tag.json" || fail "$merger merger retired $label"
+      grep -q 'not this install' <<<"$out" || fail "$merger merger kept $label without a warning"
+    fi
+  done
+}
+if command -v cygpath >/dev/null 2>&1; then
+  retire_spelling "the /c/ form of this install" "$(cygpath -u "$INST")" retired unix
+  retire_spelling "the 8.3 short-name form of this install" "$(cygpath -ms "$INST")" retired short
+else
+  retire_spelling "a path with a dot segment" "$INST/./sub/.." retired dot
+  retire_spelling "a path through .." "$INST/daemons/.." retired up
+fi
+printf '[8/%d] the same install in another drive or short-name spelling is retired\n' "$TOTAL"
+ln -s "$(cd "$INST" && pwd -P)" "$WORK/inst-link" 2>/dev/null || true
+if [[ -L "$WORK/inst-link" ]]; then
+  retire_spelling "this install through a symlink" "$WORK/inst-link" retired link
+  printf '[9/%d] the same install written through a symlink is retired\n' "$TOTAL"
+else
+  printf '[9/%d] skipped: symlinks are not available here\n' "$TOTAL"
+fi
+mkdir -p "$WORK/other/daemons"
+if command -v cygpath >/dev/null 2>&1; then OTHER="$(cygpath -m "$WORK/other")"; else OTHER="$WORK/other"; fi
+retire_spelling "a caddy.sh in a different real directory" "$OTHER" kept other
+printf '[10/%d] a caddy.sh at a different real path is still kept with a warning\n' "$TOTAL"
 
 printf 'PASS: %d/%d retired-hook scenarios\n' "$TOTAL" "$TOTAL"

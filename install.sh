@@ -1228,19 +1228,44 @@ def norm_path(value):
         value = match.group(1) + ":" + (match.group(2) or "")
     return value.lower()
 
+def real_path(value):
+    # Canonical spelling of an absolute path so one file written two ways compares equal: symlinks
+    # resolved (macOS /var -> /private/var), and on Windows the /c/ and C:/ drive forms, case and 8.3
+    # short names unified. Only the directory is resolved, so a symlinked script is not followed
+    # away from this install. The nearest existing ancestor is resolved, so a path that is gone still
+    # compares. Relative and variable paths pass through.
+    value = value.replace("\\", "/")
+    if os.name == "nt":
+        match = re.match(r"^/([A-Za-z])(/.*)?$", value)
+        if match:
+            value = match.group(1) + ":" + (match.group(2) or "/")
+    if not (value.startswith("/") or re.match(r"^[A-Za-z]:/", value)):
+        return norm_path(value)
+    head, base = os.path.split(value.rstrip("/"))
+    tail = [base] if base else []
+    while head and not os.path.exists(head):
+        parent, name = os.path.split(head)
+        if parent == head:
+            break
+        tail.insert(0, name)
+        head = parent
+    return norm_path("/".join([os.path.realpath(head).replace("\\", "/")] + tail))
+
 def is_installed_copy(command, root):
     # True when the hook's script is at this install's root: under the absolute root, under a variable
     # that names the project, or relative to it.
     tokens = tokenize(command)
-    script = next((t for t in tokens[1:] if is_path_like(t)), tokens[0] if tokens else "")
-    script = norm_path(script)
+    raw = next((t for t in tokens[1:] if is_path_like(t)), tokens[0] if tokens else "")
+    script = norm_path(raw)
     for prefix in ("$claude_project_dir/", "${claude_project_dir}/", "$aigent_root/", "${aigent_root}/", "./"):
         if script.startswith(prefix):
             script = script[len(prefix):]
             break
     else:
-        if script.startswith(norm_path(root) + "/"):
-            script = script[len(norm_path(root)) + 1:]
+        real_script = real_path(raw)
+        real_root = real_path(root)
+        if real_script.startswith(real_root + "/"):
+            script = real_script[len(real_root) + 1:]
     return script.count("/") == 1
 
 def sweep_retired_hooks(settings, root):
@@ -1445,13 +1470,35 @@ const normPath = value => {
   const match = slashed.match(/^\/([A-Za-z])(\/.*)?$/);
   return (match ? `${match[1]}:${match[2] || ''}` : slashed).toLowerCase();
 };
+// Canonical spelling of an absolute path: see real_path in the python merger above.
+const realPath = value => {
+  let v = value.replace(/\\/g, '/');
+  if (process.platform === 'win32') {
+    const m = v.match(/^\/([A-Za-z])(\/.*)?$/);
+    if (m) v = `${m[1]}:${m[2] || '/'}`;
+  }
+  if (!(v.startsWith('/') || /^[A-Za-z]:\//.test(v))) return normPath(v);
+  const path = require('path');
+  let head = path.dirname(v.replace(/\/+$/, ''));
+  const tail = [path.basename(v.replace(/\/+$/, ''))];
+  while (!fs.existsSync(head) && path.dirname(head) !== head) {
+    tail.unshift(path.basename(head));
+    head = path.dirname(head);
+  }
+  return normPath([fs.realpathSync.native(head), ...tail].join('/'));
+};
 const isInstalledCopy = (command, root) => {
   const tokens = tokenize(command);
-  let script = normPath(tokens.slice(1).find(isPathLike) ?? tokens[0] ?? '');
+  const raw = tokens.slice(1).find(isPathLike) ?? tokens[0] ?? '';
+  let script = normPath(raw);
   const variable = ['$claude_project_dir/', '${claude_project_dir}/', '$aigent_root/', '${aigent_root}/', './']
     .find(prefix => script.startsWith(prefix));
   if (variable) script = script.slice(variable.length);
-  else if (script.startsWith(`${normPath(root)}/`)) script = script.slice(normPath(root).length + 1);
+  else {
+    const realScript = realPath(raw);
+    const realRoot = realPath(root);
+    if (realScript.startsWith(`${realRoot}/`)) script = realScript.slice(realRoot.length + 1);
+  }
   return script.split('/').length === 2;
 };
 const sweepRetiredHooks = (settings, root) => {
