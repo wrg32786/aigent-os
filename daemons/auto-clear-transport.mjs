@@ -33,6 +33,14 @@ const { atomicUpdate } = require('./memory-hygiene/atomic-state.cjs');
 
 export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 
+// Match the runner's five-minute clear-verification budget: enough for a
+// loaded seat to finish a turn, but not hours with ordinary delivery closed.
+// These only retire a pre-intent request; elapsed time never proves a clear
+// cannot still run. The equal cooldown gives delivery a full open window
+// even when pressure stays high. Both are driven solely by tick().
+export const CHECKPOINT_WAIT_TIMEOUT_MS = 300_000;
+export const CHECKPOINT_RETRY_COOLDOWN_MS = 300_000;
+
 // The capsule verb's mandated closing line (skills/context-capsule step 6).
 // The seat emits EXACTLY this when its capsule is written and confirmed. It is
 // the seat's own completion signal — the event-driven trigger the principal
@@ -1158,6 +1166,10 @@ export class AutoClearTransport {
   _transition(nextState, changes = {}) {
     const next = {
       ...this.state,
+      // A proven session rebind ends the old session's retry budget too.
+      ...(hasOwn(changes, 'session_id') && changes.session_id !== this.state.session_id
+        ? { checkpoint_retry_after: null, checkpoint_wait_started_at: null, checkpoint_wait_attempts: 0 }
+        : {}),
       ...changes,
       state: nextState,
       entered_at: clockIso(this.now),
@@ -1443,6 +1455,8 @@ export class AutoClearTransport {
   }
 
   _startPressure(observation) {
+    const cooldown = this._checkpointCooldown();
+    if (cooldown) return cooldown;
     this._abandonCycleAck('new-cycle'); // a new cycle needs its own ack
     const boot = this._readBootReceipt();
     if (!boot.ok) return this._holdResult(boot.code, boot.detail, 'idle');
@@ -1468,6 +1482,9 @@ export class AutoClearTransport {
       session_id: this.sessionId,
       boot_sequence_at_start: boot.receipt.boot_sequence,
       clear_intent: null,
+      checkpoint_wait_started_at: null,
+      checkpoint_wait_attempts: 0,
+      checkpoint_retry_after: null,
       // The cycle's own acknowledgement window opens HERE, at this cycle's
       // start -- the one place a boundary can be captured that is provably
       // before any ack the cycle can earn and provably after every ack an
@@ -1607,6 +1624,58 @@ export class AutoClearTransport {
 
   _gateKillSwitch() {
     return readKillSwitch({ memRoot: this.memRoot, env: this.env, fsImpl: this.fs });
+  }
+
+  _checkpointCooldown() {
+    if (this.state.clear_intent !== null || this.state.cycle_id !== null
+      || this.state.session_id !== this.sessionId
+      || !(Date.parse(this.state.checkpoint_retry_after) > clockMs(this.now))) return null;
+    // Recovery from a telemetry/receipt hold must not bypass the cooldown.
+    const transitioned = this.state.state !== 'idle';
+    const next = transitioned ? this._transition('idle') : this.state;
+    return resultFor(next, { transitioned, status: 'checkpoint-cooldown' });
+  }
+
+  _gateCheckpointWait() {
+    // An intent, including an unconsumed token, can still run. Only these
+    // pre-capsule states explicitly vouch for no clear; no timeout overrides
+    // ambiguity, a submitted clear, or any existing intent guard (#91).
+    if (!vouchesForNoIntent(this.state)
+      // An unproven inherited session still belongs to the rebind guards.
+      || this.state.session_id !== this.sessionId
+      || !(this.state.state === 'checkpoint-requested'
+        || (this.state.state.startsWith('HOLD:checkpoint-')
+          && this._resumeStateFromHold() === 'checkpoint-requested'))) return null;
+    const startedAt = Number.isFinite(Date.parse(this.state.checkpoint_wait_started_at))
+      ? this.state.checkpoint_wait_started_at : this.state.entered_at;
+    const attempts = (Number.isSafeInteger(this.state.checkpoint_wait_attempts)
+      && this.state.checkpoint_wait_attempts >= 0 ? this.state.checkpoint_wait_attempts : 0) + 1;
+    const elapsedMs = Math.max(0, clockMs(this.now) - Date.parse(startedAt));
+    const bookkeeping = { checkpoint_wait_started_at: startedAt, checkpoint_wait_attempts: attempts };
+    if (elapsedMs < CHECKPOINT_WAIT_TIMEOUT_MS) {
+      // Keep the deadline and attempts through hold changes and relaunches.
+      // Do not change entered_at merely because another check was attempted.
+      this._atomicWrite({ ...this.state, ...bookkeeping });
+      return null;
+    }
+    const abandoned = this.state.cycle_id;
+    const holdCode = this.state.hold?.code ?? this.state.state;
+    this._abandonCycleAck('checkpoint-timeout');
+    const next = this._transition('idle', {
+      ...bookkeeping,
+      cycle_id: null,
+      session_id: this.sessionId,
+      boot_sequence_at_start: null,
+      clear_intent: null,
+      ack_boundary: null,
+      ack_classification: null,
+      abandoned_cycle_id: abandoned,
+      checkpoint_retry_after: new Date(clockMs(this.now) + CHECKPOINT_RETRY_COOLDOWN_MS).toISOString(),
+    });
+    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}`);
+    return resultFor(next, {
+      transitioned: true, status: 'cycle-abandoned-checkpoint-timeout', abandoned_cycle_id: abandoned,
+    });
   }
 
   // THE WIDE ABANDONMENT (#91). Reached from `pressure`, `checkpoint-requested`
@@ -1823,6 +1892,9 @@ export class AutoClearTransport {
     const recoverable = this._recoverableCycleHold();
     if (recoverable) return this._recoverCycleHold(recoverable);
 
+    const checkpointTimeout = this._gateCheckpointWait();
+    if (checkpointTimeout) return checkpointTimeout;
+
     if (killed.active) {
       if (this.state.state === 'idle') {
         return resultFor(this.state, {
@@ -1848,6 +1920,8 @@ export class AutoClearTransport {
     }
 
     if (this.state.state === 'idle') {
+      const cooldown = this._checkpointCooldown();
+      if (cooldown) return cooldown;
       const pressure = this._pressureObservable();
       if (!pressure.ok) return this._holdResult(pressure.code, pressure.detail, 'idle');
       if (pressure.observation.pct < this.pressureThresholdPct) {
@@ -1987,7 +2061,10 @@ export class AutoClearTransport {
     if (this.state.state === 'pressure') {
       const gate = this._gatePressure('pressure');
       if (!gate.ok) return gate;
-      const next = this._transition('checkpoint-requested');
+      const next = this._transition('checkpoint-requested', {
+        checkpoint_wait_started_at: clockIso(this.now),
+        checkpoint_wait_attempts: 0,
+      });
       return resultFor(next, {
         transitioned: true,
         status: 'checkpoint-requested',
