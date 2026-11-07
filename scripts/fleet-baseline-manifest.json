@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-06-fe019be2",
-  "public_product_commit": "fe019be21745556a80ca4bb8fe43a4e5766f9d26",
+  "baseline_id": "aigent-os-2026-11-06-2df5936c",
+  "public_product_commit": "2df5936c999862c4574557370f410c858600a141",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -46,7 +46,8 @@
     "v8 recut for #151 (0d1cbf08): pins that moved: daemons/auto-clear-transport.mjs. Recut for #151: auto-clear-transport.mjs bounds the pre-capsule checkpoint wait. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for Caddy retirement (6eb9d615): pins that moved: daemons/model-tier-guard.mjs, .claude/settings.json.template, daemons/prompt-context.sh. Recut for the Caddy retirement: daemons/caddy.sh and caddy-detect-new-skill.sh are no longer pinned (removed), daemons/prompt-context.sh is newly pinned as the UserPromptSubmit hook that fires on every prompt, and the settings template moved with it. Population 39 -> 38. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for Caddy retirement (bash 3.2) (35434c43): pins that moved: daemons/prompt-context.sh. Recut: daemons/prompt-context.sh gained a bash 3.2 fallback for its clock line. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for journal async (fe019be2): pins that moved: .claude/settings.json.template. Recut: the settings template marks the userpromptsubmit-journal hook async. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for journal async (fe019be2): pins that moved: .claude/settings.json.template. Recut: the settings template marks the userpromptsubmit-journal hook async. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for Caddy retirement, merged with #151/#150/#147 (2df5936c): pins that moved: none. Recut after merging master: auto-clear-transport.mjs carries #151, the settings template and prompt-context.sh carry the Caddy retirement. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
