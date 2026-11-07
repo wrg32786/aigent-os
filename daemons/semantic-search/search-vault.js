@@ -117,6 +117,23 @@ function cosineSimilarity(a, b) {
 // chunks carry no validity line, so the ended windows are collected per path
 // first and then applied to every chunk of that path.
 //
+// Exact title lead (issue #150). Measured 2026-11-01: a title-exact query
+// ranked its note 7th behind cross-linked neighbours, outside the default top
+// 5. A note whose title or file name equals the query (case, whitespace and
+// -/_ separators ignored) moves ahead of the vector order. Exact equality
+// only, never a substring. Runs on rows the deny and namespace filters already
+// passed, and before demoteSuperseded, so an ended window still sinks.
+// AIGENT_SEARCH_DISABLE_TITLE_LEAD=1 turns it off, for the test witness
+// (daemons/tests/semantic-search-title-lead.test.mjs).
+const TITLE_LEAD_OFF = process.env.AIGENT_SEARCH_DISABLE_TITLE_LEAD === '1';
+const titleKey = (s) => String(s || '').replace(/\.md$/i, '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+function leadExactTitle(rows, query) {
+  const key = titleKey(query);
+  if (TITLE_LEAD_OFF || !key) return rows;
+  const exact = (r) => titleKey(r.title) === key || titleKey(String(r.path).split('/').pop()) === key;
+  return [...rows.filter(exact), ...rows.filter((r) => !exact(r))];
+}
+
 // AIGENT_SEARCH_DISABLE_SUPERSESSION=1 turns the demotion off. It exists so a
 // test can witness that the demotion, and not something else, is what moved a
 // row (daemons/tests/semantic-search-supersession.test.mjs).
@@ -239,7 +256,7 @@ async function main() {
   // Demote every chunk whose validity window has ended below every chunk whose
   // has not. Placed here, between the sort and the truncation below, so a
   // demoted row leaves the top K instead of being reordered inside it.
-  const ranked = demoteSuperseded(scored, nowMs());
+  const ranked = demoteSuperseded(leadExactTitle(scored, query), nowMs());
 
   // Deduplicate by file path — keep best-scoring chunk per file
   const seen = new Set();

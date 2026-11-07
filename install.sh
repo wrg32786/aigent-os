@@ -1457,6 +1457,42 @@ if [[ ! -f "$STATE_FILE" ]]; then
 }
 JSON
 fi
+
+# Install-source record (issue #147). The baseline manifest names the commit its
+# pins were CUT from, not the commit this install came from, so two installs
+# sharing a baseline looked identical. Stamp the source commit on every install
+# (a reinstall replaces it) so doctor --attest can report it. A source that is
+# not the top of a git checkout (an archive, or a folder inside another repo)
+# records no commit rather than guessing one.
+SOURCE_RECORD="$TARGET/.aigent/install-source.json"
+SOURCE_KIND="archive"
+SOURCE_COMMIT="null"
+SOURCE_DIRTY="null"
+if command -v git >/dev/null 2>&1 \
+  && [[ "$(git -C "$SRC" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] \
+  && [[ -z "$(git -C "$SRC" rev-parse --show-prefix 2>/dev/null)" ]]; then
+  source_sha="$(git -C "$SRC" rev-parse --verify -q HEAD 2>/dev/null || true)"
+  if [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    SOURCE_KIND="git"
+    SOURCE_COMMIT="\"$source_sha\""
+    if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+      SOURCE_DIRTY="true"
+    else
+      SOURCE_DIRTY="false"
+    fi
+  fi
+fi
+require_symlink_safe "$SOURCE_RECORD"
+cat > "$SOURCE_RECORD.tmp" <<JSON
+{
+  "schemaVersion": 1,
+  "source_kind": "$SOURCE_KIND",
+  "source_commit": $SOURCE_COMMIT,
+  "source_dirty": $SOURCE_DIRTY,
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+mv -f "$SOURCE_RECORD.tmp" "$SOURCE_RECORD" || fail "cannot write $SOURCE_RECORD"
 printf '  [ok] Vault directories and first-run state ready\n'
 
 GITIGNORE="$TARGET/.gitignore"

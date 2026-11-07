@@ -197,7 +197,21 @@ def under_root(relative):
 findings = []
 
 print("info:baseline %s" % manifest["baseline_id"])
-print("info:commit %s" % manifest["public_product_commit"])
+# Issue 147: the manifest commit is where the pins were CUT, not where this
+# install came from. Label it so, and report the install record beside it.
+print("info:baseline cut from %s" % manifest["public_product_commit"])
+installed_from = "unknown (no .aigent/install-source.json; installed before issue 147)"
+try:
+    with open(under_root(".aigent/install-source.json"), encoding="utf-8") as fh:
+        source_record = json.load(fh)
+    source_commit = source_record.get("source_commit")
+    if source_commit:
+        installed_from = source_commit + (" (uncommitted changes in the source)" if source_record.get("source_dirty") else "")
+    else:
+        installed_from = "unknown (source was %s, not a git checkout)" % source_record.get("source_kind", "unrecorded")
+except (OSError, ValueError, AttributeError):
+    pass
+print("info:installed from %s" % installed_from)
 # A bare verdict is not self-describing about coverage: COMPLIANT over 31
 # files and COMPLIANT over 1 file print identically without this line.
 print("info:population %d required files" % len(manifest["required_files"]))
