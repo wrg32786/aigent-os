@@ -9885,6 +9885,7 @@ function failingCycleStateFs(fixture, when) {
   const normalized = (target) => String(target).split('\\').join('/');
   const cycleTail = normalized(cyclePath);
   let pendingText = null;
+  let failingFrom = null;
   return {
     ...fs,
     writeFileSync(target, text, ...rest) {
@@ -9893,8 +9894,14 @@ function failingCycleStateFs(fixture, when) {
       return fs.writeFileSync(target, text, ...rest);
     },
     renameSync(from, to, ...rest) {
+      // atomicUpdate retries a locked rename; a retry of the same temp file fails the same way, so
+      // the injected failure still reaches the caller.
+      if (normalized(to) === cycleTail && from === failingFrom) {
+        throw Object.assign(new Error('synthetic EACCES committing the cycle state'), { code: 'EACCES' });
+      }
       if (normalized(to) === cycleTail && pendingText !== null && when(pendingText)) {
         pendingText = null;
+        failingFrom = from;
         throw Object.assign(
           new Error('synthetic EACCES committing the cycle state'), { code: 'EACCES' },
         );
@@ -14357,4 +14364,38 @@ dialogCase('I23 CLAUDE_CONFIG_DIR: the wiring leg reads the profile the HOST use
   harness.fixture.env.CLAUDE_CONFIG_DIR = override;
   writeJson(harness.fixture.settingsPath, wiring);
   assert.equal(recheck(), null, 'a correct aigent-OS install passes with the override set');
+});
+
+// 2026-11-06: one failed transport tick (EPERM renaming auto-clear-cycle.json) disabled a seat's
+// automatic refresh until a relaunch. A failure below the limit is retried; a good tick resets the
+// count; only TRANSPORT_TICK_FAILURE_LIMIT failures in a row turn automation off, loudly.
+test('a transport tick that fails a few times is retried, not a permanent disable', async () => {
+  const { TRANSPORT_TICK_FAILURE_LIMIT } = await import('../pty-runner.mjs');
+  assert.ok(Number.isInteger(TRANSPORT_TICK_FAILURE_LIMIT) && TRANSPORT_TICK_FAILURE_LIMIT > 1);
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const transport = harness.runner.transport;
+    const realTick = transport.tick.bind(transport);
+    const locked = () => { throw Object.assign(new Error("EPERM: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'"), { code: 'EPERM' }); };
+    assert.equal(harness.runner.automationEnabled, true, 'precondition: automation on');
+    transport.tick = locked;
+    for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) {
+      const result = harness.drive();
+      assert.equal(result.status, 'retrying', `failure ${i} is retried`);
+      assert.equal(harness.runner.automationEnabled, true, `still on after failure ${i}`);
+    }
+    transport.tick = realTick;
+    harness.drive();
+    assert.equal(harness.runner.automationEnabled, true, 'a good tick');
+    transport.tick = locked;
+    for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) harness.drive();
+    assert.equal(harness.runner.automationEnabled, true, 'the good tick reset the count');
+    const last = harness.drive();
+    assert.equal(last.status, 'disabled');
+    assert.equal(harness.runner.automationEnabled, false, 'the limit in a row turns automation off');
+    const disabled = harness.events('automation-disabled').map((e) => e.detail?.code);
+    assert.ok(disabled.includes('runner-transport-tick-failed'), 'and says so');
+  } finally {
+    harness.cleanup();
+  }
 });
