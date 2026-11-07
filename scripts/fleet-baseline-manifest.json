@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-06-2df5936c",
-  "public_product_commit": "2df5936c999862c4574557370f410c858600a141",
+  "baseline_id": "aigent-os-2026-11-07-c9f12c3b",
+  "public_product_commit": "c9f12c3b3d38e9ad8435ede04e2d4c7ab83d69b8",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -47,7 +47,8 @@
     "v8 recut for Caddy retirement (6eb9d615): pins that moved: daemons/model-tier-guard.mjs, .claude/settings.json.template, daemons/prompt-context.sh. Recut for the Caddy retirement: daemons/caddy.sh and caddy-detect-new-skill.sh are no longer pinned (removed), daemons/prompt-context.sh is newly pinned as the UserPromptSubmit hook that fires on every prompt, and the settings template moved with it. Population 39 -> 38. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for Caddy retirement (bash 3.2) (35434c43): pins that moved: daemons/prompt-context.sh. Recut: daemons/prompt-context.sh gained a bash 3.2 fallback for its clock line. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for journal async (fe019be2): pins that moved: .claude/settings.json.template. Recut: the settings template marks the userpromptsubmit-journal hook async. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for Caddy retirement, merged with #151/#150/#147 (2df5936c): pins that moved: none. Recut after merging master: auto-clear-transport.mjs carries #151, the settings template and prompt-context.sh carry the Caddy retirement. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for Caddy retirement, merged with #151/#150/#147 (2df5936c): pins that moved: none. Recut after merging master: auto-clear-transport.mjs carries #151, the settings template and prompt-context.sh carry the Caddy retirement. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for transient rename lock (c9f12c3b): pins that moved: daemons/pty-runner.mjs. Recut: pty-runner.mjs retries a failed transport tick before disabling automation. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -71,7 +72,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "ca9711f6c8e03318ae1c8c663588a12ae14388596df08c98a92e56b1bd3cd63b",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "d592fce7a187f2b29e9aa27ff10849ff23a48a565b586f0581fd199ff76aee0e",
+    "daemons/pty-runner.mjs": "c766a80aac22df4733910204c74d9fc194e0bb3d2e6d5a56bcf04322ca33c53d",
     "daemons/auto-clear-transport.mjs": "09d873879f928cbfde0310c36ae88b98d681ad2a95a990abd8fdab91c8cba9d6",
     "daemons/lifecycle-common.mjs": "64502ea7182f1cf50bc1d40f81ac8f050798ccf3ba4593b6c34137e1473d4371",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
