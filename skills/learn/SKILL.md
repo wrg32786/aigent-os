@@ -13,7 +13,7 @@ The learning compounding skill. Most principals lose the value of a learning swe
 - The principal is evaluating something but doesn't have an immediate need
 - The principal asks "should I be using X?" or "what did we decide about Y?"
 - After any session where the input was *learning*, not *doing*
-- Triggered by Caddy on prompts like: "/learn", "I just read", "evaluating", "looked into", "should I use", "what did we decide about", "captured this", "interesting tool", "considered tool"
+- Use on prompts like: "/learn", "I just read", "evaluating", "looked into", "should I use", "what did we decide about", "captured this", "interesting tool", "considered tool"
 
 ## How to execute
 

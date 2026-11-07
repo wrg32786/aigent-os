@@ -3,8 +3,9 @@
 # Reads prompt text from stdin, matches high-confidence memory-authoring phrases,
 # appends staged candidates to memory/MEMORY_CANDIDATES.md.
 #
-# Called from caddy.sh AFTER [CADDY:memory] DIGEST hint emits.
-# Best-effort: failure MUST NOT block caddy hints. Errors route to DAEMON_ERR_LOG.
+# Called detached from daemons/prompt-context.sh (the UserPromptSubmit hook; Caddy, its former
+# caller, was retired 2026-11-05). Best-effort: failure never reaches the prompt. Errors route to
+# DAEMON_ERR_LOG.
 #
 # Spec: [[concepts/Somatic v0.4.2 Memory Capture]]
 # Doctrine: [[feedback/Silent successes hide failures]] — no 2>/dev/null without recovery sink.
@@ -364,6 +365,6 @@ if [ "$scan_rc" -ne 0 ]; then
     "$scan_reason"
 fi
 
-# Best-effort: capture script exit code must NOT propagate to caddy.sh.
+# Best-effort: capture script exit code must NOT propagate to the hook that started it.
 # Errors already routed to DAEMON_ERR_LOG above.
 exit 0

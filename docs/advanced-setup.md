@@ -27,10 +27,9 @@ grep -c "__AIGENT_ROOT__" .claude/settings.json  # should print 0
 
 | Hook | Event | Purpose |
 |------|-------|---------|
-| `daemons/caddy.sh` | UserPromptSubmit | Matches prompt to skills, surfaces `[CADDY] /skill` hints |
+| `daemons/prompt-context.sh` | UserPromptSubmit | Prints the `[CLOCK]` line and starts memory capture in the background |
 | `hooks/suggest-compact.sh` | PostToolUse | Nudges context management before hitting limits |
 | `hooks/auto-capture.sh` | PostToolUse | Logs actions to daily note automatically |
-| `daemons/caddy-detect-new-skill.sh` | PostToolUse (Write/Edit) | Detects new skill files, prompts `/caddy-enroll` |
 | `hooks/session-capture-summary.sh` | Stop | Writes session summary at conversation end |
 | `hooks/session-end-check.sh` | (not wired) | Legacy end-of-session check: present in the tree but NOT registered by the installer; superseded by the rolling capsule autosave (`daemons/stop-capsule-writer.mjs`); `/close` is retired |
 | `hooks/log-token-usage.sh` | Stop | Logs token cost to vault |
@@ -98,28 +97,15 @@ The installer copies `skills/` to `.claude/skills/` during setup. If you add a n
 1. Create `skills/<name>/SKILL.md` (for versioning)
 2. Also create `.claude/skills/<name>/SKILL.md` (for runtime)
 
-Or run `/caddy-enroll` after placing the file; it reads the SKILL.md and adds the skill to Caddy's index.
+Give it a precise `description` (see Skill matching below); that is what makes it findable.
 
 ---
 
-## Caddy skill index management
+## Skill matching
 
-Caddy is a non-blocking hook that matches your prompts to skills. Its index lives at `.claude/skill-index.json`, installed automatically by the installer and read by `daemons/caddy.sh` at runtime.
+Claude Code matches skills natively: each session lists every installed skill with its `description`, and the model invokes the one that fits. There is no index to maintain. What matters is the description: say what the skill does in a few words, then "Use when" and the phrases that should trigger it, in about 200 characters. The listing has a shared character budget, so long descriptions push other skills out of view; `/context` shows any that were excluded.
 
-**Manually enroll a skill:**
-```
-/caddy-enroll
-```
-
-**Reindex all skills from scratch:**
-```bash
-bash daemons/caddy-reindex.sh
-```
-
-**Check current index:**
-```bash
-cat .claude/skill-index.json | python3 -m json.tool | grep '"name"'
-```
+(Caddy, the keyword hook that matched prompts to skills before this was native, was retired on 2026-11-05. `.claude/skill-index.json` is still installed for `/skill-recall` and `/skill-audit`.)
 
 ---
 

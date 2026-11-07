@@ -35,7 +35,9 @@ const PYTHON_PUBLIC_READERS = new Set([
   'unsafeRawCapsuleValue',
   'unsafeRawScalar',
 ]);
-const MINIMUM_COUNTS = Object.freeze({ javascript: 42, shell: 28, python: 6 });
+// shell: 28 -> 27 on 2026-11-05, reviewed: the Caddy retirement removed daemons/caddy.sh,
+// caddy-detect-new-skill.sh and caddy-reindex.sh, and added daemons/prompt-context.sh.
+const MINIMUM_COUNTS = Object.freeze({ javascript: 42, shell: 27, python: 6 });
 
 function relative(file) {
   return path.relative(REPO_ROOT, file).replace(/\\/g, '/');
@@ -1561,18 +1563,6 @@ const PYTHON_RAW_ALLOWLIST = [
 // whether trusted agent definitions are eligible for explicit raw promotion.
 const SHELL_PARSER_ALLOWLIST = [
   {
-    file: 'daemons/caddy-reindex.sh',
-    rule: 'frontmatter-parser-declaration',
-    needle: 'def read_single_line_frontmatter(text):',
-    reason: 'routing metadata scalars are collapsed before entering the model-facing index',
-  },
-  {
-    file: 'daemons/caddy-reindex.sh',
-    rule: 'frontmatter-delimiter-parser',
-    needle: 'm = re.match(r"^---\\s*\\n(.*?)\\n---\\s*\\n", text, re.DOTALL)',
-    reason: 'the build-time routing parser returns only normalized scalar metadata',
-  },
-  {
     file: 'daemons/system-check.sh',
     rule: 'frontmatter-delimiter-parser',
     needle: 'match = re.match(r"^\\ufeff?---\\r?\\n(.*?)\\r?\\n---", text, re.DOTALL)',
@@ -2203,7 +2193,6 @@ test('production scan populations are non-empty, broad, and carry sentinels', ()
     'hooks/tool-tracker.js',
     'tools/capture-arch.mjs',
     'install.sh',
-    'daemons/caddy-reindex.sh',
     'daemons/system-check.sh',
     'daemons/capsule-compact.py',
     'daemons/render_boundary.py',

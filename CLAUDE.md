@@ -119,18 +119,18 @@ The vault at `vault/` is an Obsidian-compatible knowledge graph:
 - `Common Anti-Patterns.md` — 10 operating rules that prevent common agent failure modes (survey instead of action, multi-option questionnaires, scope creep, etc.). Read on first session.
 - `Ponytail Doctrine.md` — the anti-over-engineering rung ladder: whether to build at all, and how little. Stop at the first rung that holds; delete broken scaffolding instead of patching it; never cut safety to shrink a diff. Enforced as Standard 16 and fired by Caddy on build intent.
 - `Self-Improving CLAUDE.md.md` — meta-pattern for rule-writing and capturing mistakes as permanent learning
-- `Caddy.md` — skill routing via a non-blocking hook that matches prompts to skills
+- `Caddy.md` — historical: the keyword skill router retired on 2026-11-05 (skill matching is native now; see Skill Descriptions Protocol)
 - `Memory Decay Doctrine.md` — notes decay if unused, reinforce if touched; computed `heat_score` per note; ported from tinyhumansai/neocortex
 - `Feature Design Workflow.md` — 5-step ladder for any new capability (specify → core → API → UI → test); ported from tinyhumansai/openhuman
 - `External Toolkit Learnings Pattern.md` — how to rip from external projects without forking; creates auditable records of what was borrowed and why
 
 ## Daemons (in `daemons/`)
 
-- `caddy.sh` / `caddy-detect-new-skill.sh` / `caddy-reindex.sh` — Caddy skill router with class-tagged hints (memory/context/body/routing/all) and `/caddy-mute` integration
+- `prompt-context.sh` — the UserPromptSubmit hook: prints the `[CLOCK]` line and starts `memory-capture.sh` detached. Bash built-ins only, so it returns in milliseconds.
 - `semantic-search/` — local embeddings + vault semantic search
 - `memory-heat/compute-heat.js` — computes vault heat scores, writes `HEAT_INDEX.json`. Run on demand (not wired to a hook; the retired `/close` skill used to invoke it). See `vault/concepts/Memory Decay Doctrine.md` and `daemons/memory-heat/README.md`.
 - `system-check.sh` — Somatic v0.4.3 smoke test. Audits 8 wired skills, 8 daemons, 7 state files, capsules, mirror, daemon error log. Run on demand.
-- `memory-capture.sh` — Somatic v0.4.2 input organ. Auto-stages high-confidence trigger phrases ("remember that X", "from now on X", etc) into `MEMORY_CANDIDATES.md`. Called from caddy.sh.
+- `memory-capture.sh` — Somatic v0.4.2 input organ. Auto-stages high-confidence trigger phrases ("remember that X", "from now on X", etc) into `MEMORY_CANDIDATES.md`. Started detached by `prompt-context.sh`.
 - `capsule-compact.py` — Somatic v0.4.5 chain compaction. When parent_capsule_id chain >= 5, summarizes oldest 3 into a chain-summary capsule.
 - `agent-fitness-extract.py` — Somatic v0.5.0 sub-agent dispatch tracker. Scans Claude Code JSONL for `Agent` tool calls, classifies outcome, appends to `AGENT_FITNESS.md`.
 
@@ -143,7 +143,6 @@ Personal AI body — sense / rhythm / input / reflection / measurement. Lazy com
 | `/body-check` | v0.4 + v0.4.4 | Compose body state from existing signals (5 pressures + recommended reflex) |
 | `/digest` | v0.4 | Review staged memory candidates with promote/skip/supersede options |
 | `/context-capsule` | v0.4 + v0.4.1 | Resume-ready state preservation, lifecycle states, parent_capsule_id chain |
-| `/caddy-mute` | v0.4.1 | Mute a Caddy hint class for a window; 4h default expiry |
 | `/system-check` | v0.4.3 | Smoke-test every wired path |
 | `/sweep-now` | v0.4.4 | Dispatch Hestia for the 3 vault sweeps |
 | `/capsule-compact` | v0.4.5 | Compact long capsule chains |
@@ -151,7 +150,6 @@ Personal AI body — sense / rhythm / input / reflection / measurement. Lazy com
 
 **State files in `vault/memory/`:**
 - `BODY_STATE.json` — body-check schema + state
-- `CADDY_MUTES.json` — Caddy class mutes
 - `MEMORY_CANDIDATES.md` — staged captures awaiting /digest
 - `HESTIA_SWEEP_LOG.md` — Hestia sweep history
 - `AGENT_FITNESS.md` — per-dispatch ledger
@@ -215,31 +213,16 @@ See [[Self-Improving CLAUDE.md]] in the vault for the full rationale.
 
 ---
 
-## Caddy Enrollment Protocol
+## Skill Descriptions Protocol
 
-Caddy is a non-blocking PreToolUse hook that matches prompts to skills and surfaces them before the agent acts. When a new skill is built, it should be enrolled in Caddy so the system routes to it automatically.
+Claude Code matches skills natively: every session gets each installed skill's name and `description`, and the model invokes the skill whose description fits the task. The listing has a shared character budget, so a long or vague description can be dropped from view, and a skill with no usable description is effectively invisible. (Caddy, the keyword hook that used to route prompts to skills, was retired on 2026-11-05: it was slow enough to be cancelled on nearly every prompt.)
 
-**Enrollment steps:**
-1. Add a trigger pattern to `daemons/caddy.sh` under the appropriate section (reads, writes, code, design, etc.)
-2. Pattern format: `keyword1|keyword2|phrase` (case-insensitive, partial match)
-3. Surface message format: `[CADDY] SKILL_NAME — one-line description. Invoke: /skill-name`
-4. Test: run a prompt containing the trigger keyword and confirm the surface message fires
+**When you build or edit a skill:**
+1. Write the `description` as: what it does in a few words, then "Use when" and the concrete situations and phrases that should trigger it. Lead with the most distinctive words.
+2. Keep it short: about 200 characters. Long descriptions are what push other skills out of the listing.
+3. Test: in a new session, give a prompt that should match and confirm the skill is invoked.
 
-**Rule:** ALWAYS enroll a skill in Caddy on the same session it's built. A skill that isn't enrolled is invisible to the routing system and will be ignored in future sessions.
-
-**Anti-pattern:** Building skills and deferring enrollment "for later" — the hook fires on pattern match, not on recall. If it's not in Caddy, it doesn't exist operationally.
-
----
-
-## Skill Auto-Invoke Rule
-
-Caddy surfaces skills as hints in your system context. **Acting on those hints is not optional.**
-
-**ALWAYS:** When a `[CADDY:skill] MATCH` or `[CADDY] /skill-name` hint appears in your context, invoke that skill using the Skill tool BEFORE generating any other response. The hint means Caddy matched this prompt to a purpose-built skill — use it.
-
-**Single exception:** If the hint is clearly a false match (the skill topic has nothing to do with what the user asked), skip it silently. Do not mention Caddy to the user.
-
-**Why this matters:** Skills carry specialized knowledge and operating patterns that produce better output than inline reasoning. Ignoring a hint means the routing system worked but the agent short-circuited it.
+**Skill auto-invoke rule:** when a task matches an available skill's description, invoke that skill with the Skill tool before generating any other response. Skip it only when the match is clearly false.
 
 ---
 
@@ -250,7 +233,7 @@ When adding new vault notes that should be surfaced by the system, update the re
 1. **New concepts** → add a one-line entry to `vault/concepts/MAP.md` under the appropriate cluster
 2. **New reference files** → add to `vault/memory/MEMORY.md` index under the relevant section
 3. **New agents** → add the def (with `name:` + `tools:` frontmatter) to `vault/agents/` and cross-reference it in `vault/agents/Pantheon.md`. `install.sh` registers every such def into `.claude/agents/` on install — that is the only place Claude Code loads *dispatchable* subagents from, so this is the step that makes delegation actually work. After adding one to a live install, copy it into `.claude/agents/` (or re-run `install.sh`) before it can be spawned.
-4. **New skills** → enroll in Caddy (see above) + add to skills index if one exists
+4. **New skills** → write a precise `description` (see Skill Descriptions Protocol above) + add to skills index if one exists
 
 **Rule:** A note that isn't wikilinked from at least one hub note is an orphan. The graph is only as useful as its edges. Every new note should have at least one backlink from an existing hub.
 

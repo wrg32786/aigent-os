@@ -37,13 +37,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"__AIGENT_ROOT__/daemons/caddy.sh\"",
-            "timeout": 10
+            "command": "bash \"__AIGENT_ROOT__/daemons/prompt-context.sh\"",
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"__AIGENT_ROOT__/daemons/userpromptsubmit-journal.mjs\"",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ]
       }
@@ -139,16 +140,6 @@
           {
             "type": "command",
             "command": "bash \"__AIGENT_ROOT__/hooks/security-scan.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"__AIGENT_ROOT__/daemons/caddy-detect-new-skill.sh\"",
             "timeout": 5
           }
         ]

@@ -8,10 +8,10 @@
 // skip is how an inert corpus looks healthy for months. Unrunnable is fatal
 // unless the case declares `requires`, which marks a KNOWN, NAMED gap.
 //
-// DRIVES THE REAL SOURCE. skill-recall pipes prompts through daemons/caddy.sh as
-// the hook does; capsule-resume calls newestValidCapsule() from
-// daemons/lifecycle-common.mjs against a temp vault. Neither re-implements the
-// logic it checks — a mirror stays green when the daemon regresses.
+// DRIVES THE REAL SOURCE. capsule-resume calls newestValidCapsule() from
+// daemons/lifecycle-common.mjs against a temp vault; it never re-implements the
+// logic it checks — a mirror stays green when the daemon regresses. (The
+// skill-recall suite, which drove daemons/caddy.sh, was retired with Caddy.)
 //
 // Run: node evals/run-evals.mjs [--json]
 
@@ -54,142 +54,9 @@ function loadCorpus(name) {
   catch (e) { return { __error: e?.message || String(e) }; }
 }
 
-// ── Suite 1: skill recall ─────────────────────────────────────────────────────
-// Routes a prompt through the real caddy hook and asserts which skill it named.
-// `must_not_suggest` is as load-bearing as `expected_skill`: a router that fires
-// on everything has perfect recall and is useless.
-
-function runSkillRecall() {
-  const cases = loadCorpus('skill-recall-tests.json');
-  if (cases.__error) { record('skill-recall', '-', 'unrunnable', `corpus unreadable: ${cases.__error}`); return; }
-  const uniqueCases = withoutDuplicates(cases);
-
-  let index;
-  try { index = JSON.parse(readFileSync(path.join(ROOT, '.claude', 'skill-index.json'), 'utf8')); }
-  catch (e) { record('skill-recall', '-', 'unrunnable', `no skill-index.json: ${e?.message}`); return; }
-  const known = new Set(index.map((s) => s.name));
-
-  for (const c of uniqueCases) {
-    // A case naming a skill this install does not have cannot be evaluated. It is
-    // NOT a routing failure and must not be scored as one — the original corpus
-    // referenced four skills absent from this repo, which is how it stayed
-    // plausible while being unrunnable.
-    if (c.expected_skill && !known.has(c.expected_skill)) {
-      record('skill-recall', c.id, 'unrunnable', `expected_skill "${c.expected_skill}" not in skill-index (${known.size} skills)`);
-      continue;
-    }
-    // Give every case its OWN session id. caddy suppresses its no-match line once
-    // per session (caddy.sh:193-194), and a caller that sends no session_id keys
-    // that flag on the literal "unknown" — one bucket shared by every session-less
-    // caller on the install, including any live agent session firing the same hook.
-    // Clearing the shared flag instead of avoiding it was both flaky and rude: it
-    // deleted other sessions' state, and a live session could recreate the flag
-    // between the clear and the spawn. Measured at 1 failure in 5 runs, always the
-    // negative case, always "caddy said: (silent)" — a green suite that goes red
-    // depending on what else is running is not a gate.
-    const evalSession = `eval-${process.pid}-${c.id}`;
-    const proc = spawnSync('bash', [path.join(ROOT, 'daemons', 'caddy.sh')], {
-      input: JSON.stringify({ prompt: c.prompt, session_id: evalSession }),
-      env: { ...process.env, AIGENT_ROOT: ROOT },
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
-    if (proc.error) { record('skill-recall', c.id, 'harness-error', `caddy.sh did not execute: ${proc.error.message}`); continue; }
-    const out = proc.stdout || '';
-
-    // A case with neither a positive nor a negative expectation asserts NOTHING:
-    // both branches below are skipped, must_not_suggest is empty in every case,
-    // and it recorded PASS while caddy's output was discarded. An assertion that
-    // cannot fail is worse than an absent one, because it inflates the pass count.
-    if (!c.expect_no_match && !c.expected_skill) {
-      record('skill-recall', c.id, 'harness-error',
-        'case declares neither expected_skill nor expect_no_match — it asserts nothing and can never fail');
-      continue;
-    }
-
-    // An empty or falsy needle matches EVERY string, because out.includes('') is
-    // always true. One '' in acceptable_alternatives rescues any wrong answer:
-    // a case pointed at the wrong skill with alternatives [''] passed against a
-    // FULLY DEAD router while three siblings went red in the same run. This is the
-    // same defect as an assertion-free case, one level down — the case declares an
-    // expectation, but the expectation cannot fail. A trailing-comma edit produces
-    // it by accident.
-    // Type-check the FIELD before its entries. A JSON string instead of an array
-    // spreads into single characters, each a non-empty string, so an entry-level
-    // check passes and `out.includes('s')` then matches essentially any response.
-    // "acceptable_alternatives": "scout-vault" is one missing bracket pair.
-    const badShape = ['acceptable_alternatives', 'must_not_suggest']
-      .find((k) => c[k] !== undefined && !Array.isArray(c[k]));
-    if (badShape) {
-      record('skill-recall', c.id, 'harness-error',
-        `${badShape} must be an array; a bare string spreads into single characters that match anything`);
-      continue;
-    }
-    const emptyNeedle = [...(c.acceptable_alternatives || []), ...(c.must_not_suggest || [])]
-      .some((s) => typeof s !== 'string' || s === '');
-    if (emptyNeedle) {
-      record('skill-recall', c.id, 'harness-error',
-        'acceptable_alternatives/must_not_suggest contains an empty or non-string entry — it matches every response and cannot fail');
-      continue;
-    }
-
-    if (c.expect_no_match) {
-      // NOT silence. caddy announces a miss ("No skill match") and that marker is
-      // the correct answer — asserting silence here would fail on healthy output
-      // and teach the next reader to delete the case.
-      if (!/No skill match/i.test(out)) {
-        record('skill-recall', c.id, 'fail', `expected a no-match; caddy said: ${out.trim().slice(0, 120) || '(silent)'}`);
-        continue;
-      }
-    } else if (c.expected_skill) {
-      const accepted = [c.expected_skill, ...(c.acceptable_alternatives || [])];
-      if (!accepted.some((s) => out.includes(s))) {
-        record('skill-recall', c.id, 'fail', `expected "${c.expected_skill}"; caddy said: ${out.trim().slice(0, 120) || '(silent)'}`);
-        continue;
-      }
-    }
-    const bad = (c.must_not_suggest || []).find((s) => out.includes(s));
-    if (bad) { record('skill-recall', c.id, 'fail', `suggested forbidden skill "${bad}"`); continue; }
-    // PRESENCE of the scorer's own line, never ABSENCE of a miss marker. caddy has
-    // TWO resolvers: the trigger scorer prints "[CADDY] /name - why", and when it
-    // finds nothing a SKILL_LEDGER taxonomy fallback prints "[CADDY:taxonomy] ...".
-    // The fallback carries no miss marker, so an absence-check called it a match
-    // while the scorer had contributed nothing — and because the fallback only runs
-    // WHEN the scorer misses, its output is byte-identical whether the scorer is
-    // healthy or completely dead. A corpus drifting toward taxonomy-resolved prompts
-    // would let scorer coverage reach zero with every gate still green.
-    record('skill-recall', c.id, 'pass', '', { matched: /^\[CADDY\] \//m.test(out) });
-  }
-  // A no-match assertion is satisfied by a router that is COMPLETELY DEAD: total
-  // failure emits the same "No skill match" the case expects. Measured — with the
-  // scorer stubbed to return nothing, the negative case PASSED while three
-  // positive siblings went red in the same run. So a negative result only carries
-  // information when the router has proven, in this same run, that it can still
-  // match something. Without that pairing the case cannot detect under-firing,
-  // because under-firing is what produces its expected output.
-  const mine = results.filter((r) => r.suite === 'skill-recall');
-  const negativeIds = new Set(uniqueCases.filter((c) => c.expect_no_match).map((c) => c.id));
-  // The witness must have MATCHED, not merely passed. caddy's miss line names a
-  // real installed skill ("run /skill-recall to log this gap"), so a positive case
-  // expecting `skill-recall` passes identically whether the router works or is
-  // completely dead — a witness satisfied by the very failure it is meant to rule
-  // out. Only a case whose response was NOT a miss proves routing still works.
-  const positivesPassed = mine.some((r) => !negativeIds.has(r.id) && r.status === 'pass' && r.matched === true);
-  const hasPositives = uniqueCases.some((c) => !c.expect_no_match);
-  if (hasPositives && !positivesPassed) {
-    for (const r of mine) {
-      if (negativeIds.has(r.id) && r.status === 'pass') {
-        r.status = 'harness-error';
-        r.detail = 'no-match assertion is unverifiable: zero positive cases passed this run, so a dead router would satisfy it identically';
-      }
-    }
-  }
-
-  // Clean up only the flags this run created. Never touch another session's.
-  for (const f of globSync(path.join(ROOT, '.aigent', 'cache', `caddy-gap-eval-${process.pid}-*`))) {
-    rmSync(f, { force: true });
-  }
-}
+// ── Suite 1 (skill recall) retired 2026-11-05 ─────────────────────────────────
+// It drove prompts through daemons/caddy.sh. Caddy is retired: Claude Code matches skills
+// natively from each skill's description, so there is no router of ours left to evaluate.
 
 // ── Suite 2: capsule resume ───────────────────────────────────────────────────
 // Writes one capsule at the given status into a temp vault and asks the REAL
@@ -261,7 +128,6 @@ function runContradiction() {
 // ── Report ────────────────────────────────────────────────────────────────────
 
 await runCapsuleResume();
-runSkillRecall();
 runContradiction();
 
 // Keyed by suite/id, NEVER by bare id. Case ids are unique only WITHIN a corpus,
@@ -271,7 +137,6 @@ runContradiction();
 // declared it.
 const declared = new Map();
 for (const [suite, f] of [
-  ['skill-recall', 'skill-recall-tests.json'],
   ['capsule-resume', 'capsule-resume-tests.json'],
   ['contradiction', 'contradiction-tests.json'],
 ]) {
@@ -281,7 +146,6 @@ for (const [suite, f] of [
 const declarationFor = (r) => declared.get(`${r.suite}/${r.id}`);
 
 for (const [suite, f] of [
-  ['skill-recall', 'skill-recall-tests.json'],
   ['capsule-resume', 'capsule-resume-tests.json'],
   ['contradiction', 'contradiction-tests.json'],
 ]) {
@@ -346,7 +210,7 @@ const harnessError = results.filter((r) => r.status === 'harness-error');
 //   UNDERCOVERED — declarations ate the coverage. Relative, so honest gaps have room
 //                  while "declare everything" still cannot buy a green.
 const EXECUTED = new Set(['pass', 'fail']);
-const MIN_CASES = { 'skill-recall': 4, 'capsule-resume': 4 };
+const MIN_CASES = { 'capsule-resume': 4 };
 const suiteRows = (s) => results.filter((r) => r.suite === s).length;
 const suiteExecuted = (s) => results.filter((r) => r.suite === s && EXECUTED.has(r.status)).length;
 
@@ -375,7 +239,7 @@ const undercovered = Object.keys(MIN_CASES)
 const witnessedSuites = new Set(
   results.filter((r) => r.status === 'pass' && r.matched === true).map((r) => r.suite),
 );
-const unwitnessed = ['skill-recall']
+const unwitnessed = []
   .filter((s) => results.some((r) => r.suite === s && EXECUTED.has(r.status)) && !witnessedSuites.has(s));
 
 const MARK = {

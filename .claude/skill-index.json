@@ -89,19 +89,6 @@
     "why": "Vault search by meaning via local embeddings"
   },
   {
-    "name": "caddy-enroll",
-    "triggers": [
-      "enroll this skill",
-      "add to Caddy",
-      "update Caddy for",
-      "add skill to index",
-      "caddy enroll",
-      "register new skill",
-      "add to golf bag"
-    ],
-    "why": "Add a new skill to Caddy's index so it can be surfaced by prompt match"
-  },
-  {
     "name": "system-check",
     "triggers": [
       "system check",
@@ -345,53 +332,6 @@
       "capture this learning"
     ],
     "why": "Capture a learning sweep as a structured note in vault/concepts/learning/. Categorize, locate on the modern AI stack, assess relevance, capture reconsideration triggers."
-  },
-  {
-    "name": "caddy-explain",
-    "triggers": [
-      "caddy explain",
-      "why did Caddy suggest",
-      "explain that hint",
-      "why no hint",
-      "why this skill",
-      "Caddy scoring",
-      "Caddy why",
-      "Caddy reasoning",
-      "explain caddy",
-      "caddy decision",
-      "show me caddy math"
-    ],
-    "why": "Walk the deterministic Caddy scoring for a prompt — which trigger matched, what points, what threshold, what near-misses. Pairs with the legibility thesis."
-  },
-  {
-    "name": "caddy-mute",
-    "triggers": [
-      "caddy mute",
-      "mute caddy",
-      "no suggestions",
-      "stop hinting",
-      "in flow",
-      "leave me alone caddy",
-      "quiet mode",
-      "suppress caddy",
-      "shut caddy up",
-      "stop caddy"
-    ],
-    "why": "Suppress Caddy hints for a bounded duration. Auto-restores. Respects flow without breaking the framework's advisory discipline."
-  },
-  {
-    "name": "caddy-audit",
-    "triggers": [
-      "caddy audit",
-      "audit caddy",
-      "skill index drift",
-      "is the skill index correct",
-      "verify skill catalog",
-      "skill drift check",
-      "caddy hygiene",
-      "audit skill index"
-    ],
-    "why": "Quarterly hygiene check. Walks skill-index vs SKILL.md files on disk. Reports orphans (in index/not on disk and vice versa) and trigger drift."
   },
   {
     "name": "promote",

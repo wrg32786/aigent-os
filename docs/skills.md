@@ -23,7 +23,7 @@ When you type a skill command, Claude Code loads its `SKILL.md` and follows the 
 
 ## Creating Custom Skills
 
-Skills live in two places: `skills/` is the versioned **source** tree in this repo, and `.claude/skills/` is the **runtime** location Claude Code actually reads. Creating a file under `skills/` alone does NOT make the command work; you must also place it in `.claude/skills/` (or re-run the installer, or run `/caddy-enroll`).
+Skills live in two places: `skills/` is the versioned **source** tree in this repo, and `.claude/skills/` is the **runtime** location Claude Code actually reads. Creating a file under `skills/` alone does NOT make the command work; you must also place it in `.claude/skills/` (or re-run the installer).
 
 Make a new directory in `skills/` with a `SKILL.md` inside for versioning:
 
@@ -33,7 +33,7 @@ skills/
     SKILL.md
 ```
 
-Then copy it to `.claude/skills/my-skill/SKILL.md` for runtime, or run `/caddy-enroll` to register it. See [Advanced Setup → Skills: source vs runtime](advanced-setup.md#skills-source-vs-runtime).
+Then copy it to `.claude/skills/my-skill/SKILL.md` for runtime, and give it a short "Use when" `description`: Claude Code matches skills natively from that text. See [Advanced Setup → Skills: source vs runtime](advanced-setup.md#skills-source-vs-runtime).
 
 ### SKILL.md Template
 
