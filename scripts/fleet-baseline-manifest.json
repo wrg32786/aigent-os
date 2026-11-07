@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-06-824eb0e9",
-  "public_product_commit": "824eb0e9efd8af0b6670cd01fbbc0a6317755e79",
+  "baseline_id": "aigent-os-2026-11-06-44a73415",
+  "public_product_commit": "44a734158fe0e597059782252835ba3df17e8dbe",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -48,7 +48,8 @@
     "v8 recut for Caddy retirement (bash 3.2) (35434c43): pins that moved: daemons/prompt-context.sh. Recut: daemons/prompt-context.sh gained a bash 3.2 fallback for its clock line. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for journal async (fe019be2): pins that moved: .claude/settings.json.template. Recut: the settings template marks the userpromptsubmit-journal hook async. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for Caddy retirement, merged with #151/#150/#147 (2df5936c): pins that moved: none. Recut after merging master: auto-clear-transport.mjs carries #151, the settings template and prompt-context.sh carry the Caddy retirement. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for Caddy retirement follow-up (824eb0e9): pins that moved: daemons/prompt-context.sh. Recut: prompt-context.sh forwards capture notices and finds its root on a bare run. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for Caddy retirement follow-up (824eb0e9): pins that moved: daemons/prompt-context.sh. Recut: prompt-context.sh forwards capture notices and finds its root on a bare run. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for Caddy follow-up round 2 (44a73415): pins that moved: daemons/prompt-context.sh. Recut: prompt-context.sh renders capture notices inert and caps its error log. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -88,7 +89,7 @@
     "launcher/install.ps1": "25006315041090790ae30e27473e6adc5d623550bc4baf7123771d66f5fa0dd0",
     "daemons/semantic-search/namespace-registry.json": "5bcc603c8e813f272be3ef17aa94b92ac1cccd9e31fb5b02d6d5589d60025060",
     "daemons/frontmatter-reader.cjs": "f8663f5ef1609c64ff09c5b397f78fb61eb179c36f8809a2b48b75afd1f4a59b",
-    "daemons/prompt-context.sh": "0543826ccea53239e434341fe2518e923159a3977b99f4fa726b6cbce8c58db5"
+    "daemons/prompt-context.sh": "aba19f057b182c73f5fbfad291ac00d97840af4e9edaa10dbcb2b4e2d62ea8de"
   },
   "required_settings": {
     "path": ".claude/settings.json",
