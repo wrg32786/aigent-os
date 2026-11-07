@@ -1,7 +1,7 @@
 ---
 name: supersede
 agent: mnemosyne
-description: Mnemosyne's supersede skill. Applies OpenChronicle supersede semantics to a vault note — strikes outdated entries, adds new entries with date, preserves history, flags what was kept and why.
+description: "Apply OpenChronicle supersede semantics to vault notes, preserving history. Use when striking outdated entries, adding dated replacements, or updating the record."
 allowed-tools: Read, Write, Edit, Grep, Glob
 user-invocable: true
 triggers:

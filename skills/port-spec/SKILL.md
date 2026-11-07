@@ -1,7 +1,7 @@
 ---
 name: port-spec
 agent: lyra
-description: Lyra's spec-port skill. Takes a complete written specification and ports it into working code or a vault artifact. Confirms scope, reads the target, builds, returns honesty ledger.
+description: "Turn a complete written specification into working code or a vault artifact. Use when implementing a spec, building from a brief, or porting a spec to code."
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 user-invocable: true
 triggers:

@@ -1,7 +1,7 @@
 ---
 name: ui-architecture
 agent: iris
-description: Iris's new UI surface design skill. Takes a brief for a new screen, component, or design system and produces a complete visual architecture spec — component tree, layout grid, interaction states, breakpoints, tokens. No code.
+description: "Specify UI component trees, grids, states, breakpoints, and tokens without code. Use when designing a new screen, component, or design system architecture."
 allowed-tools: Read, Write, Edit, WebFetch, Grep, Glob, Agent
 user-invocable: true
 triggers:

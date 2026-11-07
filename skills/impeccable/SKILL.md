@@ -1,6 +1,6 @@
 ---
 name: impeccable
-description: Create distinctive, production-grade frontend interfaces with high design quality. Generates creative, polished code that avoids generic AI aesthetics. Use when the user asks to build web components, pages, artifacts, posters, or applications, or when any design skill requires project context. Call with 'craft' for shape-then-build, 'teach' for design context setup, or 'extract' to pull reusable components and tokens into the design system.
+description: "Build frontend interfaces; craft designs, teach project context, or extract components and tokens. Use when creating pages, apps, posters, or design systems."
 version: 2.1.1
 user-invocable: true
 argument-hint: "[craft|teach|extract]"

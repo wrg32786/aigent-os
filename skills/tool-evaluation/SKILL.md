@@ -1,7 +1,7 @@
 ---
 name: tool-evaluation
 agent: newton
-description: Newton's tool evaluation skill. Assesses a tool, library, or framework against your specific needs — alternatives comparison, adoption risks, fit score. Returns structured evaluation with recommendation.
+description: "Evaluate tools, libraries, or frameworks for fit, alternatives, and adoption risks. Use when comparing tools, choosing a library, or deciding whether to adopt one."
 allowed-tools: Read, Grep, Glob, WebFetch, Agent, Write
 user-invocable: true
 triggers:

@@ -1,6 +1,6 @@
 ---
 name: start
-description: The day-one first-run flow and the everyday home screen. On first launch, greet, run setup, then carry the operator into a real first win. On return, give a short briefing and action menu.
+description: "Provide a home screen with first-run setup, first win, or a return briefing and action menu. Use when launching for the first time or asking what to do today."
 trigger: /start
 ---
 

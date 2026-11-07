@@ -1,7 +1,7 @@
 ---
 name: meta-improve-vault
 agent: none
-description: Unique project-local route to the canonical constrained self-improvement protocol. Accepts only operator-approved Dream candidates.
+description: "Route project-local self-improvement to the canonical protocol. Use when implementing operator-approved Dream candidates through meta-improve-vault."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 disable-model-invocation: true

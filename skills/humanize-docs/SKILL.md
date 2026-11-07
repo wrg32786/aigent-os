@@ -1,15 +1,7 @@
 ---
 name: humanize-docs
 version: 1.0.0
-description: |
-  Transform AI-generated documentation into human-readable prose with personality.
-  USE WHEN: Converting rigid AI docs (checklist spam, CAPS LOCK emphasis, perfect symmetric
-  structures, template dumps) into flowing, conversational writing that feels colleague-authored.
-  Different from /humanizer — that skill detects AI writing patterns (Wikipedia taxonomy).
-  This skill does aggressive deformalization of document structure and flow.
-  PRIMARY TRIGGERS: "humanize this doc", "make this readable", "remove AI patterns from doc",
-  "add human touch to this"
-  See also: humanizer skill for text-level AI pattern removal.
+description: "Rewrite AI documentation structure and flow into conversational prose. Use when humanizing docs, removing checklist spam, or making rigid documents readable."
 license: MIT
 compatibility: claude-code opencode
 source: https://github.com/skillkit-marketplace/skills/tree/main/skills/humanize-docs

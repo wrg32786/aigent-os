@@ -1,7 +1,7 @@
 ---
 name: digest
 agent: none
-description: Review staged memory candidates from MEMORY_CANDIDATES.md. Surface each with promote/skip/supersede options. Does not auto-promote.
+description: "Review MEMORY_CANDIDATES.md with promote, skip, or supersede choices. Use when digesting staged memory or clearing its backlog. No automatic promotion."
 allowed-tools: Read, Edit, Grep
 user-invocable: true
 triggers:

@@ -1,7 +1,7 @@
 ---
 name: critique-plan
 agent: hypatia
-description: Hypatia's plan critique skill. Takes a strategic plan, architectural decision, or proposal and returns adversarial pre-commitment review — strongest counterargument first, hidden assumptions surfaced, alternatives named.
+description: "Critique plans with counterarguments, hidden assumptions, and alternatives. Use when challenging a strategic plan, architectural decision, or proposal before commitment."
 allowed-tools: Read, Grep, Glob, WebFetch
 user-invocable: true
 triggers:

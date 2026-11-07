@@ -1,3 +1,8 @@
+---
+name: solution-hunt
+description: "Find creative workarounds using local memory and skills. Use when a blocker requires an alternate solution."
+---
+
 # /solution-hunt — Creative workaround engine
 
 When blocked, systematically search for legitimate alternate routes before declaring inability.

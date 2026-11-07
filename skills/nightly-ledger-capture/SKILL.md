@@ -1,7 +1,7 @@
 ---
 name: nightly-ledger-capture
 agent: none
-description: Discovers missing honesty, trust-decay, failure-mode, and decision-outcome entries from local evidence; stages judgment and permits direct mutation only after an executable oracle.
+description: "Stage missing honesty, trust-decay, failure-mode, and decision-outcome records from local evidence. Use when capturing nightly ledger candidates; writes require an oracle."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 status: PRODUCTION - stage first and never self-confirm

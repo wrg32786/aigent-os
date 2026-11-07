@@ -1,6 +1,6 @@
 ---
 name: Honesty Check
-description: Run the volunteering ledger before declaring work done. Forces surfacing of what changed/didn't, what was noticed-but-not-fixed, what was guessed, and what tradeoffs were made on the principal's behalf. The standard - the principal should never be surprised later by something the agent knew at the time.
+description: "Surface changes, omissions, guesses, and tradeoffs in an honesty ledger. Use when declaring work done, preparing review, or explaining what remains unfixed."
 ---
 
 # Honesty Check

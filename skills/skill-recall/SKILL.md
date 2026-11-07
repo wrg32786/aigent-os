@@ -1,3 +1,8 @@
+---
+name: skill-recall
+description: "Find local skills for the current task and log gaps. Use when checking which local skill matches a task or whether a suitable skill exists."
+---
+
 # /skill-recall — Find local skills for current task
 
 When invoked, match the current task against the installed skill taxonomy. Return ranked suggestions or log a gap.

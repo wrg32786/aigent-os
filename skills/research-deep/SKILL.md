@@ -1,7 +1,7 @@
 ---
 name: research-deep
 agent: newton
-description: Newton's multi-source deep research skill. Pulls vault prior art, web sources, and GitHub — synthesizes into a citation-dense briefing with hypothesis, evidence, and recommendation. Returns honesty ledger.
+description: "Synthesize vault, web, and GitHub research into a cited briefing with evidence and recommendations. Use when investigating a topic or requesting multi-source research."
 allowed-tools: Read, Grep, Glob, WebFetch, Agent, Write
 user-invocable: true
 triggers:

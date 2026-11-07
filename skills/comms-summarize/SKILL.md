@@ -1,7 +1,7 @@
 ---
 name: comms-summarize
 agent: echo
-description: Echo's comms polling skill. Read an inbox, channel, or message thread and return a structured unread summary — sender, topic, action required, and urgency. Read-only.
+description: "Summarize unread inbox, channel, or thread messages with sender, topic, action, and urgency. Use when checking inboxes or polling comms. Read-only."
 allowed-tools: Read, Grep, Glob
 user-invocable: true
 triggers:

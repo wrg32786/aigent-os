@@ -1,7 +1,7 @@
 ---
 name: capsule-compact
 agent: none
-description: Compact a long capsule chain. Walks parent_capsule_id backward from a head capsule; if chain >= 5, summarizes oldest 3 into a chain-summary capsule. Manual invocation.
+description: "Compact capsule chains by summarizing older capsules. Use when manually compacting capsules or a context chain grows too long."
 allowed-tools: Bash, Read
 user-invocable: true
 triggers:

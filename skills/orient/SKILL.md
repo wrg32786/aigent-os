@@ -1,3 +1,8 @@
+---
+name: orient
+description: "Provide orientation. Use when asking to orient or needing an initial orientation."
+---
+
 # orient
 
 When the user (or an agent) is confused about where something lives, who owns what, what the rules are, or what to do next, run this to load the canonical map.

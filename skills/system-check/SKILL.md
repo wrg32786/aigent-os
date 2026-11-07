@@ -1,7 +1,7 @@
 ---
 name: system-check
 agent: none
-description: Read-only installation smoke test for skills, daemons, operational memory, cognitive runtime, nightly freshness, terminal evidence, and unique route ownership.
+description: "Run read-only installation smoke tests for skills, daemons, memory, runtime, freshness, and routes. Use when verifying an install or checking aigent-OS health."
 allowed-tools: Bash, Read
 user-invocable: true
 triggers:

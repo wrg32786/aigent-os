@@ -1,7 +1,7 @@
 ---
 name: sweep-links
 agent: hestia
-description: Hestia's broken wikilink detection skill. Scans vault notes for [[wikilinks]] that point to non-existent files. Reports broken links with source file and line. Does not fix — reports only.
+description: "Report broken vault wikilinks with source files and lines. Use when scanning for dead links, checking wikilinks, or sweeping links. Reports only; no fixes."
 allowed-tools: Read, Grep, Glob
 user-invocable: true
 triggers:

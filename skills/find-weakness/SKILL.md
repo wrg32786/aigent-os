@@ -1,7 +1,7 @@
 ---
 name: find-weakness
 agent: hypatia
-description: Hypatia's targeted weakness-finding skill. Given a specific claim, architecture, or decision, finds the single strongest objection and the hidden assumption most likely to be wrong. Sharper and faster than critique-plan.
+description: "Find the single strongest objection and weakest assumption. Use when stress testing a specific claim, architecture, or decision for its biggest flaw."
 allowed-tools: Read, Grep, Glob, WebFetch
 user-invocable: true
 triggers:

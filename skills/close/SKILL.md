@@ -1,6 +1,6 @@
 ---
 name: close
-description: Commit the session to durable vault memory and prepare a clean resume point
+description: "Save session outcomes to durable vault memory and prepare a resume point. Use when ending a session, wrapping up, or done for today."
 trigger: /close
 status: DEPRECATED by the two-verb lifecycle — see skills/context-capsule/SKILL.md. /context-capsule absorbs /close; there is no separate close ceremony. Kept for manual invocation during the transition; not deleted.
 ---

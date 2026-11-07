@@ -1,6 +1,6 @@
 ---
 name: Sandbox Routing
-description: SELF-CORRECT tool choice. About to Read a long file just to extract one piece of info? Use a sandbox tool that returns only the summary. About to run a long shell command? Same. Sandbox keeps raw output OUT of context — only summaries land. Triggers when about to flood context with large output.
+description: "Route large files and command output through sandbox tools that return summaries. Use when extracting small details from huge files or avoiding context flooding."
 ---
 
 # Sandbox Routing

@@ -1,7 +1,7 @@
 ---
 name: sweep-now
 agent: none
-description: Run the three read-mostly vault sweeps for stale tracker items, dormant-note candidates, and broken wikilinks, then append one dated result to SWEEP_LOG.md.
+description: "Sweep stale trackers, dormant-note candidates, and broken wikilinks; append results to SWEEP_LOG.md. Use when running all vault sweeps or a full vault cleanup check."
 allowed-tools: Read, Edit, Bash, Grep, Glob
 user-invocable: true
 triggers:

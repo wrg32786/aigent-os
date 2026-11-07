@@ -1,6 +1,6 @@
 ---
 name: brief
-description: Generate a structured delegation brief for any task
+description: "Generate a structured delegation brief. Use when assigning a task, handing off work, or briefing a sub-agent."
 trigger: /brief
 ---
 

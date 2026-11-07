@@ -1,6 +1,6 @@
 ---
 name: Envelope
-description: Classify any incoming directive as Ship / Ask one focused question / Propose first. Forces a sharp decision instead of a multi-option survey to the principal. The default failure mode for agents is treating ship-work as ask-work (over-surveying) or treating propose-work as ship-work (rushing irreversible changes). This skill prevents both.
+description: "Classify directives as Ship, Ask one question, or Propose first. Use when deciding whether to act, clarify, or seek approval for a request."
 ---
 
 # Envelope

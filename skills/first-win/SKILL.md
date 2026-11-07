@@ -1,6 +1,6 @@
 ---
 name: first-win
-description: The day-one first-win menu. Three dead-simple, high-value tasks (two zero-dependency) that each put a real, usable artifact in the operator's hands in minutes, so the "ship something real" promise is met on day one and never waits on a connector or OAuth.
+description: "Offer three starter tasks that produce usable artifacts. Use when seeking a first win, a day-one task, or something useful to try first."
 trigger: /first-win
 ---
 

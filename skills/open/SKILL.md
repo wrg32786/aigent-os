@@ -1,6 +1,6 @@
 ---
 name: open
-description: Boot the session, load context from the vault, and surface what matters
+description: "Boot a session, load vault context, and surface what matters. Use when opening a session, saying good morning, or starting work."
 trigger: /open
 status: DEPRECATED by the two-verb lifecycle — see skills/resume/SKILL.md. /resume absorbs /open; the post-clear boot runs it automatically via daemons/resume-verb.mjs. Kept for manual invocation during the transition; not deleted.
 ---

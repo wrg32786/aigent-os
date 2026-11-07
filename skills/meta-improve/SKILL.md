@@ -1,7 +1,7 @@
 ---
 name: meta-improve
 agent: none
-description: Canonical constrained self-improvement protocol. Reads operator-approved Dream candidates and never self-merges or self-approves.
+description: "Run constrained self-improvement without self-approval or self-merge. Use when implementing operator-approved Dream candidates via the canonical protocol."
 allowed-tools: Read, Write, Bash
 user-invocable: false
 status: PRODUCTION - invoke through /meta-improve-vault

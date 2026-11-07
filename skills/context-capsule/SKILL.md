@@ -1,6 +1,6 @@
 ---
 name: context-capsule
-description: The capsule verb, invoked explicitly — reconcile from the live memory, write a resume-ready capsule, then stop. Mid-session checkpoint or completion capsule; a rolling best-effort version of the same write also runs automatically on every Stop event via daemons/stop-capsule-writer.mjs.
+description: "Write a resume-ready capsule from live memory, then stop. Use when explicitly saving state, preserving context, checkpointing, or completing a milestone."
 trigger: /context-capsule
 status: Two-verb lifecycle — supersedes the v1 capsule skill and absorbs /close (there is no separate close ceremony).
 related:

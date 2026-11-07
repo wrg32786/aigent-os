@@ -1,7 +1,7 @@
 ---
 name: dream
 agent: none
-description: Evidence-gated synthesis over recent operating evidence. Appends admitted lessons and a dated synthesis with propose-only improvement candidates.
+description: "Synthesize lessons and propose improvements from recent operating evidence. Use when reviewing sessions, consolidating notes, or finding patterns."
 allowed-tools: Read, Write, Bash
 user-invocable: true
 status: PRODUCTION - canonical writer and propose-only

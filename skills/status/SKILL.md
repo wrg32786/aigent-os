@@ -1,3 +1,8 @@
+---
+name: status
+description: "Report aigent-OS operational status. Use when checking the current operational state of aigent-OS."
+---
+
 # /status — aigent-OS operational status
 
 Read computed runtime state and display a concise operational summary. Under 12 lines.

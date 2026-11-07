@@ -1,6 +1,6 @@
 ---
 name: Skill Audit
-description: List every installed skill, when it was last invoked, how often, and whether the description still matches the trigger patterns the principal actually uses. Flags dead skills for retirement and frequently-needed-but-missing capabilities for skill creation.
+description: "Audit skill usage and description-trigger fit. Use when finding unused skills, reviewing invocation history, or identifying missing capabilities."
 ---
 
 # Skill Audit

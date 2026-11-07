@@ -1,7 +1,7 @@
 ---
 name: reconcile
 agent: none
-description: Read-only attention reconciliation. Computes actual seven-day project attention from daily notes against explicit Tier-1 intended shares.
+description: "Compare seven-day project attention in daily notes with explicit Tier-1 intended shares. Use when reconciling attention or checking priority drift. Read-only."
 allowed-tools: Read, Bash
 user-invocable: true
 status: PRODUCTION - deterministic and read-only

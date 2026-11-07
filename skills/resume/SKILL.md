@@ -1,6 +1,6 @@
 ---
 name: resume
-description: The resume verb, invoked explicitly — load the newest valid capsule by created_at, re-ground against live memory, then ACT on waiting_on. Mid-session or on explicit ask; the post-clear boot fires the same procedure automatically via daemons/resume-verb.mjs.
+description: "Load the newest valid capsule, check live memory, and act on waiting_on. Use when explicitly resuming work or picking up where you left off."
 trigger: /resume
 status: Two-verb lifecycle — supersedes the v1 open skill and absorbs /open (there is no separate open ceremony).
 related:

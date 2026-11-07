@@ -1,6 +1,6 @@
 ---
 name: Diagnose
-description: When something feels off, type /diagnose and describe the symptom. The skill walks the seven-layer stack (kernel, skills, hooks, daemons, vault, doctrine, principal config) and reports which layer is most likely responsible.
+description: "Diagnose kernel, skills, hooks, daemons, vault, doctrine, and principal config. Use when hooks fail, routing breaks, or agent behavior changes."
 ---
 
 # Diagnose
