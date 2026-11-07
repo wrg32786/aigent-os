@@ -198,6 +198,10 @@ export const HOLD_CLEAR_STALLED_AFTER_ACK = 'HOLD:clear-stalled-after-ack';
 // A refusal line carrying the ownership snapshot is longer than the 400-char
 // default; give it room so the snapshot is never the part that gets cut.
 const REFUSAL_DETAIL_MAX = 1200;
+// Consecutive failed transport ticks before automation is turned off. A tick that throws once (a
+// file briefly locked on Windows) used to disable automatic refresh until a relaunch. Each tick's
+// own state write already retries its rename, so this many failures in a row is not transient.
+export const TRANSPORT_TICK_FAILURE_LIMIT = 5;
 
 function hasOwn(value, field) {
   return value !== null
@@ -7357,9 +7361,24 @@ export class ManagedPtyRunner {
     try {
       coreResult = this.transport.tick();
     } catch (error) {
+      // A failed tick changes nothing on disk (the cycle file is written last and atomically), so
+      // the next tick can simply run again.
+      this.transportTickFailures = (this.transportTickFailures || 0) + 1;
+      if (this.transportTickFailures < TRANSPORT_TICK_FAILURE_LIMIT) {
+        this._event('transport-tick-failed-retrying', {
+          failures: this.transportTickFailures,
+          limit: TRANSPORT_TICK_FAILURE_LIMIT,
+          detail: errorText(error),
+        });
+        return {
+          status: 'retrying',
+          code: 'runner-transport-tick-failed',
+          detail: errorText(error),
+        };
+      }
       this._disableAutomation(
         'runner-transport-tick-failed',
-        errorText(error),
+        `${this.transportTickFailures} consecutive failures; last: ${errorText(error)}`,
       );
       return {
         status: 'disabled',
@@ -7367,6 +7386,7 @@ export class ManagedPtyRunner {
         detail: errorText(error),
       };
     }
+    this.transportTickFailures = 0;
     this.lastCoreResult = coreResult;
     if (!coreResult || typeof coreResult !== 'object'
       || !hasOwn(coreResult, 'state')
