@@ -152,6 +152,7 @@ jobs:
           bash tests/test-installer-fast.sh
           bash tests/test-installer-drift.sh
           bash tests/test-installer-operator-owned.sh
+          bash tests/test-installer-stale-docs.sh
           bash tests/test-installer-install-source.sh
           bash tests/test-installer-slow-smoke.sh
           bash tests/test-web-install.sh
