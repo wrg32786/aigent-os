@@ -167,14 +167,14 @@ remain residue in this round and were not re-engineered.
 
 | ID | Site | Source → sink |
 |---|---|---|
-| SH-D01 | `daemons/caddy-detect-new-skill.sh:11-75` | PostToolUse Write/Edit path plus skill index → validated skill name and quoted path → model-facing `/caddy-enroll` nudge. |
-| SH-D02 | `daemons/caddy.sh:18-20,60-109` | User prompt pattern matches and mute state → selected fixed routing/memory/context/body hint lines → UserPromptSubmit stdout. |
-| SH-D03 | `daemons/caddy.sh:115-170` | User prompt plus `.claude/skill-index.json` name/triggers/why → validated name and quoted reason → top-two Caddy hints. |
-| SH-D04 | `daemons/caddy.sh:179-213` | User prompt words plus `memory/SKILL_LEDGER.md` row fields → quoted skill/path/description taxonomy fallback or fixed gap hint. |
-| SH-D05 | `daemons/caddy.sh:215-229` | User prompt overlap plus `memory/SKILL_CHAINS.md` chain cell → quoted prior-chain hint. |
-| SH-D06 | `daemons/skill-router.sh:30-60,62-143` | User prompt plus legacy/typed skill-card index fields → validated alias/name and quoted description, matched triggers, and model → structured Caddy skill hint. |
-| SH-D07 | `daemons/caddy.sh:233-235` | Output from `skill-router.sh` → unchanged forwarding to the UserPromptSubmit channel. |
-| SH-D08 | `daemons/memory-capture.sh:229-232,257-262,337-357` | Candidate backlog or injection-guard exit code → fixed/numeric cap or scan-failure instruction → Caddy stdout. |
+| SH-D01 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D02 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D03 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D04 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D05 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D06 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+| SH-D07 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
+S9,269,364` | Candidate backlog or injection-guard exit code → fixed/numeric cap or scan-failure instruction → `.aigent/capture-notices`, shown by `daemons/prompt-context.sh` on the next prompt. |
 | SH-D09 | `daemons/consciousness-boot.sh:23-42,46-57,60-149` | Skill index, hook wiring, `BODY_STATE.json`, sweep age, and router state → quoted/derived bounded fields → boot manifest procedure. |
 | SH-D10 | `daemons/somatic/reflex-body.sh:8-31` | `BODY_STATE.json` pressure and recommended-reflex fields → fixed pressure instructions plus quoted reflex → UserPromptSubmit somatic hint. |
 | SH-D11 | `daemons/somatic/reflex-digest.sh:5-8` | Count of staged `MEMORY_CANDIDATES.md` rows → numeric `/digest` instruction. |
@@ -200,7 +200,7 @@ remain residue in this round and were not re-engineered.
 
 | ID | Site | Source → persisted sink → later renderer |
 |---|---|---|
-| SH-P01 | `daemons/caddy-reindex.sh:22-62,75-97` | Skill-catalog frontmatter → locally collapsed flat `.claude/skill-index.json` → SH-D03/SH-D06. |
+| SH-P01 | Removed | The site is gone: the Caddy scripts and `skill-router.sh` were removed. |
 | SH-P02 | `daemons/memory-capture.sh:32-64,104-121,238-312` | User prompt memory-authoring match → quoted/bounded `MEMORY_CANDIDATES.md` row → digest and SH-D11; rows remain `unscanned` until the injection guard promotes them. |
 | SH-P03 | `hooks/auto-capture.sh:14-41` | JS-P05 quoted capture line → today’s `vault/daily/*.md` `Session Captures` section → SH-P04. |
 | SH-P04 | `hooks/session-capture-summary.sh:40-155` | Intentional multiline daily capture section → parsed quoted cells, bounded tool/file sample → persisted single-line daily-note summary used by later memory orientation/reconciliation. |

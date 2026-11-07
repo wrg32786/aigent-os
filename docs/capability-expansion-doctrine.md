@@ -62,6 +62,5 @@ Every new capability added via this doctrine gets:
 - [[Lego Arsenal Doctrine]]: every skill built via expansion is a Pantheon-compatible Lego
 - [[Self-Improving CLAUDE.md]]: the broader self-improvement loop this doctrine feeds
 - [[Pipeline Verification Doctrine]]: verify the expanded capability works end-to-end before shipping
-- [[concepts/Caddy Skill Recall Integration]]: how Caddy surfaces expansion prompts at runtime
 - [[memory/SKILL_LEDGER]]: live taxonomy index of installed skills
 - [[memory/SKILL_GAPS]]: open capability gaps awaiting hunt or resolution

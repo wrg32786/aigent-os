@@ -9,7 +9,7 @@ created: 2026-05-08
 
 Taxonomy-structured index of all installed skills and tool capabilities. Maintained by `/skill-recall` on every successful hunt; updated manually on new installs.
 
-See [[concepts/Capability Expansion Doctrine]] for the expansion protocol. See [[concepts/Caddy Skill Recall Integration]] for how this feeds Caddy.
+See [[concepts/Capability Expansion Doctrine]] for the expansion protocol.
 
 ## Last indexed
 
@@ -140,7 +140,6 @@ See [[concepts/Capability Expansion Doctrine]] for the expansion protocol. See [
 
 ### caddy
 
-- `caddy.enroll` — Add skill to Caddy's index — (caddy-enroll skill)
 - `caddy.mute` — Suppress Caddy hints for bounded duration — `/caddy-mute`
 - `caddy.explain` — Walk Caddy scoring for a prompt — (caddy-explain skill)
 - `caddy.audit` — Quarterly hygiene check of skill-index vs disk — (caddy-audit skill)

@@ -58,7 +58,7 @@ DAEMONS_TOTAL=0
 # Check which daemons are referenced in settings.json hooks
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ]; then
-  for daemon in prompt-context.sh check-comms.sh skill-router.sh; do
+  for daemon in prompt-context.sh check-comms.sh; do
     DAEMONS_TOTAL=$((DAEMONS_TOTAL + 1))
     grep -q "$daemon" "$SETTINGS" 2>/dev/null && DAEMONS_WIRED=$((DAEMONS_WIRED + 1))
   done
@@ -139,22 +139,14 @@ print((datetime.now(timezone.utc) - d).days)
 fi
 SWEEP_SUMMARY="Hestia: last sweep $SWEEP_AGE"
 
-# ── Router status ────────────────────────────────────────────────────────────
-if grep -q "caddy.sh" "$SETTINGS" 2>/dev/null; then
-  ROUTER_STATUS="Router: WIRED (caddy.sh → skill-index.json)"
-else
-  ROUTER_STATUS="Router: NOT WIRED — skills won't auto-match"
-fi
-
 # ── Output manifest ─────────────────────────────────────────────────────────
 cat <<EOF
 [BOOT] Consciousness manifest loaded.
 $SKILL_SUMMARY
-$ROUTER_STATUS
 $DAEMON_SUMMARY
 $SOMATIC_SUMMARY
 $SWEEP_SUMMARY
-Auto-invoke: ON — when [CADDY:skill] MATCH fires, invoke the skill immediately.
+Skills: matched natively from each skill's description.
 EOF
 
 exit 0

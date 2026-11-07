@@ -10,7 +10,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
-TOTAL=5
+TOTAL=7
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 FIXTURE="$WORK/src"
@@ -64,14 +64,61 @@ printf '[4/%d] the retirement is reported\n' "$TOTAL"
 #    directly: extracted from install.sh's heredoc and fed the same old settings.
 sed -n "/merge-settings.cjs\" <<'JS'/,/^JS$/p" "$ROOT/install.sh" | sed '1d;$d' > "$WORK/merge-settings.cjs"
 [[ -s "$WORK/merge-settings.cjs" ]] || fail "could not extract the node merger"
-OLD="$WORK/old-settings.json"
+mkdir -p "$WORK/old/.claude"
+OLD="$WORK/old/.claude/settings.json"
 NEW="$WORK/new-settings.json"
-printf '{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash \\"/x/daemons/caddy.sh\\""},{"type":"command","command":"bash \\"/x/hooks/operator-own.sh\\""}]}]}}' > "$OLD"
+printf '{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash \\"$CLAUDE_PROJECT_DIR/daemons/caddy.sh\\""},{"type":"command","command":"bash \\"/x/hooks/operator-own.sh\\""}]}]}}' > "$OLD"
 printf '{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash \\"/x/daemons/prompt-context.sh\\""}]}]}}' > "$NEW"
 NODE_OUT="$(node "$WORK/merge-settings.cjs" "$OLD" "$NEW" "$WORK/merged.json")"
 grep -q 'daemons/caddy.sh' "$WORK/merged.json" && fail "node merger kept caddy.sh: $(cat "$WORK/merged.json")"
 grep -q 'hooks/operator-own.sh' "$WORK/merged.json" || fail "node merger dropped the operator hook"
 grep -q '\[merge\] retired' <<<"$NODE_OUT" || fail "node merger retired silently"
 printf '[5/%d] the node merger retires the same hooks\n' "$TOTAL"
+
+# 6 to 9. Narrow retirement, on both mergers, run directly. The settings file sits at
+#    <root>/.claude/settings.json, which is how the mergers find the install's root.
+sed -n "/merge-settings.py\" <<'PY'/,/^PY$/p" "$ROOT/install.sh" | sed '1d;$d' > "$WORK/merge-settings.py"
+[[ -s "$WORK/merge-settings.py" ]] || fail "could not extract the python merger"
+INST="$WORK/inst"
+mkdir -p "$INST/.claude"
+if command -v cygpath >/dev/null 2>&1; then INST_ABS="$(cygpath -m "$INST")"; else INST_ABS="$INST"; fi
+node -e '
+const [out, root] = process.argv.slice(1);
+const h = (command) => ({ type: "command", command });
+const settings = { hooks: {
+  UserPromptSubmit: [{ hooks: [
+    h(`bash "${root}/daemons/caddy.sh"`),
+    h("bash \"$CLAUDE_PROJECT_DIR/daemons/caddy.sh\""),
+    h("bash /mine/daemons/caddy.sh"),
+    h("bash -c \"cd /x && bash /h/daemons/caddy.sh && echo chained-work\""),
+    h("bash -c \"echo chained-work-2 && bash /h/daemons/caddy.sh\""),
+  ] }],
+  Stop: [{ hooks: [h(`bash "${root}/daemons/caddy.sh"`)] }],
+} };
+require("fs").writeFileSync(out, JSON.stringify(settings));
+' "$INST/.claude/settings.json" "$INST_ABS"
+printf '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"bash \\"/x/daemons/prompt-context.sh\\""}]}]}}\n' > "$WORK/new2.json"
+check_merger() {
+  local name="$1" merged="$2" output="$3"
+  grep -q '/mine/daemons/caddy.sh' "$merged" || fail "$name retired an operator's own script of the same name"
+  grep -q 'not this install' <<<"$output" || fail "$name kept the operator's script without saying so"
+  grep -q 'chained-work' "$merged" || fail "$name dropped a compound command and its chained work"
+  grep -q 'chained-work-2' "$merged" || fail "$name dropped a compound command that ends in the retired script"
+  grep -q 'compound command' <<<"$output" || fail "$name kept the compound command without a warning"
+  grep -q "$INST_ABS/daemons/caddy.sh" "$merged" && fail "$name kept this install's own copy"
+  grep -q 'CLAUDE_PROJECT_DIR/daemons/caddy.sh' "$merged" && fail "$name kept the project-variable copy"
+  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if (s.hooks.Stop) process.exit(1)' "$merged" \
+    || fail "$name did not sweep an event the template lacks"
+}
+OUT_NODE="$(node "$WORK/merge-settings.cjs" "$INST/.claude/settings.json" "$WORK/new2.json" "$WORK/merged-n.json")"
+check_merger "the node merger" "$WORK/merged-n.json" "$OUT_NODE"
+printf '[6/%d] node merger: own copies retired, in every event; an operator script and a compound are kept with a warning\n' "$TOTAL"
+if command -v python3 >/dev/null 2>&1; then
+  OUT_PY="$(python3 "$WORK/merge-settings.py" "$INST/.claude/settings.json" "$WORK/new2.json" "$WORK/merged-p.json")"
+  check_merger "the python merger" "$WORK/merged-p.json" "$OUT_PY"
+  printf '[7/%d] python merger: the same\n' "$TOTAL"
+else
+  printf '[7/%d] skipped: no python3\n' "$TOTAL"
+fi
 
 printf 'PASS: %d/%d retired-hook scenarios\n' "$TOTAL" "$TOTAL"

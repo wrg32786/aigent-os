@@ -1119,6 +1119,7 @@ else
   if command -v python3 >/dev/null 2>&1; then
     cat > "$AIGENT_TMP/merge-settings.py" <<'PY'
 import json
+import os
 import re
 import shlex
 import sys
@@ -1206,15 +1207,75 @@ def hook_identity(hook):
 
 # Hooks the framework once shipped and has since removed, by the same dir/basename identity. The
 # merge only ever added or replaced template hooks, so a removed hook stayed wired in every
-# existing install forever. Each identity here is dropped from the old settings on merge and
-# reported as "[merge] retired". Only framework-owned script paths belong here, never an
-# operator's. The node merger below carries the identical list.
+# existing install forever. A hook on this list is removed from every event, including events the
+# template does not have, and reported as "[merge] retired", but only when it is this install's own
+# copy and the command does nothing else. Any other match is kept and reported as "[merge] WARNING":
+# a script of the same name elsewhere belongs to the operator, and a compound command may carry
+# other work. The node merger below carries the identical list and rule.
 # 2026-11-05: Caddy (13 to 22 s per prompt, cancelled at its limit; replaced by
 # daemons/prompt-context.sh, skill matching is native in Claude Code).
 RETIRED_HOOK_IDENTITIES = {
     "daemons/caddy.sh",
     "daemons/caddy-detect-new-skill.sh",
 }
+
+COMPOUND_COMMAND = re.compile(r"&&|\|\||[;|&\n`]|\$\(")
+
+def norm_path(value):
+    value = value.replace("\\", "/").rstrip("/")
+    match = re.match(r"^/([A-Za-z])(/.*)?$", value)
+    if match:
+        value = match.group(1) + ":" + (match.group(2) or "")
+    return value.lower()
+
+def is_installed_copy(command, root):
+    # True when the hook's script is at this install's root: under the absolute root, under a variable
+    # that names the project, or relative to it.
+    tokens = tokenize(command)
+    script = next((t for t in tokens[1:] if is_path_like(t)), tokens[0] if tokens else "")
+    script = norm_path(script)
+    for prefix in ("$claude_project_dir/", "${claude_project_dir}/", "$aigent_root/", "${aigent_root}/", "./"):
+        if script.startswith(prefix):
+            script = script[len(prefix):]
+            break
+    else:
+        if script.startswith(norm_path(root) + "/"):
+            script = script[len(norm_path(root)) + 1:]
+    return script.count("/") == 1
+
+def sweep_retired_hooks(settings, root):
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    if not isinstance(hooks, dict):
+        return settings
+    for event in list(hooks):
+        groups = hooks[event]
+        if not isinstance(groups, list):
+            continue
+        kept = []
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                kept.append(group)
+                continue
+            remaining = []
+            for hook in group["hooks"]:
+                command = hook.get("command", "") if isinstance(hook, dict) else ""
+                compound = isinstance(command, str) and (COMPOUND_COMMAND.search(command) or " -c " in command)
+                if compound and any(name in command.replace("\\", "/") for name in RETIRED_HOOK_IDENTITIES):
+                    print(f"  [merge] WARNING kept a compound command that calls a retired hook; remove the call by hand: {command}")
+                elif hook_identity(hook) in RETIRED_HOOK_IDENTITIES:
+                    if is_installed_copy(command, root):
+                        print(f"  [merge] retired {command}")
+                        continue
+                    else:
+                        print(f"  [merge] WARNING kept {command}: it has a retired hook's name but is not this install's copy")
+                remaining.append(hook)
+            if remaining:
+                kept.append({**group, "hooks": remaining})
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    return settings
 
 def merge_hook_groups(old_groups, new_groups):
     # new_groups is the freshly rendered template: it always wins for any
@@ -1236,9 +1297,6 @@ def merge_hook_groups(old_groups, new_groups):
         remaining = []
         for hook in group.get("hooks", []):
             identity = hook_identity(hook)
-            if identity and identity in RETIRED_HOOK_IDENTITIES:
-                print(f"  [merge] retired {hook.get('command', hook) if isinstance(hook, dict) else hook}")
-                continue
             if identity and identity in template_identities:
                 print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
                 continue
@@ -1269,7 +1327,9 @@ def merge(old, new, path=()):
     return old
 
 with open(out_path, "w", encoding="utf-8") as fh:
-    json.dump(merge(base, addition), fh, indent=2)
+    # The settings file is <root>/.claude/settings.json.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(base_path)))
+    json.dump(sweep_retired_hooks(merge(base, addition), root), fh, indent=2)
     fh.write("\n")
 PY
     if python3 "$AIGENT_TMP/merge-settings.py" "$SETTINGS_DST" "$RENDERED_TMPL" "$MERGED" 2>/dev/null; then
@@ -1373,11 +1433,58 @@ const hookIdentity = hook => {
 // by whole-group equality). Ports the same algorithm so both mergers stay
 // behaviorally identical. An empty identity never matches anything, so
 // ambiguous (e.g. commandless) hooks are never deduped against each other.
-// Retired framework hooks: identical to RETIRED_HOOK_IDENTITIES in the python merger above.
+// Retired framework hooks: the same list and rule as RETIRED_HOOK_IDENTITIES and
+// sweep_retired_hooks in the python merger above.
 const RETIRED_HOOK_IDENTITIES = new Set([
   'daemons/caddy.sh',
   'daemons/caddy-detect-new-skill.sh',
 ]);
+const COMPOUND_COMMAND = /&&|\|\||[;|&\n`]|\$\(/;
+const normPath = value => {
+  const slashed = value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const match = slashed.match(/^\/([A-Za-z])(\/.*)?$/);
+  return (match ? `${match[1]}:${match[2] || ''}` : slashed).toLowerCase();
+};
+const isInstalledCopy = (command, root) => {
+  const tokens = tokenize(command);
+  let script = normPath(tokens.slice(1).find(isPathLike) ?? tokens[0] ?? '');
+  const variable = ['$claude_project_dir/', '${claude_project_dir}/', '$aigent_root/', '${aigent_root}/', './']
+    .find(prefix => script.startsWith(prefix));
+  if (variable) script = script.slice(variable.length);
+  else if (script.startsWith(`${normPath(root)}/`)) script = script.slice(normPath(root).length + 1);
+  return script.split('/').length === 2;
+};
+const sweepRetiredHooks = (settings, root) => {
+  const hooks = settings && settings.hooks;
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return settings;
+  for (const event of Object.keys(hooks)) {
+    if (!Array.isArray(hooks[event])) continue;
+    const kept = [];
+    for (const group of hooks[event]) {
+      if (!group || typeof group !== 'object' || !Array.isArray(group.hooks)) { kept.push(group); continue; }
+      const remaining = [];
+      for (const hook of group.hooks) {
+        const command = hook && typeof hook === 'object' && typeof hook.command === 'string' ? hook.command : '';
+        const compound = COMPOUND_COMMAND.test(command) || command.includes(' -c ');
+        if (compound && [...RETIRED_HOOK_IDENTITIES].some(name => command.replace(/\\/g, '/').includes(name))) {
+          console.log(`  [merge] WARNING kept a compound command that calls a retired hook; remove the call by hand: ${command}`);
+        } else if (RETIRED_HOOK_IDENTITIES.has(hookIdentity(hook))) {
+          if (isInstalledCopy(command, root)) {
+            console.log(`  [merge] retired ${command}`);
+            continue;
+          } else {
+            console.log(`  [merge] WARNING kept ${command}: it has a retired hook's name but is not this install's copy`);
+          }
+        }
+        remaining.push(hook);
+      }
+      if (remaining.length) kept.push({ ...group, hooks: remaining });
+    }
+    if (kept.length) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  return settings;
+};
 const mergeHookGroups = (oldGroups, newGroups) => {
   const templateIdentities = new Set();
   for (const group of newGroups) {
@@ -1391,11 +1498,6 @@ const mergeHookGroups = (oldGroups, newGroups) => {
     const remaining = [];
     for (const hook of group.hooks || []) {
       const identity = hookIdentity(hook);
-      if (identity && RETIRED_HOOK_IDENTITIES.has(identity)) {
-        const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
-        console.log(`  [merge] retired ${label}`);
-        continue;
-      }
       if (identity && templateIdentities.has(identity)) {
         const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
         console.log(`  [merge] dropped ${label}`);
@@ -1431,7 +1533,9 @@ function merge(oldValue, newValue, path = []) {
   }
   return oldValue;
 }
-fs.writeFileSync(outPath, JSON.stringify(merge(base, addition), null, 2) + '\n');
+// The settings file is <root>/.claude/settings.json.
+const root = require('path').dirname(require('path').dirname(require('path').resolve(basePath)));
+fs.writeFileSync(outPath, JSON.stringify(sweepRetiredHooks(merge(base, addition), root), null, 2) + '\n');
 JS
     if node "$AIGENT_TMP/merge-settings.cjs" "$SETTINGS_DST" "$RENDERED_TMPL" "$MERGED" 2>/dev/null; then
       MERGE_OK=1
@@ -1458,8 +1562,8 @@ if [[ "$(abspath "$SETTINGS_SRC")" != "$(abspath "$TARGET/.claude/settings.json.
   cp "$SETTINGS_SRC" "$TARGET/.claude/settings.json.template"
 fi
 
-# skill-index.json drives Caddy's skill auto-invoke hints. It is trusted routing
-# metadata in the same sensitivity class as a hook.
+# skill-index.json is the local skill catalog the boot summary and /diagnose read. It
+# is trusted metadata in the same sensitivity class as a hook.
 if [[ -f "$SRC/.claude/skill-index.json" ]]; then
   copy_missing_file "$SRC/.claude/skill-index.json" "$TARGET/.claude/skill-index.json" 1 || true
 fi

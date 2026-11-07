@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 HOOK="$ROOT/daemons/prompt-context.sh"
-TOTAL=5
+TOTAL=9
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 [[ -f "$HOOK" ]] || fail "no hook at $HOOK"
@@ -72,5 +72,50 @@ TEMPLATE="$ROOT/.claude/settings.json.template"
 grep -q 'daemons/prompt-context.sh' "$TEMPLATE" || fail "template does not wire prompt-context.sh"
 grep -qE 'daemons/caddy(-detect-new-skill)?\.sh' "$TEMPLATE" && fail "template still wires a Caddy hook"
 printf '[5/%d] the template wires prompt-context.sh and no Caddy hook\n' "$TOTAL"
+
+# 6. A notice from the capture reaches the session on the next prompt, once.
+FAKE2="$WORK/install2"
+mkdir -p "$FAKE2/daemons" "$FAKE2/memory"
+cat > "$FAKE2/daemons/memory-capture.sh" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+echo '[memory] CAP: test notice'
+: > "$AIGENT_ROOT/memory/ran"
+EOF
+printf '{"prompt":"x"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do [[ -e "$FAKE2/memory/ran" && -s "$FAKE2/.aigent/capture-notices" ]] && break; sleep 0.5; done
+printf '#!/bin/bash\ncat >/dev/null\n' > "$FAKE2/daemons/memory-capture.sh"
+OUT="$(printf '{"prompt":"y"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK")"
+grep -q '^\[memory\] CAP: test notice$' <<<"$OUT" || fail "the notice did not reach the next prompt: $OUT"
+OUT="$(printf '{"prompt":"z"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK")"
+grep -q 'test notice' <<<"$OUT" && fail "the notice was shown twice: $OUT"
+printf '[6/%d] a capture notice is shown on the next prompt, once\n' "$TOTAL"
+
+# 7. A capture that crashes leaves a trace.
+printf '#!/bin/bash\necho capture-crash-marker >&2\nexit 3\n' > "$FAKE2/daemons/memory-capture.sh"
+printf '{"prompt":"x"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do grep -q capture-crash-marker "$FAKE2/.aigent/capture-errors.log" 2>/dev/null && break; sleep 0.5; done
+grep -q capture-crash-marker "$FAKE2/.aigent/capture-errors.log" || fail "a capture crash left no trace"
+printf '[7/%d] a capture crash reaches the error log\n' "$TOTAL"
+
+# 8. A bare invocation from inside daemons/, with no AIGENT_ROOT, still captures.
+FAKE3="$WORK/install3"
+mkdir -p "$FAKE3/daemons" "$FAKE3/memory"
+cp "$HOOK" "$FAKE3/daemons/prompt-context.sh"
+printf '#!/bin/bash\ncat > "$AIGENT_ROOT/memory/bare.json"\n' > "$FAKE3/daemons/memory-capture.sh"
+(cd "$FAKE3/daemons" && printf '{"prompt":"bare"}' | env -u AIGENT_ROOT bash prompt-context.sh >/dev/null)
+for _ in $(seq 1 60); do [[ -s "$FAKE3/memory/bare.json" ]] && break; sleep 0.5; done
+grep -q bare "$FAKE3/memory/bare.json" 2>/dev/null || fail "a bare invocation never captured"
+printf '[8/%d] a bare invocation with no AIGENT_ROOT captures\n' "$TOTAL"
+
+# 9. What Caddy left behind stays gone: every core skill system-check requires exists, and nothing
+#    the install runs still emits a Caddy tag or banner.
+CORE="$(sed -n '/^CORE_SKILLS=(/,/^)/p' "$ROOT/daemons/system-check.sh" | sed '1d;$d')"
+for skill in $CORE; do
+  [[ -f "$ROOT/skills/$skill/SKILL.md" ]] || fail "system-check requires a skill that does not ship: $skill"
+done
+grep -rlE '\[CADDY|Router: NOT WIRED|CADDY_MUTES' "$ROOT/daemons" --include='*.sh' --include='*.py' --include='*.mjs' --include='*.cjs' --exclude-dir=tests --exclude-dir=node_modules > "$WORK/caddy-left" || true
+[[ ! -s "$WORK/caddy-left" ]] || fail "Caddy output is still emitted by: $(cat "$WORK/caddy-left")"
+printf '[9/%d] system-check requires only shipped skills, and no daemon emits Caddy output\n' "$TOTAL"
 
 printf 'PASS: %d/%d prompt-context scenarios\n' "$TOTAL" "$TOTAL"

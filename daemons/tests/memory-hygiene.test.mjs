@@ -786,7 +786,7 @@ test('wiring: with node unreachable the capture script leaves rows unscanned and
     'a row staged while the scan was down must not be sitting in the promotable set',
   );
   assert.doesNotMatch(staged, /\| staged \|/, 'nothing may be promotable without a scan');
-  assert.match(down.stdout, /\[CADDY:memory\] SCAN-FAILED/, 'the session must be told');
+  assert.match(down.stdout, /\[memory\] SCAN-FAILED/, 'the session must be told');
   assert.match(readFileSync(errLog, 'utf8'), /INJECTION_SCAN_DID_NOT_RUN reason=node not found/);
 
   // Green half: the SAME script over the SAME file with node reachable again.
