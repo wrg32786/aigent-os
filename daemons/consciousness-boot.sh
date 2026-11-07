@@ -58,7 +58,7 @@ DAEMONS_TOTAL=0
 # Check which daemons are referenced in settings.json hooks
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ]; then
-  for daemon in caddy.sh check-comms.sh skill-router.sh; do
+  for daemon in prompt-context.sh check-comms.sh skill-router.sh; do
     DAEMONS_TOTAL=$((DAEMONS_TOTAL + 1))
     grep -q "$daemon" "$SETTINGS" 2>/dev/null && DAEMONS_WIRED=$((DAEMONS_WIRED + 1))
   done

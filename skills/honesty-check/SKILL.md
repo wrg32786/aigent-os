@@ -12,7 +12,7 @@ Before saying "done", "shipped", "complete", or "ready for review" — run this 
 - About to declare a piece of work complete
 - About to post "PR ready for review" / "fix shipped"
 - After any non-trivial fix, port, refactor, or feature
-- Triggered by Caddy on prompts like: "done", "shipped", "complete", "ready for review", "PR ready", "all good", "fix is in", "wrapped up", "task complete"
+- Use on prompts like: "done", "shipped", "complete", "ready for review", "PR ready", "all good", "fix is in", "wrapped up", "task complete"
 
 ## The ledger (volunteer ALL that apply, even unasked)
 

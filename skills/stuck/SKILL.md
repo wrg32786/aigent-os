@@ -12,7 +12,7 @@ Before posting "I'm blocked", "not sure how to proceed", or "should I…?" — w
 - About to surface to the principal for help
 - Hit an error, an obstacle, or genuine ambiguity
 - Tempted to type "I'm stuck" or "this isn't working"
-- Triggered by Caddy on prompts like: "blocked", "not sure how", "can't find", "need help", "should I ask", "stuck on", "this isn't working", "hitting a wall", "give up", "ask for help"
+- Use on prompts like: "blocked", "not sure how", "can't find", "need help", "should I ask", "stuck on", "this isn't working", "hitting a wall", "give up", "ask for help"
 
 ## The ladder (climb top-to-bottom; only stop at the bottom)
 

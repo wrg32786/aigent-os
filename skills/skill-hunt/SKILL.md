@@ -78,7 +78,7 @@ Run the skill on a dummy/safe task to verify it works. Report result.
 - Add entry to `memory/SKILL_LEDGER.md` under the correct taxonomy path
 - Add entry to `.claude/skill-index.json` with at least 3 trigger phrases
 - Update `memory/SKILL_GAPS.md`: set status to `resolved`, add resolution note
-- Output: "Skill installed, enrolled in Caddy, indexed in SKILL_LEDGER."
+- Output: "Skill installed with a precise description, indexed in SKILL_LEDGER."
 
 ### 9. Failure path
 If no suitable candidate found OR test fails:

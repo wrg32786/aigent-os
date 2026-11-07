@@ -1,9 +1,9 @@
 // persisted-render.test.mjs -- trust-boundary #43 chokepoint regression guard.
 //
 // Covers the renderPersisted() chokepoint added to lifecycle-common.mjs and
-// its two wired callers: P5 (daemons/semantic-search/search-vault.js) and P4
-// (daemons/caddy.sh, which imports the canonical daemons/render_boundary.py
-// inert() + SKILL_CHAINS staleness). See
+// its wired caller P5 (daemons/semantic-search/search-vault.js), plus byte-parity of the
+// canonical daemons/render_boundary.py inert() against the JS one. (P4, daemons/caddy.sh,
+// was retired with Caddy on 2026-11-05.) See
 // capability-completion/trust-boundary-43/inventory.md for the full path
 // inventory, fixtures, and falsifier list this file implements.
 //
@@ -30,7 +30,6 @@ import { renderPersisted, inert } from '../lifecycle-common.mjs';
 
 const DAEMONS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SEM = path.join(DAEMONS, 'semantic-search');
-const CADDY_SH = path.join(DAEMONS, 'caddy.sh');
 
 let failed = 0;
 let checked = 0;
@@ -445,76 +444,15 @@ const HEALTHY_CHUNK = 'CANARY-HEALTHY-7d21ab-ordinary vault content that should 
   if (restoredGreen) console.log('WITNESS GREEN: restoring the original source re-closed DENY');
 }
 
-// Witness 3: remove the staleness check in P4 -> RED
-{
-  const caddySrc = readFileSync(CADDY_SH, 'utf8');
-  const staleBlock = /            try:\n                age_days = \(date\.today\(\) - date\.fromisoformat\(date_value\)\)\.days[\s\S]*?provenance = "recorded date unreadable -- reference only, verify before reuse"\n/;
-  check('witness setup: staleness block has one scriptable occurrence', staleBlock.test(caddySrc));
-
-  const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), 'persisted-render-witness-caddy-'));
-  sandboxes.push(sandboxRoot);
-  const caddyPath = path.join(sandboxRoot, 'caddy.sh');
-
-  function runCaddy(chainDate) {
-    const workRoot = mkdtempSync(path.join(os.tmpdir(), 'persisted-render-caddy-work-'));
-    sandboxes.push(workRoot);
-    mkdirSync(path.join(workRoot, '.claude'), { recursive: true });
-    mkdirSync(path.join(workRoot, 'memory'), { recursive: true });
-    writeFileSync(path.join(workRoot, '.claude', 'skill-index.json'), '[]');
-    writeFileSync(path.join(workRoot, 'memory', 'SKILL_LEDGER.md'), '');
-    writeFileSync(
-      path.join(workRoot, 'memory', 'SKILL_CHAINS.md'),
-      `| Date | Objective | Chain | Outcome |\n|------|-----------|-------|---------|\n| ${chainDate} | deploy the staging build | /vercel:deploy -> /vercel:status | success |\n`,
-    );
-    const r = spawnSync('bash', [caddyPath], {
-      encoding: 'utf8',
-      input: JSON.stringify({ session_id: 'abc', prompt: "let's deploy the staging build now" }),
-      env: { ...process.env, AIGENT_ROOT: workRoot },
-    });
-    return r.stdout || '';
-  }
-
-  // caddy.sh sources its memory-root door from its own directory, so the
-  // vendored copy needs the door and the resolver beside it.
-  copyFileSync(path.join(DAEMONS, 'memory-root.sh'), path.join(sandboxRoot, 'memory-root.sh'));
-  copyFileSync(path.join(DAEMONS, 'memory-root.cjs'), path.join(sandboxRoot, 'memory-root.cjs'));
-  writeFileSync(caddyPath, caddySrc);
-  const baselineOut = runCaddy('2020-01-15');
-  const baselineGreen = /STALE/.test(baselineOut);
-  check('witness 3: GREEN before mutation (2020 row flagged STALE)', baselineGreen, baselineOut.slice(0, 400));
-  if (baselineGreen) console.log('WITNESS GREEN: old SKILL_CHAINS row flagged STALE, not presented as current');
-
-  writeFileSync(caddyPath, caddySrc.replace(staleBlock, '            provenance = f"recorded {date_value}"\n'));
-  const mutantOut = runCaddy('2020-01-15');
-  const mutantRed = mutantOut.includes('[CADDY:chain]') && !/STALE/.test(mutantOut);
-  check('witness 3: RED after removing the staleness check (2020 row presented as current)', mutantRed, mutantOut.slice(0, 400));
-  if (mutantRed) console.log('WITNESS RED AS EXPECTED: removing the staleness check presented a 2413-day-old chain as current');
-
-  writeFileSync(caddyPath, caddySrc);
-  const restoredOut = runCaddy('2020-01-15');
-  const restoredGreen = /STALE/.test(restoredOut);
-  check('witness 3: GREEN again after restoring the real source', restoredGreen, restoredOut.slice(0, 400));
-  if (restoredGreen) console.log('WITNESS GREEN: restoring the original caddy.sh source re-flagged the stale row');
-}
-
-// N3 (review R1): the byte-parity check above pins render_boundary.py against
-// JS, but nothing pinned caddy.sh to actually IMPORT it -- re-adding the
-// deleted duplicate `inert()` in caddy.sh went undetected by every other
-// test. These two source assertions are that pin.
-{
-  const caddySrcForPin = readFileSync(CADDY_SH, 'utf8');
-  // The import lives inside `try:` (indented), so the anchor allows leading
-  // whitespace -- an unindented-only anchor would never match the real code.
-  check('F4: caddy.sh imports the canonical render boundary', /^\s*from render_boundary import inert$/m.test(caddySrcForPin));
-  check('F4: caddy.sh carries no re-derived escaping logic', !/LINE_BREAKING\s*=\s*re\.compile/.test(caddySrcForPin));
-}
+// Witness 3 (P4 staleness in daemons/caddy.sh) and the F4 import pin were retired with Caddy
+// on 2026-11-05: caddy.sh no longer exists, so P4 has no caller. Section 4 still pins the
+// canonical daemons/render_boundary.py module byte-for-byte against the JS inert().
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 4 -- P4 byte-parity: caddy.sh's canonical import vs the JS inert()
+// SECTION 4 -- byte-parity: the canonical render_boundary.py inert() vs the JS inert()
 // ═══════════════════════════════════════════════════════════════════════════
-// caddy.sh imports render_boundary.py's inert() directly (review R1, finding
-// F4) rather than duplicating it, so this no longer regex-extracts an
-// embedded copy -- it runs the same canonical module caddy.sh imports.
+// Runs the canonical Python module directly (review R1, finding F4), never an
+// embedded copy, so any Python caller gets the same bytes as the JS chokepoint.
 {
   const FIXTURES = [
     '',

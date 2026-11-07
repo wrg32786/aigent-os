@@ -67,7 +67,7 @@ Auto-Refresh is what keeps a long-lived agent going. The rest of aigent-OS is ab
 | Live failure to fix loop | Problems found on the maintainers' live seats come back to this repo as fixes and regression tests, gathered in a weekly fleet-to-product port sweep (for example [PR #69](https://github.com/wrg32786/aigent-os/pull/69)). A `Stop` hook also flags turns whose confident claims ("fixed", "verified") went unrecorded. | On by default (the fixes and the hook ship in the core; the sweep is how we maintain the repo) |
 | Failure-to-fix procedure | A [written procedure](docs/self-learning-doctrine.md) asks the agent to turn a failure seen twice into a skill, a check or a routing rule. No code forces it, and the ledgers ship empty. | Experimental (a skill the agent follows) |
 | Memory guardrails | A size budget on always-loaded memory files, staged memory that tries to give instructions is held for review, anything read back from memory is treated as data and never as an instruction, and folders you mark confidential stay out of search | On by default |
-| Skill caddy | A hook matches each prompt against your skill catalog and suggests the skill that fits. It never blocks the turn, and when nothing fits it points at `/skill-recall` so the gap gets logged. | On by default |
+| Skill matching | Claude Code matches each task to a skill natively, from each skill's `description`. Every shipped skill carries a short "Use when" description so it stays inside the listing budget; `/skill-recall` finds a fit on demand. | Native |
 | Nine named specialist agents | A builder, a read-only scout, a researcher, a design spec writer, a memory architect, a critic, a vault custodian, an architecture reviewer and a prompt writer, each with a fixed model tier and tool set ([roster](vault/agents/Pantheon.md)). A hook checks every dispatch against the agent's declared tier ([details](docs/model-routing-enforcement.md)). | On by default (warns); block is opt-in with `AIGENT_MODEL_GUARD=enforce` |
 | C2 temporal supersession | A note can carry a validity window. Once it ends, search ranks the note below current ones instead of deleting it ([details](docs/temporal-fact-ledger.md)). | On by default for notes with a validity line; in v1.1.0-rc.1 |
 | Hindsight and Jev memory bridge | Explicit retain, recall, reflect and ranking against providers you configure, with every result checked against a local source ([details](docs/memory-bridge.md)) | Opt-in; on master, not in a release, not verified against the live services |
@@ -283,7 +283,7 @@ Every framework claims to be different. Here's exactly where that's true for aig
 | Self-learning engine | Skill recall → skill hunt → solution hunt escalation chain; failures are meant to become durable artifacts (a written procedure, not enforced by code) | ⚠️ procedure shipped, not enforced |
 | Cognitive architecture | Persistent self-model, goal stack, belief tracking with confidence scores, human-gated `/dream` consolidation, `/reconcile`, `/meta-improve` | ✅ shipped |
 | Calibration measurement | `HONESTY_LEDGER`, `TRUST_DECAY`, and `FAILURE_MODES` are paired ledgers: a claim captured, then resolved as held, drifted, or reversed; drift detection runs at `resume`, and a `Stop` hook prompts the capture when a turn's confident claims went unrecorded | ✅ shipped |
-| Caddy skill router | Non-blocking prompt-matching hook surfaces the right skill from your own catalog; auto-reindexes on drop-in | ✅ shipped |
+| Skill matching | Native in Claude Code from each skill's `description`; the Caddy keyword router was retired 2026-11-05 | ✅ native |
 | 3-tier memory (napkin → index → deep) | Heat-scored top-20 + staged digest sit above full topic files | ✅ shipped |
 | Model-tier dispatch enforcement | A `PreToolUse` hook checks every named agent's `Agent`-tool dispatch against its declared model tier live; advisory by default, `AIGENT_MODEL_GUARD=enforce` opts into a hard block | ✅ shipped ([`docs/model-routing-enforcement.md`](docs/model-routing-enforcement.md)) |
 | Non-Claude execution (Codex adapter) | One bounded, mechanical task class routed to the Codex CLI's non-interactive `codex exec`, review-gated, never auto-merged | ✅ shipped (single task class; [`docs/codex-adapter.md`](docs/codex-adapter.md)) |
@@ -349,7 +349,7 @@ vault/                             Persistent memory and knowledge graph (markdo
 vault/agents/                      Instrument roster: 9 named sub-agents
 skills/                            Claude Code slash-command skills (60+ source templates)
 hooks/                             Automation hook scripts (session summary, token tracking, compact nudge)
-daemons/                           Background helpers (Auto-Refresh transport, Caddy, semantic search, runtime state)
+daemons/                           Background helpers (Auto-Refresh transport, prompt context, semantic search, runtime state)
 docs/                              Setup guides, doctrine references, architecture roadmaps
 memory/                            Ledger templates (SKILL_LEDGER, SKILL_GAPS, SKILL_CHAINS, facts/)
 memory/runtime/                    Cognitive layer (ACTIVE_STATE, SELF_MODEL, GOAL_STACK, BELIEF_STATE)
@@ -544,7 +544,6 @@ If you're building an agent framework for end-users to consume, you probably wan
 
 <div align="center">
 <img src="assets/authority-matrix.svg" alt="The Authority Matrix: Level 1 Autonomous, Level 2 Recommend & Confirm, Level 3 Human Only" width="49%"/>
-<img src="assets/caddy-router.svg" alt="Caddy: automatic skill routing pipeline" width="49%"/>
 <br/>
 <img src="assets/somatic-layer.svg" alt="Somatic Layer: 5 pressure gauges for self-awareness" width="49%"/>
 <img src="assets/self-learning-loop.svg" alt="Self-Learning Loop: failure to artifact pipeline" width="49%"/>
@@ -556,7 +555,7 @@ If you're building an agent framework for end-users to consume, you probably wan
 
 **Measurement layer.** Most agent frameworks let the AI talk; almost none measure how often it's confidently wrong. `HONESTY_LEDGER.md`, `TRUST_DECAY.md`, and `FAILURE_MODES.md` are paired ledgers (a claim captured, then resolved later as held/drifted/reversed) plus drift detection at `resume` (decision aging, attention reconciliation vs. `ACTIVE_PRIORITIES.md`). The credible claim: the framework measures its own AI's calibration over time, not just its output. A `Stop` hook closes the loop by noticing when a turn made confident claims that no ledger recorded, so the ledgers fill from real work instead of waiting to be remembered: [Closing the Measurement Loop](docs/closing-the-measurement-loop.md). Full doctrine: [`vault/concepts/Cost of Confidence.md`](vault/concepts/Cost%20of%20Confidence.md).
 
-**Caddy: the skill that finds the right skill.** A non-blocking `UserPromptSubmit` hook matches your words against every skill in your catalog and surfaces the one that fits, without ever blocking the turn on a wrong guess. A `PostToolUse` hook detects a newly dropped skill and nudges `/caddy-enroll` to index it; the golf bag stays complete without manual upkeep.
+**Native skill matching.** Claude Code reads every installed skill's `description` and invokes the one that fits the task. aigent-OS keeps those descriptions short and trigger-led so they all fit the listing budget. (Caddy, the keyword hook that did this before Claude Code could, was retired on 2026-11-05: on a Windows host it took 13 to 22 seconds a prompt and was cancelled on nearly every one.) The `UserPromptSubmit` hook that remains, `daemons/prompt-context.sh`, prints the current time and stages memory captures in the background.
 
 **Self-aware about what it doesn't do yet.** `system/12_authority_matrix.md` bounds what the AI decides alone vs. brings to you; `/dream` proposes improvements but only the operator approves merges: see [`docs/meta-aigent-doctrine.md`](docs/meta-aigent-doctrine.md) for the safety boundary.
 

@@ -280,6 +280,7 @@ printf '  Launch: %s\n' "$([[ "$NO_LAUNCHER" -eq 1 ]] && printf 'files only' || 
 OPERATOR_OWNED_REL=".aigent/operator-owned.json"
 OPERATOR_OWNED_FILE="$TARGET/$OPERATOR_OWNED_REL"
 OPERATOR_OWNED_KEEP=$'\n'
+STALE_DOCS_COUNT=0   # issue #147: installed docs that differ from this source (copy_missing_file)
 
 read_operator_owned_declaration() {
   python3 - \
@@ -613,6 +614,14 @@ copy_missing_file() {
     printf '  [operator-owned] keep %s\n' "${dest_file#"$TARGET"/}"
     return 0
   fi
+  # Issue #147 (docs half): docs/ is never overwritten, since an operator may have edited
+  # it, but a doc that differs from this source is named rather than kept in silence.
+  # The summary prints once, after the copy (STALE_DOCS_COUNT).
+  if [[ "$sensitive" -eq 0 && "$dest_file" == "$TARGET/docs/"* ]] && ! cmp -s "$source_file" "$dest_file" 2>/dev/null; then
+    printf '  [stale-doc] %s differs from this source; kept as installed\n' "${dest_file#"$TARGET"/}"
+    STALE_DOCS_COUNT=$((STALE_DOCS_COUNT + 1))
+    return 0
+  fi
   [[ "$sensitive" -eq 1 && "$TRUST_EXISTING" -eq 0 ]] || return 0
   cmp -s "$source_file" "$dest_file" 2>/dev/null && return 0
 
@@ -808,6 +817,12 @@ if [[ "$MODE" == "copy" ]]; then
     esac
     printf '  [ok] %s/\n' "$dir"
   done
+  # Issue #147: one summary for the [stale-doc] lines copy_missing_file printed above. Kept out of
+  # the docs case so that case stays the exact one-line call render-boundary-guard audits.
+  if [[ "$STALE_DOCS_COUNT" -gt 0 ]]; then
+    printf '  [info] %d installed doc(s) differ from this source and were kept. To take the shipped copy, delete the doc and re-run the installer, or compare against %s/docs/.\n' \
+      "$STALE_DOCS_COUNT" "$SRC"
+  fi
   # Git records this front door as 100644; launcher/install.sh makes it
   # executable too. Restore that contract only for a newly copied file.
   if [[ "$launcher_shell_missing" -eq 1 && -f "$launcher_shell" ]] \
@@ -1189,6 +1204,18 @@ def hook_identity(hook):
         return ""
     return "/".join(parts[-2:])
 
+# Hooks the framework once shipped and has since removed, by the same dir/basename identity. The
+# merge only ever added or replaced template hooks, so a removed hook stayed wired in every
+# existing install forever. Each identity here is dropped from the old settings on merge and
+# reported as "[merge] retired". Only framework-owned script paths belong here, never an
+# operator's. The node merger below carries the identical list.
+# 2026-11-05: Caddy (13 to 22 s per prompt, cancelled at its limit; replaced by
+# daemons/prompt-context.sh, skill matching is native in Claude Code).
+RETIRED_HOOK_IDENTITIES = {
+    "daemons/caddy.sh",
+    "daemons/caddy-detect-new-skill.sh",
+}
+
 def merge_hook_groups(old_groups, new_groups):
     # new_groups is the freshly rendered template: it always wins for any
     # hook it ships. old_groups keeps only the hooks the template does NOT
@@ -1209,6 +1236,9 @@ def merge_hook_groups(old_groups, new_groups):
         remaining = []
         for hook in group.get("hooks", []):
             identity = hook_identity(hook)
+            if identity and identity in RETIRED_HOOK_IDENTITIES:
+                print(f"  [merge] retired {hook.get('command', hook) if isinstance(hook, dict) else hook}")
+                continue
             if identity and identity in template_identities:
                 print(f"  [merge] dropped {hook.get('command', hook) if isinstance(hook, dict) else hook}")
                 continue
@@ -1343,6 +1373,11 @@ const hookIdentity = hook => {
 // by whole-group equality). Ports the same algorithm so both mergers stay
 // behaviorally identical. An empty identity never matches anything, so
 // ambiguous (e.g. commandless) hooks are never deduped against each other.
+// Retired framework hooks: identical to RETIRED_HOOK_IDENTITIES in the python merger above.
+const RETIRED_HOOK_IDENTITIES = new Set([
+  'daemons/caddy.sh',
+  'daemons/caddy-detect-new-skill.sh',
+]);
 const mergeHookGroups = (oldGroups, newGroups) => {
   const templateIdentities = new Set();
   for (const group of newGroups) {
@@ -1356,6 +1391,11 @@ const mergeHookGroups = (oldGroups, newGroups) => {
     const remaining = [];
     for (const hook of group.hooks || []) {
       const identity = hookIdentity(hook);
+      if (identity && RETIRED_HOOK_IDENTITIES.has(identity)) {
+        const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
+        console.log(`  [merge] retired ${label}`);
+        continue;
+      }
       if (identity && templateIdentities.has(identity)) {
         const label = hook && typeof hook === 'object' && hook.command ? hook.command : JSON.stringify(hook);
         console.log(`  [merge] dropped ${label}`);
@@ -1442,6 +1482,42 @@ if [[ ! -f "$STATE_FILE" ]]; then
 }
 JSON
 fi
+
+# Install-source record (issue #147). The baseline manifest names the commit its
+# pins were CUT from, not the commit this install came from, so two installs
+# sharing a baseline looked identical. Stamp the source commit on every install
+# (a reinstall replaces it) so doctor --attest can report it. A source that is
+# not the top of a git checkout (an archive, or a folder inside another repo)
+# records no commit rather than guessing one.
+SOURCE_RECORD="$TARGET/.aigent/install-source.json"
+SOURCE_KIND="archive"
+SOURCE_COMMIT="null"
+SOURCE_DIRTY="null"
+if command -v git >/dev/null 2>&1 \
+  && [[ "$(git -C "$SRC" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] \
+  && [[ -z "$(git -C "$SRC" rev-parse --show-prefix 2>/dev/null)" ]]; then
+  source_sha="$(git -C "$SRC" rev-parse --verify -q HEAD 2>/dev/null || true)"
+  if [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    SOURCE_KIND="git"
+    SOURCE_COMMIT="\"$source_sha\""
+    if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+      SOURCE_DIRTY="true"
+    else
+      SOURCE_DIRTY="false"
+    fi
+  fi
+fi
+require_symlink_safe "$SOURCE_RECORD"
+cat > "$SOURCE_RECORD.tmp" <<JSON
+{
+  "schemaVersion": 1,
+  "source_kind": "$SOURCE_KIND",
+  "source_commit": $SOURCE_COMMIT,
+  "source_dirty": $SOURCE_DIRTY,
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+mv -f "$SOURCE_RECORD.tmp" "$SOURCE_RECORD" || fail "cannot write $SOURCE_RECORD"
 printf '  [ok] Vault directories and first-run state ready\n'
 
 GITIGNORE="$TARGET/.gitignore"

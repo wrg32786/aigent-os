@@ -36,7 +36,7 @@ import {
 
 // Runtime installs get .claude/agents/; this repo's own source tree (and any
 // fork exercising the hook before running install.sh) only has vault/agents/.
-// First existing candidate wins -- same precedence rule daemons/caddy.sh uses
+// First existing candidate wins -- the same precedence rule daemons/caddy.sh used (retired 2026-11-05)
 // for its repo-index-vs-global-index lookup.
 function agentDefDir(root) {
   for (const candidate of ['.claude/agents', 'vault/agents']) {

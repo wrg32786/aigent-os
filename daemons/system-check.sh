@@ -199,7 +199,7 @@ else
 fi
 
 # Shell and Python daemons.
-SHELL_DAEMONS=(caddy.sh memory-capture.sh sync-usage.sh system-check.sh skill-router.sh)
+SHELL_DAEMONS=(prompt-context.sh memory-capture.sh sync-usage.sh system-check.sh skill-router.sh)
 SHELL_MISSING=""
 for daemon in "${SHELL_DAEMONS[@]}"; do
   if [[ ! -f "$DAEMONS_ROOT/$daemon" ]] || ! bash -n "$DAEMONS_ROOT/$daemon" 2>/dev/null; then

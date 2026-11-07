@@ -15,7 +15,7 @@ Without `/promote`, those insights live in the conversation transcript and decay
 - The principal said "we should remember that" or "make a note that…"
 - A doctrine pattern is starting to emerge from the discussion
 - A new person, project, or concept came up that needs a vault entry
-- Triggered by Caddy on prompts like: "/promote", "promote that", "make a note that", "save that insight", "elevate to doctrine", "capture this conversation", "remember that we decided", "this should be a vault note"
+- Use on prompts like: "/promote", "promote that", "make a note that", "save that insight", "elevate to doctrine", "capture this conversation", "remember that we decided", "this should be a vault note"
 
 ## How to execute
 

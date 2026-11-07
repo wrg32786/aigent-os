@@ -25,4 +25,4 @@ Tight. Don't restate the MAP — point to the section. The MAP is the source of 
 
 ## Triggered by
 
-Caddy fires this skill on confusion patterns: "where does X live", "which repo", "who handles", "I'm lost", "where do I start", "how do I find", "what's the rule for". See `daemons/caddy.sh` confusion-pattern block.
+Use on confusion patterns: "where does X live", "which repo", "who handles", "I'm lost", "where do I start", "how do I find", "what's the rule for".

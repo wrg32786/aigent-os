@@ -11,7 +11,7 @@ When a failure occurs, classify it, check for repetition, and produce a durable 
 
 `/learn-from-failure` or `/learn-from-failure <failure description>`
 
-Caddy auto-surfaces on: "same issue", "happened again", "recurring", "third time", "keeps happening"
+Use on: "same issue", "happened again", "recurring", "third time", "keeps happening"
 
 ## Flow
 
@@ -53,14 +53,14 @@ Append a new entry following the existing format:
 
 | Failure mode | Artifact | Target |
 |---|---|---|
-| `routing` | Caddy trigger or hook | `.claude/hooks/` or `.claude/skill-index.json` |
+| `routing` | Skill description or hook | the skill's `SKILL.md` description, or `.claude/hooks/` |
 | `verification` | Checklist item in doctrine | Relevant doctrine note |
 | `tool` | SKILL_GAPS entry + skill spec | `memory/SKILL_GAPS.md` |
 | `knowledge` | Vault note or memory candidate | `concepts/` or `memory/` |
 | `authority` | Flag to the operator | `aigent_authority_matrix.md` |
 
 ### 6. Create artifact
-- For routing: draft a Caddy enrollment entry with 3+ trigger phrases
+- For routing: add 3+ trigger phrases to the skill's `description` ("Use when ...")
 - For verification: append a concrete, runnable check to the relevant doctrine
 - For tool: log to SKILL_GAPS.md, suggest /skill-hunt if external capability needed
 - For knowledge: write a memory candidate or vault note

@@ -12,7 +12,7 @@ When dropped into an unfamiliar codebase or asked to fix something in code you d
 - Fresh in an unfamiliar codebase
 - Asked to fix or change code in an area you haven't worked in
 - Tempted to ask "where does X live?" or "how does Y work?"
-- Triggered by Caddy on prompts like: "fix the X", "investigate", "trace this bug", "how does X work", "unfamiliar codebase", "where is X defined", "what calls Y", "navigate the code", "find the bug in"
+- Use on prompts like: "fix the X", "investigate", "trace this bug", "how does X work", "unfamiliar codebase", "where is X defined", "what calls Y", "navigate the code", "find the bug in"
 
 ## The sequence (run top-to-bottom)
 

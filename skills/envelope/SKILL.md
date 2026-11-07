@@ -12,7 +12,7 @@ Sort an incoming request into one of three envelopes — **A: Ship**, **B: Ask o
 - The principal gives a directive and you're tempted to respond with multiple clarifying questions
 - The work involves a fork in the road and you're tempted to present multiple options
 - Before posting any "should I…?" question
-- Triggered by Caddy on prompts like: "should I", "before I start", "is this clear", "is this OK", "couple options", "two paths", "ambiguous", "not sure if you want", "want me to", "ship vs ask", "decision tree", "fork in the road"
+- Use on prompts like: "should I", "before I start", "is this clear", "is this OK", "couple options", "two paths", "ambiguous", "not sure if you want", "want me to", "ship vs ask", "decision tree", "fork in the road"
 
 ## The decision tree (run top-to-bottom)
 
