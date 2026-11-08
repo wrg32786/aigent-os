@@ -231,11 +231,6 @@ const undercovered = Object.keys(MIN_CASES)
 // satisfied both STARVED and UNDERCOVERED with scorer coverage at exactly zero.
 // This makes scorer liveness a property of the suite rather than a courtesy
 // extended to negative cases.
-// KNOWN LATENT FALSE NEGATIVE, recorded so it is not a surprise: daemons/skill-router.sh
-// is a THIRD resolver emitting "[CADDY:skill] MATCH". It cannot spoof `matched`
-// (colon-prefixed), but a corpus whose positives ALL resolve through it would have
-// no witness and go red while healthy. Red-when-healthy is the safe direction and
-// it is loud, so it is left; no current corpus prompt reaches that path.
 const witnessedSuites = new Set(
   results.filter((r) => r.status === 'pass' && r.matched === true).map((r) => r.suite),
 );

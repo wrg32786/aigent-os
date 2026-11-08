@@ -3,9 +3,9 @@
 # Reads prompt text from stdin, matches high-confidence memory-authoring phrases,
 # appends staged candidates to memory/MEMORY_CANDIDATES.md.
 #
-# Called detached from daemons/prompt-context.sh (the UserPromptSubmit hook; Caddy, its former
-# caller, was retired 2026-11-05). Best-effort: failure never reaches the prompt. Errors route to
-# DAEMON_ERR_LOG.
+# Called detached from daemons/prompt-context.sh (the UserPromptSubmit hook), which shows this
+# script's stdout to the session on the next prompt. Best-effort: failure never reaches the prompt.
+# Errors route to DAEMON_ERR_LOG.
 #
 # Spec: [[concepts/Somatic v0.4.2 Memory Capture]]
 # Doctrine: [[feedback/Silent successes hide failures]] — no 2>/dev/null without recovery sink.
@@ -98,7 +98,7 @@ def log_tier2_obs(pattern_name, confidence, trigger_text, banked):
     except Exception as e:
         log_err(f"tier2_obs_write_failed err={e}")
 
-# ── Excluded phrases — these are caddy invocations, not memory-authoring ───
+# ── Excluded phrases — these are skill invocations, not memory-authoring ───
 EXCLUDED = re.compile(
     r"^\s*/digest"
     r"|review\s+candidates?"
@@ -236,7 +236,7 @@ for m in row_re.finditer(content):
 
 # ── Hard cap check (spec §3) ───────────────────────────────────────────────
 if staged_count >= 50:
-    print("[CADDY:memory] CAP — MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
+    print("[memory] CAP: MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
     sys.exit(0)
 
 # ── Match trigger patterns ─────────────────────────────────────────────────
@@ -266,7 +266,7 @@ for pattern, ptype, confidence, label in PATTERNS:
     if staged_count + len(rows_to_append) >= 50:
         if is_tier2:
             log_tier2_obs(label, confidence, source_phrase, banked=False)
-        print("[CADDY:memory] CAP — MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
+        print("[memory] CAP: MEMORY_CANDIDATES backlog at 50, /digest before more candidates auto-stage")
         break
 
     dest = suggested_destination(ptype, phrase_stem)
@@ -332,7 +332,7 @@ PYEOF
 # `staged`. So a scan that CANNOT run cannot be mistaken for one that ran and
 # found nothing: the rows keep saying so in the file, and the reason is reported
 # on all three channels a failure here can reach -- the row state, the error log,
-# and the caddy hint the session actually sees.
+# and the notice the session actually sees.
 #
 # The exit code is deliberately captured rather than swallowed with `|| true`.
 # The best-effort contract (never abort a session over memory capture) is kept by
@@ -361,7 +361,7 @@ if [ "$scan_rc" -ne 0 ]; then
   fi
   printf '[memory-capture] %s INJECTION_SCAN_DID_NOT_RUN reason=%s file=%s rows left unscanned\n' \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$scan_reason" "$CANDIDATES" >>"$DAEMON_ERR_LOG"
-  printf '[CADDY:memory] SCAN-FAILED: injection scan did not run (%s); new candidates are marked unscanned and will not promote until it does\n' \
+  printf '[memory] SCAN-FAILED: injection scan did not run (%s); new candidates are marked unscanned and will not promote until it does\n' \
     "$scan_reason"
 fi
 

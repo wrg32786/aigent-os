@@ -8,7 +8,7 @@ created: 2026-05-08
 # Self-Learning Doctrine
 
 > [!abstract] Core rule
-> Every repeated failure must produce one reusable artifact: memory, rule, skill, test, checklist, or Caddy trigger. A failure that produces nothing is a failure that will recur.
+> Every repeated failure must produce one reusable artifact: memory, rule, skill, test, checklist, or a sharper skill description. A failure that produces nothing is a failure that will recur.
 
 ## The Failure → Artifact Pipeline
 
@@ -34,7 +34,7 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
 
 6. **If actionable → create skill candidate**: if the fix requires a repeatable procedure, draft a skill spec. Route to Lyra for implementation if the skill doesn't exist.
 
-7. **If routing failure → update Caddy**: add a trigger-pattern entry to `.claude/hooks/` or `.claude/skill-index.json` so the right skill fires automatically next time.
+7. **If routing failure → update the skill's description**: add the words that were missed to the `description` in its `SKILL.md`, so native matching picks it next time.
 
 8. **If verification failure → add test/check**: append a concrete check to the relevant doctrine note (usually [[Pipeline Verification Doctrine]] or [[concepts/Verification Rules]]). The check must be runnable, not aspirational.
 
@@ -44,7 +44,7 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
 
 | Failure mode | Required artifact | Owner | Target file |
 |---|---|---|---|
-| `routing` | Caddy trigger or Caddy hook | Lyra | `.claude/hooks/` or `.claude/skill-index.json` |
+| `routing` | Skill description | Lyra | `skills/<name>/SKILL.md` |
 | `verification` | Checklist item in doctrine | Lyra / Mnemosyne | Relevant doctrine note |
 | `tool` | SKILL_GAPS.md entry + skill spec | Newton + Lyra | `memory/SKILL_GAPS.md` |
 | `knowledge` | Vault note or memory candidate | Mnemosyne | `concepts/` or `memory/` |
@@ -63,10 +63,10 @@ Every confirmed failure passes through this 9-step sequence. No skipping.
 
 A failure mode that has appeared more than once without a durable artifact in place is a systemic gap, not bad luck.
 
-## Caddy hook
+## When to invoke
 
-**Trigger pattern:** "same issue", "happened again", "recurring", "third time", "we've seen this before", "this keeps happening"
-**Surface:** [[Self-Learning Doctrine]] + [[concepts/Self-Improving CLAUDE.md]]
+**Phrases:** "same issue", "happened again", "recurring", "third time", "we've seen this before", "this keeps happening"
+**Read:** [[Self-Learning Doctrine]] + [[concepts/Self-Improving CLAUDE.md]]
 **Action:** invoke `/learn-from-failure` before doing anything else
 
 ## Connects to

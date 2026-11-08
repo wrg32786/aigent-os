@@ -961,9 +961,9 @@ else
 fi
 
 if [ -f "$ROOT/.claude/skill-index.json" ]; then
-  pass ".claude/skill-index.json found -- Caddy enrollment works"
+  pass ".claude/skill-index.json found"
 else
-  fail ".claude/skill-index.json missing -- Caddy hints will not fire on fresh install. Run the installer, or copy .claude/skill-index.json from a repo checkout (no .template variant exists)"
+  fail ".claude/skill-index.json missing -- the boot summary and /diagnose read it. Run the installer, or copy .claude/skill-index.json from a repo checkout (no .template variant exists)"
 fi
 
 # -- 5b. Pantheon agents (dispatchable subagents) ------------------------------

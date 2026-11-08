@@ -169,7 +169,7 @@ command -v python3 >/dev/null 2>&1 \
 # Source skills. Top-level skills/ is the repository source of truth; install.sh
 # mirrors each skill into .claude/skills for Claude Code at install time.
 CORE_SKILLS=(
-  body-check digest context-capsule caddy-mute system-check sweep-now
+  body-check digest context-capsule system-check sweep-now
   capsule-compact agent-fitness status reconcile dream meta-improve
   skill-recall skill-hunt pause resume
 )
@@ -199,7 +199,7 @@ else
 fi
 
 # Shell and Python daemons.
-SHELL_DAEMONS=(prompt-context.sh memory-capture.sh sync-usage.sh system-check.sh skill-router.sh)
+SHELL_DAEMONS=(prompt-context.sh memory-capture.sh sync-usage.sh system-check.sh)
 SHELL_MISSING=""
 for daemon in "${SHELL_DAEMONS[@]}"; do
   if [[ ! -f "$DAEMONS_ROOT/$daemon" ]] || ! bash -n "$DAEMONS_ROOT/$daemon" 2>/dev/null; then
@@ -278,17 +278,6 @@ if HEAT_FILE="$MEMORY_ROOT/HEAT_INDEX.json" python3 -c \
   ck "HEAT_INDEX.json schema" PASS
 else
   ck "HEAT_INDEX.json schema" FAIL "missing or invalid"
-fi
-
-if [[ -f "$LEDGERS_ROOT/CADDY_MUTES.json" ]]; then
-  if CADDY_FILE="$LEDGERS_ROOT/CADDY_MUTES.json" python3 -c \
-    'import json, os; json.load(open(os.environ["CADDY_FILE"], encoding="utf-8"))' 2>/dev/null; then
-    ck "CADDY_MUTES.json parses" PASS
-  else
-    ck "CADDY_MUTES.json parses" FAIL "optional file exists but is invalid"
-  fi
-else
-  ck "CADDY_MUTES.json absent" INFO "optional file not configured"
 fi
 
 if [[ -f "$MEMORY_ROOT/MEMORY_CANDIDATES.md" ]] \

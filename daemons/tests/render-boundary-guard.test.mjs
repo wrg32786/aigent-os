@@ -37,7 +37,8 @@ const PYTHON_PUBLIC_READERS = new Set([
 ]);
 // shell: 28 -> 27 on 2026-11-05, reviewed: the Caddy retirement removed daemons/caddy.sh,
 // caddy-detect-new-skill.sh and caddy-reindex.sh, and added daemons/prompt-context.sh.
-const MINIMUM_COUNTS = Object.freeze({ javascript: 42, shell: 27, python: 6 });
+// shell: 27 -> 26 on 2026-11-06, reviewed: daemons/skill-router.sh removed, nothing called it.
+const MINIMUM_COUNTS = Object.freeze({ javascript: 42, shell: 26, python: 6 });
 
 function relative(file) {
   return path.relative(REPO_ROOT, file).replace(/\\/g, '/');

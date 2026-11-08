@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 HOOK="$ROOT/daemons/prompt-context.sh"
-TOTAL=5
+TOTAL=11
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 [[ -f "$HOOK" ]] || fail "no hook at $HOOK"
@@ -72,5 +72,79 @@ TEMPLATE="$ROOT/.claude/settings.json.template"
 grep -q 'daemons/prompt-context.sh' "$TEMPLATE" || fail "template does not wire prompt-context.sh"
 grep -qE 'daemons/caddy(-detect-new-skill)?\.sh' "$TEMPLATE" && fail "template still wires a Caddy hook"
 printf '[5/%d] the template wires prompt-context.sh and no Caddy hook\n' "$TOTAL"
+
+# 6. A notice from the capture reaches the session on the next prompt, once.
+FAKE2="$WORK/install2"
+mkdir -p "$FAKE2/daemons" "$FAKE2/memory"
+cat > "$FAKE2/daemons/memory-capture.sh" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+echo '[memory] CAP: test notice'
+: > "$AIGENT_ROOT/memory/ran"
+EOF
+printf '{"prompt":"x"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do [[ -e "$FAKE2/memory/ran" && -s "$FAKE2/.aigent/capture-notices" ]] && break; sleep 0.5; done
+printf '#!/bin/bash\ncat >/dev/null\n' > "$FAKE2/daemons/memory-capture.sh"
+OUT="$(printf '{"prompt":"y"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK")"
+grep -q '^\[memory\] CAP: test notice$' <<<"$OUT" || fail "the notice did not reach the next prompt: $OUT"
+OUT="$(printf '{"prompt":"z"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK")"
+grep -q 'test notice' <<<"$OUT" && fail "the notice was shown twice: $OUT"
+printf '[6/%d] a capture notice is shown on the next prompt, once\n' "$TOTAL"
+
+# 7. A capture that crashes leaves a trace.
+printf '#!/bin/bash\necho capture-crash-marker >&2\nexit 3\n' > "$FAKE2/daemons/memory-capture.sh"
+printf '{"prompt":"x"}' | AIGENT_ROOT="$FAKE2" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do grep -q capture-crash-marker "$FAKE2/.aigent/capture-errors.log" 2>/dev/null && break; sleep 0.5; done
+grep -q capture-crash-marker "$FAKE2/.aigent/capture-errors.log" || fail "a capture crash left no trace"
+printf '[7/%d] a capture crash reaches the error log\n' "$TOTAL"
+
+# 8. A bare invocation from inside daemons/, with no AIGENT_ROOT, still captures.
+FAKE3="$WORK/install3"
+mkdir -p "$FAKE3/daemons" "$FAKE3/memory"
+cp "$HOOK" "$FAKE3/daemons/prompt-context.sh"
+printf '#!/bin/bash\ncat > "$AIGENT_ROOT/memory/bare.json"\n' > "$FAKE3/daemons/memory-capture.sh"
+(cd "$FAKE3/daemons" && printf '{"prompt":"bare"}' | env -u AIGENT_ROOT bash prompt-context.sh >/dev/null)
+for _ in $(seq 1 60); do [[ -s "$FAKE3/memory/bare.json" ]] && break; sleep 0.5; done
+grep -q bare "$FAKE3/memory/bare.json" 2>/dev/null || fail "a bare invocation never captured"
+printf '[8/%d] a bare invocation with no AIGENT_ROOT captures\n' "$TOTAL"
+
+# 9. What Caddy left behind stays gone: every core skill system-check requires exists, and nothing
+#    the install runs still emits a Caddy tag or banner.
+CORE="$(sed -n '/^CORE_SKILLS=(/,/^)/p' "$ROOT/daemons/system-check.sh" | sed '1d;$d')"
+for skill in $CORE; do
+  [[ -f "$ROOT/skills/$skill/SKILL.md" ]] || fail "system-check requires a skill that does not ship: $skill"
+done
+grep -rlE '\[CADDY|Router: NOT WIRED|CADDY_MUTES' "$ROOT/daemons" --include='*.sh' --include='*.py' --include='*.mjs' --include='*.cjs' --exclude-dir=tests --exclude-dir=node_modules > "$WORK/caddy-left" || true
+[[ ! -s "$WORK/caddy-left" ]] || fail "Caddy output is still emitted by: $(cat "$WORK/caddy-left")"
+printf '[9/%d] system-check requires only shipped skills, and no daemon emits Caddy output\n' "$TOTAL"
+
+# 10. A notice is rendered inert: control and line-separator characters go, lines and length are capped.
+FAKE4="$WORK/install4"
+mkdir -p "$FAKE4/.aigent"
+{
+  printf 'esc\033[31mred sep\xe2\x80\xa8tail\n'
+  printf 'L%.0s' $(seq 1 700); printf '\n'
+  for n in 3 4 5 6 7; do printf 'line%s\n' "$n"; done
+} > "$FAKE4/.aigent/capture-notices"
+OUT="$(printf '{}' | AIGENT_ROOT="$FAKE4" bash "$HOOK")"
+[[ "$OUT" != *$'\033'* ]] || fail "an escape character reached the session"
+[[ "$OUT" != *$'\xe2\x80\xa8'* ]] || fail "a line separator reached the session"
+grep -q 'sep tail' <<<"$OUT" || fail "the notice text was lost: $OUT"
+awk 'length($0)==500 && /^L+$/ {f=1} END {exit !f}' <<<"$OUT" || fail "a long line was not cut to 500 characters"
+grep -q 'line5' <<<"$OUT" || fail "the fifth line was lost"
+grep -q 'line6' <<<"$OUT" && fail "more than 5 lines were shown"
+[[ ! -s "$FAKE4/.aigent/capture-notices" ]] || fail "shown notices were kept"
+printf '[10/%d] notices are inert and capped\n' "$TOTAL"
+
+# 11. The capture error log stays bounded.
+FAKE5="$WORK/install5"
+mkdir -p "$FAKE5/daemons" "$FAKE5/.aigent" "$FAKE5/memory"
+head -c 1100000 /dev/zero | tr '\0' 'x' > "$FAKE5/.aigent/capture-errors.log"
+printf '#!/bin/bash\necho newest-error >&2\n' > "$FAKE5/daemons/memory-capture.sh"
+printf '{}' | AIGENT_ROOT="$FAKE5" bash "$HOOK" >/dev/null
+for _ in $(seq 1 60); do (( $(wc -c <"$FAKE5/.aigent/capture-errors.log") <= 1048576 )) && break; sleep 0.5; done
+(( $(wc -c <"$FAKE5/.aigent/capture-errors.log") <= 1048576 )) || fail "the error log was not capped"
+grep -q newest-error "$FAKE5/.aigent/capture-errors.log" || fail "capping lost the newest error"
+printf '[11/%d] the capture error log stays under its cap\n' "$TOTAL"
 
 printf 'PASS: %d/%d prompt-context scenarios\n' "$TOTAL" "$TOTAL"

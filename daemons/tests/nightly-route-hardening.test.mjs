@@ -46,10 +46,6 @@ function fixture(label) {
       path.join(root, 'skills', skill, 'SKILL.md'),
     );
   }
-  copyFile(
-    path.join(REPO_ROOT, 'daemons', 'skill-router.sh'),
-    path.join(root, 'daemons', 'skill-router.sh'),
-  );
   mkdirSync(path.join(root, 'vault', 'memory', 'runtime'), { recursive: true });
   tempRoots.push(base);
   return { base, root };
@@ -153,30 +149,6 @@ test('mutation proof: the unique alias must pin the canonical local protocol', (
   assert.match(restored.stdout, /NIGHTLY_ROUTE PASS/);
   assert.match(restored.stdout, /skills[\\/]nightly[\\/]SKILL\.md/i);
   proof('RESTORE local-route-sentinel', restored);
-});
-
-test('mutation proof: the prompt router fails closed when the alias mapping is removed', () => {
-  const { root } = fixture('router-mapping');
-  const router = path.join(root, 'daemons', 'skill-router.sh');
-  const original = readFileSync(router, 'utf8');
-  const mutated = original.replace(
-    '"nightly": "nightly-close-parity"',
-    '"nightly": "nightly"',
-  );
-  assert.notEqual(mutated, original, 'fixture mutation must change the nightly alias mapping');
-  writeFileSync(router, mutated, 'utf8');
-
-  const broken = runRoute(root);
-  assert.equal(broken.status, 1);
-  assert.match(broken.stdout, /NIGHTLY_ROUTE FAIL/);
-  assert.match(broken.stdout, /router|alias/i);
-  proof('BREAK router-alias', broken);
-
-  writeFileSync(router, original, 'utf8');
-  const restored = runRoute(root);
-  assert.equal(restored.status, 0, restored.stderr);
-  assert.match(restored.stdout, /NIGHTLY_ROUTE PASS/);
-  proof('RESTORE router-alias', restored);
 });
 
 test('mutation proof: a user-global same-name skill never substitutes for the local alias', () => {

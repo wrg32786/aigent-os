@@ -25,7 +25,7 @@ The script:
 
 ## When to run
 
-- /close Step 0.5 PART E (v0.4.5) emits `[CADDY:context] CHAIN — capsule chain length N` when threshold hit
+- /close Step 0.5 PART E (v0.4.5) reports the capsule chain length when the threshold is hit
 - Manually before a session-heavy week to keep /open Step 2.5 fast
 - After narrative-reconstruction archeology when the chain has grown unwieldy
 

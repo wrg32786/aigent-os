@@ -107,7 +107,7 @@ jobs:
       - name: Validate .claude/skill-index.json exists
         run: |
           if [ ! -f "$INSTALL_TARGET/.claude/skill-index.json" ]; then
-            echo "FAIL: .claude/skill-index.json not installed — Caddy enrollment will not work"
+            echo "FAIL: .claude/skill-index.json not installed"
             exit 1
           fi
           echo "PASS: .claude/skill-index.json exists"

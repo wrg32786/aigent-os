@@ -43,7 +43,7 @@ Nothing here commits or pushes. Every run writes to `<dir>/.aigent/codex-runs/<U
 
 ## Skill wrapper
 
-`skills/codex-adapter/SKILL.md` documents when this is (and isn't) a good fit and walks through the invocation + review steps for the operating Claude. Caddy surfaces it via `.claude/skill-index.json`'s `codex-adapter` entry.
+`skills/codex-adapter/SKILL.md` documents when this is (and isn't) a good fit and walks through the invocation + review steps for the operating Claude.
 
 ## Testing
 

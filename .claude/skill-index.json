@@ -112,13 +112,12 @@
       "dead skills",
       "retire a skill",
       "skill catalog",
-      "Caddy hygiene",
       "trigger mismatch",
       "missing skills",
       "capability gaps",
       "skills audit"
     ],
-    "why": "List skills by usage, flag dead ones for retirement, detect Caddy trigger mismatches, surface missing skills."
+    "why": "List skills by usage, flag dead ones for retirement, detect description mismatches, surface missing skills."
   },
   {
     "name": "diagnose",
@@ -128,14 +127,13 @@
       "something feels off",
       "what changed",
       "hook not firing",
-      "Caddy not working",
       "AI behavior changed",
       "wikilinks broken",
       "open isn't loading",
       "intermittent failure",
       "weird behavior"
     ],
-    "why": "Walk the seven-layer aigent-OS stack to identify which layer is causing an issue. Caddy pattern applied to debugging."
+    "why": "Walk the seven-layer aigent-OS stack to identify which layer is causing an issue. The same pattern-matching idea applied to debugging."
   },
   {
     "name": "envelope",

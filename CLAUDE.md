@@ -117,7 +117,7 @@ The vault at `vault/` is an Obsidian-compatible knowledge graph:
 ## Standing Doctrine Notes (in `vault/concepts/`)
 
 - `Common Anti-Patterns.md` — 10 operating rules that prevent common agent failure modes (survey instead of action, multi-option questionnaires, scope creep, etc.). Read on first session.
-- `Ponytail Doctrine.md` — the anti-over-engineering rung ladder: whether to build at all, and how little. Stop at the first rung that holds; delete broken scaffolding instead of patching it; never cut safety to shrink a diff. Enforced as Standard 16 and fired by Caddy on build intent.
+- `Ponytail Doctrine.md` — the anti-over-engineering rung ladder: whether to build at all, and how little. Stop at the first rung that holds; delete broken scaffolding instead of patching it; never cut safety to shrink a diff. Standard 16; nothing fires it automatically, so apply it on any build task.
 - `Self-Improving CLAUDE.md.md` — meta-pattern for rule-writing and capturing mistakes as permanent learning
 - `Caddy.md` — historical: the keyword skill router retired on 2026-11-05 (skill matching is native now; see Skill Descriptions Protocol)
 - `Memory Decay Doctrine.md` — notes decay if unused, reinforce if touched; computed `heat_score` per note; ported from tinyhumansai/neocortex

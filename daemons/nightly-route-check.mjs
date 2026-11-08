@@ -53,7 +53,6 @@ export function checkNightlyRoute(root = defaultNightlyRoot()) {
   const contextPath = skill('context-hygiene');
   const cognitivePath = skill('cognitive-update');
   const ledgerPath = skill('nightly-ledger-capture');
-  const routerPath = path.join(repositoryRoot, 'daemons', 'skill-router.sh');
 
   const canonical = fileText(canonicalPath, failures, 'canonical nightly');
   const alias = fileText(aliasPath, failures, 'nightly invocation alias');
@@ -64,7 +63,6 @@ export function checkNightlyRoute(root = defaultNightlyRoot()) {
   const context = fileText(contextPath, failures, 'context-hygiene');
   const cognitive = fileText(cognitivePath, failures, 'cognitive-update');
   const ledger = fileText(ledgerPath, failures, 'nightly-ledger-capture');
-  const router = fileText(routerPath, failures, 'skill-router');
 
   if (canonical && !canonical.includes(NIGHTLY_ROUTE_SENTINEL)) {
     failures.push('canonical nightly sentinel missing');
@@ -122,15 +120,6 @@ export function checkNightlyRoute(root = defaultNightlyRoot()) {
     'nightly-decision-outcome.mjs',
     'FRIDAY_MEASUREMENT',
   ]);
-  for (const token of [
-    '"nightly": "nightly-close-parity"',
-    '"meta-improve": "meta-improve-vault"',
-    'os.path.join(root, "skills", alias, "SKILL.md")',
-  ]) {
-    if (router && !router.includes(token)) {
-      failures.push(`skill-router missing fail-closed alias token ${token}`);
-    }
-  }
 
   return {
     ok: failures.length === 0,
