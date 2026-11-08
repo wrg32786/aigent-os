@@ -152,6 +152,7 @@ if command -v cygpath >/dev/null 2>&1; then
   retire_spelling "the /c/ form of this install" "$(cygpath -u "$INST")" retired unix
   retire_spelling "the 8.3 short-name form of this install" "$(cygpath -ms "$INST")" retired short
 else
+  mkdir -p "$INST/sub" "$INST/daemons"  # the dot segments must resolve, as they would for a real hook
   retire_spelling "a path with a dot segment" "$INST/./sub/.." retired dot
   retire_spelling "a path through .." "$INST/daemons/.." retired up
 fi
