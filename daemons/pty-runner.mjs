@@ -8192,6 +8192,9 @@ export function runPtySession({
         : 24,
       cwd,
       env: resolved.env || childEnv,
+      // AIGENT_CONPTY_DLL=1 (opt-in, 2026-11-09): the conpty.dll node-pty bundles instead of the system
+      // ConPTY, which rewrites the child's output from its own buffer and leaves stale cells on screen.
+      useConptyDll: env.AIGENT_CONPTY_DLL === '1',
     });
   } catch (error) {
     try { releaseRunnerLockFn(lockHandle, { fsImpl }); } catch { /* reclaimable */ }
