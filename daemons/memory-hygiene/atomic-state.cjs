@@ -139,12 +139,31 @@ function readOrNull(target, fsImpl) {
   try { return fsImpl.readFileSync(target, 'utf8'); } catch { return null; }
 }
 
-function commit(target, text, fsImpl) {
+// On Windows a rename onto a file another process has open without delete sharing (a virus
+// scanner, an indexer, an editor or a non-Node reader) fails with EPERM, EBUSY or EACCES for a
+// moment. One such failure on a seat's auto-clear-cycle.json used to turn its automatic refresh off
+// until a relaunch (2026-11-06). Retry the rename for under a second before giving up.
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_RETRY_DELAYS_MS = Object.freeze([10, 25, 50, 100, 200, 400]);
+
+function renameWithRetry(from, to, fsImpl, delays = RENAME_RETRY_DELAYS_MS) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fsImpl.renameSync(from, to);
+      return;
+    } catch (error) {
+      if (!RENAME_RETRY_CODES.has(error && error.code) || attempt >= delays.length) throw error;
+      sleepSync(delays[attempt]);
+    }
+  }
+}
+
+function commit(target, text, fsImpl, renameRetryDelaysMs) {
   const tmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   try {
     fsImpl.mkdirSync(path.dirname(target), { recursive: true });
     fsImpl.writeFileSync(tmp, text);
-    fsImpl.renameSync(tmp, target);
+    renameWithRetry(tmp, target, fsImpl, renameRetryDelaysMs);
   } catch (error) {
     try { if (fsImpl.existsSync(tmp)) fsImpl.unlinkSync(tmp); } catch { /* best effort */ }
     throw error;
@@ -157,7 +176,7 @@ function commit(target, text, fsImpl) {
 // correct for append-shaped edits, wrong for anything computed from the old
 // value, which is why it is off by default).
 function atomicUpdate(target, mutate, options = {}) {
-  const { fsImpl = fs, allowDrift = false } = options;
+  const { fsImpl = fs, allowDrift = false, renameRetryDelaysMs } = options;
   const handle = acquireLock(target, options);
   try {
     let before = readOrNull(target, fsImpl);
@@ -190,7 +209,7 @@ function atomicUpdate(target, mutate, options = {}) {
       };
     }
     const text = String(next);
-    commit(target, text, fsImpl);
+    commit(target, text, fsImpl, renameRetryDelaysMs);
     return {
       changed: text !== before,
       drift: false,
