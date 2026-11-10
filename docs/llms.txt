@@ -2,7 +2,7 @@
 
 > Claude Code harness and alternative to context compaction: at 80% context it writes a verified capsule, runs /clear and resumes with persistent memory in git. MIT, local, Node 18+.
 
-aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, exact acknowledgement, one /clear, fresh session check, resume. Memory is plain markdown in git. Public evidence is single-seat (11 of 11 cycles on one Windows seat); see Known limits in the v1.1.0 release notes.
+aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, exact acknowledgement, one /clear, fresh session check, resume. Memory is plain markdown in git. Public evidence is single-seat (11 of 11 cycles on one Windows seat); see Known limits in the v1.2.0 release notes.
 
 ## Docs
 
@@ -20,6 +20,7 @@ aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, 
 
 ## Releases
 
+- [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0): native skill matching, Caddy retirement, sturdier refresh
 - [v1.1.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0): first stable Managed Auto-Refresh, with Known limits
 - [All releases](https://github.com/wrg32786/aigent-os/releases)
 

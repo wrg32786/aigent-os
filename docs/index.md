@@ -34,5 +34,5 @@ Or just the manual capsule plugin:
 - [Getting started](getting-started.md)
 - [Filesystem Standard](filesystem-standard.md)
 - [context-capsule plugin](https://github.com/wrg32786/aigent-os/tree/master/plugins/context-capsule)
-- [Releases](https://github.com/wrg32786/aigent-os/releases) (current: [v1.1.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0))
+- [Releases](https://github.com/wrg32786/aigent-os/releases) (current: [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0))
 - [llms.txt](llms.txt)
