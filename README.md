@@ -56,7 +56,7 @@ Don't want the full install? [context-capsule](plugins/context-capsule) is the p
 - **What has been shown publicly:** 11 of 11 observed Auto-Refresh cycles on one Windows reference seat, in one live run during release testing for v1.1.0-rc.1. Each cycle had one capsule request, one acknowledgement, one `/clear`, and one fresh session, with zero stranded acknowledgements and zero duplicate clears. Write-up: the companion paper, [*governed-agent-organizations*, hypothesis H2](https://github.com/wrg32786/governed-agent-organizations/blob/main/PAPER.md), and its [continuity and Auto-Refresh case study](https://github.com/wrg32786/governed-agent-organizations/blob/main/case-studies/continuity-and-auto-refresh.md). More detail: [Release evidence](#release-evidence).
 - **What it is not:** this is single-seat evidence, not a fleet or reliability claim, and not a claim that this approach beats compaction. It is a different trade-off: an explicit, inspectable checkpoint and a clean window instead of a model-written summary.
 - **Known limitation (v1.1.0-rc.1):** on the rc.1 release, a long session on a managed install can stop at the clear step and need a manual `/clear`. The fixes for that are merged on `master` ([#62](https://github.com/wrg32786/aigent-os/pull/62), [#78](https://github.com/wrg32786/aigent-os/issues/78), [#79](https://github.com/wrg32786/aigent-os/issues/79)) and ship in v1.1.0. Two narrower ack edge cases, [#90](https://github.com/wrg32786/aigent-os/issues/90) (a relaunch can miss an ack already on disk) and [#91](https://github.com/wrg32786/aigent-os/issues/91) (an unspent ack can authorize a later clear after pressure drops), are now closed and fixed on `master` via [#97](https://github.com/wrg32786/aigent-os/pull/97). All of these ship in v1.1.0. If you ever clear by hand, check that the latest capsule and any work in flight are saved first. See the [v1.1.0-rc.1 release notes](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0-rc.1).
-- **Release status:** Managed Auto-Refresh first shipped in the v1.1.0-rc.1 pre-release and is stable in [v1.1.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0), the current Latest release.
+- **Release status:** Managed Auto-Refresh first shipped in the v1.1.0-rc.1 pre-release and is stable in [v1.1.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0). The current Latest release is [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0), with native skill matching, Caddy retirement, and a sturdier refresh.
 
 ## Operator
 
@@ -70,10 +70,10 @@ Auto-Refresh is what keeps a long-lived agent going. The rest of aigent-OS is ab
 | Skill matching | Claude Code matches each task to a skill natively, from each skill's `description`. Every shipped skill carries a short "Use when" description so it stays inside the listing budget; `/skill-recall` finds a fit on demand. | Native |
 | Nine named specialist agents | A builder, a read-only scout, a researcher, a design spec writer, a memory architect, a critic, a vault custodian, an architecture reviewer and a prompt writer, each with a fixed model tier and tool set ([roster](vault/agents/Pantheon.md)). A hook checks every dispatch against the agent's declared tier ([details](docs/model-routing-enforcement.md)). | On by default (warns); block is opt-in with `AIGENT_MODEL_GUARD=enforce` |
 | C2 temporal supersession | A note can carry a validity window. Once it ends, search ranks the note below current ones instead of deleting it ([details](docs/temporal-fact-ledger.md)). | On by default for notes with a validity line; in v1.1.0-rc.1 |
-| Hindsight and Jev memory bridge | Explicit retain, recall, reflect and ranking against providers you configure, with every result checked against a local source ([details](docs/memory-bridge.md)) | Opt-in; on master, not in a release, not verified against the live services |
+| Hindsight and Jev memory bridge | Explicit retain, recall, reflect and ranking against providers you configure, with every result checked against a local source ([details](docs/memory-bridge.md)) | Opt-in; shipped since v1.1.0, not verified against the live services |
 | Gateguard | The first edit of each file in a session waits until the agent names what depends on it, what the change affects and the instruction it is following | Opt-in with `AIGENT_GATEGUARD=enforce` |
 | Codex adapter | Routes one bounded, mechanical task type to `codex exec` and writes a diff for review; never commits or pushes ([details](docs/codex-adapter.md)) | Opt-in when you invoke it; one task type |
-| fleet-band and fleet-delivery mods | A status line above the prompt, and delivery of messages and scheduled job results into an idle session, once each ([mods](plugins/README.md)) | Opt-in pilot (fleet-delivery runs on one seat); on master, not in a release. Delivery needs a message room and a job-results source that are not in this public repo yet |
+| fleet-band and fleet-delivery mods | A status line above the prompt, and delivery of messages and scheduled job results into an idle session, once each ([mods](plugins/README.md)) | Opt-in pilot (fleet-delivery runs on one seat); ships in v1.2.0 (fleet-delivery 0.4.x). Delivery needs a message room and a job-results source that are not in this public repo yet |
 | Agent teams ("crews") | [Guidance](vault/concepts/Orchestration%20Lanes.md) on when to run a standing team, a one-shot fan-out or a solo agent | Guidance only; no code |
 | Self-testing of its own operating rules | Testing a seat's behavior against its own rules | Roadmap |
 
@@ -197,7 +197,7 @@ See [What this changes on your machine](#what-this-changes-on-your-machine) and 
 
 ### Is it production-ready?
 
-Managed Auto-Refresh is stable as of v1.1.0, with single-seat public evidence. See [Evidence and limits](#evidence-and-limits) for what is and is not shown.
+Managed Auto-Refresh is stable as of v1.1.0, and current in [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0), with single-seat public evidence. See [Evidence and limits](#evidence-and-limits) for what is and is not shown.
 
 ### Is anyone running this in production?
 
@@ -402,7 +402,7 @@ The accelerated observation harness then failed outside the transport: the model
 
 This is bounded single-seat release evidence, not a fleet-reliability or "20/20" claim. The executable transport files in this public release are the same files used for the successful observed transactions. The companion paper reports the same result as hypothesis H2: [PAPER.md](https://github.com/wrg32786/governed-agent-organizations/blob/main/PAPER.md) and the [continuity and Auto-Refresh case study](https://github.com/wrg32786/governed-agent-organizations/blob/main/case-studies/continuity-and-auto-refresh.md).
 
-**Known limitation:** the clear-step fixes ([#62](https://github.com/wrg32786/aigent-os/pull/62), [#78](https://github.com/wrg32786/aigent-os/issues/78), [#79](https://github.com/wrg32786/aigent-os/issues/79)) are merged on `master` but not yet in a tagged release, and automatic refresh is not yet proven clean end to end on a managed install. The two ack edge cases, [#90](https://github.com/wrg32786/aigent-os/issues/90) and [#91](https://github.com/wrg32786/aigent-os/issues/91), are closed and fixed on `master` via [#97](https://github.com/wrg32786/aigent-os/pull/97). All of these ship in v1.1.0. Before clearing by hand, check that the latest capsule and any work in flight are preserved.
+**Known limitation:** the clear-step and ack-ownership fixes ([#62](https://github.com/wrg32786/aigent-os/pull/62), [#78](https://github.com/wrg32786/aigent-os/issues/78), [#79](https://github.com/wrg32786/aigent-os/issues/79), [#97](https://github.com/wrg32786/aigent-os/pull/97)) ship in [v1.1.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0). [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0) adds further refresh fixes, including a retry around a transient rename lock ([#164](https://github.com/wrg32786/aigent-os/pull/164)). Automatic refresh is not yet proven clean end to end on a managed install. Before clearing by hand, check that the latest capsule and any work in flight are preserved.
 
 See [`docs/two-verb-lifecycle.md`](docs/two-verb-lifecycle.md) for the lifecycle and identity contract.
 
@@ -603,7 +603,7 @@ Explicitly non-normative: nothing below is claimed as shipped, and none of it ap
 - **Codex adapter generalization**: routing by task class, and additional non-Claude CLIs behind the same interface (see [Agent Routing and Multi-LLM Execution](#-agent-routing-and-multi-llm-execution) above).
 - **`vault-sync.mjs` path-scoping polish**: tightening the memoryPaths exists-filter at the edges of what counts as "durable memory" for a sync commit.
 
-One structural note, since it comes up: the core is scoped to a single operator running a single Claude session at a time. Two opt-in mods in [`plugins/`](plugins/README.md), fleet-band and fleet-delivery, are the first pieces that let several seats work side by side, and we run aigent-OS that way. They are a pilot on master, not yet in a release, and the shared message room and job scheduler they connect to are not part of this repo.
+One structural note, since it comes up: the core is scoped to a single operator running a single Claude session at a time. Two opt-in mods in [`plugins/`](plugins/README.md), fleet-band and fleet-delivery, are the first pieces that let several seats work side by side, and we run aigent-OS that way. They ship in v1.2.0 as an opt-in pilot (fleet-delivery 0.4.x), and the shared message room and job scheduler they connect to are not part of this repo.
 
 ---
 

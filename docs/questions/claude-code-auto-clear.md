@@ -46,7 +46,7 @@ Just want the manual capsule commands? Install the context-capsule plugin inside
 - Scrolling the seat window during a refresh sends stray input ([#99](https://github.com/wrg32786/aigent-os/issues/99)).
 - macOS has the least live mileage with the managed runner.
 
-Full list: the Known limits section of the [v1.1.0 release notes](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0).
+Full list: the Known limits section of the [v1.2.0 release notes](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0).
 
 ## FAQ
 

@@ -42,7 +42,7 @@ Just want the manual capsule commands? Install the context-capsule plugin inside
 - Scrolling the seat window during a refresh sends stray input ([#99](https://github.com/wrg32786/aigent-os/issues/99)).
 - macOS has the least live mileage with the managed runner.
 
-Full list: the Known limits section of the [v1.1.0 release notes](https://github.com/wrg32786/aigent-os/releases/tag/v1.1.0).
+Full list: the Known limits section of the [v1.2.0 release notes](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0).
 - The fleet-band and fleet-delivery mods (status line, message delivery into an idle session) are an opt-in pilot on master, not in a release, and delivery needs a message room and job source that aren't in the public repo. fleet-delivery can type into a seat during a refresh ([#105](https://github.com/wrg32786/aigent-os/issues/105)).
 
 ## FAQ
