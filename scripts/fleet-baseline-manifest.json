@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-11-2b0f8a0e",
-  "public_product_commit": "2b0f8a0e2153cccc091447cbc4c633f12aefcaef",
+  "baseline_id": "aigent-os-2026-11-11-a4676981",
+  "public_product_commit": "a4676981c5e3f966fc5f9faa4553f6b258c9e6a7",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -51,7 +51,9 @@
     "v8 recut for Caddy retirement follow-up (824eb0e9): pins that moved: daemons/prompt-context.sh. Recut: prompt-context.sh forwards capture notices and finds its root on a bare run. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for Caddy follow-up round 2 (44a73415): pins that moved: daemons/prompt-context.sh. Recut: prompt-context.sh renders capture notices inert and caps its error log. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for transient rename lock (ce8e7bcf): pins that moved: daemons/pty-runner.mjs. Recut: pty-runner.mjs retries a failed transport tick before disabling automation. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for input tracker modifier keys (2b0f8a0e): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs treats a character-free modifier key and Shift+Tab as leaving the composer unchanged, and counts a character on a modifier's release as typed. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for input tracker modifier keys (2b0f8a0e): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs treats a character-free modifier key and Shift+Tab as leaving the composer unchanged, and counts a character on a modifier's release as typed. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for opt-in bundled conpty.dll for the runner (eff68279): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs spawns through node-pty's bundled conpty.dll when AIGENT_CONPTY_DLL is exactly 1; otherwise the system ConPTY as before. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for opt-in bundled conpty.dll, absent when off (a4676981): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs adds useConptyDll:true to the spawn options only when AIGENT_CONPTY_DLL is exactly 1; otherwise the options are unchanged from before. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -75,7 +77,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "ca9711f6c8e03318ae1c8c663588a12ae14388596df08c98a92e56b1bd3cd63b",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "09d8b4314934714fa60f0c7071f803a785c20168c67a85fdfdb7661eae901b0e",
+    "daemons/pty-runner.mjs": "2e2dcfd1183f59a02d2f838d00325d386731344dd8712e81b15539c2171d4df9",
     "daemons/auto-clear-transport.mjs": "09d873879f928cbfde0310c36ae88b98d681ad2a95a990abd8fdab91c8cba9d6",
     "daemons/lifecycle-common.mjs": "64502ea7182f1cf50bc1d40f81ac8f050798ccf3ba4593b6c34137e1473d4371",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",

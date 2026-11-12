@@ -508,8 +508,9 @@ function makeThresholdWiringProbe(name, env) {
   let nodePtyLoadCount = 0;
   let runnerLockAcquireCount = 0;
   let runnerLockReleaseCount = 0;
-  // The environment each managed spawn was given (#98).
+  // The environment each managed spawn was given (#98), and its whole options object.
   const spawnEnvs = [];
+  const spawnOptions = [];
 
   const result = runPtySession({
     childArgs: ['--continue', '/open'],
@@ -532,6 +533,7 @@ function makeThresholdWiringProbe(name, env) {
           spawn(command, args, options) {
             managedSpawnCount += 1;
             spawnEnvs.push(options?.env);
+            spawnOptions.push(options);
             return pty;
           },
         },
@@ -582,6 +584,7 @@ function makeThresholdWiringProbe(name, env) {
     stderr,
     constructed,
     spawnEnvs,
+    spawnOptions,
     bindTransport() {
       writeJson(fixture.bootPath, {
         boot_sequence: 11,
@@ -3985,6 +3988,25 @@ test('V1 threshold-applied: env=15 reaches the production transport constructor'
       assert.equal(boundaryProbe.constructed[0].pressureThresholdPct, expected);
     } finally {
       boundaryProbe.close();
+    }
+  }
+});
+
+test('AIGENT_CONPTY_DLL=1 asks node-pty for its bundled conpty.dll; anything else keeps the system ConPTY', () => {
+  for (const value of ['1', undefined, '', '0', 'true', '01', '1 ']) {
+    const env = { TERM: 'xterm-256color', ...(value === undefined ? {} : { AIGENT_CONPTY_DLL: value }) };
+    const probe = makeThresholdWiringProbe(`conpty-dll-${value === undefined ? 'unset' : encodeURIComponent(value).replace(/%/g, 'x') || 'empty'}`, env);
+    try {
+      assert.equal(probe.result.mode, 'managed');
+      assert.equal(probe.spawnOptions.length, 1, 'one managed spawn');
+      if (value === '1') {
+        assert.equal(probe.spawnOptions[0].useConptyDll, true, 'exactly "1" asks for the bundled conpty.dll');
+      } else {
+        assert.equal(Object.hasOwn(probe.spawnOptions[0], 'useConptyDll'), false,
+          `AIGENT_CONPTY_DLL=${JSON.stringify(value)}: the option is absent, as on master`);
+      }
+    } finally {
+      probe.close();
     }
   }
 });
