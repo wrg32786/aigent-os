@@ -974,3 +974,34 @@ test('15. session-id regex source stays identical between transport and stop wri
     safeSessionId.groups.source,
   );
 });
+
+// The runner's floor (pty-runner.mjs _raiseRefreshAlert) writes <session_id>.alert beside the pressure
+// file; the status line must show it under the usual line, and show nothing when there is none.
+test('statusline shows the runner refresh alert for its own session, and only then', (t) => {
+  if (spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
+    t.skip('jq not installed: the alert line is shown on the jq path only');
+    return;
+  }
+  const fixture = makeFixture('statusline-alert');
+  try {
+    const run = (sessionId) => spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: sessionId, model: { display_name: 'M' }, context_window: { used_percentage: 81 } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fixture.homeDir, AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+    });
+    const quiet = run('alert-session');
+    assert.equal(quiet.status, 0, quiet.stderr);
+    assert.doesNotMatch(quiet.stdout, /⚠/, 'no alert file, no alert line');
+
+    writeText(path.join(fixture.homeDir, '.claude', 'ctx-refresh', 'alert-session.alert'),
+      'auto-refresh blocked since 21:13: the runner cannot tell whether the prompt box is empty. Send any message, or run /context-capsule.\n');
+    const shown = run('alert-session');
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /^M \| ctx 81%\r?\n⚠ auto-refresh blocked since 21:13: .*\/context-capsule\.\r?\n$/, 'the alert is its own line under the usual one');
+
+    const other = run('other-session');
+    assert.doesNotMatch(other.stdout, /⚠/, 'another session never shows this session\'s alert');
+  } finally {
+    fs.rmSync(fixture.base, { recursive: true, force: true });
+  }
+});

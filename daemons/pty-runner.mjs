@@ -2243,6 +2243,9 @@ export class ManagedPtyRunner {
     // text (or uncertain input ownership). Diagnostic latch only — it makes
     // the deferral a once-per-cycle event; the request itself stays pending.
     this.capsuleRequestDeferredCycleId = null;
+    // How many cycles in a row deferred their request behind the composer guard. At two (the first
+    // cycle timed out and re-armed), the runner raises a status-line alert; see _raiseRefreshAlert.
+    this.composerBusyCycles = 0;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3864,6 +3867,43 @@ export class ManagedPtyRunner {
     this.composerMayHoldControlText = false;
   }
 
+  // THE FLOOR UNDER THE COMPOSER GUARD (2026-11-11). The guard never guesses the composer is empty, so a
+  // tracker left "unknown" with no confirmed send after it defers every cycle until native compaction
+  // takes the seat (measured on two live seats). Guessing "empty" would bring back the mangled
+  // prompt the guard exists to prevent, so the runner tells the operator instead: once a deferral outlives
+  // a re-arm, it writes one line beside the session's pressure file, and statusline-ctx.sh shows it.
+  // A bare Enter does not help: the tracker trusts a send only when the prompt reaches the transcript.
+  // Best effort: an unwritable file is ignored and never touches automation.
+  _refreshAlertPath() {
+    if (typeof this.homeDir !== 'string' || !this.homeDir || typeof this.sessionId !== 'string'
+      || !/^[A-Za-z0-9_-]+$/.test(this.sessionId)) return null;
+    return path.join(this.homeDir, '.claude', 'ctx-refresh', `${this.sessionId}.alert`);
+  }
+
+  _raiseRefreshAlert(cycleId) {
+    const file = this._refreshAlertPath();
+    if (!file) return;
+    const since = new Date().toTimeString().slice(0, 5);
+    const text = `auto-refresh blocked since ${since}: the runner cannot tell whether the prompt box is empty. `
+      + 'Send any message, or run /context-capsule.';
+    try {
+      this.fs.mkdirSync(path.dirname(file), { recursive: true });
+      if (!this.fs.existsSync(file)) this.fs.writeFileSync(file, `${text}\n`);
+      this._event('refresh-alert-raised', { cycle_id: cycleId, cycles: this.composerBusyCycles });
+    } catch { /* the status line simply shows nothing */ }
+  }
+
+  _clearRefreshAlert() {
+    const file = this._refreshAlertPath();
+    if (!file) return;
+    try {
+      if (this.fs.existsSync(file)) {
+        this.fs.unlinkSync(file);
+        this._event('refresh-alert-cleared', null);
+      }
+    } catch { /* a stale line clears with the session id at the next /clear */ }
+  }
+
   _writeCapsuleRequest(cycleId) {
     if (this.capsuleRequestCycleId === cycleId) return false;
     // COMPOSER GUARD (measured live 2026-09-24): the request fired while the
@@ -3898,13 +3938,19 @@ export class ManagedPtyRunner {
     if (!composer.knownEmpty) {
       if (this.capsuleRequestDeferredCycleId !== cycleId) {
         this.capsuleRequestDeferredCycleId = cycleId;
+        this.composerBusyCycles += 1;
         this.lastReason = {
           code: 'runner-capsule-request-composer-busy',
           detail: { cycle_id: cycleId, input: composer },
         };
         this._event('capsule-request-deferred', this.lastReason);
+        if (this.composerBusyCycles >= 2) this._raiseRefreshAlert(cycleId);
       }
       return false;
+    }
+    if (this.composerBusyCycles > 0) {
+      this.composerBusyCycles = 0;
+      this._clearRefreshAlert();
     }
     // ─── DIALOG READINESS (#104) ───────────────────────────────────────────
     // ALONGSIDE the composer guard above, never instead of it. The composer

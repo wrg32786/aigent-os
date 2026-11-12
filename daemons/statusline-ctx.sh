@@ -45,7 +45,7 @@ if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1;
     # Housekeeping: drop sensor files idle >7 days (session ids rotate on
     # /clear; old files are dead). Only *.json — the sensor's own *.state
     # files are its business, not ours.
-    find "$SENSOR_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null
+    find "$SENSOR_DIR" \( -name '*.json' -o -name '*.alert' \) -mtime +7 -delete 2>/dev/null
   fi
 elif command -v node >/dev/null 2>&1; then
   SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
@@ -76,4 +76,10 @@ elif [ "$HAS_JQ" -eq 1 ]; then
      (if .context_window.used_percentage != null
       then "ctx \(.context_window.used_percentage | floor)%" else empty end)]
     | join(" | ")' 2>/dev/null || true
+fi
+
+# The PTY runner's alert when it cannot send the capsule request (pty-runner.mjs, _raiseRefreshAlert):
+# one line, shown under whatever the display above printed. It goes away when the runner clears it.
+if [ "$HAS_JQ" -eq 1 ] && [ -n "$SID" ] && [ -f "$SENSOR_DIR/$SID.alert" ]; then
+  printf '⚠ %s\n' "$(head -c 200 "$SENSOR_DIR/$SID.alert" | tr -d '\r\n')"
 fi

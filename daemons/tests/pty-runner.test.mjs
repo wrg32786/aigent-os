@@ -5388,6 +5388,52 @@ test('C1 partial operator text defers the capsule request; the operator bytes ar
   }
 });
 
+// The floor: on a live seat one cycle deferred three times, five minutes apart, with the tracker unknown
+// and nobody told, until native compaction. One deferred cycle is ordinary (the operator is mid-prompt);
+// a deferral that outlives a re-arm is put on the status line, and the request going out takes it down.
+test('C1b a capsule request deferred across a re-arm raises a status-line alert; the request going out clears it', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const alert = path.join(harness.fixture.homeDir, '.claude', 'ctx-refresh', `${runner.sessionId}.alert`);
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`)); // Left arrow: the composer is unknown
+
+    assert.equal(runner._writeCapsuleRequest('cycle-a'), false, 'first cycle deferred');
+    assert.equal(fs.existsSync(alert), false, 'one deferred cycle is not an alert');
+    assert.equal(runner._writeCapsuleRequest('cycle-a'), false);
+    assert.equal(fs.existsSync(alert), false, 'more ticks of the same cycle are still not an alert');
+
+    assert.equal(runner._writeCapsuleRequest('cycle-b'), false, 'the re-armed cycle is deferred too');
+    assert.equal(fs.existsSync(alert), true, 'a deferral that outlives a re-arm is shown to the operator -- red without the floor');
+    const text = fs.readFileSync(alert, 'utf8');
+    assert.match(text, /\/context-capsule/, 'the alert names what the operator can do');
+    assert.doesNotMatch(text, /\r|\n./, 'one line');
+    assert.equal(harness.pty.writes.filter((w) => String(w).includes('/context-capsule')).length, 0,
+      'the floor never types into an unknown composer');
+
+    runner.input = new InputOwnershipTracker(); // stands for the operator's own prompt being confirmed
+    runner._writeCapsuleRequest('cycle-c');
+    assert.equal(fs.existsSync(alert), false, 'once the composer guard passes, the alert comes down');
+    assert.equal(runner.composerBusyCycles, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('C1c the alert is best effort: an unwritable home never throws and never disables automation', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    runner.homeDir = path.join(harness.fixture.homeDir, 'missing\u0000bad');
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`));
+    runner._writeCapsuleRequest('cycle-a');
+    assert.doesNotThrow(() => runner._writeCapsuleRequest('cycle-b'));
+    assert.notEqual(runner.phase, 'disabled');
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('C2 the deferred request proceeds on a later tick once the operator submits their own prompt', () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
