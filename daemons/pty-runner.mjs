@@ -2246,6 +2246,10 @@ export class ManagedPtyRunner {
     // How many cycles in a row deferred their request behind the composer guard. At two (the first
     // cycle timed out and re-armed), the runner raises a status-line alert; see _raiseRefreshAlert.
     this.composerBusyCycles = 0;
+    // The alert file's state: raised (written, or being written) until a removal succeeds, and whether a
+    // removal is in flight. Kept apart from the counter so a failed removal is retried (review round 2).
+    this.refreshAlertRaised = false;
+    this.refreshAlertClearing = false;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3873,7 +3877,8 @@ export class ManagedPtyRunner {
   // prompt the guard exists to prevent, so the runner tells the operator instead: once a deferral outlives
   // a re-arm, it writes one line beside the session's pressure file, and statusline-ctx.sh shows it.
   // A bare Enter does not help: the tracker trusts a send only when the prompt reaches the transcript.
-  // Best effort: an unwritable file is ignored and never touches automation.
+  // Best effort and never on the tick's thread: the file work is asynchronous, so slow or failing storage
+  // cannot hold the runner, and a failure is ignored and never touches automation (review round 2).
   _refreshAlertPath() {
     if (typeof this.homeDir !== 'string' || !this.homeDir || typeof this.sessionId !== 'string'
       || !/^[A-Za-z0-9_-]+$/.test(this.sessionId)) return null;
@@ -3881,27 +3886,41 @@ export class ManagedPtyRunner {
   }
 
   _raiseRefreshAlert(cycleId) {
+    if (this.refreshAlertRaised) return;
     const file = this._refreshAlertPath();
-    if (!file) return;
+    if (!file || typeof this.fs.mkdir !== 'function' || typeof this.fs.writeFile !== 'function') return;
+    this.refreshAlertRaised = true;
     const since = new Date().toTimeString().slice(0, 5);
     const text = `auto-refresh blocked since ${since}: the runner cannot tell whether the prompt box is empty. `
       + 'Send any message, or run /context-capsule.';
     try {
-      this.fs.mkdirSync(path.dirname(file), { recursive: true });
-      if (!this.fs.existsSync(file)) this.fs.writeFileSync(file, `${text}\n`);
-      this._event('refresh-alert-raised', { cycle_id: cycleId, cycles: this.composerBusyCycles });
+      this.fs.mkdir(path.dirname(file), { recursive: true }, (mkdirError) => {
+        if (mkdirError) return;
+        this.fs.writeFile(file, `${text}\n`, (writeError) => {
+          if (writeError) return;
+          // Taken down while the write was in flight: the file must not outlive the alert.
+          if (!this.refreshAlertRaised) { this.refreshAlertClearing = false; this._clearRefreshAlert(true); return; }
+          this._event('refresh-alert-raised', { cycle_id: cycleId, cycles: this.composerBusyCycles });
+        });
+      });
     } catch { /* the status line simply shows nothing */ }
   }
 
-  _clearRefreshAlert() {
+  // Called on every pass of the composer guard. A removal that fails leaves the alert raised, so the next
+  // pass tries again; a missing file counts as removed.
+  _clearRefreshAlert(force = false) {
+    if ((!this.refreshAlertRaised && !force) || this.refreshAlertClearing) return;
     const file = this._refreshAlertPath();
-    if (!file) return;
+    if (!file || typeof this.fs.unlink !== 'function') { this.refreshAlertRaised = false; return; }
+    this.refreshAlertClearing = true;
     try {
-      if (this.fs.existsSync(file)) {
-        this.fs.unlinkSync(file);
+      this.fs.unlink(file, (error) => {
+        this.refreshAlertClearing = false;
+        if (error && error.code !== 'ENOENT') return;
+        if (!force) this.refreshAlertRaised = false;
         this._event('refresh-alert-cleared', null);
-      }
-    } catch { /* a stale line clears with the session id at the next /clear */ }
+      });
+    } catch { this.refreshAlertClearing = false; }
   }
 
   _writeCapsuleRequest(cycleId) {
@@ -3948,10 +3967,8 @@ export class ManagedPtyRunner {
       }
       return false;
     }
-    if (this.composerBusyCycles > 0) {
-      this.composerBusyCycles = 0;
-      this._clearRefreshAlert();
-    }
+    this.composerBusyCycles = 0;
+    this._clearRefreshAlert();
     // ─── DIALOG READINESS (#104) ───────────────────────────────────────────
     // ALONGSIDE the composer guard above, never instead of it. The composer
     // guard models the composer TEXT LINE; it knows nothing about a modal

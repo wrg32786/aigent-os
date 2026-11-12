@@ -80,6 +80,10 @@ fi
 
 # The PTY runner's alert when it cannot send the capsule request (pty-runner.mjs, _raiseRefreshAlert):
 # one line, shown under whatever the display above printed. It goes away when the runner clears it.
+# Printable ASCII only, so a file holding terminal controls (escape, OSC, bell) cannot reach the display;
+# nothing at all when that leaves no text (review round 2).
 if [ "$HAS_JQ" -eq 1 ] && [ -n "$SID" ] && [ -f "$SENSOR_DIR/$SID.alert" ]; then
-  printf '⚠ %s\n' "$(head -c 200 "$SENSOR_DIR/$SID.alert" | tr -d '\r\n')"
+  ALERT=$(head -c 200 "$SENSOR_DIR/$SID.alert" | LC_ALL=C tr -cd '\040-\176')
+  ALERT=${ALERT#"${ALERT%%[! ]*}"}
+  [ -n "$ALERT" ] && printf '⚠ %s\n' "$ALERT"
 fi

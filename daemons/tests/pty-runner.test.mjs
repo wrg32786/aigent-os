@@ -5391,7 +5391,17 @@ test('C1 partial operator text defers the capsule request; the operator bytes ar
 // The floor: on a live seat one cycle deferred three times, five minutes apart, with the tracker unknown
 // and nobody told, until native compaction. One deferred cycle is ordinary (the operator is mid-prompt);
 // a deferral that outlives a re-arm is put on the status line, and the request going out takes it down.
-test('C1b a capsule request deferred across a re-arm raises a status-line alert; the request going out clears it', () => {
+// The alert's file work is asynchronous (review round 2), so the tests wait for it to land.
+async function waitUntil(predicate, label, ms = 2000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting: ${label}`);
+}
+
+test('C1b a capsule request deferred across a re-arm raises a status-line alert; the request going out clears it', async () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     const runner = harness.runner;
@@ -5399,12 +5409,12 @@ test('C1b a capsule request deferred across a re-arm raises a status-line alert;
     harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`)); // Left arrow: the composer is unknown
 
     assert.equal(runner._writeCapsuleRequest('cycle-a'), false, 'first cycle deferred');
-    assert.equal(fs.existsSync(alert), false, 'one deferred cycle is not an alert');
     assert.equal(runner._writeCapsuleRequest('cycle-a'), false);
-    assert.equal(fs.existsSync(alert), false, 'more ticks of the same cycle are still not an alert');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(alert), false, 'one deferred cycle, however many ticks, is not an alert');
 
     assert.equal(runner._writeCapsuleRequest('cycle-b'), false, 'the re-armed cycle is deferred too');
-    assert.equal(fs.existsSync(alert), true, 'a deferral that outlives a re-arm is shown to the operator -- red without the floor');
+    await waitUntil(() => fs.existsSync(alert), 'a deferral that outlives a re-arm is shown to the operator -- red without the floor');
     const text = fs.readFileSync(alert, 'utf8');
     assert.match(text, /\/context-capsule/, 'the alert names what the operator can do');
     assert.doesNotMatch(text, /\r|\n./, 'one line');
@@ -5413,8 +5423,64 @@ test('C1b a capsule request deferred across a re-arm raises a status-line alert;
 
     runner.input = new InputOwnershipTracker(); // stands for the operator's own prompt being confirmed
     runner._writeCapsuleRequest('cycle-c');
-    assert.equal(fs.existsSync(alert), false, 'once the composer guard passes, the alert comes down');
+    await waitUntil(() => !fs.existsSync(alert) && !runner.refreshAlertRaised, 'once the composer guard passes, the alert comes down');
     assert.equal(runner.composerBusyCycles, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review round 2, finding 2: storage that is slow and then fails must not hold the runner's tick.
+test('C1d slow or failing storage never holds the tick that raises the alert', async () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const busyThrow = () => { const end = Date.now() + 250; while (Date.now() < end) { /* blocked */ } throw Object.assign(new Error('EIO'), { code: 'EIO' }); };
+    const late = (callback) => setTimeout(() => callback(Object.assign(new Error('EIO'), { code: 'EIO' })), 250);
+    runner.fs = Object.assign(Object.create(fs), {
+      mkdirSync: busyThrow, writeFileSync: busyThrow, existsSync: busyThrow, unlinkSync: busyThrow,
+      mkdir: (target, options, callback) => late(callback),
+      writeFile: (target, data, callback) => late(callback),
+      unlink: (target, callback) => late(callback),
+    });
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`));
+    runner._writeCapsuleRequest('cycle-a');
+    const started = Date.now();
+    assert.doesNotThrow(() => runner._writeCapsuleRequest('cycle-b'));
+    assert.ok(Date.now() - started < 100, `the tick returned in ${Date.now() - started} ms -- red when the write is synchronous`);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.notEqual(runner.phase, 'disabled', 'a failed alert write never touches automation');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review round 2, finding 3: a removal that fails must be tried again, not forgotten.
+test('C1e a failed alert removal is retried on the next guard pass', async () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const alert = path.join(harness.fixture.homeDir, '.claude', 'ctx-refresh', `${runner.sessionId}.alert`);
+    let unlinks = 0;
+    runner.fs = Object.assign(Object.create(fs), {
+      unlink: (target, callback) => {
+        unlinks += 1;
+        if (unlinks === 1) { setImmediate(() => callback(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }))); return; }
+        fs.unlink(target, callback);
+      },
+    });
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`));
+    runner._writeCapsuleRequest('cycle-a');
+    runner._writeCapsuleRequest('cycle-b');
+    await waitUntil(() => fs.existsSync(alert), 'alert raised');
+
+    runner._clearRefreshAlert(); // a guard pass whose removal fails with EBUSY
+    await waitUntil(() => unlinks === 1 && !runner.refreshAlertClearing, 'first removal attempted');
+    assert.equal(fs.existsSync(alert), true, 'the failed removal left the file');
+    assert.equal(runner.refreshAlertRaised, true, 'and the alert stays raised, so it is tried again -- red when the state is dropped');
+
+    runner._clearRefreshAlert(); // the next guard pass
+    await waitUntil(() => !fs.existsSync(alert) && !runner.refreshAlertRaised, 'the second pass removes it and the alert is down');
   } finally {
     harness.cleanup();
   }

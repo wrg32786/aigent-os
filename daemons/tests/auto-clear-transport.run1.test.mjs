@@ -1001,6 +1001,18 @@ test('statusline shows the runner refresh alert for its own session, and only th
 
     const other = run('other-session');
     assert.doesNotMatch(other.stdout, /⚠/, 'another session never shows this session\'s alert');
+
+    // Review round 2: terminal controls never reach the display, and an empty alert is silent.
+    const alertFile = path.join(fixture.homeDir, '.claude', 'ctx-refresh', 'alert-session.alert');
+    fs.writeFileSync(alertFile, '\x1b[2J\x1b[Hforged\x07\x1b]0;title\x07 line\n');
+    const forged = run('alert-session');
+    const alertLine = forged.stdout.slice(forged.stdout.indexOf('⚠'));
+    assert.doesNotMatch(alertLine.replace(/\n$/, ''), /[\x00-\x1f\x7f]/, 'no escape, bell or other control byte is printed');
+    assert.equal(alertLine, '⚠ [2J[Hforged]0;title line\n', 'only the printable text is shown');
+    for (const empty of ['', '\r\n', '\x1b\x07', '   ']) {
+      fs.writeFileSync(alertFile, empty);
+      assert.doesNotMatch(run('alert-session').stdout, /⚠/, `an alert of ${JSON.stringify(empty)} prints nothing`);
+    }
   } finally {
     fs.rmSync(fixture.base, { recursive: true, force: true });
   }
