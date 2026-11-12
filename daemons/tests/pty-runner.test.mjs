@@ -1900,6 +1900,79 @@ test('win32-input-mode: Kd outside {0,1} falls through to fail-closed taint', ()
   }
 });
 
+// Specimens from live seats: the lastTaint of every deferred capsule request. None of these keys changes
+// the composer's text, yet each left it "unknown" until a confirmed send that never came, and the seat ran
+// into native compaction.
+test('win32-input-mode: a modifier alone or Shift+Tab leaves a clean composer clean', () => {
+  const specimens = {
+    'Ctrl alone (Windows Terminal kept the C for its copy)': `${ESC}[17;29;0;1;8;1_`,
+    'Alt alone (Alt+Tab away)': `${ESC}[18;56;0;1;2;1_`,
+    'Shift+Tab (permission-mode cycle)': `${ESC}[9;15;9;1;16;1_`,
+    'Shift+Tab with NumLock on (Cs 48)': `${ESC}[9;15;9;1;48;1_`,
+    'Shift+Tab with CapsLock on (Cs 144)': `${ESC}[9;15;9;1;144;1_`,
+    'Shift alone': `${ESC}[16;42;0;1;16;1_`,
+    'left Windows key': `${ESC}[91;91;0;1;0;1_`,
+  };
+  for (const [name, bytes] of Object.entries(specimens)) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe(bytes);
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.unknown, false, `${name} must not taint`);
+    assert.equal(snapshot.knownEmpty, true, `${name} must leave an empty composer known empty`);
+    assert.equal(snapshot.lastTaint, null, name);
+  }
+});
+
+test('win32-input-mode: a modifier alone keeps an earlier taint and earlier text', () => {
+  const tainted = new InputOwnershipTracker();
+  tainted.observe(`${ESC}[37;75;0;1;0;1_`); // Left arrow: still taints
+  tainted.observe(`${ESC}[17;29;0;1;8;1_`); // then Ctrl alone
+  assert.equal(tainted.snapshot().unknown, true, 'a modifier must not clear an earlier taint');
+  assert.match(tainted.snapshot().lastTaint, /37;75/, 'the earlier taint stays named');
+
+  const dirty = new InputOwnershipTracker();
+  dirty.observe(`${ESC}[65;30;97;1;0;1_`); // 'a'
+  dirty.observe(`${ESC}[18;56;0;1;2;1_`); // Alt alone
+  assert.equal(dirty.snapshot().knownEmpty, false, 'a modifier must not erase typed text');
+});
+
+// Review of 7873493, P1: the exemption is for modifiers that carry no character. A modifier event that
+// carries one is text, and Alt+numpad delivers its character on the Alt release.
+test('win32-input-mode: a modifier event that carries a character marks the composer dirty', () => {
+  const specimens = {
+    'Alt key-down carrying a character': `${ESC}[18;0;233;1;2;1_`,
+    'the same with a repeat count of 5': `${ESC}[18;0;233;1;2;5_`,
+    'Alt+numpad: Alt down, then the character on the Alt release': `${ESC}[18;0;0;1;2;1_${ESC}[18;0;233;0;0;1_`,
+  };
+  for (const [name, bytes] of Object.entries(specimens)) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe(bytes);
+    assert.equal(tracker.snapshot().knownEmpty, false, `${name}: a character reached the composer`);
+  }
+  const typed = new InputOwnershipTracker();
+  typed.observe(`${ESC}[18;0;0;1;2;1_${ESC}[18;0;233;0;0;1_`);
+  assert.equal(typed.snapshot().lastByte, 'é', 'the released character is the byte before the cursor');
+  const plain = new InputOwnershipTracker();
+  plain.observe(`${ESC}[65;30;97;1;0;1_${ESC}[65;30;97;0;0;1_`); // 'a' down and up
+  assert.equal(plain.snapshot().unknown, false, 'an ordinary key release that repeats its character stays a plain release');
+});
+
+test('win32-input-mode: keys that can change the text still taint (Tab, Ctrl+Tab, Esc, Backspace, arrows)', () => {
+  const specimens = {
+    'Tab': `${ESC}[9;15;9;1;0;1_`,
+    'Ctrl+Tab': `${ESC}[9;15;9;1;8;1_`,
+    'Ctrl+Shift+Tab': `${ESC}[9;15;9;1;24;1_`,
+    'Esc': `${ESC}[27;1;27;1;0;1_`,
+    'Backspace': `${ESC}[8;14;8;1;0;1_`,
+    'Up': `${ESC}[38;72;0;1;0;1_`,
+  };
+  for (const [name, bytes] of Object.entries(specimens)) {
+    const tracker = new InputOwnershipTracker();
+    tracker.observe(bytes);
+    assert.equal(tracker.snapshot().unknown, true, `${name} must still taint`);
+  }
+});
+
 test('win32-input-mode: a printable keydown marks the composer dirty without tainting, and a following Enter still clears it', () => {
   const tracker = new InputOwnershipTracker();
   assert.equal(tracker.snapshot().knownEmpty, true);
