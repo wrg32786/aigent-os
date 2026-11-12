@@ -441,6 +441,31 @@ const VK_RETURN = 13;
 // and ENHANCED_KEY 0x100 (set on the numpad Enter) ride along on ordinary
 // submissions and must never veto one -- the mask deliberately stops at 0x1F.
 const WIN32_CS_MODIFIER_MASK = 0x1f;
+// Key-downs that put nothing in the composer and change none of its text: a modifier or lock key pressed
+// alone with no character (the Ctrl of a Ctrl+C that Windows Terminal keeps for its own copy, the Alt of
+// Alt+Tab, the Shift before a capital) and Shift+Tab, which Claude Code reads as the permission-mode
+// cycle. Measured on live seats: these were the lastTaint on every deferred capsule request, and with no
+// later confirmed send the composer stayed "unknown" until native compaction. Every other non-printable
+// key-down (Esc, Backspace, Tab, arrows) still taints. A modifier event that carries a character is text:
+// Alt+numpad delivers its character on the Alt release, so that key-up is counted as typed (see below).
+const WIN32_MODIFIER_ONLY_VKS = new Set([
+  0x10, 0x11, 0x12, // Shift, Ctrl, Alt
+  0x14, 0x90, 0x91, // Caps, Num and Scroll Lock
+  0x5b, 0x5c, // left and right Windows
+  0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, // left and right Shift, Ctrl, Alt
+]);
+const VK_TAB = 0x09;
+const SHIFT_PRESSED = 0x10;
+function win32KeyLeavesComposerUnchanged(event) {
+  if (WIN32_MODIFIER_ONLY_VKS.has(event.vk)) return event.uc === 0;
+  // Shift+Tab carries the Tab character itself (Uc 9) and nothing else.
+  return event.vk === VK_TAB && (event.uc === 0 || event.uc === VK_TAB)
+    && (event.cs & WIN32_CS_MODIFIER_MASK) === SHIFT_PRESSED;
+}
+// A modifier's key-up that carries a character: Alt+numpad entry. The character lands in the composer.
+function win32CharacterOnModifierRelease(event) {
+  return event.kd === 0 && event.uc !== 0 && WIN32_MODIFIER_ONLY_VKS.has(event.vk);
+}
 
 // Returns {vk, sc, uc, kd, cs, rc} for a syntactically valid win32-input-
 // mode key event, or null for anything that doesn't match the six-field
@@ -1231,8 +1256,11 @@ export class InputOwnershipTracker {
             // {0,1}, backspace/delete/arrows/function keys) falls to the
             // same fail-closed else branch raw CSI codes already use.
             const event = parseWin32InputModeEvent(this.sequence);
-            if (event.kd === 0) {
-              // KEYUP: places nothing in the composer -- same restore
+            const releasedCharacter = win32CharacterOnModifierRelease(event);
+            if ((event.kd === 0 && !releasedCharacter)
+              || (event.kd === 1 && win32KeyLeavesComposerUnchanged(event))) {
+              // KEYUP, or a key-down that changes no text (modifier alone,
+              // Shift+Tab): places nothing in the composer -- same restore
               // semantics as the report whitelists above. The Enter's own
               // keyup always follows an uncertain keydown on the live wire,
               // so this restore is what keeps that CR confirmable as EMPTY
@@ -1280,8 +1308,9 @@ export class InputOwnershipTracker {
               } else {
                 this._cleanSubmission(unitsBefore + seen, this.preSequenceKnownEmpty);
               }
-            } else if (event.kd === 1 && event.uc >= 0x20 && event.uc !== 0x7f) {
-              // KEYDOWN printable (same 0x20..0x7e boundary the raw-byte
+            } else if ((event.kd === 1 || releasedCharacter) && event.uc >= 0x20 && event.uc !== 0x7f) {
+              // KEYDOWN printable, or the character an Alt+numpad entry
+              // delivers on the modifier's release (same 0x20..0x7e boundary the raw-byte
               // path below already uses for its DEL/control check): we
               // KNOW a character was typed, so no taint. knownEmpty is
               // forced dirty -- genuine new content, unlike the whitelists
