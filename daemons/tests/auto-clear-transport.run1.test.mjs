@@ -1025,6 +1025,31 @@ test('statusline shows the runner refresh alert for its own session, and only th
     });
     assert.equal(viaNode.status, 0, viaNode.stderr);
     assert.match(viaNode.stdout, /⚠ auto-refresh blocked since 21:13: .*\/context-capsule\.\r?\n$/, 'the alert shows without jq -- red when it needs HAS_JQ');
+
+    // Review round 6: the session id is the payload's top-level session_id, last duplicate winning, nested
+    // ignored, on both paths. Raw strings, since JSON.stringify cannot write a duplicate key.
+    const dir = path.join(fixture.homeDir, '.claude', 'ctx-refresh');
+    fs.writeFileSync(path.join(dir, 'wrong.alert'), 'WRONG ALERT\n');
+    fs.writeFileSync(path.join(dir, 'right.alert'), 'RIGHT ALERT\n');
+    const cases = [
+      ['{"session_id":"wrong","session_id":"right"}', 'right'],
+      ['{"nested":{"session_id":"wrong"},"session_id":"right"}', 'right'],
+      ['{"nested":{"session_id":"wrong"}}', null],
+    ];
+    for (const forceNode of ['0', '1']) {
+      for (const [payload, expected] of cases) {
+        const shown = spawnSync('bash', [STATUSLINE], {
+          input: payload,
+          encoding: 'utf8',
+          env: { ...process.env, HOME: fixture.homeDir, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+        });
+        assert.equal(shown.status, 0, shown.stderr);
+        const where = `${forceNode === '1' ? 'node' : 'jq'} path, ${payload}`;
+        assert.doesNotMatch(shown.stdout, /WRONG ALERT/, `${where}: never the nested or first duplicate -- red with a text match`);
+        if (expected) assert.match(shown.stdout, /⚠ RIGHT ALERT/, `${where}: the top-level, last session_id`);
+        else assert.doesNotMatch(shown.stdout, /⚠/, `${where}: no top-level session_id, no alert`);
+      }
+    }
   } finally {
     fs.rmSync(fixture.base, { recursive: true, force: true });
   }

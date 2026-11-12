@@ -5567,31 +5567,29 @@ test('C1h one alert operation in flight at most, however often the alert flips',
   }
 });
 
-// Review round 5, finding 1: an operation whose completion never comes is abandoned at its deadline, and
-// its late completion changes nothing.
-test('C1l an alert operation with no completion is abandoned at its deadline; its late completion is ignored', () => {
+// Review round 6 ruling: one operation at a time, strictly. A completion that never arrives never starts a
+// second operation, however long; the stall is logged exactly once and changes nothing.
+test('C1l a held alert operation never starts a second one; its stall is logged once', () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     const runner = harness.runner;
-    const { fake, held } = heldFs();
+    let started = 0;
+    const fake = Object.assign(Object.create(fs), {
+      mkdir: () => { started += 1; }, // never calls back
+      writeFile: () => { started += 1; },
+      unlink: () => { started += 1; },
+    });
     runner.fs = fake;
     let t = Date.parse('2026-11-12T08:00:00Z');
     runner.now = () => new Date(t);
     harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`)); // the composer is unknown, so the alert stays wanted
     runner._raiseRefreshAlert();
-    assert.equal(held.mkdir.length, 1, 'the write began');
-    const lost = held.mkdir.shift(); // its completion never comes
-    for (let i = 0; i < 100; i += 1) runner.tick();
-    assert.equal(held.mkdir.length + held.writeFile.length, 0, 'before the deadline nothing new starts');
-    t += 31_000;
-    runner.tick();
-    assert.equal(held.mkdir.length, 1, 'past the deadline the write starts again -- red when busy has no way out');
-    lost(null); // the abandoned operation completes late
-    assert.equal(held.writeFile.length, 0, 'and its late completion does nothing');
-    held.mkdir.shift()(null);
-    held.writeFile.shift()(null);
-    assert.equal(runner.refreshAlertOnDisk, true);
-    assert.equal(runner.refreshAlertBusy, false);
+    assert.equal(started, 1, 'the write began');
+    for (let i = 0; i < 1000; i += 1) { t += 3_600; runner.tick(); } // 1,000 ticks over an hour
+    assert.equal(started, 1, 'no second operation, ever -- red when a deadline starts another');
+    const stalls = runner.events.filter((event) => event.name === 'refresh-alert-operation-stalled');
+    assert.equal(stalls.length, 1, 'the stall is logged exactly once');
+    assert.equal(runner.refreshAlertBusy, true, 'and changes nothing');
   } finally {
     harness.cleanup();
   }

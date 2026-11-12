@@ -81,11 +81,15 @@ fi
 # The PTY runner's alert when it cannot send the capsule request (pty-runner.mjs, _raiseRefreshAlert):
 # one line, shown under whatever the display above printed. It goes away when the runner clears it.
 # Printable ASCII only, so a file holding terminal controls (escape, OSC, bell) cannot reach the display;
-# nothing at all when that leaves no text (review round 2). The session id comes from jq when it ran, else
-# from a plain match on the payload, so the Node fallback shows the alert too (review round 5).
+# nothing at all when that leaves no text (review round 2). The session id comes from jq when it ran (its
+# .session_id is the top-level key, last duplicate winning), else from the same parse in node, and only when
+# some alert file exists at all, so a seat without alerts pays no extra process (review round 6). Either
+# way it must match the runner's own character set before it names a path.
 ALERT_SID=${SID:-}
-if [ -z "$ALERT_SID" ] && [[ $INPUT =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]]; then
-  ALERT_SID=${BASH_REMATCH[1]}
+if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && compgen -G "$SENSOR_DIR/*.alert" >/dev/null 2>&1 \
+  && command -v node >/dev/null 2>&1; then
+  ALERT_SID=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const v=JSON.parse(s).session_id;if(typeof v==="string"&&/^[A-Za-z0-9_-]+$/.test(v))process.stdout.write(v)}catch{}})' 2>/dev/null)
+  [[ "$ALERT_SID" =~ ^[A-Za-z0-9_-]+$ ]] || ALERT_SID=""
 fi
 if [ -n "$ALERT_SID" ] && [ -f "$SENSOR_DIR/$ALERT_SID.alert" ]; then
   ALERT=$(head -c 200 "$SENSOR_DIR/$ALERT_SID.alert" | LC_ALL=C tr -cd '\040-\176')
