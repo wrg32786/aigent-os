@@ -441,6 +441,10 @@ const VK_RETURN = 13;
 // and ENHANCED_KEY 0x100 (set on the numpad Enter) ride along on ordinary
 // submissions and must never veto one -- the mask deliberately stops at 0x1F.
 const WIN32_CS_MODIFIER_MASK = 0x1f;
+// The composer-guard alert (see _syncRefreshAlert): an alert-file operation with no completion after this
+// long is abandoned, and a wanted alert is rewritten this often.
+const REFRESH_ALERT_OP_DEADLINE_MS = 30_000;
+const REFRESH_ALERT_REWRITE_MS = 60 * 60_000;
 // Key-downs that put nothing in the composer and change none of its text: a modifier or lock key pressed
 // alone with no character (the Ctrl of a Ctrl+C that Windows Terminal keeps for its own copy, the Alt of
 // Alt+Tab, the Shift before a capital) and Shift+Tab, which Claude Code reads as the permission-mode
@@ -2255,6 +2259,11 @@ export class ManagedPtyRunner {
     this.refreshAlertBusy = false;
     this.refreshAlertSince = null;
     this.refreshAlertFile = null;
+    // Round 5: each operation carries a token, so one abandoned at its deadline cannot be completed late;
+    // when it began; and when the alert was last written, so a wanted alert is rewritten hourly.
+    this.refreshAlertOp = 0;
+    this.refreshAlertBusySince = 0;
+    this.refreshAlertWrittenAt = 0;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3918,19 +3927,34 @@ export class ManagedPtyRunner {
   // current path, changes, and the old session's file is removed before anything else.
   // A missing file counts as removed. Only a write that landed after the alert came down, or a stale
   // file's removal, is followed at once; a failed operation waits for the next call, so it never spins.
+  // Round 5: an operation with no completion by REFRESH_ALERT_OP_DEADLINE_MS is abandoned; its token is
+  // spent, so a late completion changes nothing, and the file it may have touched counts as 'maybe'. A wanted
+  // alert is rewritten every REFRESH_ALERT_REWRITE_MS, which also restores one deleted from outside (the
+  // status line's 7-day housekeeping, or anyone else).
   _syncRefreshAlert() {
-    if (this.refreshAlertBusy) return;
+    const clock = this.now();
+    const nowMs = clock instanceof Date ? clock.getTime() : Number(clock);
+    if (this.refreshAlertBusy) {
+      if (!(nowMs - this.refreshAlertBusySince >= REFRESH_ALERT_OP_DEADLINE_MS)) return;
+      this.refreshAlertOp += 1;
+      this.refreshAlertBusy = false;
+      if (this.refreshAlertFile) this.refreshAlertOnDisk = 'maybe';
+    }
     const current = this._refreshAlertPath();
     const fsx = this.fs;
     if (!fsx || typeof fsx.mkdir !== 'function' || typeof fsx.writeFile !== 'function'
       || typeof fsx.unlink !== 'function') return;
+    const op = ++this.refreshAlertOp;
+    const live = () => op === this.refreshAlertOp;
+    const begin = () => { this.refreshAlertBusy = true; this.refreshAlertBusySince = nowMs; };
     const held = this.refreshAlertOnDisk !== false && this.refreshAlertFile;
     if (held && (!this.refreshAlertWanted || this.refreshAlertFile !== current)) {
       const target = this.refreshAlertFile;
-      this.refreshAlertBusy = true;
+      begin();
       try {
         fsx.unlink(target, (error) => {
           try {
+            if (!live()) return;
             this.refreshAlertBusy = false;
             if (error && error.code !== 'ENOENT') return; // still there: the next call tries again
             this.refreshAlertOnDisk = false;
@@ -3941,14 +3965,18 @@ export class ManagedPtyRunner {
       } catch { this.refreshAlertBusy = false; }
       return;
     }
-    if (!this.refreshAlertWanted || !current || this.refreshAlertOnDisk === true) return;
-    this.refreshAlertBusy = true;
+    const due = this.refreshAlertOnDisk !== true
+      || !(nowMs - this.refreshAlertWrittenAt < REFRESH_ALERT_REWRITE_MS);
+    if (!this.refreshAlertWanted || !current || !due) return;
+    begin();
     this.refreshAlertFile = current;
     const text = `auto-refresh blocked since ${this.refreshAlertSince}: the runner cannot tell whether the prompt `
       + 'box is empty. Send any message, or run /context-capsule.';
     const done = (written) => {
+      if (!live()) return;
       this.refreshAlertBusy = false;
       this.refreshAlertOnDisk = written ? true : 'maybe';
+      if (written) this.refreshAlertWrittenAt = nowMs;
       // Landed after the alert came down, or after the session changed: remove it now.
       if (written && (!this.refreshAlertWanted || this.refreshAlertFile !== this._refreshAlertPath())) {
         this._syncRefreshAlert();
@@ -3957,6 +3985,7 @@ export class ManagedPtyRunner {
     try {
       fsx.mkdir(path.dirname(current), { recursive: true }, (mkdirError) => {
         try {
+          if (!live()) return;
           if (mkdirError) { done(false); return; }
           fsx.writeFile(current, `${text}\n`, (writeError) => {
             try { done(!writeError); } catch { this.refreshAlertBusy = false; }

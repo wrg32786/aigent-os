@@ -81,9 +81,16 @@ fi
 # The PTY runner's alert when it cannot send the capsule request (pty-runner.mjs, _raiseRefreshAlert):
 # one line, shown under whatever the display above printed. It goes away when the runner clears it.
 # Printable ASCII only, so a file holding terminal controls (escape, OSC, bell) cannot reach the display;
-# nothing at all when that leaves no text (review round 2).
-if [ "$HAS_JQ" -eq 1 ] && [ -n "$SID" ] && [ -f "$SENSOR_DIR/$SID.alert" ]; then
-  ALERT=$(head -c 200 "$SENSOR_DIR/$SID.alert" | LC_ALL=C tr -cd '\040-\176')
+# nothing at all when that leaves no text (review round 2). The session id comes from jq when it ran, else
+# from a plain match on the payload, so the Node fallback shows the alert too (review round 5).
+ALERT_SID=${SID:-}
+if [ -z "$ALERT_SID" ] && [[ $INPUT =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_-]+)\" ]]; then
+  ALERT_SID=${BASH_REMATCH[1]}
+fi
+if [ -n "$ALERT_SID" ] && [ -f "$SENSOR_DIR/$ALERT_SID.alert" ]; then
+  ALERT=$(head -c 200 "$SENSOR_DIR/$ALERT_SID.alert" | LC_ALL=C tr -cd '\040-\176')
   ALERT=${ALERT#"${ALERT%%[! ]*}"}
-  [ -n "$ALERT" ] && printf '⚠ %s\n' "$ALERT"
+  if [ -n "$ALERT" ]; then
+    printf '⚠ %s\n' "$ALERT"
+  fi
 fi

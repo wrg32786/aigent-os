@@ -5567,6 +5567,61 @@ test('C1h one alert operation in flight at most, however often the alert flips',
   }
 });
 
+// Review round 5, finding 1: an operation whose completion never comes is abandoned at its deadline, and
+// its late completion changes nothing.
+test('C1l an alert operation with no completion is abandoned at its deadline; its late completion is ignored', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const { fake, held } = heldFs();
+    runner.fs = fake;
+    let t = Date.parse('2026-11-12T08:00:00Z');
+    runner.now = () => new Date(t);
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`)); // the composer is unknown, so the alert stays wanted
+    runner._raiseRefreshAlert();
+    assert.equal(held.mkdir.length, 1, 'the write began');
+    const lost = held.mkdir.shift(); // its completion never comes
+    for (let i = 0; i < 100; i += 1) runner.tick();
+    assert.equal(held.mkdir.length + held.writeFile.length, 0, 'before the deadline nothing new starts');
+    t += 31_000;
+    runner.tick();
+    assert.equal(held.mkdir.length, 1, 'past the deadline the write starts again -- red when busy has no way out');
+    lost(null); // the abandoned operation completes late
+    assert.equal(held.writeFile.length, 0, 'and its late completion does nothing');
+    held.mkdir.shift()(null);
+    held.writeFile.shift()(null);
+    assert.equal(runner.refreshAlertOnDisk, true);
+    assert.equal(runner.refreshAlertBusy, false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review round 5, finding 2: a wanted alert deleted from outside (the status line's 7-day housekeeping)
+// comes back, because a wanted alert is rewritten hourly.
+test('C1m a wanted alert is rewritten hourly, so one deleted from outside comes back', async () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const alert = path.join(harness.fixture.homeDir, '.claude', 'ctx-refresh', `${runner.sessionId}.alert`);
+    let t = Date.parse('2026-11-12T08:00:00Z');
+    runner.now = () => new Date(t);
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`)); // the composer is unknown, so the alert stays wanted
+    runner._raiseRefreshAlert();
+    await waitUntil(() => fs.existsSync(alert) && runner.refreshAlertOnDisk === true, 'written');
+    fs.unlinkSync(alert); // housekeeping, or anyone
+    t += 30 * 60_000;
+    runner.tick();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(fs.existsSync(alert), false, 'not rewritten within the hour');
+    t += 31 * 60_000;
+    runner.tick();
+    await waitUntil(() => fs.existsSync(alert), 'rewritten after the hour -- red when an on-disk alert is never rewritten');
+  } finally {
+    harness.cleanup();
+  }
+});
+
 // Review round 4, finding 1: a file callback never logs, so a slow log cannot reach the event loop.
 test('C1i alert file callbacks never log', () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });

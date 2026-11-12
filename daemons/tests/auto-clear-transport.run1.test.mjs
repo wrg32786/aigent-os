@@ -1011,8 +1011,20 @@ test('statusline shows the runner refresh alert for its own session, and only th
     assert.equal(alertLine, '⚠ [2J[Hforged]0;title line\n', 'only the printable text is shown');
     for (const empty of ['', '\r\n', '\x1b\x07', '   ']) {
       fs.writeFileSync(alertFile, empty);
-      assert.doesNotMatch(run('alert-session').stdout, /⚠/, `an alert of ${JSON.stringify(empty)} prints nothing`);
+      const silent = run('alert-session');
+      assert.doesNotMatch(silent.stdout, /⚠/, `an alert of ${JSON.stringify(empty)} prints nothing`);
+      assert.equal(silent.status, 0, `and the status line still exits 0 -- red when the block's last test fails (${JSON.stringify(empty)})`);
     }
+
+    // Review round 5: the Node fallback (no jq) shows the alert too.
+    fs.writeFileSync(alertFile, 'auto-refresh blocked since 21:13: send any message, or run /context-capsule.\n');
+    const viaNode = spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: 'alert-session', model: { display_name: 'M' }, context_window: { used_percentage: 81 } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fixture.homeDir, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+    });
+    assert.equal(viaNode.status, 0, viaNode.stderr);
+    assert.match(viaNode.stdout, /⚠ auto-refresh blocked since 21:13: .*\/context-capsule\.\r?\n$/, 'the alert shows without jq -- red when it needs HAS_JQ');
   } finally {
     fs.rmSync(fixture.base, { recursive: true, force: true });
   }
