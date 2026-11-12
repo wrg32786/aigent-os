@@ -5423,8 +5423,10 @@ test('C1b a capsule request deferred across a re-arm raises a status-line alert;
 
     runner.input = new InputOwnershipTracker(); // stands for the operator's own prompt being confirmed
     runner._writeCapsuleRequest('cycle-c');
-    await waitUntil(() => !fs.existsSync(alert) && !runner.refreshAlertRaised, 'once the composer guard passes, the alert comes down');
+    await waitUntil(() => !fs.existsSync(alert) && runner.refreshAlertOnDisk === false && !runner.refreshAlertBusy,
+      'once the composer guard passes, the alert comes down');
     assert.equal(runner.composerBusyCycles, 0);
+    assert.equal(runner.refreshAlertWanted, false);
   } finally {
     harness.cleanup();
   }
@@ -5475,12 +5477,91 @@ test('C1e a failed alert removal is retried on the next guard pass', async () =>
     await waitUntil(() => fs.existsSync(alert), 'alert raised');
 
     runner._clearRefreshAlert(); // a guard pass whose removal fails with EBUSY
-    await waitUntil(() => unlinks === 1 && !runner.refreshAlertClearing, 'first removal attempted');
+    await waitUntil(() => unlinks === 1 && !runner.refreshAlertBusy, 'first removal attempted');
     assert.equal(fs.existsSync(alert), true, 'the failed removal left the file');
-    assert.equal(runner.refreshAlertRaised, true, 'and the alert stays raised, so it is tried again -- red when the state is dropped');
+    assert.equal(runner.refreshAlertOnDisk, true, 'and it is still known to be there, so it is tried again -- red when the state is dropped');
 
     runner._clearRefreshAlert(); // the next guard pass
-    await waitUntil(() => !fs.existsSync(alert) && !runner.refreshAlertRaised, 'the second pass removes it and the alert is down');
+    await waitUntil(() => !fs.existsSync(alert) && runner.refreshAlertOnDisk === false, 'the second pass removes it');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// A file system whose callbacks the test releases by hand.
+function heldFs() {
+  const held = { mkdir: [], writeFile: [], unlink: [] };
+  const fake = Object.assign(Object.create(fs), {
+    mkdir: (target, options, callback) => { held.mkdir.push(callback); },
+    writeFile: (target, data, callback) => { held.writeFile.push(callback); },
+    unlink: (target, callback) => { held.unlink.push(callback); },
+  });
+  return { fake, held };
+}
+
+// Review round 3, finding 1: a throw inside a callback must not escape the runner.
+test('C1f a write call that throws inside the mkdir callback is contained', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const { fake, held } = heldFs();
+    fake.writeFile = () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); };
+    runner.fs = fake;
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`));
+    runner._writeCapsuleRequest('cycle-a');
+    runner._writeCapsuleRequest('cycle-b');
+    assert.equal(held.mkdir.length, 1);
+    assert.doesNotThrow(() => held.mkdir[0](null), 'the throw stays inside the callback -- red when the write call is unguarded');
+    assert.equal(runner.refreshAlertBusy, false, 'the failed write ends the operation');
+    assert.equal(runner.refreshAlertOnDisk, 'maybe', 'and the file may be partial, so removal will be tried');
+    assert.notEqual(runner.phase, 'disabled');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review round 3, finding 2: a write that lands after the alert came down is removed, and that removal
+// is retried when it fails.
+test('C1g a write that lands after the alert came down is removed, and its failed removal retried', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const { fake, held } = heldFs();
+    runner.fs = fake;
+    harness.operator(Buffer.from(`${ESC}[37;75;0;1;0;1_`));
+    runner._writeCapsuleRequest('cycle-a');
+    runner._writeCapsuleRequest('cycle-b');
+    held.mkdir.shift()(null); // the write is now in flight
+    runner._clearRefreshAlert(); // a clean guard pass while it is held
+    assert.equal(held.unlink.length, 0, 'no removal races the write in flight');
+    held.writeFile.shift()(null); // the write lands after the alert came down
+    assert.equal(held.unlink.length, 1, 'so its removal follows at once');
+    held.unlink.shift()(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    assert.equal(runner.refreshAlertOnDisk, true, 'the failed removal leaves the file known on disk');
+    assert.equal(held.unlink.length, 0, 'and is not retried at once: a persistent lock must not spin');
+    runner._clearRefreshAlert(); // the next clean pass
+    assert.equal(held.unlink.length, 1, 'and the next pass tries again -- red when the retry state is lost');
+    held.unlink.shift()(null);
+    assert.equal(runner.refreshAlertOnDisk, false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review round 3, finding 3: at most one file operation is in flight, however often the alert flips.
+test('C1h one alert operation in flight at most, however often the alert flips', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const { fake, held } = heldFs();
+    runner.fs = fake;
+    for (let i = 0; i < 1000; i += 1) {
+      runner._raiseRefreshAlert();
+      runner._raiseRefreshAlert();
+      runner._clearRefreshAlert();
+    }
+    const inFlight = held.mkdir.length + held.writeFile.length + held.unlink.length;
+    assert.equal(inFlight, 1, `operations in flight: ${inFlight} -- red when writes are not coalesced`);
   } finally {
     harness.cleanup();
   }

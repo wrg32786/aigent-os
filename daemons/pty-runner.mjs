@@ -2246,10 +2246,13 @@ export class ManagedPtyRunner {
     // How many cycles in a row deferred their request behind the composer guard. At two (the first
     // cycle timed out and re-armed), the runner raises a status-line alert; see _raiseRefreshAlert.
     this.composerBusyCycles = 0;
-    // The alert file's state: raised (written, or being written) until a removal succeeds, and whether a
-    // removal is in flight. Kept apart from the counter so a failed removal is retried (review round 2).
-    this.refreshAlertRaised = false;
-    this.refreshAlertClearing = false;
+    // The alert file, reconciled one operation at a time (review rounds 2 and 3): whether the alert is
+    // wanted, what is known to be on disk (true, false, or 'maybe' after a failed write), whether an
+    // operation is in flight, and when the current alert began.
+    this.refreshAlertWanted = false;
+    this.refreshAlertOnDisk = false;
+    this.refreshAlertBusy = false;
+    this.refreshAlertSince = null;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3878,49 +3881,69 @@ export class ManagedPtyRunner {
   // a re-arm, it writes one line beside the session's pressure file, and statusline-ctx.sh shows it.
   // A bare Enter does not help: the tracker trusts a send only when the prompt reaches the transcript.
   // Best effort and never on the tick's thread: the file work is asynchronous, so slow or failing storage
-  // cannot hold the runner, and a failure is ignored and never touches automation (review round 2).
+  // cannot hold the runner. One operation is in flight at most; every callback is guarded, so a throw
+  // inside one cannot escape; a failed write or removal is retried on the next call, never in a loop.
+  // Nothing here touches automation (review rounds 2 and 3).
   _refreshAlertPath() {
     if (typeof this.homeDir !== 'string' || !this.homeDir || typeof this.sessionId !== 'string'
       || !/^[A-Za-z0-9_-]+$/.test(this.sessionId)) return null;
     return path.join(this.homeDir, '.claude', 'ctx-refresh', `${this.sessionId}.alert`);
   }
 
-  _raiseRefreshAlert(cycleId) {
-    if (this.refreshAlertRaised) return;
-    const file = this._refreshAlertPath();
-    if (!file || typeof this.fs.mkdir !== 'function' || typeof this.fs.writeFile !== 'function') return;
-    this.refreshAlertRaised = true;
-    const since = new Date().toTimeString().slice(0, 5);
-    const text = `auto-refresh blocked since ${since}: the runner cannot tell whether the prompt box is empty. `
-      + 'Send any message, or run /context-capsule.';
-    try {
-      this.fs.mkdir(path.dirname(file), { recursive: true }, (mkdirError) => {
-        if (mkdirError) return;
-        this.fs.writeFile(file, `${text}\n`, (writeError) => {
-          if (writeError) return;
-          // Taken down while the write was in flight: the file must not outlive the alert.
-          if (!this.refreshAlertRaised) { this.refreshAlertClearing = false; this._clearRefreshAlert(true); return; }
-          this._event('refresh-alert-raised', { cycle_id: cycleId, cycles: this.composerBusyCycles });
-        });
-      });
-    } catch { /* the status line simply shows nothing */ }
+  _raiseRefreshAlert() {
+    if (!this.refreshAlertWanted) this.refreshAlertSince = new Date().toTimeString().slice(0, 5);
+    this.refreshAlertWanted = true;
+    this._syncRefreshAlert();
   }
 
-  // Called on every pass of the composer guard. A removal that fails leaves the alert raised, so the next
-  // pass tries again; a missing file counts as removed.
-  _clearRefreshAlert(force = false) {
-    if ((!this.refreshAlertRaised && !force) || this.refreshAlertClearing) return;
+  // Called on every pass of the composer guard.
+  _clearRefreshAlert() {
+    this.refreshAlertWanted = false;
+    this._syncRefreshAlert();
+  }
+
+  // Brings the file in line with refreshAlertWanted: write it when wanted and not known written, remove it
+  // when unwanted and possibly present (a missing file counts as removed). A write that completes after the
+  // alert came down is followed by its removal.
+  _syncRefreshAlert() {
+    if (this.refreshAlertBusy) return;
     const file = this._refreshAlertPath();
-    if (!file || typeof this.fs.unlink !== 'function') { this.refreshAlertRaised = false; return; }
-    this.refreshAlertClearing = true;
-    try {
-      this.fs.unlink(file, (error) => {
-        this.refreshAlertClearing = false;
-        if (error && error.code !== 'ENOENT') return;
-        if (!force) this.refreshAlertRaised = false;
-        this._event('refresh-alert-cleared', null);
-      });
-    } catch { this.refreshAlertClearing = false; }
+    const fsx = this.fs;
+    if (!file || !fsx || typeof fsx.mkdir !== 'function' || typeof fsx.writeFile !== 'function'
+      || typeof fsx.unlink !== 'function') return;
+    // followUp: only a write that landed after the alert came down is followed at once (by its removal);
+    // a failed removal waits for the next call, so a persistent lock never spins.
+    const finish = (onDisk, event, followUp = false) => {
+      this.refreshAlertBusy = false;
+      this.refreshAlertOnDisk = onDisk;
+      if (event) this._event(event, { since: this.refreshAlertSince });
+      if (followUp && onDisk === true && !this.refreshAlertWanted) this._syncRefreshAlert();
+    };
+    if (this.refreshAlertWanted && this.refreshAlertOnDisk !== true) {
+      this.refreshAlertBusy = true;
+      const text = `auto-refresh blocked since ${this.refreshAlertSince}: the runner cannot tell whether the prompt `
+        + 'box is empty. Send any message, or run /context-capsule.';
+      try {
+        fsx.mkdir(path.dirname(file), { recursive: true }, (mkdirError) => {
+          try {
+            if (mkdirError) { finish('maybe'); return; }
+            fsx.writeFile(file, `${text}\n`, (writeError) => {
+              try { finish(writeError ? 'maybe' : true, writeError ? null : 'refresh-alert-raised', !writeError); } catch { this.refreshAlertBusy = false; }
+            });
+          } catch { finish('maybe'); }
+        });
+      } catch { this.refreshAlertBusy = false; this.refreshAlertOnDisk = 'maybe'; }
+    } else if (!this.refreshAlertWanted && this.refreshAlertOnDisk !== false) {
+      this.refreshAlertBusy = true;
+      try {
+        fsx.unlink(file, (error) => {
+          try {
+            if (!error || error.code === 'ENOENT') finish(false, 'refresh-alert-cleared');
+            else finish(this.refreshAlertOnDisk);
+          } catch { this.refreshAlertBusy = false; }
+        });
+      } catch { this.refreshAlertBusy = false; }
+    }
   }
 
   _writeCapsuleRequest(cycleId) {
@@ -3963,8 +3986,9 @@ export class ManagedPtyRunner {
           detail: { cycle_id: cycleId, input: composer },
         };
         this._event('capsule-request-deferred', this.lastReason);
-        if (this.composerBusyCycles >= 2) this._raiseRefreshAlert(cycleId);
       }
+      // Every deferred tick, so a write that failed is tried again on a later one (never in a loop).
+      if (this.composerBusyCycles >= 2) this._raiseRefreshAlert();
       return false;
     }
     this.composerBusyCycles = 0;
