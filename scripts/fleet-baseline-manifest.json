@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-11-2f42f44c",
-  "public_product_commit": "2f42f44cc97a1099d365ef6f0364d47a68d55702",
+  "baseline_id": "aigent-os-2026-11-12-5a0ae45c",
+  "public_product_commit": "5a0ae45c58c3069aa09d730ff5df7b0ebc5068c3",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -54,10 +54,11 @@
     "v8 recut for input tracker modifier keys (2b0f8a0e): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs treats a character-free modifier key and Shift+Tab as leaving the composer unchanged, and counts a character on a modifier's release as typed. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for opt-in bundled conpty.dll for the runner (eff68279): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs spawns through node-pty's bundled conpty.dll when AIGENT_CONPTY_DLL is exactly 1; otherwise the system ConPTY as before. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for opt-in bundled conpty.dll, absent when off (a4676981): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs adds useConptyDll:true to the spawn options only when AIGENT_CONPTY_DLL is exactly 1; otherwise the options are unchanged from before. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for composer-guard alert, on the installed conpty head (2f42f44c): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. pty-runner.mjs raises a status-line alert when the capsule request stays deferred across a re-arm and reconciles the alert file from every tick, one asynchronous operation at a time, per session; statusline-ctx.sh shows the alert as printable text only. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for composer-guard alert, on the installed conpty head (2f42f44c): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. pty-runner.mjs raises a status-line alert when the capsule request stays deferred across a re-arm and reconciles the alert file from every tick, one asynchronous operation at a time, per session; statusline-ctx.sh shows the alert as printable text only. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for composer-guard alert round 6 (5a0ae45c): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. pty-runner.mjs abandons an alert-file operation with no completion after 30 s and ignores its late completion, and rewrites a wanted alert hourly; statusline-ctx.sh shows the alert without jq and exits 0 when it prints nothing. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
-    "daemons/statusline-ctx.sh": "bca869df36bcbbb03e0923e8e326b841c206243d5664881836af1ee49a3f224a",
+    "daemons/statusline-ctx.sh": "67b3b727834406bbda553390623008c65b67bef00f32836237cc0c4b7700ee41",
     "daemons/sessionstart-reinject.mjs": "3d8eda506714ffbf8e04a5c7e428252fedba0d01f2153b22e9f256b642de641e",
     "daemons/resume-verb.mjs": "9486500ddb3cd6cc95f267a0eab5a90617c398bb146ffada7f45e9f681dc3442",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
@@ -78,7 +79,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "ca9711f6c8e03318ae1c8c663588a12ae14388596df08c98a92e56b1bd3cd63b",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "7b80a8d83eaccb0575dd8644dd2bca5f597ea0fdc97aa75a3f8625323c03167b",
+    "daemons/pty-runner.mjs": "349686d08b35efbf7f013372ede13dce2559b5e8ea947bb99bed514eccac8aa3",
     "daemons/auto-clear-transport.mjs": "09d873879f928cbfde0310c36ae88b98d681ad2a95a990abd8fdab91c8cba9d6",
     "daemons/lifecycle-common.mjs": "64502ea7182f1cf50bc1d40f81ac8f050798ccf3ba4593b6c34137e1473d4371",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
