@@ -8194,7 +8194,8 @@ export function runPtySession({
       env: resolved.env || childEnv,
       // AIGENT_CONPTY_DLL=1 (opt-in, 2026-11-09): the conpty.dll node-pty bundles instead of the system
       // ConPTY, which rewrites the child's output from its own buffer and leaves stale cells on screen.
-      useConptyDll: env.AIGENT_CONPTY_DLL === '1',
+      // Added only for exactly "1", so with the opt-in off the options are the same object shape as before.
+      ...(env.AIGENT_CONPTY_DLL === '1' ? { useConptyDll: true } : {}),
     });
   } catch (error) {
     try { releaseRunnerLockFn(lockHandle, { fsImpl }); } catch { /* reclaimable */ }

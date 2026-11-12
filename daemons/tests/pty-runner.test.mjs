@@ -3993,13 +3993,18 @@ test('V1 threshold-applied: env=15 reaches the production transport constructor'
 });
 
 test('AIGENT_CONPTY_DLL=1 asks node-pty for its bundled conpty.dll; anything else keeps the system ConPTY', () => {
-  for (const [value, expected] of [['1', true], [undefined, false], ['0', false], ['true', false]]) {
+  for (const value of ['1', undefined, '', '0', 'true', '01', '1 ']) {
     const env = { TERM: 'xterm-256color', ...(value === undefined ? {} : { AIGENT_CONPTY_DLL: value }) };
-    const probe = makeThresholdWiringProbe(`conpty-dll-${value}`, env);
+    const probe = makeThresholdWiringProbe(`conpty-dll-${value === undefined ? 'unset' : encodeURIComponent(value).replace(/%/g, 'x') || 'empty'}`, env);
     try {
       assert.equal(probe.result.mode, 'managed');
       assert.equal(probe.spawnOptions.length, 1, 'one managed spawn');
-      assert.equal(probe.spawnOptions[0].useConptyDll, expected, `AIGENT_CONPTY_DLL=${value}`);
+      if (value === '1') {
+        assert.equal(probe.spawnOptions[0].useConptyDll, true, 'exactly "1" asks for the bundled conpty.dll');
+      } else {
+        assert.equal(Object.hasOwn(probe.spawnOptions[0], 'useConptyDll'), false,
+          `AIGENT_CONPTY_DLL=${JSON.stringify(value)}: the option is absent, as on master`);
+      }
     } finally {
       probe.close();
     }
