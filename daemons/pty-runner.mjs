@@ -2248,11 +2248,13 @@ export class ManagedPtyRunner {
     this.composerBusyCycles = 0;
     // The alert file, reconciled one operation at a time (review rounds 2 and 3): whether the alert is
     // wanted, what is known to be on disk (true, false, or 'maybe' after a failed write), whether an
-    // operation is in flight, and when the current alert began.
+    // operation is in flight, when the current alert began, and which session's file the on-disk state
+    // refers to (review round 4).
     this.refreshAlertWanted = false;
     this.refreshAlertOnDisk = false;
     this.refreshAlertBusy = false;
     this.refreshAlertSince = null;
+    this.refreshAlertFile = null;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3890,60 +3892,78 @@ export class ManagedPtyRunner {
     return path.join(this.homeDir, '.claude', 'ctx-refresh', `${this.sessionId}.alert`);
   }
 
+  // The only log lines are here, on the tick, when the wanted state flips; file callbacks never log, so a
+  // slow log cannot reach the event loop through them (review round 4).
   _raiseRefreshAlert() {
-    if (!this.refreshAlertWanted) this.refreshAlertSince = new Date().toTimeString().slice(0, 5);
-    this.refreshAlertWanted = true;
+    if (!this.refreshAlertWanted) {
+      this.refreshAlertSince = new Date().toTimeString().slice(0, 5);
+      this.refreshAlertWanted = true;
+      this._event('refresh-alert-raised', { since: this.refreshAlertSince, cycles: this.composerBusyCycles });
+    }
     this._syncRefreshAlert();
   }
 
-  // Called on every pass of the composer guard.
+  // Called on every pass of the composer guard, and from tick() once the composer is known empty.
   _clearRefreshAlert() {
-    this.refreshAlertWanted = false;
+    if (this.refreshAlertWanted) {
+      this.refreshAlertWanted = false;
+      this._event('refresh-alert-cleared', { since: this.refreshAlertSince });
+    }
     this._syncRefreshAlert();
   }
 
-  // Brings the file in line with refreshAlertWanted: write it when wanted and not known written, remove it
-  // when unwanted and possibly present (a missing file counts as removed). A write that completes after the
-  // alert came down is followed by its removal.
+  // Brings the disk in line with refreshAlertWanted, one asynchronous operation at a time. It runs on every
+  // tick (review round 4), so cleanup goes on after the request is sent or the cycle ends.
+  // refreshAlertFile is the file the on-disk state refers to: after /clear the session id, and so the
+  // current path, changes, and the old session's file is removed before anything else.
+  // A missing file counts as removed. Only a write that landed after the alert came down, or a stale
+  // file's removal, is followed at once; a failed operation waits for the next call, so it never spins.
   _syncRefreshAlert() {
     if (this.refreshAlertBusy) return;
-    const file = this._refreshAlertPath();
+    const current = this._refreshAlertPath();
     const fsx = this.fs;
-    if (!file || !fsx || typeof fsx.mkdir !== 'function' || typeof fsx.writeFile !== 'function'
+    if (!fsx || typeof fsx.mkdir !== 'function' || typeof fsx.writeFile !== 'function'
       || typeof fsx.unlink !== 'function') return;
-    // followUp: only a write that landed after the alert came down is followed at once (by its removal);
-    // a failed removal waits for the next call, so a persistent lock never spins.
-    const finish = (onDisk, event, followUp = false) => {
-      this.refreshAlertBusy = false;
-      this.refreshAlertOnDisk = onDisk;
-      if (event) this._event(event, { since: this.refreshAlertSince });
-      if (followUp && onDisk === true && !this.refreshAlertWanted) this._syncRefreshAlert();
-    };
-    if (this.refreshAlertWanted && this.refreshAlertOnDisk !== true) {
-      this.refreshAlertBusy = true;
-      const text = `auto-refresh blocked since ${this.refreshAlertSince}: the runner cannot tell whether the prompt `
-        + 'box is empty. Send any message, or run /context-capsule.';
-      try {
-        fsx.mkdir(path.dirname(file), { recursive: true }, (mkdirError) => {
-          try {
-            if (mkdirError) { finish('maybe'); return; }
-            fsx.writeFile(file, `${text}\n`, (writeError) => {
-              try { finish(writeError ? 'maybe' : true, writeError ? null : 'refresh-alert-raised', !writeError); } catch { this.refreshAlertBusy = false; }
-            });
-          } catch { finish('maybe'); }
-        });
-      } catch { this.refreshAlertBusy = false; this.refreshAlertOnDisk = 'maybe'; }
-    } else if (!this.refreshAlertWanted && this.refreshAlertOnDisk !== false) {
+    const held = this.refreshAlertOnDisk !== false && this.refreshAlertFile;
+    if (held && (!this.refreshAlertWanted || this.refreshAlertFile !== current)) {
+      const target = this.refreshAlertFile;
       this.refreshAlertBusy = true;
       try {
-        fsx.unlink(file, (error) => {
+        fsx.unlink(target, (error) => {
           try {
-            if (!error || error.code === 'ENOENT') finish(false, 'refresh-alert-cleared');
-            else finish(this.refreshAlertOnDisk);
+            this.refreshAlertBusy = false;
+            if (error && error.code !== 'ENOENT') return; // still there: the next call tries again
+            this.refreshAlertOnDisk = false;
+            this.refreshAlertFile = null;
+            if (this.refreshAlertWanted && current) this._syncRefreshAlert(); // the current session's alert
           } catch { this.refreshAlertBusy = false; }
         });
       } catch { this.refreshAlertBusy = false; }
+      return;
     }
+    if (!this.refreshAlertWanted || !current || this.refreshAlertOnDisk === true) return;
+    this.refreshAlertBusy = true;
+    this.refreshAlertFile = current;
+    const text = `auto-refresh blocked since ${this.refreshAlertSince}: the runner cannot tell whether the prompt `
+      + 'box is empty. Send any message, or run /context-capsule.';
+    const done = (written) => {
+      this.refreshAlertBusy = false;
+      this.refreshAlertOnDisk = written ? true : 'maybe';
+      // Landed after the alert came down, or after the session changed: remove it now.
+      if (written && (!this.refreshAlertWanted || this.refreshAlertFile !== this._refreshAlertPath())) {
+        this._syncRefreshAlert();
+      }
+    };
+    try {
+      fsx.mkdir(path.dirname(current), { recursive: true }, (mkdirError) => {
+        try {
+          if (mkdirError) { done(false); return; }
+          fsx.writeFile(current, `${text}\n`, (writeError) => {
+            try { done(!writeError); } catch { this.refreshAlertBusy = false; }
+          });
+        } catch { done(false); }
+      });
+    } catch { this.refreshAlertBusy = false; this.refreshAlertOnDisk = 'maybe'; }
   }
 
   _writeCapsuleRequest(cycleId) {
@@ -7353,6 +7373,17 @@ export class ManagedPtyRunner {
 
   tick() {
     if (this.closed) return { status: 'closed' };
+
+    // The composer-guard alert, every tick (review round 4): it comes down once the composer is known
+    // empty, and its file work goes on whatever the cycle is doing. Asynchronous and best effort.
+    try {
+      if (this.refreshAlertWanted && this.input?.snapshot?.().knownEmpty) {
+        this.composerBusyCycles = 0;
+        this._clearRefreshAlert();
+      } else {
+        this._syncRefreshAlert();
+      }
+    } catch { /* the alert never touches the tick's outcome */ }
 
     const submitted = this.phase === 'submitted' || this.phase === 'submitting';
     const killed = this._readKillSwitch();
