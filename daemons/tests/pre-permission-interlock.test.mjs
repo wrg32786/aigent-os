@@ -25,6 +25,7 @@ import {
   HOOK_GATE_BUDGET_MS,
   INTERLOCK_DRAIN_MS,
   PENDING_MAX,
+  RECENT_IDS_MAX,
   PROOF_NAME,
   STATE_NAME,
   ALL_PRE_TOOL_USE_DENY_CODES,
@@ -495,50 +496,133 @@ test('#104 G12 the four evidence legs each refuse by their own name, and all fou
     assert.equal(interlockEvidence(good).code, 'interlock-hook-not-observed',
       'leg 3 is the EMPIRICAL one: the host must actually have run the hook');
 
-    // Leg 4 is a DELTA against the last agreement point, not an absolute
-    // comparison -- the reader's baseline walk parses up to a megabyte of
-    // history whose calls the hook handled before the state file existed.
+    // Leg 4 matches BY ID against the last agreement point. With no agreement
+    // point yet, the ids the reader parsed are history (its baseline walk reads
+    // up to a megabyte whose calls the hook handled before the state file
+    // existed) and are absorbed rather than charged to the hook.
     writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 3 } });
-    const first = interlockEvidence({ ...good, toolUsesObserved: 500 });
+    const first = interlockEvidence({ ...good, toolUsesObserved: 500, toolUseIdsSince: ['toolu_OLD1', 'toolu_OLD2'] });
     assert.equal(first.ok, true,
       'with no checkpoint, history is absorbed rather than charged to the hook');
-    assert.deepEqual(first.nextCheckpoint, { observed: 500, preRuns: 3 });
+    assert.deepEqual(first.nextCheckpoint, { preRuns: 3 });
 
     // A DEAD HOOK: two more tool calls the reader saw, and NO hook activity at
     // all since the agreement point.
-    const dead = interlockEvidence({ ...good, toolUsesObserved: 502, checkpoint: first.nextCheckpoint });
+    const dead = interlockEvidence({
+      ...good, toolUsesObserved: 502, toolUseIdsSince: ['toolu_D1', 'toolu_D2'], checkpoint: first.nextCheckpoint,
+    });
     assert.equal(dead.ok, false, 'a hook that stopped running is detected on the next call');
     assert.equal(dead.code, 'interlock-hook-missed-tool-calls');
-    assert.deepEqual(dead.detail, { hook_runs_since: 0, tool_uses_since: 2 });
+    assert.deepEqual(dead.detail, { hook_runs_since: 0, tool_uses_since: 2, unpaid: 2 });
 
-    // A DROPPED INCREMENT, which is a different thing and must not be
-    // permanent. THIS IS WHERE THE ORIGINAL VECTOR WAS WRONG: it advanced
-    // pre_runs while leaving toolUsesObserved at 502, a shape no real seat
-    // produces, so it never exercised the recovery it claimed. On a seat the
-    // two move TOGETHER -- a tool call writes a record and runs the hook -- so
-    // both advance here, and the shortfall persists because one earlier
-    // increment was lost.
-    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 6 } });
+    // Every parsed id has a run with that id: a plain pass, nothing forgiven.
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 5, recent_ids: ['toolu_P1', 'toolu_P2'] } });
+    const paid = interlockEvidence({
+      ...good, toolUseIdsSince: ['toolu_P1', 'toolu_P2'], checkpoint: first.nextCheckpoint,
+    });
+    assert.equal(paid.ok, true);
+    assert.equal(paid.forgaveDeficit, undefined, 'paid in full is not a forgiveness');
+    assert.deepEqual(paid.nextCheckpoint, { preRuns: 5 });
+
+    // A CALL THE HOOK DID NOT COUNT, which is a different thing and must not
+    // be permanent. The hook is ALIVE (it ran for other calls since the
+    // agreement point), so an unpaid record is a call it missed, not death.
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 6, recent_ids: ['toolu_F1', 'toolu_F2', 'toolu_F3'] } });
     const forgiven = interlockEvidence({
-      ...good, toolUsesObserved: 506, checkpoint: first.nextCheckpoint,
+      ...good,
+      toolUseIdsSince: ['toolu_F1', 'toolu_X1', 'toolu_F2', 'toolu_X2', 'toolu_F3', 'toolu_X3'],
+      checkpoint: first.nextCheckpoint,
     });
     assert.equal(forgiven.ok, true,
       'the hook ran 3 times for 6 observed calls -- it is ALIVE, so the shortfall is a '
-      + 'dropped increment and not death. A cumulative delta that only re-anchored on a '
-      + 'pass made one lost increment end automation for the session.');
-    assert.deepEqual(forgiven.forgaveDeficit, { hook_runs_since: 3, tool_uses_since: 6 },
+      + 'missed call and not death. A rule that only re-anchored on a pass made one lost '
+      + 'run end automation for the session.');
+    assert.deepEqual(forgiven.forgaveDeficit, { hook_runs_since: 3, tool_uses_since: 6, unpaid: 3 },
       'and the forgiveness is reported, because it resolves permissively');
-    assert.deepEqual(forgiven.nextCheckpoint, { observed: 506, preRuns: 6 },
+    assert.deepEqual(forgiven.nextCheckpoint, { preRuns: 6 },
       're-anchored, so the deficit is not re-charged for ever');
 
     // AND IT IS POSITIVE EVIDENCE, NOT A TOLERANCE. With the hook still dead,
     // more observed calls keep refusing however many arrive.
-    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 6 } });
     const stillDead = interlockEvidence({
-      ...good, toolUsesObserved: 999, checkpoint: { observed: 506, preRuns: 6 },
+      ...good, toolUseIdsSince: Array.from({ length: 50 }, (_, i) => `toolu_Z${i}`), checkpoint: { preRuns: 6 },
     });
     assert.equal(stillDead.ok, false, 'no hook activity, no forgiveness');
     assert.equal(stillDead.code, 'interlock-hook-missed-tool-calls');
+
+    // AN ID PAYS FOR ITS OWN RECORD AND NOTHING ELSE. A run whose record the
+    // reader never parses (a line it stepped over) leaves nothing behind that
+    // a later record with no run could spend.
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 7, recent_ids: ['toolu_BIG'] } });
+    const overBig = interlockEvidence({ ...good, toolUseIdsSince: [], checkpoint: { preRuns: 6 } });
+    assert.equal(overBig.ok, true, 'setup: the run for the unread record passes');
+    const afterBig = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_DEAD'], checkpoint: overBig.nextCheckpoint });
+    assert.equal(afterBig.code, 'interlock-hook-missed-tool-calls',
+      'a count carried forward would have let the run for toolu_BIG pay for toolu_DEAD');
+  });
+});
+
+test('#104 G12b a run that lands before its record still pays for it (the 2026-11-13 hold)', () => {
+  withScratch('g12b', (fx) => {
+    const nonce = bind(fx, { pid: 1202 });
+    const good = {
+      dir: fx.dir, nonce, sessionId: SESSION, runnerPid: 1202, hookPath: HOOK_PATH,
+      hookSha256: crypto.createHash('sha256').update(fs.readFileSync(HOOK_PATH)).digest('hex'),
+    };
+    // The hook ran for toolu_CAP; its record is still in flush lag. The check
+    // in that gap passes and takes its agreement point over the run.
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 4, recent_ids: ['toolu_CAP'] } });
+    const gap = interlockEvidence({ ...good, toolUseIdsSince: [], checkpoint: { preRuns: 3 } });
+    assert.equal(gap.ok, true);
+    // The record arrives. The seat is idle: no further run will ever come.
+    const arrives = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_CAP'], checkpoint: gap.nextCheckpoint });
+    assert.equal(arrives.ok, true,
+      'by count this was owed 1, ran 0, and held the clear for eight hours on an idle seat');
+    assert.equal(arrives.forgaveDeficit, undefined, 'paid by its own run, not forgiven');
+
+    // The same with the agreement point freshly discarded (a re-baseline): the
+    // run is absorbed with the history, and its record is still paid later.
+    const rebased = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_HIST'], checkpoint: null });
+    assert.equal(rebased.ok, true);
+    const late = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_CAP'], checkpoint: rebased.nextCheckpoint });
+    assert.equal(late.ok, true, 'recent_ids outlives the agreement point');
+    assert.equal(late.forgaveDeficit, undefined);
+
+    // A record with no run in the same span spends nothing: it is unpaid on
+    // its own, and the lagging run still pays for its own record.
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 4, recent_ids: [] } });
+    const invalid = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_INVALID'], checkpoint: { preRuns: 4 } });
+    assert.equal(invalid.code, 'interlock-hook-missed-tool-calls', 'no run since the point: held');
+    writeState({ dir: fx.dir, state: { ...emptyState(nonce), stop_runs: 1, pre_runs: 5, recent_ids: ['toolu_C'] } });
+    const alive = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_INVALID'], checkpoint: { preRuns: 4 } });
+    assert.equal(alive.ok, true, 'the hook ran since: alive, the unpaid record is forgiven');
+    assert.deepEqual(alive.forgaveDeficit, { hook_runs_since: 1, tool_uses_since: 1, unpaid: 1 });
+    const cLands = interlockEvidence({ ...good, toolUseIdsSince: ['toolu_C'], checkpoint: alive.nextCheckpoint });
+    assert.equal(cLands.ok, true, 'the run for toolu_C was not spent on toolu_INVALID');
+    assert.equal(cLands.forgaveDeficit, undefined);
+  });
+});
+
+test('#104 G12c the hook remembers the ids it ran for, bounded, real ids only', () => {
+  withScratch('g12c', (fx) => {
+    const nonce = bind(fx);
+    writeState({ dir: fx.dir, state: emptyState(nonce) });
+    const call = (event, id) => runHook({
+      payload: hookPayload({ tool_use_id: id, tool_name: 'Read' }),
+      event, env: fx.env, pid: 503, processLike: { kill: () => true }, now: () => 0, sleep: () => {},
+    });
+    call('PreToolUse', 'anon:not-a-record');
+    call('PostToolUse', 'anon:not-a-record');
+    for (let i = 0; i < RECENT_IDS_MAX + 3; i += 1) {
+      call('PreToolUse', `toolu_R${i}`);
+      call('PostToolUse', `toolu_R${i}`);
+    }
+    const state = JSON.parse(fs.readFileSync(path.join(fx.dir, STATE_NAME), 'utf8'));
+    assert.equal(state.pre_runs, RECENT_IDS_MAX + 4, 'every run counted, the anon one too');
+    assert.ok(!state.recent_ids.some((id) => id.startsWith('anon:')), 'a synthetic key names no record');
+    assert.equal(state.recent_ids.length, RECENT_IDS_MAX, 'bounded');
+    assert.equal(state.recent_ids[0], 'toolu_R3', 'oldest dropped first');
+    assert.equal(state.recent_ids.at(-1), `toolu_R${RECENT_IDS_MAX + 2}`);
   });
 });
 

@@ -1863,6 +1863,9 @@ const ABSENT_TRANSCRIPT_READY_AT = Object.freeze(['wake-enter-retry']);
 // an orphaned marker, so both hold and only the NAME changes. The bound exists
 // so the operator can tell the two apart in the log.
 const INTERLOCK_PENDING_STALE_MS = 120000;
+// Most tool_use ids the reader keeps between agreement points (leg 4 matches
+// them by id). Past it the agreement point is discarded, as a re-baseline does.
+const TOOL_USE_IDS_SINCE_MAX = 8192;
 // How many recently SETTLED tool_use ids the reader remembers, so the interlock
 // can discount a marker whose call the transcript has answered. A recent-history
 // lookup, not a ledger: the only ids that matter are ones a pending marker still
@@ -2282,8 +2285,9 @@ export class ManagedPtyRunner {
     // removed from the settings mid-session is caught empirically by the
     // missed-tool-calls leg on the very next tool call.
     this.interlockWiring = null;
-    // Last point at which the hook's own invocation count and the transcript
-    // reader's tool_use count agreed. Null means "not established yet", which
+    // Last point at which every tool_use the reader parsed had a hook run with
+    // its id (leg 4; stores the hook's pre_runs there, for the forgiveness
+    // evidence). Null means "not established yet", which
     // the evidence check initialises rather than treats as a failure. Dropped
     // on every re-baseline -- see _noteToolCallWatch.
     this.interlockCheckpoint = null;
@@ -2305,10 +2309,14 @@ export class ManagedPtyRunner {
     // Once-per-shape latch for the forgiven-deficit event.
     this.interlockForgaveKey = null;
     // Monotone count of tool_use blocks the reader has PARSED, across baseline
-    // and catch-up alike. Only ever compared as a delta against
-    // interlockCheckpoint; see the evidence header in the hook module for why
-    // an absolute comparison against the hook's counter would be wrong.
+    // and catch-up alike. Leg 3 asks only whether it is zero.
     this.toolUsesObserved = 0;
+    // The ids of the tool_use blocks parsed since interlockCheckpoint, which
+    // leg 4 matches against the hook's recent_ids (by id; see the evidence
+    // header in the hook module). Cleared whenever the checkpoint is set or
+    // discarded. Bounded: past TOOL_USE_IDS_SINCE_MAX the checkpoint is
+    // discarded, as a re-baseline does.
+    this.toolUseIdsSince = [];
     // How many times the CURRENT delayed automatic Enter has been rescheduled
     // because a tool call was outstanding. Reset whenever a fresh Enter is
     // scheduled by a text write, and bounded by AUTOMATIC_ENTER_DEFERRAL_LIMIT.
@@ -4384,6 +4392,7 @@ export class ManagedPtyRunner {
     // agreement point. Not a hole: a re-baseline also raises `unknownOpen`,
     // which holds every automatic write until an anchor discharges it.
     this.interlockCheckpoint = null;
+    this.toolUseIdsSince = [];
     const degraded = (code, detail = null) => {
       this.toolCallWatch = {
         transcript,
@@ -4656,11 +4665,22 @@ export class ManagedPtyRunner {
         for (const id of record.opens) watch.outstanding.set(id, ends[i]);
         // THE INTERLOCK'S LIVENESS LEG 4 (#104 I-series). Every tool_use the
         // reader parses is a tool call the host made, and every tool call the
-        // host made must have run the PreToolUse hook. Counted here, compared
-        // as a delta in _interlockReadiness: if the hook stops running, the
-        // next call makes the two counters disagree and automatic writes are
-        // held BY NAME -- positive detection of a dead hook, not a timeout.
+        // host made must have run the PreToolUse hook. Its id is kept here and
+        // matched in _interlockReadiness against the ids the hook ran for: if
+        // the hook stops running, the next call has no run with its id and
+        // automatic writes are held BY NAME -- positive detection of a dead
+        // hook, not a timeout.
         this.toolUsesObserved += record.opens.length;
+        for (const id of record.opens) {
+          if (this.toolUseIdsSince.length >= TOOL_USE_IDS_SINCE_MAX) {
+            // More calls than one agreement span can hold: discard the
+            // agreement point, exactly as a re-baseline does, so these ids are
+            // absorbed rather than kept without bound.
+            this.interlockCheckpoint = null;
+            this.toolUseIdsSince = [];
+          }
+          this.toolUseIdsSince.push(id);
+        }
       } else if (record.kind === 'results') {
         // BY ID, AND ONLY ITS OWN. One result may not release another
         // outstanding call -- that is the whole point of pairing on the id
@@ -4930,6 +4950,7 @@ export class ManagedPtyRunner {
     this.interlockHookSha256 = digest;
     // A fresh binding has established no agreement point with the hook yet.
     this.interlockCheckpoint = null;
+    this.toolUseIdsSince = [];
     this._event('interlock-bound', { session_id: this.sessionId, hook_sha256: digest.slice(0, 12) });
     try {
       sweepInterlockSessionDirs({
@@ -5029,6 +5050,7 @@ export class ManagedPtyRunner {
         hookPath: this.interlockHookPath,
         hookSha256: this.interlockHookSha256,
         toolUsesObserved: this.toolUsesObserved,
+        toolUseIdsSince: this.toolUseIdsSince,
         checkpoint: this.interlockCheckpoint,
         fsImpl: this.fs,
       });
@@ -5064,10 +5086,12 @@ export class ManagedPtyRunner {
         this.interlockSessionId = null;
         this.interlockNonce = null;
         this.interlockCheckpoint = null;
+        this.toolUseIdsSince = [];
       }
       return unknown(evidence.code, evidence.detail);
     }
     this.interlockCheckpoint = evidence.nextCheckpoint;
+    this.toolUseIdsSince = [];
     const pending = interlockPendingProblem(evidence.state, {
       now: this.now().getTime(),
       staleMs: INTERLOCK_PENDING_STALE_MS,
@@ -6919,6 +6943,7 @@ export class ManagedPtyRunner {
     this.interlockNonce = null;
     this.interlockWiring = null;
     this.interlockCheckpoint = null;
+    this.toolUseIdsSince = [];
     this.toolUsesObserved = 0;
     // THE RELEASE LATCH CLEARS WITH THE BINDING, and only with it. A new
     // session id means a new interlock directory, so the previous binding's
