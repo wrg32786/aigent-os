@@ -603,7 +603,7 @@ test('#104 G12b a run that lands before its record still pays for it (the 2026-1
   });
 });
 
-test('#104 G12c the hook remembers the ids it ran for, bounded, real ids only', () => {
+test('#104 G12c the hook remembers the main-loop ids it ran for, bounded, real ids only', () => {
   withScratch('g12c', (fx) => {
     const nonce = bind(fx);
     writeState({ dir: fx.dir, state: emptyState(nonce) });
@@ -613,12 +613,19 @@ test('#104 G12c the hook remembers the ids it ran for, bounded, real ids only', 
     });
     call('PreToolUse', 'anon:not-a-record');
     call('PostToolUse', 'anon:not-a-record');
+    runHook({
+      payload: hookPayload({ tool_use_id: 'toolu_SUBAGENT', tool_name: 'Read', agent_id: 'agent_bg' }),
+      event: 'PreToolUse', env: fx.env, pid: 503, processLike: { kill: () => true }, now: () => 0, sleep: () => {},
+    });
+    call('PostToolUse', 'toolu_SUBAGENT');
     for (let i = 0; i < RECENT_IDS_MAX + 3; i += 1) {
       call('PreToolUse', `toolu_R${i}`);
       call('PostToolUse', `toolu_R${i}`);
     }
     const state = JSON.parse(fs.readFileSync(path.join(fx.dir, STATE_NAME), 'utf8'));
-    assert.equal(state.pre_runs, RECENT_IDS_MAX + 4, 'every run counted, the anon one too');
+    assert.equal(state.pre_runs, RECENT_IDS_MAX + 5, 'every run counted, anon and subagent too');
+    assert.ok(!state.recent_ids.includes('toolu_SUBAGENT'),
+      'a subagent call writes to its own transcript: remembered, it only evicts main-loop ids');
     assert.ok(!state.recent_ids.some((id) => id.startsWith('anon:')), 'a synthetic key names no record');
     assert.equal(state.recent_ids.length, RECENT_IDS_MAX, 'bounded');
     assert.equal(state.recent_ids[0], 'toolu_R3', 'oldest dropped first');

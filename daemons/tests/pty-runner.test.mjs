@@ -14598,7 +14598,6 @@ dialogCase('I27 C: a record with no run spends no other call\'s run', (harness) 
   hookRunsAhead(harness, 'toolu_C');
   assert.equal(readinessOf(harness).ready, true,
     'the hook ran since the agreement point: alive, so the unpaid record is forgiven');
-  assert.match(allRunnerLogs(harness), /interlock-deficit-forgiven/, 'said out loud');
 
   openToolCall(harness, 'toolu_C', { hook: false });
   settleToolCall(harness, 'toolu_C', { hook: false });
@@ -14606,4 +14605,82 @@ dialogCase('I27 C: a record with no run spends no other call\'s run', (harness) 
   assert.equal(readinessOf(harness).ready, true,
     'FIRST RED: by count the record with no run spent the run for toolu_C, and '
     + 'toolu_C then arrived owed');
+  assert.match(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'the forgiveness of toolu_INVALID was said out loud');
+});
+
+dialogCase('I28 H: a dead hook refused past the id bound keeps refusing', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  // The hook is dead. Records with no run arrive in batches, each consulted
+  // (and refused) before the next, so the reader parses all of them and the
+  // list is never cleared by a pass. 8500 crosses TOOL_USE_IDS_SINCE_MAX.
+  for (let batch = 0; batch < 17; batch += 1) {
+    for (let i = 0; i < 500; i += 1) {
+      const id = `toolu_H${batch}_${i}`;
+      openToolCall(harness, id, { hook: false });
+      settleToolCall(harness, id, { hook: false });
+    }
+    anchorTurn(harness);
+    const verdict = readinessOf(harness);
+    assert.equal(verdict.ready, false,
+      `batch ${batch}: discarding the agreement point at the bound absorbed the `
+      + 'backlog, and a dead hook refused 8192 times passed once, silently');
+    assert.equal(verdict.detail?.reason, 'interlock-hook-missed-tool-calls');
+  }
+  assert.doesNotMatch(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'nothing ran, so nothing is forgiven');
+
+  // And a hook that comes back is forgiven, loudly -- the bound collapses the
+  // list, it does not wedge the seat.
+  openToolCall(harness, 'toolu_H_BACK');
+  settleToolCall(harness, 'toolu_H_BACK');
+  anchorTurn(harness);
+  assert.equal(readinessOf(harness).ready, true, 'alive again: forgiven');
+  assert.match(allRunnerLogs(harness), /interlock-deficit-forgiven/, 'said out loud');
+});
+
+dialogCase('I29 G: subagent churn cannot evict a main-loop run whose record lags', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  hookRunsAhead(harness, 'toolu_MAIN_X');
+  // Background agents work while the main record is in flush lag. Their calls
+  // run the same hook, with agent_id, and write to their own transcripts.
+  for (let i = 0; i < 520; i += 1) {
+    const id = `toolu_SUB_${i}`;
+    harness.interlockHook('PreToolUse', { tool_use_id: id, tool_name: 'Read', tool_input: {}, agent_id: 'agent_bg' });
+    harness.interlockHook('PostToolUse', {
+      tool_use_id: id, tool_name: 'Read', tool_input: {}, tool_response: {}, agent_id: 'agent_bg',
+    });
+  }
+  assert.equal(readinessOf(harness).ready, true, 'a pass after the churn');
+
+  openToolCall(harness, 'toolu_MAIN_X', { hook: false });
+  settleToolCall(harness, 'toolu_MAIN_X', { hook: false });
+  anchorTurn(harness);
+  assert.equal(readinessOf(harness).ready, true,
+    'with subagent ids in the ring, 520 runs evicted toolu_MAIN_X: unpaid, ran 0, held');
+  assert.doesNotMatch(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'paid by its own run, not forgiven');
+});
+
+dialogCase('I30 F: every forgiveness is logged, however alike', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  for (let round = 0; round < 3; round += 1) {
+    const missed = `toolu_F_MISSED_${round}`;
+    openToolCall(harness, missed, { hook: false });
+    settleToolCall(harness, missed, { hook: false });
+    const healthy = `toolu_F_OK_${round}`;
+    openToolCall(harness, healthy);
+    settleToolCall(harness, healthy);
+    anchorTurn(harness);
+    assert.equal(readinessOf(harness).ready, true, `round ${round}: forgiven`);
+  }
+  const logged = (allRunnerLogs(harness).match(/interlock-deficit-forgiven/g) || []).length;
+  assert.equal(logged, 3,
+    'latched on the deficit SIZE, the second and third forgiveness of size 2 were silent');
 });

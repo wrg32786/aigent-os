@@ -1157,8 +1157,17 @@ is not a hole: a re-baseline also raises `unknownOpen`, which holds every
 automatic write until an anchor discharges it, so the two legs cover each other.
 A run made before the re-baseline still pays for its record if that record is
 read afterwards, because `recent_ids` outlives the agreement point. The runner's
-list is bounded (`TOOL_USE_IDS_SINCE_MAX`, 8192); past it the agreement point is
-discarded the same way.
+list is bounded (`TOOL_USE_IDS_SINCE_MAX`, 8192). Only a refusing seat can fill
+it, because every pass clears it, so past the bound the agreement point is
+**kept** and the list collapses to one id no run can pay: a dead hook keeps
+refusing, and a live one is forgiven. Discarding the point there instead let a
+dead hook refused 8192 times pass once, silently (gate probe H, `#104 I28`).
+The hook remembers only the session's own loop's ids (no `agent_id` in the
+payload): a subagent writes its records to its own transcript, which the runner
+does not read, and 512 subagent runs could otherwise evict a main-loop id whose
+record was still in flush lag (gate probe G, `I29`). Every forgiveness is logged;
+the event is latched on the point it re-anchors to, never on the deficit's size
+(gate probe F, `I30`).
 
 **What is NOT a leg.** A runner-side probe -- spawn the hook with a synthetic
 payload and check it stamps -- was considered and dropped. It proves the file

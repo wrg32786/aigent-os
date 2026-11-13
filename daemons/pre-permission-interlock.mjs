@@ -208,8 +208,8 @@ export const RUNNER_GATE_ATTEMPTS = 2;
 // file without bound. Hitting it is itself a named refusal, never a discard:
 // dropping a pending call is the fail-open this file exists to prevent.
 export const PENDING_MAX = 64;
-// Leg 4 matches by id: the ids of the most recent PreToolUse runs, main loop
-// and subagents alike, oldest dropped first. An id can only ever pay for the
+// Leg 4 matches by id: the ids of the most recent main-loop PreToolUse runs
+// (no agent_id in the payload), oldest dropped first. An id can only ever pay for the
 // record with the same id. A record whose run fell off the end is unpaid and
 // is forgiven only on positive evidence (see interlockEvidence).
 export const RECENT_IDS_MAX = 512;
@@ -468,8 +468,8 @@ export function gateStillHeld(handle) {
 //   { nonce, pre_runs, post_runs, stop_runs, recent_ids, last_event,
 //     last_event_at, last_write_at, pending: { <tool_use_id>: {tool, ts, transcript_size} } }
 //
-// recent_ids: the ids of the last RECENT_IDS_MAX PreToolUse runs, oldest first
-// (leg 4 matches records to runs by id).
+// recent_ids: the ids of the last RECENT_IDS_MAX main-loop PreToolUse runs,
+// oldest first (leg 4 matches records to runs by id).
 //
 // Replaced through a temp file plus rename so a torn file is impossible; a
 // state file that will not parse is a NAMED refusal on the runner's side, not
@@ -1262,7 +1262,7 @@ export function runHook({
         // whole-state write is safe here in a way it is not on the gate-busy
         // path above.
         state.nonce = nonce;
-        countPreRun(state, toolUseId);
+        countPreRun(state, toolUseId, payload);
         state.last_event = 'PreToolUse:denied';
         state.last_event_at = now();
         writeState({ dir, state, fsImpl, pid });
@@ -1279,7 +1279,7 @@ export function runHook({
         ts: now(),
         transcript_size: transcriptSize,
       };
-      countPreRun(state, toolUseId);
+      countPreRun(state, toolUseId, payload);
     } else if (event === 'PostToolUse') {
       const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : null;
       if (toolUseId !== null) delete state.pending[toolUseId];
@@ -1320,12 +1320,17 @@ export function runHook({
   }
 }
 
-// One PreToolUse run: counted (leg 3 and the forgiveness evidence) and, when the
-// call has a real id, remembered (leg 4). A synthetic anon: key names no record,
-// so it is counted and not remembered.
-function countPreRun(state, toolUseId) {
+// One PreToolUse run: counted (leg 3 and the forgiveness evidence) and, when it
+// is the session's own loop's call with a real id, remembered (leg 4). A
+// synthetic anon: key names no record. A subagent's call (agent_id in the
+// payload) writes its record to the subagent's own transcript, which the
+// runner does not read, so remembering it would only let subagent churn evict
+// a main-loop id whose record is still in flush lag. Both are counted and not
+// remembered; misclassifying one costs a forgiveness, never a pass.
+function countPreRun(state, toolUseId, payload) {
   state.pre_runs = (Number(state.pre_runs) || 0) + 1;
   if (typeof toolUseId !== 'string' || toolUseId.startsWith('anon:')) return;
+  if (typeof payload?.agent_id === 'string' && payload.agent_id.length > 0) return;
   const ids = Array.isArray(state.recent_ids) ? state.recent_ids.filter((id) => typeof id === 'string') : [];
   ids.push(toolUseId);
   state.recent_ids = ids.length > RECENT_IDS_MAX ? ids.slice(ids.length - RECENT_IDS_MAX) : ids;

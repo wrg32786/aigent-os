@@ -1866,6 +1866,10 @@ const INTERLOCK_PENDING_STALE_MS = 120000;
 // Most tool_use ids the reader keeps between agreement points (leg 4 matches
 // them by id). Past it the agreement point is discarded, as a re-baseline does.
 const TOOL_USE_IDS_SINCE_MAX = 8192;
+// Stands in for an overflowed list. The hook records only ids matching its
+// TOOL_USE_ID_OK, which rejects '<' and '>', so this is never in recent_ids:
+// it is always unpaid.
+const INTERLOCK_IDS_OVERFLOW = '<interlock-ids-overflow>';
 // How many recently SETTLED tool_use ids the reader remembers, so the interlock
 // can discount a marker whose call the transcript has answered. A recent-history
 // lookup, not a ledger: the only ids that matter are ones a pending marker still
@@ -2314,8 +2318,8 @@ export class ManagedPtyRunner {
     // The ids of the tool_use blocks parsed since interlockCheckpoint, which
     // leg 4 matches against the hook's recent_ids (by id; see the evidence
     // header in the hook module). Cleared whenever the checkpoint is set or
-    // discarded. Bounded: past TOOL_USE_IDS_SINCE_MAX the checkpoint is
-    // discarded, as a re-baseline does.
+    // discarded. Bounded: past TOOL_USE_IDS_SINCE_MAX it collapses to one
+    // id that is never paid (INTERLOCK_IDS_OVERFLOW).
     this.toolUseIdsSince = [];
     // How many times the CURRENT delayed automatic Enter has been rescheduled
     // because a tool call was outstanding. Reset whenever a fresh Enter is
@@ -4673,11 +4677,13 @@ export class ManagedPtyRunner {
         this.toolUsesObserved += record.opens.length;
         for (const id of record.opens) {
           if (this.toolUseIdsSince.length >= TOOL_USE_IDS_SINCE_MAX) {
-            // More calls than one agreement span can hold: discard the
-            // agreement point, exactly as a re-baseline does, so these ids are
-            // absorbed rather than kept without bound.
-            this.interlockCheckpoint = null;
-            this.toolUseIdsSince = [];
+            // More calls than one agreement span can hold. Only a REFUSING
+            // seat gets here (every pass clears the list), so the backlog must
+            // not be absorbed: that let a dead hook refused 8192 times pass
+            // once, silently. Keep the agreement point and collapse the list
+            // to one id no run can pay. A dead hook (no run since the point)
+            // keeps refusing; a live one is forgiven, loudly. Bounded either way.
+            this.toolUseIdsSince = [INTERLOCK_IDS_OVERFLOW];
           }
           this.toolUseIdsSince.push(id);
         }
@@ -5061,7 +5067,10 @@ export class ManagedPtyRunner {
       // A deficit resolved in the PERMISSIVE direction, so it is named. The
       // evidence for it is that the hook has demonstrably run since the
       // agreement point; the shortfall is a dropped increment, not a dead hook.
-      const key = `forgave:${evidence.forgaveDeficit.tool_uses_since}`;
+      // Keyed on the point it re-anchors to: a forgiveness moves that point,
+      // so each one is logged and the same one is not logged twice. Keyed on
+      // the deficit's SIZE, every later forgiveness of that size was silent.
+      const key = `forgave:${evidence.nextCheckpoint?.preRuns}`;
       if (this.interlockForgaveKey !== key) {
         this.interlockForgaveKey = key;
         this._event('interlock-deficit-forgiven', evidence.forgaveDeficit);
