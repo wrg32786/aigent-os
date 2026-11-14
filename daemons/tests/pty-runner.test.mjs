@@ -14494,3 +14494,193 @@ test('a transport tick that fails a few times is retried, not a permanent disabl
     harness.cleanup();
   }
 });
+
+// ─── LEG 4 BY ID (2026-11-13) ───────────────────────────────────────────────
+// The hook runs BEFORE its record reaches the transcript (flush lag, measured
+// >= 2.44 s). Counting runs against records let an agreement point taken in that
+// gap swallow the run, so the record arrived owed with nothing to pay it, and an
+// idle seat held its clear for eight hours. Leg 4 now matches each parsed record
+// to a run with the same tool_use_id. These four are red on the count rule or on
+// the credit-carry attempt that preceded this one (gate verdict, probes E/A/B/C).
+
+function leg4Resp(id, content) {
+  return {
+    type: 'assistant', isSidechain: false, apiBlockIndex: 0, requestId: `req_${id}`,
+    message: { id, role: 'assistant', content },
+  };
+}
+
+// The hook's two events for a call whose record has not landed yet.
+function hookRunsAhead(harness, id) {
+  harness.interlockPermissionCheck(id, 'Read');
+  harness.interlockToolFinished(id, 'Read');
+}
+
+dialogCase('I24 E: a run that lands before its record pays for it, on an idle seat', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  hookRunsAhead(harness, 'toolu_CAPSULE');
+  assert.equal(readinessOf(harness).ready, true, 'the check in the flush-lag gap');
+
+  openToolCall(harness, 'toolu_CAPSULE', { hook: false });
+  settleToolCall(harness, 'toolu_CAPSULE', { hook: false });
+  anchorTurn(harness);
+  const verdict = readinessOf(harness);
+  assert.equal(verdict.ready, true,
+    'FIRST RED: by count the agreement point had absorbed the run, so the record was '
+    + 'owed 1, ran 0 -- and with the seat idle nothing ever paid it (8 h, 2026-11-13)');
+  assert.doesNotMatch(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'paid by its own run, not forgiven');
+});
+
+dialogCase('I25 A: a run whose record the reader steps over pays for no other record', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  // A tool_use line over the reader's 256 KiB line bound: the hook ran for it,
+  // the reader never parses it.
+  appendLine(harness, leg4Resp('msg_BIG', [{
+    type: 'tool_use', id: 'toolu_BIG', name: 'Write',
+    input: { file_path: 'big.html', content: 'x'.repeat(300 * 1024) },
+  }]));
+  harness.interlockPermissionCheck('toolu_BIG', 'Write');
+  harness.interlockToolFinished('toolu_BIG', 'Write');
+  settleToolCall(harness, 'toolu_BIG', { hook: false });
+  appendLine(harness, leg4Resp('msg_A1', [{ type: 'text', text: 'wrote it' }]));
+  readinessOf(harness);
+
+  // The hook dies. One call lands with no run behind it.
+  openToolCall(harness, 'toolu_DEAD', { hook: false });
+  settleToolCall(harness, 'toolu_DEAD', { hook: false });
+  appendLine(harness, leg4Resp('msg_A2', [{ type: 'text', text: 'done' }]));
+  const verdict = readinessOf(harness);
+  assert.equal(verdict.ready, false,
+    'a count carried forward lets the run for toolu_BIG pay for toolu_DEAD -- a dead '
+    + 'hook passing as a live one');
+  assert.equal(verdict.detail?.reason, 'interlock-hook-missed-tool-calls');
+});
+
+dialogCase('I26 B: a run ahead of its record survives a discarded agreement point', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  // More than the reader's catch-up window arrives at once, so the next
+  // consultation re-baselines and discards the agreement point.
+  for (let i = 0; i < 6; i += 1) {
+    appendLine(harness, {
+      type: 'user', isSidechain: false,
+      message: { role: 'user', content: 'y'.repeat(200 * 1024) },
+    });
+  }
+  appendLine(harness, leg4Resp('msg_ANCHOR', [{ type: 'text', text: 'read it' }]));
+  hookRunsAhead(harness, 'toolu_LAST');
+  readinessOf(harness);
+
+  openToolCall(harness, 'toolu_LAST', { hook: false });
+  settleToolCall(harness, 'toolu_LAST', { hook: false });
+  anchorTurn(harness);
+  const verdict = readinessOf(harness);
+  assert.equal(verdict.ready, true,
+    'FIRST RED: the re-baseline set its base over the run, and the record arrived owed');
+});
+
+dialogCase('I27 C: a record with no run spends no other call\'s run', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  // Measured on 2.1.323: a call that fails input validation writes its record
+  // and moves pre_runs by 0.
+  openToolCall(harness, 'toolu_INVALID', { hook: false });
+  settleToolCall(harness, 'toolu_INVALID', { denied: true, hook: false });
+  anchorTurn(harness);
+
+  hookRunsAhead(harness, 'toolu_C');
+  assert.equal(readinessOf(harness).ready, true,
+    'the hook ran since the agreement point: alive, so the unpaid record is forgiven');
+
+  openToolCall(harness, 'toolu_C', { hook: false });
+  settleToolCall(harness, 'toolu_C', { hook: false });
+  anchorTurn(harness);
+  assert.equal(readinessOf(harness).ready, true,
+    'FIRST RED: by count the record with no run spent the run for toolu_C, and '
+    + 'toolu_C then arrived owed');
+  assert.match(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'the forgiveness of toolu_INVALID was said out loud');
+});
+
+dialogCase('I28 H: a dead hook refused past the id bound keeps refusing', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  // The hook is dead. Records with no run arrive in batches, each consulted
+  // (and refused) before the next, so the reader parses all of them and the
+  // list is never cleared by a pass. 8500 crosses TOOL_USE_IDS_SINCE_MAX.
+  for (let batch = 0; batch < 17; batch += 1) {
+    for (let i = 0; i < 500; i += 1) {
+      const id = `toolu_H${batch}_${i}`;
+      openToolCall(harness, id, { hook: false });
+      settleToolCall(harness, id, { hook: false });
+    }
+    anchorTurn(harness);
+    const verdict = readinessOf(harness);
+    assert.equal(verdict.ready, false,
+      `batch ${batch}: discarding the agreement point at the bound absorbed the `
+      + 'backlog, and a dead hook refused 8192 times passed once, silently');
+    assert.equal(verdict.detail?.reason, 'interlock-hook-missed-tool-calls');
+  }
+  assert.doesNotMatch(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'nothing ran, so nothing is forgiven');
+
+  // And a hook that comes back is forgiven, loudly -- the bound collapses the
+  // list, it does not wedge the seat.
+  openToolCall(harness, 'toolu_H_BACK');
+  settleToolCall(harness, 'toolu_H_BACK');
+  anchorTurn(harness);
+  assert.equal(readinessOf(harness).ready, true, 'alive again: forgiven');
+  assert.match(allRunnerLogs(harness), /interlock-deficit-forgiven/, 'said out loud');
+});
+
+dialogCase('I29 G: subagent churn cannot evict a main-loop run whose record lags', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  hookRunsAhead(harness, 'toolu_MAIN_X');
+  // Background agents work while the main record is in flush lag. Their calls
+  // run the same hook, with agent_id, and write to their own transcripts.
+  for (let i = 0; i < 520; i += 1) {
+    const id = `toolu_SUB_${i}`;
+    harness.interlockHook('PreToolUse', { tool_use_id: id, tool_name: 'Read', tool_input: {}, agent_id: 'agent_bg' });
+    harness.interlockHook('PostToolUse', {
+      tool_use_id: id, tool_name: 'Read', tool_input: {}, tool_response: {}, agent_id: 'agent_bg',
+    });
+  }
+  assert.equal(readinessOf(harness).ready, true, 'a pass after the churn');
+
+  openToolCall(harness, 'toolu_MAIN_X', { hook: false });
+  settleToolCall(harness, 'toolu_MAIN_X', { hook: false });
+  anchorTurn(harness);
+  assert.equal(readinessOf(harness).ready, true,
+    'with subagent ids in the ring, 520 runs evicted toolu_MAIN_X: unpaid, ran 0, held');
+  assert.doesNotMatch(allRunnerLogs(harness), /interlock-deficit-forgiven/,
+    'paid by its own run, not forgiven');
+});
+
+dialogCase('I30 F: every forgiveness is logged, however alike', (harness) => {
+  atRequestEdge(harness);
+  assert.equal(readinessOf(harness).ready, true, 'setup: healthy');
+
+  for (let round = 0; round < 3; round += 1) {
+    const missed = `toolu_F_MISSED_${round}`;
+    openToolCall(harness, missed, { hook: false });
+    settleToolCall(harness, missed, { hook: false });
+    const healthy = `toolu_F_OK_${round}`;
+    openToolCall(harness, healthy);
+    settleToolCall(harness, healthy);
+    anchorTurn(harness);
+    assert.equal(readinessOf(harness).ready, true, `round ${round}: forgiven`);
+  }
+  const logged = (allRunnerLogs(harness).match(/interlock-deficit-forgiven/g) || []).length;
+  assert.equal(logged, 3,
+    'latched on the deficit SIZE, the second and third forgiveness of size 2 were silent');
+});

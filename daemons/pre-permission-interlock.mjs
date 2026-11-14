@@ -208,6 +208,11 @@ export const RUNNER_GATE_ATTEMPTS = 2;
 // file without bound. Hitting it is itself a named refusal, never a discard:
 // dropping a pending call is the fail-open this file exists to prevent.
 export const PENDING_MAX = 64;
+// Leg 4 matches by id: the ids of the most recent main-loop PreToolUse runs
+// (no agent_id in the payload), oldest dropped first. An id can only ever pay for the
+// record with the same id. A record whose run fell off the end is unpaid and
+// is forgiven only on positive evidence (see interlockEvidence).
+export const RECENT_IDS_MAX = 512;
 // Session directories older than this are swept when a new one is created.
 export const SESSION_DIR_TTL_MS = 6 * 60 * 60 * 1000;
 export const SESSION_DIR_SWEEP_MAX = 32;
@@ -460,8 +465,11 @@ export function gateStillHeld(handle) {
 
 // ─── THE STATE FILE ─────────────────────────────────────────────────────────
 // Written only under the gate, by either side. Shape:
-//   { nonce, pre_runs, post_runs, stop_runs, last_event, last_event_at,
-//     last_write_at, pending: { <tool_use_id>: {tool, ts, transcript_size} } }
+//   { nonce, pre_runs, post_runs, stop_runs, recent_ids, last_event,
+//     last_event_at, last_write_at, pending: { <tool_use_id>: {tool, ts, transcript_size} } }
+//
+// recent_ids: the ids of the last RECENT_IDS_MAX main-loop PreToolUse runs,
+// oldest first (leg 4 matches records to runs by id).
 //
 // Replaced through a temp file plus rename so a torn file is impossible; a
 // state file that will not parse is a NAMED refusal on the runner's side, not
@@ -472,6 +480,7 @@ export function emptyState(nonce) {
     pre_runs: 0,
     post_runs: 0,
     stop_runs: 0,
+    recent_ids: [],
     last_event: null,
     last_event_at: null,
     last_write_at: null,
@@ -711,30 +720,40 @@ export function manualRelease({ dir, sessionId, fsImpl = fs } = {}) {
 //                 assistant turn, measured, so a session that has had a turn
 //                 satisfies it even with no tool call in it.
 //                 -> interlock-hook-not-observed
-//   4. CURRENT    the hook has seen every tool call the transcript reader has.
-//                 Since the last point at which both counters agreed, the hook
-//                 must have run (pre_runs) at least as many times as the reader
-//                 has parsed new tool_use records. This is POSITIVE DETECTION
-//                 OF A DEAD HOOK rather than a timeout: if the configuration is
-//                 changed mid-session, or the hook starts failing, the next tool
-//                 call makes the counters disagree and the gate closes. Idle
-//                 time proves nothing and is deliberately NOT used -- a quiet
-//                 session makes no tool calls, so an idle-staleness rule would
-//                 hold automation on a healthy seat and would be a liveness bug
-//                 dressed as a safety check.
+//   4. CURRENT    the hook has seen every tool call the transcript reader has,
+//                 BY ID. Every tool_use the reader parsed since the last
+//                 agreement point must be in the hook's recent_ids: the hook ran
+//                 for THAT call. This is POSITIVE DETECTION OF A DEAD HOOK rather
+//                 than a timeout: if the configuration is changed mid-session, or
+//                 the hook starts failing, the next tool call has no run with its
+//                 id and the gate closes. Idle time proves nothing and is
+//                 deliberately NOT used -- a quiet session makes no tool calls, so
+//                 an idle-staleness rule would hold automation on a healthy seat
+//                 and would be a liveness bug dressed as a safety check.
 //                 -> interlock-hook-missed-tool-calls
 //
-//                 The comparison is a DELTA against a checkpoint, not a running
-//                 total, because the reader's absolute count is not comparable
-//                 to the hook's: the reader's baseline walk parses up to a
-//                 megabyte of HISTORY whose calls the hook may have handled
-//                 before the state file existed. The checkpoint is discarded on
-//                 every re-baseline (see the runner's _noteToolCallWatch) --
-//                 after a re-baseline the reader has re-read records it had
-//                 already counted, so it has no claim about what the hook owed.
-//                 That forgiveness is not a hole: a re-baseline also raises
-//                 `unknownOpen`, which holds every automatic write until an
-//                 anchor discharges it, so the two legs cover each other.
+//                 BY ID, NOT BY COUNT (2026-11-13). Counts let one call's run
+//                 stand for another call's record. The hook runs BEFORE its
+//                 record reaches the transcript (flush lag >= 2.44 s), so an
+//                 agreement point taken in that gap swallowed the run, and the
+//                 record arrived owed with nothing to pay it: a seat idle after
+//                 its capsule held its clear for eight hours (measured). A count
+//                 carried forward instead fails open (a run whose record the
+//                 reader never counts pays for a later call with no run), and a
+//                 record with no run at all spends another call's run. Matching
+//                 on the id closes all three: a run pays for its own record and
+//                 nothing else, whenever that record is read.
+//
+//                 The ids are those parsed since the agreement point. The point
+//                 is discarded on every re-baseline (see the runner's
+//                 _noteToolCallWatch): after a re-baseline the reader has re-read
+//                 history whose calls the hook may have handled before the state
+//                 file existed, so those ids are absorbed rather than charged.
+//                 That is not a hole: a re-baseline also raises `unknownOpen`,
+//                 which holds every automatic write until an anchor discharges
+//                 it, so the two legs cover each other. A run made before the
+//                 re-baseline still pays for its record if that record is read
+//                 afterwards, because recent_ids outlives the agreement point.
 //
 // WHAT IS NOT A LEG, AND WHY. A runner-side probe (spawn the hook with a
 // synthetic payload and check it stamps) was considered and dropped: it proves
@@ -754,6 +773,8 @@ export function interlockEvidence({
   hookPath,
   hookSha256,
   toolUsesObserved = 0,
+  // The ids of the tool_use records the reader has parsed since `checkpoint`.
+  toolUseIdsSince = [],
   checkpoint = null,
   fsImpl = fs,
 } = {}) {
@@ -824,15 +845,14 @@ export function interlockEvidence({
       detail: { pre_runs: pre, post_runs: post, stop_runs: stop, tool_uses_observed: Number(toolUsesObserved) || 0 },
     };
   }
-  // Leg 4. A delta against the last point at which both sides agreed; see the
-  // header for why an absolute comparison would be wrong.
-  const observed = Number(toolUsesObserved) || 0;
-  const base = checkpoint === null
-    ? { observed, preRuns: pre }
-    : { observed: Number(checkpoint.observed) || 0, preRuns: Number(checkpoint.preRuns) || 0 };
-  const owed = Math.max(0, observed - base.observed);
-  const ran = Math.max(0, pre - base.preRuns);
-  if (ran < owed) {
+  // Leg 4, by id; see the header. With no agreement point yet (a fresh binding,
+  // a re-baseline) the parsed ids are history and are absorbed, not charged.
+  const parsed = checkpoint === null || !Array.isArray(toolUseIdsSince) ? [] : toolUseIdsSince;
+  const ran = Math.max(0, pre - (checkpoint === null ? pre : Number(checkpoint.preRuns) || 0));
+  const recent = new Set(Array.isArray(state.recent_ids) ? state.recent_ids : []);
+  const owed = parsed.length;
+  const unpaid = parsed.filter((id) => !recent.has(id)).length;
+  if (unpaid > 0) {
     // ─── THE DEFICIT MUST NOT BE PERMANENT ────────────────────────────────
     // A cumulative delta that only ever re-anchors on a PASS made one missed
     // increment unforgivable: five consecutive healthy calls still refused, so
@@ -843,27 +863,30 @@ export function interlockEvidence({
     //
     // THE FORGIVENESS IS POSITIVE EVIDENCE, NOT A TIMER. Leg 4 exists to catch
     // a DEAD hook. If `pre_runs` has advanced since the agreement point, the
-    // hook is demonstrably alive, so the shortfall is a dropped increment and
-    // not death: re-anchor and pass, loudly. If `pre_runs` has NOT advanced
-    // while the reader keeps parsing new tool calls, the hook is dead and this
-    // refuses for as long as that stays true. Nothing here is time-based and
-    // nothing gives up and allows.
+    // hook is demonstrably alive, so an unpaid record is a call it did not
+    // count (a host timeout on the hook, a crash mid-invocation, a call that
+    // failed validation before PreToolUse, a gate-busy denial), not death:
+    // re-anchor and pass, loudly. If `pre_runs` has NOT advanced while the
+    // reader keeps parsing calls with no run behind them, the hook is dead and
+    // this refuses for as long as that stays true. Nothing here is time-based
+    // and nothing gives up and allows. A forgiven record is forgiven alone: the
+    // run that proved the hook alive still pays only for its own record.
     if (ran > 0) {
       return {
         ok: true,
         code: null,
         detail: null,
         state,
-        nextCheckpoint: { observed, preRuns: pre },
+        nextCheckpoint: { preRuns: pre },
         // The caller logs this: a forgiven deficit is a real event and must not
         // be silent, even though it resolves in the permissive direction.
-        forgaveDeficit: { hook_runs_since: ran, tool_uses_since: owed },
+        forgaveDeficit: { hook_runs_since: ran, tool_uses_since: owed, unpaid },
       };
     }
     return {
       ok: false,
       code: 'interlock-hook-missed-tool-calls',
-      detail: { hook_runs_since: ran, tool_uses_since: owed },
+      detail: { hook_runs_since: ran, tool_uses_since: owed, unpaid },
     };
   }
   return {
@@ -871,9 +894,9 @@ export function interlockEvidence({
     code: null,
     detail: null,
     state,
-    // The caller stores this and passes it back, so the next comparison starts
-    // from the fact that these two agreed here.
-    nextCheckpoint: { observed, preRuns: pre },
+    // The caller stores this and passes it back, and clears its parsed ids, so
+    // the next comparison starts from the fact that these two agreed here.
+    nextCheckpoint: { preRuns: pre },
   };
 }
 
@@ -1239,7 +1262,7 @@ export function runHook({
         // whole-state write is safe here in a way it is not on the gate-busy
         // path above.
         state.nonce = nonce;
-        state.pre_runs = (Number(state.pre_runs) || 0) + 1;
+        countPreRun(state, toolUseId, payload);
         state.last_event = 'PreToolUse:denied';
         state.last_event_at = now();
         writeState({ dir, state, fsImpl, pid });
@@ -1256,7 +1279,7 @@ export function runHook({
         ts: now(),
         transcript_size: transcriptSize,
       };
-      state.pre_runs = (Number(state.pre_runs) || 0) + 1;
+      countPreRun(state, toolUseId, payload);
     } else if (event === 'PostToolUse') {
       const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : null;
       if (toolUseId !== null) delete state.pending[toolUseId];
@@ -1295,6 +1318,22 @@ export function runHook({
   } finally {
     releaseGate(gate.handle);
   }
+}
+
+// One PreToolUse run: counted (leg 3 and the forgiveness evidence) and, when it
+// is the session's own loop's call with a real id, remembered (leg 4). A
+// synthetic anon: key names no record. A subagent's call (agent_id in the
+// payload) writes its record to the subagent's own transcript, which the
+// runner does not read, so remembering it would only let subagent churn evict
+// a main-loop id whose record is still in flush lag. Both are counted and not
+// remembered; misclassifying one costs a forgiveness, never a pass.
+function countPreRun(state, toolUseId, payload) {
+  state.pre_runs = (Number(state.pre_runs) || 0) + 1;
+  if (typeof toolUseId !== 'string' || toolUseId.startsWith('anon:')) return;
+  if (typeof payload?.agent_id === 'string' && payload.agent_id.length > 0) return;
+  const ids = Array.isArray(state.recent_ids) ? state.recent_ids.filter((id) => typeof id === 'string') : [];
+  ids.push(toolUseId);
+  state.recent_ids = ids.length > RECENT_IDS_MAX ? ids.slice(ids.length - RECENT_IDS_MAX) : ids;
 }
 
 const DENY_PREFIX = '[PRE-PERMISSION INTERLOCK]';
