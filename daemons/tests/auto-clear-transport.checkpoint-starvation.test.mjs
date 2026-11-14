@@ -284,3 +284,81 @@ for (const state of ['checkpoint-requested', 'HOLD:checkpoint-transcript-short',
     }));
   }
 }
+
+// ── 2026-11-14: the bound for a request that has actually gone out ─────────────
+// Titus cycle 155: the request went out at 20:38:58Z after deferring, the seat
+// spent 6 min 12 s writing its capsule, the cycle was abandoned at the 5-min
+// bound counted from when it began waiting, and the answer that arrived 82 s
+// later was consumed as a retired request's. No clear came; Will cleared by hand.
+const ANSWER_MS = 1_200_000;
+const sendRequest = (t, cycleId, issued = 1) => t.noteAckClassification({
+  cycleId, classifiedThrough: 0, debtsOutstanding: 0, requestsIssued: issued, answersSettled: 0,
+});
+
+test('11-14 replay: a request sent after a 4-min deferral gets its full answer time', () => withFixture((f) => {
+  const t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short');
+  f.clock.advance(4 * 60_000);   // deferred: composer busy
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short');
+  assert.ok(sendRequest(t, cycleId), 'the send is recorded');
+  for (let i = 0; i < 6; i += 1) {
+    f.busy();
+    f.clock.advance(62_000);     // the seat writes its capsule: 6 min 12 s
+    assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short',
+      `minute ${i + 1} of the answer: still waiting (the old bound abandoned here)`);
+  }
+  assert.equal(f.logs.some((line) => line.includes('cycle-abandoned-checkpoint-timeout')), false);
+  f.healthy();                    // the capsule lands
+  assert.equal(t.tick().state.state, 'checkpoint-confirmed');
+  assert.equal(disk(f).cycle_id, cycleId, 'the same cycle goes on to its clear');
+}));
+
+test('a sent request that is never answered is still abandoned, at the answer bound from the send', () => withFixture((f) => {
+  let t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  f.clock.advance(60_000);
+  sendRequest(t, cycleId);
+  f.clock.advance(ANSWER_MS - 1);
+  f.busy();
+  t = f.create();                 // a relaunch keeps the send's clock
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short');
+  f.clock.advance(1);
+  const result = t.tick();
+  assert.equal(result.status, 'cycle-abandoned-checkpoint-timeout');
+  const line = f.logs.find((l) => l.includes('cycle-abandoned-checkpoint-timeout'));
+  assert.match(line, new RegExp(`elapsed_ms=${ANSWER_MS} .*request=sent`));
+  assert.equal(core.CHECKPOINT_ANSWER_TIMEOUT_MS, ANSWER_MS);
+}));
+
+test('#151 kept: a request never sent abandons at the original bound, and a classification-only write does not reset it', () => withFixture((f) => {
+  const t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  f.clock.advance(WAIT_MS - 1000);
+  sendRequest(t, cycleId, 0);     // evidence classified, nothing sent
+  f.clock.advance(1000);
+  assert.equal(t.tick().status, 'cycle-abandoned-checkpoint-timeout');
+}));
+
+test('a second send restarts the answer clock', () => withFixture((f) => {
+  const t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  sendRequest(t, cycleId, 1);
+  f.clock.advance(ANSWER_MS - 60_000);
+  sendRequest(t, cycleId, 2);
+  f.clock.advance(120_000);
+  f.busy();
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short', 'measured from the second send');
+  assert.equal(disk(f).checkpoint_wait_attempts, 1, 'the attempt count restarted with the clock');
+}));

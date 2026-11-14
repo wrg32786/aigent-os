@@ -39,6 +39,13 @@ export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 // cannot still run. The equal cooldown gives delivery a full open window
 // even when pressure stays high. Both are driven solely by tick().
 export const CHECKPOINT_WAIT_TIMEOUT_MS = 300_000;
+// Once the capsule request has actually gone out, the seat is WRITING the
+// capsule, and that turn is long: measured 2026-11-14, Titus 6 min 12 s, Pheme
+// 8 min 48 s, DaVinci 10 min 31 s. Abandoning at 5 min threw away Titus's
+// answer (it arrived 82 s after the abandon and was consumed as retired), so
+// the clear never came. From the request's own send, the seat gets this long.
+// Before the send (a deferred request) the #151 bound above still applies.
+export const CHECKPOINT_ANSWER_TIMEOUT_MS = 1_200_000;
 export const CHECKPOINT_RETRY_COOLDOWN_MS = 300_000;
 
 // The capsule verb's mandated closing line (skills/context-capsule step 6).
@@ -1313,6 +1320,14 @@ export class AutoClearTransport {
       && sameShape(current.accepted, nextAccepted)) {
       return clone(current);
     }
+    // A request that has just gone out restarts the checkpoint clock: the
+    // answer bound runs from the send, not from when the cycle began waiting
+    // (time spent deferred is not time the seat had to answer).
+    const sentNow = issued > (current !== null && Number.isSafeInteger(current.requests_issued)
+      ? current.requests_issued : 0);
+    const clock = sentNow
+      ? { checkpoint_wait_started_at: clockIso(this.now), checkpoint_wait_attempts: 0 }
+      : {};
     const record = {
       cycle_id: cycleId,
       session_id: this.sessionId,
@@ -1324,7 +1339,7 @@ export class AutoClearTransport {
       accepted: nextAccepted,
       updated_at: clockIso(this.now),
     };
-    this._atomicWrite({ ...this.state, ack_classification: record });
+    this._atomicWrite({ ...this.state, ...clock, ack_classification: record });
     return clone(record);
   }
 
@@ -1652,7 +1667,15 @@ export class AutoClearTransport {
       && this.state.checkpoint_wait_attempts >= 0 ? this.state.checkpoint_wait_attempts : 0) + 1;
     const elapsedMs = Math.max(0, clockMs(this.now) - Date.parse(startedAt));
     const bookkeeping = { checkpoint_wait_started_at: startedAt, checkpoint_wait_attempts: attempts };
-    if (elapsedMs < CHECKPOINT_WAIT_TIMEOUT_MS) {
+    // A request this cycle has SENT (the runner's durable tally) is being
+    // answered: noteAckClassification restarted the clock at the send. Not
+    // sent yet, the #151 bound holds so a deferral cannot close delivery.
+    const record = this.state.ack_classification;
+    const sent = record !== null && typeof record === 'object' && !Array.isArray(record)
+      && record.cycle_id === this.state.cycle_id
+      && Number.isSafeInteger(record.requests_issued) && record.requests_issued > 0;
+    const boundMs = sent ? CHECKPOINT_ANSWER_TIMEOUT_MS : CHECKPOINT_WAIT_TIMEOUT_MS;
+    if (elapsedMs < boundMs) {
       // Keep the deadline and attempts through hold changes and relaunches.
       // Do not change entered_at merely because another check was attempted.
       this._atomicWrite({ ...this.state, ...bookkeeping });
@@ -1672,7 +1695,7 @@ export class AutoClearTransport {
       abandoned_cycle_id: abandoned,
       checkpoint_retry_after: new Date(clockMs(this.now) + CHECKPOINT_RETRY_COOLDOWN_MS).toISOString(),
     });
-    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}`);
+    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}${sent ? ' request=sent' : ''}`);
     return resultFor(next, {
       transitioned: true, status: 'cycle-abandoned-checkpoint-timeout', abandoned_cycle_id: abandoned,
     });
