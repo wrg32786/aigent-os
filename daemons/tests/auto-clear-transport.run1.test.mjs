@@ -1054,3 +1054,60 @@ test('statusline shows the runner refresh alert for its own session, and only th
     fs.rmSync(fixture.base, { recursive: true, force: true });
   }
 });
+
+// Review round 7, finding 1: the alert-file probe globbed the WHOLE path, so a home directory whose name
+// holds glob characters (h[ab]) matched nothing and a real alert was never shown on the Node path. Only
+// the file name may be a pattern; the directory is quoted.
+test('statusline alert probe: glob characters in the home directory never hide an alert', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-glob-'));
+  try {
+    const home = path.join(base, 'h[ab]');
+    const dir = path.join(home, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'glob-session.alert'), 'GLOB ALERT\n');
+    const shown = spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: 'glob-session', model: { display_name: 'M' } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+    });
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /⚠ GLOB ALERT/, 'the alert shows under a home named h[ab] -- red when the directory is globbed');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 7, finding 2: on the jq path `.session_id // empty` printed a number as digits and a string
+// with a trailing newline as its text (the shell strips the newline), so both named an alert file. jq
+// now emits only a string that is wholly [A-Za-z0-9_-]; the Node path already refused both.
+test('statusline alert: the jq path takes only a plain-token string session_id', (t) => {
+  if (spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
+    t.skip('jq not installed: these cases are the jq path');
+    return;
+  }
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-sid-'));
+  try {
+    const dir = path.join(base, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '123.alert'), 'NUMBER ALERT\n');
+    fs.writeFileSync(path.join(dir, 'right.alert'), 'NEWLINE ALERT\n');
+    for (const forceNode of ['0', '1']) {
+      for (const [payload, banned] of [
+        ['{"session_id":123,"context_window":{"used_percentage":50}}', /NUMBER ALERT/],
+        ['{"session_id":"right\n","context_window":{"used_percentage":50}}', /NEWLINE ALERT/],
+      ]) {
+        const res = spawnSync('bash', [STATUSLINE], {
+          input: payload,
+          encoding: 'utf8',
+          env: { ...process.env, HOME: base, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+        });
+        assert.equal(res.status, 0, res.stderr);
+        assert.doesNotMatch(res.stdout, banned, `${forceNode === '1' ? 'node' : 'jq'} path, ${payload}: no alert for a session id that is not a plain-token string`);
+      }
+    }
+    assert.ok(!fs.existsSync(path.join(dir, '123.json')) && !fs.existsSync(path.join(dir, 'right.json')),
+      'and no pressure file is written under such an id either');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

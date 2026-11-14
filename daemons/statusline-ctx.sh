@@ -28,7 +28,9 @@ DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/stat
 
 if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
   HAS_JQ=1
-  SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+  # Only a string that is wholly a plain token: `.session_id // empty` printed a number as digits and a
+  # string ending in a newline as its text once the shell stripped the newline (review round 7).
+  SID=$(printf '%s' "$INPUT" | jq -r 'if (.session_id | type) == "string" and (.session_id | test("\\A[A-Za-z0-9_-]+\\z")) then .session_id else empty end' 2>/dev/null)
   PCT=$(printf '%s' "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
 
   # Refuse to build a path from a session id that isn't a plain token, and
@@ -86,7 +88,9 @@ fi
 # some alert file exists at all, so a seat without alerts pays no extra process (review round 6). Either
 # way it must match the runner's own character set before it names a path.
 ALERT_SID=${SID:-}
-if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && compgen -G "$SENSOR_DIR/*.alert" >/dev/null 2>&1 \
+# Only the file name is a pattern: the directory is quoted, so glob characters in $HOME match literally
+# (review round 7).
+if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && (cd -- "$SENSOR_DIR" 2>/dev/null && compgen -G '*.alert' >/dev/null 2>&1) \
   && command -v node >/dev/null 2>&1; then
   ALERT_SID=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const v=JSON.parse(s).session_id;if(typeof v==="string"&&/^[A-Za-z0-9_-]+$/.test(v))process.stdout.write(v)}catch{}})' 2>/dev/null)
   [[ "$ALERT_SID" =~ ^[A-Za-z0-9_-]+$ ]] || ALERT_SID=""
