@@ -1025,7 +1025,7 @@ Four legs, **all required**, each with its own refusal:
 | 1 **bound** | the evidence belongs to *this* binding | `proof.json` exists in this session's directory and its `nonce`, `session_id` and `runner_pid` match the binding in memory | `interlock-proof-missing` / `-unreadable` / `-mismatch` |
 | 2 **installed** | the hook is the file the proof was written about | the recorded path still exists and its sha256 still matches | `interlock-hook-missing` / `interlock-hook-changed` |
 | 3 **observed** | the **host** has actually invoked **`PreToolUse`** for this nonce | `state.json` carries this nonce and `pre_runs >= 1` -- *or* the reader has parsed no `tool_use` at all, in which case a `Stop` or `PostToolUse` suffices | `interlock-hook-not-observed` |
-| 4 **current** | the hook has not stopped running | since the last point at which both counters agreed, `pre_runs` has advanced at least as far as the transcript reader's `tool_use` count -- or, if it has advanced at all, the shortfall is forgiven and re-anchored | `interlock-hook-missed-tool-calls` |
+| 4 **current** | the hook has not stopped running | every `tool_use` id the transcript reader has parsed since the last agreement point is in the hook's `recent_ids` (the hook ran for *that* call) -- or, if `pre_runs` has advanced at all since that point, the unpaid records are forgiven and re-anchored | `interlock-hook-missed-tool-calls` |
 
 Plus `interlock-hook-not-wired`: the hook must appear under `PreToolUse`,
 `PostToolUse` **and** `Stop` with a matcher that matches every tool (`""`, `"*"`
@@ -1132,15 +1132,42 @@ fail-closed *in principle* and explicitly did not accept. Two changes:
 The earlier text here said "the next tool call makes the counters disagree and
 the gate closes", which read as self-healing when it was not. It is now.
 
-The comparison is a **delta against a checkpoint**, not an absolute total,
-because the two counters are not comparable in absolute terms: the reader's
+**The match is by `tool_use_id`, not by count (2026-11-13).** The leg used to
+compare how many times the hook ran with how many `tool_use` records the reader
+parsed. The hook runs *before* its record reaches the transcript (flush lag,
+measured at 2.44 s and more), so an agreement point taken in that gap absorbed
+the run, and the record then arrived owed with nothing to pay it. On an idle
+seat nothing ever did: a seat that had just written its capsule held its clear
+for eight hours as `interlock-hook-missed-tool-calls {hook_runs_since: 0,
+tool_uses_since: 1}`. Carrying the count forward instead fails open (a run whose
+record the reader never parses -- a line over its 256 KiB bound -- pays for a
+later call with no run), and a record with no run at all (a call that failed
+input validation) spends another call's run. Now the hook keeps the ids of its
+last `RECENT_IDS_MAX` (512) `PreToolUse` runs in `state.json`, the runner keeps
+the ids it has parsed since the agreement point, and a record is paid only by a
+run with its own id, whenever that record is read. `#104 G12`, `G12b`, `G12c`,
+`I24`-`I27`.
+
+The ids are those parsed **since an agreement point**, because the reader's
 baseline walk parses up to a megabyte of *history* whose calls the hook handled
-before `state.json` existed. The checkpoint is advanced every time all four legs
-pass, and **discarded on every re-baseline** -- after a re-baseline the reader
-has re-read records it already counted, so it has no claim about what the hook
-owed. That forgiveness is not a hole: a re-baseline also raises `unknownOpen`,
-which holds every automatic write until an anchor discharges it, so the two legs
-cover each other.
+before `state.json` existed. The agreement point is advanced every time all four
+legs pass, and **discarded on every re-baseline** -- after a re-baseline the
+reader has re-read history, so those ids are absorbed rather than charged. That
+is not a hole: a re-baseline also raises `unknownOpen`, which holds every
+automatic write until an anchor discharges it, so the two legs cover each other.
+A run made before the re-baseline still pays for its record if that record is
+read afterwards, because `recent_ids` outlives the agreement point. The runner's
+list is bounded (`TOOL_USE_IDS_SINCE_MAX`, 8192). Only a refusing seat can fill
+it, because every pass clears it, so past the bound the agreement point is
+**kept** and the list collapses to one id no run can pay: a dead hook keeps
+refusing, and a live one is forgiven. Discarding the point there instead let a
+dead hook refused 8192 times pass once, silently (gate probe H, `#104 I28`).
+The hook remembers only the session's own loop's ids (no `agent_id` in the
+payload): a subagent writes its records to its own transcript, which the runner
+does not read, and 512 subagent runs could otherwise evict a main-loop id whose
+record was still in flush lag (gate probe G, `I29`). Every forgiveness is logged;
+the event is latched on the point it re-anchors to, never on the deficit's size
+(gate probe F, `I30`).
 
 **What is NOT a leg.** A runner-side probe -- spawn the hook with a synthetic
 payload and check it stamps -- was considered and dropped. It proves the file
@@ -1503,8 +1530,8 @@ removed. What remains, stated as a fact rather than claimed away:
     recycling can also make it read the other way. Named here because it is new
     surface, not because it is known to be wrong.
 
-13. **Leg 4's forgiveness detects a DEAD hook, not a FLAKY one.** The
-    shortfall is forgiven whenever `pre_runs` has advanced at all since the
+13. **Leg 4's forgiveness detects a DEAD hook, not a FLAKY one.** An unpaid
+    record is forgiven whenever `pre_runs` has advanced at all since the
     agreement point, so a **parallel-call batch in which one `PreToolUse` was
     missed** is forgiven as soon as any sibling was marked. The missed call is
     exactly the one whose dialog is up, and it is then covered only by the
