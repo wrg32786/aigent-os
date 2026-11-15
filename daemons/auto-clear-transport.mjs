@@ -39,7 +39,27 @@ export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 // cannot still run. The equal cooldown gives delivery a full open window
 // even when pressure stays high. Both are driven solely by tick().
 export const CHECKPOINT_WAIT_TIMEOUT_MS = 300_000;
+// Once the host has RECORDED this cycle's capsule request (the request is a
+// turn in the transcript, so it reached the seat), the seat is writing the
+// capsule, and that turn is long: measured 2026-11-14, Titus 6 min 12 s, Pheme
+// 8 min 48 s, DaVinci 10 min 31 s. Abandoning at 5 min threw away an answer
+// that arrived 82 s later, so the clear never came. From the first record, the
+// seat gets this long. Until a record, the #151 bound above still applies: a
+// request that never reached the seat (deferred, or its Enter stranded) gets no
+// longer. Recorded once per cycle, so a relaunch that re-requests cannot
+// restart it: the wait is never longer than WAIT + ANSWER from its start.
+export const CHECKPOINT_ANSWER_TIMEOUT_MS = 1_200_000;
 export const CHECKPOINT_RETRY_COOLDOWN_MS = 300_000;
+
+// When the host recorded the live cycle's capsule request, in ms, or null. A
+// record for any other cycle (or a malformed one) is no record.
+function recordedAtFor(state, nowMs = Infinity) {
+  const r = state?.checkpoint_request_recorded;
+  if (r === null || typeof r !== 'object' || Array.isArray(r) || r.cycle_id !== state.cycle_id) return null;
+  const at = Date.parse(r.at);
+  // A time later than now (a clock stepped back, a foreign writer) proves no delivery.
+  return Number.isFinite(at) && at <= nowMs ? at : null;
+}
 
 // The capsule verb's mandated closing line (skills/context-capsule step 6).
 // The seat emits EXACTLY this when its capsule is written and confirmed. It is
@@ -1235,6 +1255,50 @@ export class AutoClearTransport {
     this._capsuleAckMs = clockMs(this.now);
   }
 
+  // When this cycle's capsule request reached the seat, in ms, or null: the
+  // host's transcript record of it (noteCheckpointRequestRecorded) or the
+  // PostToolUse nudge that told the seat mid-turn (capsule-nudge.mjs writes
+  // <memRoot>/runtime/capsule-nudge.json {cycle_id, at}), whichever is first.
+  _requestDeliveredAt() {
+    const nowMs = clockMs(this.now);
+    const recorded = recordedAtFor(this.state, nowMs);
+    let nudged = null;
+    try {
+      const marker = JSON.parse(this.fs.readFileSync(path.join(this.memRoot, 'runtime', 'capsule-nudge.json'), 'utf8'));
+      const at = Date.parse(marker?.at);
+      if (marker?.cycle_id === this.state?.cycle_id && Number.isFinite(at) && at <= nowMs) nudged = at;
+    } catch (error) {
+      // No marker is the ordinary case. Anything else drops a nudged seat back to the #151
+      // bound, so it is said, once per cycle.
+      if (error?.code !== 'ENOENT' && this._nudgeReadLoggedFor !== this.state?.cycle_id) {
+        this._nudgeReadLoggedFor = this.state?.cycle_id ?? null;
+        this.log(`capsule nudge marker unreadable for cycle ${this.state?.cycle_id ?? 'null'}: ${error?.code || error?.message || error}; the #151 bound applies`);
+      }
+    }
+    if (recorded === null) return nudged;
+    return nudged === null ? recorded : Math.min(recorded, nudged);
+  }
+
+  /**
+   * The host has recorded this cycle's capsule request in the transcript
+   * (runner: capsule-request-recorded), so the request reached the seat and
+   * the answer bound applies from now. FIRST RECORD ONLY: a relaunch that
+   * re-requests the same cycle does not move it. Bound to the live cycle by its
+   * cycle_id: a later cycle (ids are unique) never reads it as its own. Returns
+   * true when written.
+   */
+  noteCheckpointRequestRecorded(detail = {}) {
+    if (this._cycleUnreadable !== null) return false;
+    const cycleId = detail && typeof detail === 'object' ? detail.cycleId : undefined;
+    if (typeof cycleId !== 'string' || cycleId.length === 0 || cycleId !== this.state?.cycle_id) return false;
+    if (recordedAtFor(this.state) !== null) return false;
+    this._atomicWrite({
+      ...this.state,
+      checkpoint_request_recorded: { cycle_id: cycleId, at: clockIso(this.now) },
+    });
+    return true;
+  }
+
   /**
    * Record, in the cycle's own durable record, how far the runner has
    * classified its acknowledgement evidence and how many retired requests are
@@ -1652,7 +1716,14 @@ export class AutoClearTransport {
       && this.state.checkpoint_wait_attempts >= 0 ? this.state.checkpoint_wait_attempts : 0) + 1;
     const elapsedMs = Math.max(0, clockMs(this.now) - Date.parse(startedAt));
     const bookkeeping = { checkpoint_wait_started_at: startedAt, checkpoint_wait_attempts: attempts };
-    if (elapsedMs < CHECKPOINT_WAIT_TIMEOUT_MS) {
+    // A request the host has RECORDED for this cycle, or a capsule nudge the
+    // seat was shown mid-turn (capsule-nudge.mjs), is being answered: the
+    // answer bound runs from the earlier of the two. Neither, the #151 bound.
+    const recorded = this._requestDeliveredAt();
+    const sent = recorded !== null;
+    const boundMs = sent ? CHECKPOINT_ANSWER_TIMEOUT_MS : CHECKPOINT_WAIT_TIMEOUT_MS;
+    const clockedMs = sent ? Math.max(0, clockMs(this.now) - recorded) : elapsedMs;
+    if (clockedMs < boundMs) {
       // Keep the deadline and attempts through hold changes and relaunches.
       // Do not change entered_at merely because another check was attempted.
       this._atomicWrite({ ...this.state, ...bookkeeping });
@@ -1672,7 +1743,7 @@ export class AutoClearTransport {
       abandoned_cycle_id: abandoned,
       checkpoint_retry_after: new Date(clockMs(this.now) + CHECKPOINT_RETRY_COOLDOWN_MS).toISOString(),
     });
-    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}`);
+    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}${sent ? ` request=recorded answer_ms=${clockedMs}` : ''}`);
     return resultFor(next, {
       transitioned: true, status: 'cycle-abandoned-checkpoint-timeout', abandoned_cycle_id: abandoned,
     });

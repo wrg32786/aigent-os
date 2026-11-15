@@ -841,6 +841,11 @@ function wrapCore(core, guards) {
     noteAckClassification(detail) {
       return core.noteAckClassification?.(detail);
     },
+    // Forwarded too: the production runner hands the transport the host's
+    // request record, which starts the checkpoint wait's answer bound.
+    noteCheckpointRequestRecorded(detail) {
+      return core.noteCheckpointRequestRecorded?.(detail);
+    },
     beginClearSubmission() {
       return core.beginClearSubmission();
     },
@@ -15017,4 +15022,46 @@ dialogCase('I30 F: every forgiveness is logged, however alike', (harness) => {
   const logged = (allRunnerLogs(harness).match(/interlock-deficit-forgiven/g) || []).length;
   assert.equal(logged, 3,
     'latched on the deficit SIZE, the second and third forgiveness of size 2 were silent');
+});
+
+// ── 2026-11-14: the checkpoint answer bound runs from the host's request record ──
+// Review of 3ec528f, finding 1: the runner's tally goes up BEFORE the request
+// text is written, so a request whose Enter never landed was given the 20-min
+// bound. The bound now starts only at the host's record of the request.
+const checkpointAbandons = (h) => h.fixture.logs.filter((l) => l.includes('cycle-abandoned-checkpoint-timeout'));
+
+test('checkpoint answer bound: an Enter that never landed keeps the #151 5-min bound', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.scheduleEnter = () => null;   // the text lands, the Enter never does
+    assert.equal(harness.drive().state.state, 'pressure');
+    harness.drive();
+    assert.equal(harness.events('capsule-request-enter-schedule-failed').length, 1, 'setup: the Enter was never scheduled');
+    assert.equal(harness.cycleState().ack_classification?.requests_issued, 1, 'setup: the tally went up anyway');
+    appendCapsuleRunNoise(harness);
+    harness.drive();
+    harness.fixture.clock.advance(300_000);
+    appendCapsuleRunNoise(harness);
+    assert.equal(harness.drive().state.state, 'idle', 'abandoned at 5 min (3ec528f held to 20)');
+    assert.equal(checkpointAbandons(harness).length, 1);
+    assert.doesNotMatch(checkpointAbandons(harness)[0], /request=recorded/);
+  } finally { harness.cleanup(); }
+});
+
+test('checkpoint answer bound: a request the host recorded gets its answer time, through the real runner', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const cycleId = driveToRequestedWithRequest(harness);
+    appendCapsuleRequestRecord(harness);
+    harness.drive();
+    assert.equal(harness.events('capsule-request-recorded').length, 1, 'setup: the runner saw the record');
+    assert.equal(harness.cycleState().checkpoint_request_recorded?.cycle_id, cycleId, 'and the transport persisted it');
+    for (let i = 0; i < 7; i += 1) {   // a 7-minute capsule turn
+      harness.fixture.clock.advance(60_000);
+      appendCapsuleRunNoise(harness);
+      harness.drive();
+    }
+    assert.equal(checkpointAbandons(harness).length, 0, 'still waiting past 5 min (master abandoned here)');
+    assert.equal(harness.cycleState().cycle_id, cycleId);
+  } finally { harness.cleanup(); }
 });

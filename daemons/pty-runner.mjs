@@ -4343,6 +4343,15 @@ export class ManagedPtyRunner {
             seen: watch.request_records_seen,
             issued,
           });
+          // The request reached the seat: the checkpoint wait's answer bound
+          // runs from here (first record of the cycle only; the transport
+          // ignores later ones). A failure to persist it only leaves the
+          // shorter #151 bound in force.
+          try {
+            this.transport?.noteCheckpointRequestRecorded?.({ cycleId: watch.cycle_id });
+          } catch (error) {
+            this._event('checkpoint-request-record-unpersisted', { cycle_id: watch.cycle_id, error: errorText(error) });
+          }
           continue;
         }
         if (!isAckLine(line)) continue;
