@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-14-7359c65f",
-  "public_product_commit": "7359c65fd610e728d1b1113f2c3eb646effa1888",
+  "baseline_id": "aigent-os-2026-11-14-56a88c06",
+  "public_product_commit": "56a88c0697151f8fc45f2eebcf63d4523ee56e44",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -56,7 +56,8 @@
     "v8 recut for opt-in bundled conpty.dll, absent when off (a4676981): pins that moved: daemons/pty-runner.mjs. pty-runner.mjs adds useConptyDll:true to the spawn options only when AIGENT_CONPTY_DLL is exactly 1; otherwise the options are unchanged from before. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for interlock-id-match (28ae6a54): pins that moved: daemons/pre-permission-interlock.mjs, daemons/pty-runner.mjs. leg 4 by tool_use_id. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for interlock-id-match-2 (6bb16540): pins that moved: daemons/pre-permission-interlock.mjs, daemons/pty-runner.mjs. leg 4 by tool_use_id: overflow sentinel, main-loop ids, every forgiveness logged. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for checkpoint-answer-time (7359c65f): pins that moved: daemons/auto-clear-transport.mjs. a sent capsule request gets 20 min to be answered. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for checkpoint-answer-time (7359c65f): pins that moved: daemons/auto-clear-transport.mjs. a sent capsule request gets 20 min to be answered. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for checkpoint answer time, round 2 (56a88c06): pins that moved: daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. the answer bound starts at the host's first request record of the cycle. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -80,8 +81,8 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "ca9711f6c8e03318ae1c8c663588a12ae14388596df08c98a92e56b1bd3cd63b",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "6f079a72f90d7f70076c3ad5faf63cd1d8e5b20aaa6880cfe35215ad4d9605ed",
-    "daemons/auto-clear-transport.mjs": "e88700c1f476fa86f9a1babea658ac286613d60780b4557bf12faf2193abda09",
+    "daemons/pty-runner.mjs": "052c7c7f0df48d3aacb69861df3025ef1d932eea07a0a7a88392315a5a241986",
+    "daemons/auto-clear-transport.mjs": "afd21060604f912b362dc70bcd4e1eef8c91a8d7d122ba7c876465fd20f4786f",
     "daemons/lifecycle-common.mjs": "64502ea7182f1cf50bc1d40f81ac8f050798ccf3ba4593b6c34137e1473d4371",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
