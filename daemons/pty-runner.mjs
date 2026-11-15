@@ -441,6 +441,10 @@ const VK_RETURN = 13;
 // and ENHANCED_KEY 0x100 (set on the numpad Enter) ride along on ordinary
 // submissions and must never veto one -- the mask deliberately stops at 0x1F.
 const WIN32_CS_MODIFIER_MASK = 0x1f;
+// The composer-guard alert (see _syncRefreshAlert): an alert-file operation still outstanding after this
+// long is logged once (nothing else changes), and a wanted alert is rewritten this often.
+const REFRESH_ALERT_STALL_LOG_MS = 30_000;
+const REFRESH_ALERT_REWRITE_MS = 60 * 60_000;
 // Key-downs that put nothing in the composer and change none of its text: a modifier or lock key pressed
 // alone with no character (the Ctrl of a Ctrl+C that Windows Terminal keeps for its own copy, the Alt of
 // Alt+Tab, the Shift before a capital) and Shift+Tab, which Claude Code reads as the permission-mode
@@ -2250,6 +2254,23 @@ export class ManagedPtyRunner {
     // text (or uncertain input ownership). Diagnostic latch only — it makes
     // the deferral a once-per-cycle event; the request itself stays pending.
     this.capsuleRequestDeferredCycleId = null;
+    // How many cycles in a row deferred their request behind the composer guard. At two (the first
+    // cycle timed out and re-armed), the runner raises a status-line alert; see _raiseRefreshAlert.
+    this.composerBusyCycles = 0;
+    // The alert file, reconciled one operation at a time (review rounds 2 and 3): whether the alert is
+    // wanted, what is known to be on disk (true, false, or 'maybe' after a failed write), whether an
+    // operation is in flight, when the current alert began, and which session's file the on-disk state
+    // refers to (review round 4).
+    this.refreshAlertWanted = false;
+    this.refreshAlertOnDisk = false;
+    this.refreshAlertBusy = false;
+    this.refreshAlertSince = null;
+    this.refreshAlertFile = null;
+    // When the operation in flight began, whether its stall was logged, and when the alert was last
+    // written, so a wanted alert is rewritten hourly.
+    this.refreshAlertStallLogged = false;
+    this.refreshAlertBusySince = 0;
+    this.refreshAlertWrittenAt = 0;
     // Receipt watch for the tracker's outstanding CRs: {transcript, offset,
     // midLine}. Noted when the queue goes from empty to non-empty, scanned
     // each tick by _checkPendingSubmission for new operator prompt records,
@@ -3876,6 +3897,119 @@ export class ManagedPtyRunner {
     this.composerMayHoldControlText = false;
   }
 
+  // THE FLOOR UNDER THE COMPOSER GUARD (2026-11-11). The guard never guesses the composer is empty, so a
+  // tracker left "unknown" with no confirmed send after it defers every cycle until native compaction
+  // takes the seat (measured on two live seats). Guessing "empty" would bring back the mangled
+  // prompt the guard exists to prevent, so the runner tells the operator instead: once a deferral outlives
+  // a re-arm, it writes one line beside the session's pressure file, and statusline-ctx.sh shows it.
+  // A bare Enter does not help: the tracker trusts a send only when the prompt reaches the transcript.
+  // Best effort and never on the tick's thread: the file work is asynchronous, so slow or failing storage
+  // cannot hold the runner. One operation is in flight at most; every callback is guarded, so a throw
+  // inside one cannot escape; a failed write or removal is retried on the next call, never in a loop.
+  // Nothing here touches automation (review rounds 2 and 3).
+  _refreshAlertPath() {
+    if (typeof this.homeDir !== 'string' || !this.homeDir || typeof this.sessionId !== 'string'
+      || !/^[A-Za-z0-9_-]+$/.test(this.sessionId)) return null;
+    return path.join(this.homeDir, '.claude', 'ctx-refresh', `${this.sessionId}.alert`);
+  }
+
+  // The only log lines are here, on the tick, when the wanted state flips; file callbacks never log, so a
+  // slow log cannot reach the event loop through them (review round 4).
+  _raiseRefreshAlert() {
+    if (!this.refreshAlertWanted) {
+      this.refreshAlertSince = new Date().toTimeString().slice(0, 5);
+      this.refreshAlertWanted = true;
+      this._event('refresh-alert-raised', { since: this.refreshAlertSince, cycles: this.composerBusyCycles });
+    }
+    this._syncRefreshAlert();
+  }
+
+  // Called on every pass of the composer guard, and from tick() once the composer is known empty.
+  _clearRefreshAlert() {
+    if (this.refreshAlertWanted) {
+      this.refreshAlertWanted = false;
+      this._event('refresh-alert-cleared', { since: this.refreshAlertSince });
+    }
+    this._syncRefreshAlert();
+  }
+
+  // Brings the disk in line with refreshAlertWanted, one asynchronous operation at a time. It runs on every
+  // tick (review round 4), so cleanup goes on after the request is sent or the cycle ends.
+  // refreshAlertFile is the file the on-disk state refers to: after /clear the session id, and so the
+  // current path, changes, and the old session's file is removed before anything else.
+  // A missing file counts as removed. Only a write that landed after the alert came down, or a stale
+  // file's removal, is followed at once; a failed operation waits for the next call, so it never spins.
+  // A wanted alert is rewritten every REFRESH_ALERT_REWRITE_MS, which also restores one deleted from outside
+  // (the status line's 7-day housekeeping, or anyone else).
+  // KNOWN LIMIT, accepted (review round 6): one operation at a time, strictly, so an operation whose
+  // completion never arrives holds the alert where it is. Node calls every fs callback unless the kernel
+  // call itself hangs, and in that state no write could land either. The alert is a best-effort notice and
+  // the capsule request does not depend on it. A stall is logged once, after REFRESH_ALERT_STALL_LOG_MS,
+  // and changes nothing.
+  _syncRefreshAlert() {
+    const clock = this.now();
+    const nowMs = clock instanceof Date ? clock.getTime() : Number(clock);
+    if (this.refreshAlertBusy) {
+      if (!this.refreshAlertStallLogged && nowMs - this.refreshAlertBusySince >= REFRESH_ALERT_STALL_LOG_MS) {
+        this.refreshAlertStallLogged = true;
+        this._event('refresh-alert-operation-stalled', { file: this.refreshAlertFile, since_ms: this.refreshAlertBusySince });
+      }
+      return;
+    }
+    const current = this._refreshAlertPath();
+    const fsx = this.fs;
+    if (!fsx || typeof fsx.mkdir !== 'function' || typeof fsx.writeFile !== 'function'
+      || typeof fsx.unlink !== 'function') return;
+    const begin = () => {
+      this.refreshAlertBusy = true;
+      this.refreshAlertBusySince = nowMs;
+      this.refreshAlertStallLogged = false;
+    };
+    const held = this.refreshAlertOnDisk !== false && this.refreshAlertFile;
+    if (held && (!this.refreshAlertWanted || this.refreshAlertFile !== current)) {
+      const target = this.refreshAlertFile;
+      begin();
+      try {
+        fsx.unlink(target, (error) => {
+          try {
+            this.refreshAlertBusy = false;
+            if (error && error.code !== 'ENOENT') return; // still there: the next call tries again
+            this.refreshAlertOnDisk = false;
+            this.refreshAlertFile = null;
+            if (this.refreshAlertWanted && current) this._syncRefreshAlert(); // the current session's alert
+          } catch { this.refreshAlertBusy = false; }
+        });
+      } catch { this.refreshAlertBusy = false; }
+      return;
+    }
+    const due = this.refreshAlertOnDisk !== true
+      || !(nowMs - this.refreshAlertWrittenAt < REFRESH_ALERT_REWRITE_MS);
+    if (!this.refreshAlertWanted || !current || !due) return;
+    begin();
+    this.refreshAlertFile = current;
+    const text = `auto-refresh blocked since ${this.refreshAlertSince}: the runner cannot tell whether the prompt `
+      + 'box is empty. Send any message, or run /context-capsule.';
+    const done = (written) => {
+      this.refreshAlertBusy = false;
+      this.refreshAlertOnDisk = written ? true : 'maybe';
+      if (written) this.refreshAlertWrittenAt = nowMs;
+      // Landed after the alert came down, or after the session changed: remove it now.
+      if (written && (!this.refreshAlertWanted || this.refreshAlertFile !== this._refreshAlertPath())) {
+        this._syncRefreshAlert();
+      }
+    };
+    try {
+      fsx.mkdir(path.dirname(current), { recursive: true }, (mkdirError) => {
+        try {
+          if (mkdirError) { done(false); return; }
+          fsx.writeFile(current, `${text}\n`, (writeError) => {
+            try { done(!writeError); } catch { this.refreshAlertBusy = false; }
+          });
+        } catch { done(false); }
+      });
+    } catch { this.refreshAlertBusy = false; this.refreshAlertOnDisk = 'maybe'; }
+  }
+
   _writeCapsuleRequest(cycleId) {
     if (this.capsuleRequestCycleId === cycleId) return false;
     // COMPOSER GUARD (measured live 2026-09-24): the request fired while the
@@ -3910,14 +4044,19 @@ export class ManagedPtyRunner {
     if (!composer.knownEmpty) {
       if (this.capsuleRequestDeferredCycleId !== cycleId) {
         this.capsuleRequestDeferredCycleId = cycleId;
+        this.composerBusyCycles += 1;
         this.lastReason = {
           code: 'runner-capsule-request-composer-busy',
           detail: { cycle_id: cycleId, input: composer },
         };
         this._event('capsule-request-deferred', this.lastReason);
       }
+      // Every deferred tick, so a write that failed is tried again on a later one (never in a loop).
+      if (this.composerBusyCycles >= 2) this._raiseRefreshAlert();
       return false;
     }
+    this.composerBusyCycles = 0;
+    this._clearRefreshAlert();
     // ─── DIALOG READINESS (#104) ───────────────────────────────────────────
     // ALONGSIDE the composer guard above, never instead of it. The composer
     // guard models the composer TEXT LINE; it knows nothing about a modal
@@ -7309,6 +7448,17 @@ export class ManagedPtyRunner {
 
   tick() {
     if (this.closed) return { status: 'closed' };
+
+    // The composer-guard alert, every tick (review round 4): it comes down once the composer is known
+    // empty, and its file work goes on whatever the cycle is doing. Asynchronous and best effort.
+    try {
+      if (this.refreshAlertWanted && this.input?.snapshot?.().knownEmpty) {
+        this.composerBusyCycles = 0;
+        this._clearRefreshAlert();
+      } else {
+        this._syncRefreshAlert();
+      }
+    } catch { /* the alert never touches the tick's outcome */ }
 
     const submitted = this.phase === 'submitted' || this.phase === 'submitting';
     const killed = this._readKillSwitch();

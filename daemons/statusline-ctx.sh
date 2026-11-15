@@ -24,11 +24,19 @@ INPUT=$(cat)
 
 SENSOR_DIR="$HOME/.claude/ctx-refresh"
 HAS_JQ=0
+# Ours alone: only the jq path below assigns SID, so an inherited one must never reach the alert path (review round 8).
+SID=""
+RC=0
 DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline-command.sh}"
 
 if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
   HAS_JQ=1
-  SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+  # Only a string that is wholly a plain token: `.session_id // empty` printed a number as digits and a
+  # string ending in a newline as its text once the shell stripped the newline (review round 7). The id is
+  # taken JSON-quoted, so a newline or NUL stays escaped and fails the match; no jq regex, which a jq built
+  # without Oniguruma lacks (review round 8).
+  SID=$(printf '%s' "$INPUT" | jq -r 'if (.session_id | type) == "string" then (.session_id | @json) else empty end' 2>/dev/null)
+  if [[ "$SID" =~ ^\"([A-Za-z0-9_-]+)\"$ ]]; then SID="${BASH_REMATCH[1]}"; else SID=""; fi
   PCT=$(printf '%s' "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
 
   # Refuse to build a path from a session id that isn't a plain token, and
@@ -45,7 +53,7 @@ if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1;
     # Housekeeping: drop sensor files idle >7 days (session ids rotate on
     # /clear; old files are dead). Only *.json — the sensor's own *.state
     # files are its business, not ours.
-    find "$SENSOR_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null
+    find "$SENSOR_DIR" \( -name '*.json' -o -name '*.alert' \) -mtime +7 -delete 2>/dev/null
   fi
 elif command -v node >/dev/null 2>&1; then
   SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
@@ -68,6 +76,7 @@ fi
 # Display: delegate to an existing statusline script unchanged, if one is wired.
 if [ -f "$DELEGATE" ]; then
   printf '%s' "$INPUT" | bash "$DELEGATE"
+  RC=$?
 elif [ "$HAS_JQ" -eq 1 ]; then
   # Minimal built-in fallback: model name + context usage. `|| true` so an
   # unparseable payload shows an empty line rather than a failing statusline.
@@ -77,3 +86,30 @@ elif [ "$HAS_JQ" -eq 1 ]; then
       then "ctx \(.context_window.used_percentage | floor)%" else empty end)]
     | join(" | ")' 2>/dev/null || true
 fi
+
+# The PTY runner's alert when it cannot send the capsule request (pty-runner.mjs, _raiseRefreshAlert):
+# one line, shown under whatever the display above printed. It goes away when the runner clears it.
+# Printable ASCII only, so a file holding terminal controls (escape, OSC, bell) cannot reach the display;
+# nothing at all when that leaves no text (review round 2). The session id comes from jq when it ran (its
+# .session_id is the top-level key, last duplicate winning), else from the same parse in node, and only when
+# some alert file exists at all, so a seat without alerts pays no extra process (review round 6). Either
+# way it must match the runner's own character set before it names a path.
+ALERT_SID=${SID:-}
+# Only the file name is a pattern: the directory is quoted, so glob characters in $HOME match literally
+# (review round 7).
+if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && (CDPATH= cd -- "$SENSOR_DIR" >/dev/null 2>&1 && compgen -G '*.alert' >/dev/null 2>&1) \
+  && command -v node >/dev/null 2>&1; then
+  ALERT_SID=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const v=JSON.parse(s).session_id;if(typeof v==="string"&&/^[A-Za-z0-9_-]+$/.test(v))process.stdout.write(v)}catch{}})' 2>/dev/null)
+  [[ "$ALERT_SID" =~ ^[A-Za-z0-9_-]+$ ]] || ALERT_SID=""
+fi
+if [ -n "$ALERT_SID" ] && [ -f "$SENSOR_DIR/$ALERT_SID.alert" ]; then
+  ALERT=$(head -c 200 < "$SENSOR_DIR/$ALERT_SID.alert" | LC_ALL=C tr -cd '\040-\176')
+  ALERT=${ALERT#"${ALERT%%[! ]*}"}
+  if [ -n "$ALERT" ]; then
+    printf '⚠ %s\n' "$ALERT"
+    # The host blanks the whole status line on a nonzero exit (Claude Code shows stdout only on status 0),
+    # so the alert must survive a failing delegate (review round 9).
+    RC=0
+  fi
+fi
+exit "$RC"

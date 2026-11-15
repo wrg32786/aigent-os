@@ -974,3 +974,215 @@ test('15. session-id regex source stays identical between transport and stop wri
     safeSessionId.groups.source,
   );
 });
+
+// The runner's floor (pty-runner.mjs _raiseRefreshAlert) writes <session_id>.alert beside the pressure
+// file; the status line must show it under the usual line, and show nothing when there is none.
+test('statusline shows the runner refresh alert for its own session, and only then', (t) => {
+  if (spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
+    t.skip('jq not installed: the alert line is shown on the jq path only');
+    return;
+  }
+  const fixture = makeFixture('statusline-alert');
+  try {
+    const run = (sessionId) => spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: sessionId, model: { display_name: 'M' }, context_window: { used_percentage: 81 } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fixture.homeDir, AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+    });
+    const quiet = run('alert-session');
+    assert.equal(quiet.status, 0, quiet.stderr);
+    assert.doesNotMatch(quiet.stdout, /⚠/, 'no alert file, no alert line');
+
+    writeText(path.join(fixture.homeDir, '.claude', 'ctx-refresh', 'alert-session.alert'),
+      'auto-refresh blocked since 21:13: the runner cannot tell whether the prompt box is empty. Send any message, or run /context-capsule.\n');
+    const shown = run('alert-session');
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /^M \| ctx 81%\r?\n⚠ auto-refresh blocked since 21:13: .*\/context-capsule\.\r?\n$/, 'the alert is its own line under the usual one');
+
+    const other = run('other-session');
+    assert.doesNotMatch(other.stdout, /⚠/, 'another session never shows this session\'s alert');
+
+    // Review round 2: terminal controls never reach the display, and an empty alert is silent.
+    const alertFile = path.join(fixture.homeDir, '.claude', 'ctx-refresh', 'alert-session.alert');
+    fs.writeFileSync(alertFile, '\x1b[2J\x1b[Hforged\x07\x1b]0;title\x07 line\n');
+    const forged = run('alert-session');
+    const alertLine = forged.stdout.slice(forged.stdout.indexOf('⚠'));
+    assert.doesNotMatch(alertLine.replace(/\n$/, ''), /[\x00-\x1f\x7f]/, 'no escape, bell or other control byte is printed');
+    assert.equal(alertLine, '⚠ [2J[Hforged]0;title line\n', 'only the printable text is shown');
+    for (const empty of ['', '\r\n', '\x1b\x07', '   ']) {
+      fs.writeFileSync(alertFile, empty);
+      const silent = run('alert-session');
+      assert.doesNotMatch(silent.stdout, /⚠/, `an alert of ${JSON.stringify(empty)} prints nothing`);
+      assert.equal(silent.status, 0, `and the status line still exits 0 -- red when the block's last test fails (${JSON.stringify(empty)})`);
+    }
+
+    // Review round 5: the Node fallback (no jq) shows the alert too.
+    fs.writeFileSync(alertFile, 'auto-refresh blocked since 21:13: send any message, or run /context-capsule.\n');
+    const viaNode = spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: 'alert-session', model: { display_name: 'M' }, context_window: { used_percentage: 81 } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: fixture.homeDir, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+    });
+    assert.equal(viaNode.status, 0, viaNode.stderr);
+    assert.match(viaNode.stdout, /⚠ auto-refresh blocked since 21:13: .*\/context-capsule\.\r?\n$/, 'the alert shows without jq -- red when it needs HAS_JQ');
+
+    // Review round 6: the session id is the payload's top-level session_id, last duplicate winning, nested
+    // ignored, on both paths. Raw strings, since JSON.stringify cannot write a duplicate key.
+    const dir = path.join(fixture.homeDir, '.claude', 'ctx-refresh');
+    fs.writeFileSync(path.join(dir, 'wrong.alert'), 'WRONG ALERT\n');
+    fs.writeFileSync(path.join(dir, 'right.alert'), 'RIGHT ALERT\n');
+    const cases = [
+      ['{"session_id":"wrong","session_id":"right"}', 'right'],
+      ['{"nested":{"session_id":"wrong"},"session_id":"right"}', 'right'],
+      ['{"nested":{"session_id":"wrong"}}', null],
+    ];
+    for (const forceNode of ['0', '1']) {
+      for (const [payload, expected] of cases) {
+        const shown = spawnSync('bash', [STATUSLINE], {
+          input: payload,
+          encoding: 'utf8',
+          env: { ...process.env, HOME: fixture.homeDir, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: path.join(fixture.base, 'no-delegate.sh') },
+        });
+        assert.equal(shown.status, 0, shown.stderr);
+        const where = `${forceNode === '1' ? 'node' : 'jq'} path, ${payload}`;
+        assert.doesNotMatch(shown.stdout, /WRONG ALERT/, `${where}: never the nested or first duplicate -- red with a text match`);
+        if (expected) assert.match(shown.stdout, /⚠ RIGHT ALERT/, `${where}: the top-level, last session_id`);
+        else assert.doesNotMatch(shown.stdout, /⚠/, `${where}: no top-level session_id, no alert`);
+      }
+    }
+  } finally {
+    fs.rmSync(fixture.base, { recursive: true, force: true });
+  }
+});
+
+// Review round 7, finding 1: the alert-file probe globbed the WHOLE path, so a home directory whose name
+// holds glob characters (h[ab]) matched nothing and a real alert was never shown on the Node path. Only
+// the file name may be a pattern; the directory is quoted.
+test('statusline alert probe: glob characters in the home directory never hide an alert', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-glob-'));
+  try {
+    const home = path.join(base, 'h[ab]');
+    const dir = path.join(home, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'glob-session.alert'), 'GLOB ALERT\n');
+    const shown = spawnSync('bash', [STATUSLINE], {
+      input: JSON.stringify({ session_id: 'glob-session', model: { display_name: 'M' } }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+    });
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /⚠ GLOB ALERT/, 'the alert shows under a home named h[ab] -- red when the directory is globbed');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 7, finding 2: on the jq path `.session_id // empty` printed a number as digits and a string
+// with a trailing newline as its text (the shell strips the newline), so both named an alert file. jq
+// now emits only a string that is wholly [A-Za-z0-9_-]; the Node path already refused both.
+test('statusline alert: both paths take only a plain-token string session_id', () => {
+  // The node path needs no jq, so it always runs (review round 8, finding 6); the jq path runs when jq is here.
+  const hasJq = spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status === 0;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-sid-'));
+  try {
+    const dir = path.join(base, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '123.alert'), 'NUMBER ALERT\n');
+    fs.writeFileSync(path.join(dir, 'right.alert'), 'NEWLINE ALERT\n');
+    // A raw string would lose its NUL in the shell and name xy (review round 9): the row must be able to fail.
+    fs.writeFileSync(path.join(dir, 'xy.alert'), 'NUL ALERT\n');
+    for (const forceNode of hasJq ? ['0', '1'] : ['1']) {
+      for (const [payload, banned] of [
+        ['{"session_id":123,"context_window":{"used_percentage":50}}', /NUMBER ALERT/],
+        ['{"session_id":"x\\u0000y","context_window":{"used_percentage":50}}', /NUL ALERT/],
+        ['{"session_id":"right\n","context_window":{"used_percentage":50}}', /NEWLINE ALERT/],
+      ]) {
+        const res = spawnSync('bash', [STATUSLINE], {
+          input: payload,
+          encoding: 'utf8',
+          env: { ...process.env, HOME: base, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+        });
+        assert.equal(res.status, 0, res.stderr);
+        assert.doesNotMatch(res.stdout, banned, `${forceNode === '1' ? 'node' : 'jq'} path, ${payload}: no alert for a session id that is not a plain-token string`);
+      }
+    }
+    assert.ok(!fs.existsSync(path.join(dir, '123.json')) && !fs.existsSync(path.join(dir, 'right.json'))
+      && !fs.existsSync(path.join(dir, 'xy.json')),
+      'and no pressure file is written under such an id either');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 8, finding 1: only the jq path assigned SID, so on the node path a SID exported in the
+// environment became the alert id unchecked -- another session's alert, or a path outside the sensor
+// directory. The script now starts SID empty.
+test('statusline alert: a SID exported in the environment is never the session id', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-envsid-'));
+  try {
+    const dir = path.join(base, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'me.alert'), 'ME ALERT\n');
+    fs.writeFileSync(path.join(dir, 'victim.alert'), 'VICTIM ALERT\n');
+    fs.writeFileSync(path.join(base, '.claude', 'outside.alert'), 'OUTSIDE ALERT\n');
+    for (const envSid of ['victim', '../outside']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'me', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: base, SID: envSid, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+      });
+      assert.equal(res.status, 0, res.stderr);
+      assert.match(res.stdout, /⚠ ME ALERT/, `SID=${envSid}: the payload's own alert shows`);
+      assert.doesNotMatch(res.stdout, /VICTIM ALERT|OUTSIDE ALERT/, `SID=${envSid}: the environment never names the alert`);
+    }
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 8, findings 3-5: CDPATH never redirects the probe or prints into the line, a home
+// starting with "-" still shows its alert, and the delegate's exit status is the script's.
+test('statusline alert: CDPATH, a leading-dash home and the delegate status', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-r8-'));
+  try {
+    const decoy = path.join(root, 'decoy');
+    fs.mkdirSync(path.join(decoy, '-x', '.claude', 'ctx-refresh'), { recursive: true });
+    const dir = path.join(root, '-x', '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'dash.alert'), 'DASH ALERT\n');
+    // bash reads CDPATH as a POSIX list: on Windows the decoy is given in the shell's own form.
+    const posix = spawnSync('bash', ['-c', 'cd -- "$1" && pwd', '_', decoy], { encoding: 'utf8' }).stdout.trim() || decoy;
+    const env = { ...process.env, HOME: '-x', CDPATH: posix, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(root, 'no-delegate.sh') };
+    const shown = spawnSync('bash', [STATUSLINE], {
+      cwd: root, input: JSON.stringify({ session_id: 'dash', model: { display_name: 'M' } }), encoding: 'utf8', env,
+    });
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /⚠ DASH ALERT/, 'a relative home named -x still shows its alert');
+    assert.doesNotMatch(shown.stdout, /decoy/, 'CDPATH never prints a directory into the status line');
+    const delegate = path.join(root, 'delegate.sh');
+    fs.writeFileSync(delegate, '#!/bin/bash\ncat >/dev/null\necho DELEGATE\nexit 3\n');
+    for (const forceNode of ['0', '1']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'nobody', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: root, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: delegate },
+      });
+      assert.match(res.stdout, /DELEGATE/);
+      assert.equal(res.status, 3, `force_node=${forceNode}: with no alert, the delegate's exit status is passed on`);
+    }
+    // Review round 9: the host blanks the line on a nonzero exit, so a shown alert exits 0 even over a failing delegate.
+    fs.mkdirSync(path.join(root, '.claude', 'ctx-refresh'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude', 'ctx-refresh', 'failing.alert'), 'FAILING ALERT\n');
+    for (const forceNode of ['0', '1']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'failing', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: root, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: delegate },
+      });
+      assert.match(res.stdout, /DELEGATE[\s\S]*⚠ FAILING ALERT/);
+      assert.equal(res.status, 0, `force_node=${forceNode}: the alert is never blanked by the delegate's failure`);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

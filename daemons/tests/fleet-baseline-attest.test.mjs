@@ -1005,10 +1005,10 @@ const REGISTRY = 'daemons/semantic-search/namespace-registry.json';
 test('v8 manifest identity pins the recut population', () => {
   const manifest = readManifest();
   assert.equal(manifest.schema, 'FleetBaselineManifest/v8');
-  assert.equal(manifest.baseline_id, 'aigent-os-2026-11-15-e36da261');
+  assert.equal(manifest.baseline_id, 'aigent-os-2026-11-15-357d0f49');
   assert.equal(
     manifest.public_product_commit,
-    'e36da2615071becf3f2dc03bda6e70989977fc6c',
+    '357d0f496b3b8d40f9e945dcd56103a5717dfa29',
   );
   assert.ok(
     manifest.baseline_id.endsWith(manifest.public_product_commit.slice(0, 8)),
