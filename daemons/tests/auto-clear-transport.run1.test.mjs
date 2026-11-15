@@ -1080,20 +1080,19 @@ test('statusline alert probe: glob characters in the home directory never hide a
 // Review round 7, finding 2: on the jq path `.session_id // empty` printed a number as digits and a string
 // with a trailing newline as its text (the shell strips the newline), so both named an alert file. jq
 // now emits only a string that is wholly [A-Za-z0-9_-]; the Node path already refused both.
-test('statusline alert: the jq path takes only a plain-token string session_id', (t) => {
-  if (spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
-    t.skip('jq not installed: these cases are the jq path');
-    return;
-  }
+test('statusline alert: both paths take only a plain-token string session_id', () => {
+  // The node path needs no jq, so it always runs (review round 8, finding 6); the jq path runs when jq is here.
+  const hasJq = spawnSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).status === 0;
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-sid-'));
   try {
     const dir = path.join(base, '.claude', 'ctx-refresh');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, '123.alert'), 'NUMBER ALERT\n');
     fs.writeFileSync(path.join(dir, 'right.alert'), 'NEWLINE ALERT\n');
-    for (const forceNode of ['0', '1']) {
+    for (const forceNode of hasJq ? ['0', '1'] : ['1']) {
       for (const [payload, banned] of [
         ['{"session_id":123,"context_window":{"used_percentage":50}}', /NUMBER ALERT/],
+        ['{"session_id":"x\\u0000y","context_window":{"used_percentage":50}}', /NUMBER ALERT|NEWLINE ALERT/],
         ['{"session_id":"right\n","context_window":{"used_percentage":50}}', /NEWLINE ALERT/],
       ]) {
         const res = spawnSync('bash', [STATUSLINE], {
@@ -1109,5 +1108,66 @@ test('statusline alert: the jq path takes only a plain-token string session_id',
       'and no pressure file is written under such an id either');
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 8, finding 1: only the jq path assigned SID, so on the node path a SID exported in the
+// environment became the alert id unchecked -- another session's alert, or a path outside the sensor
+// directory. The script now starts SID empty.
+test('statusline alert: a SID exported in the environment is never the session id', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-envsid-'));
+  try {
+    const dir = path.join(base, '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'me.alert'), 'ME ALERT\n');
+    fs.writeFileSync(path.join(dir, 'victim.alert'), 'VICTIM ALERT\n');
+    fs.writeFileSync(path.join(base, '.claude', 'outside.alert'), 'OUTSIDE ALERT\n');
+    for (const envSid of ['victim', '../outside']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'me', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: base, SID: envSid, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(base, 'no-delegate.sh') },
+      });
+      assert.equal(res.status, 0, res.stderr);
+      assert.match(res.stdout, /⚠ ME ALERT/, `SID=${envSid}: the payload's own alert shows`);
+      assert.doesNotMatch(res.stdout, /VICTIM ALERT|OUTSIDE ALERT/, `SID=${envSid}: the environment never names the alert`);
+    }
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// Review round 8, findings 3-5: CDPATH never redirects the probe or prints into the line, a home
+// starting with "-" still shows its alert, and the delegate's exit status is the script's.
+test('statusline alert: CDPATH, a leading-dash home and the delegate status', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-r8-'));
+  try {
+    const decoy = path.join(root, 'decoy');
+    fs.mkdirSync(path.join(decoy, '-x', '.claude', 'ctx-refresh'), { recursive: true });
+    const dir = path.join(root, '-x', '.claude', 'ctx-refresh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'dash.alert'), 'DASH ALERT\n');
+    // bash reads CDPATH as a POSIX list: on Windows the decoy is given in the shell's own form.
+    const posix = spawnSync('bash', ['-c', 'cd -- "$1" && pwd', '_', decoy], { encoding: 'utf8' }).stdout.trim() || decoy;
+    const env = { ...process.env, HOME: '-x', CDPATH: posix, CTX_TELEMETRY_FORCE_NODE: '1', AIGENT_STATUSLINE_DELEGATE: path.join(root, 'no-delegate.sh') };
+    const shown = spawnSync('bash', [STATUSLINE], {
+      cwd: root, input: JSON.stringify({ session_id: 'dash', model: { display_name: 'M' } }), encoding: 'utf8', env,
+    });
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /⚠ DASH ALERT/, 'a relative home named -x still shows its alert');
+    assert.doesNotMatch(shown.stdout, /decoy/, 'CDPATH never prints a directory into the status line');
+    const delegate = path.join(root, 'delegate.sh');
+    fs.writeFileSync(delegate, '#!/bin/bash\ncat >/dev/null\necho DELEGATE\nexit 3\n');
+    for (const forceNode of ['0', '1']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'nobody', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: root, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: delegate },
+      });
+      assert.match(res.stdout, /DELEGATE/);
+      assert.equal(res.status, 3, `force_node=${forceNode}: the delegate's exit status is passed on, as before the alert block`);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

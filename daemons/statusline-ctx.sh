@@ -24,13 +24,19 @@ INPUT=$(cat)
 
 SENSOR_DIR="$HOME/.claude/ctx-refresh"
 HAS_JQ=0
+# Ours alone: only the jq path below assigns SID, so an inherited one must never reach the alert path (review round 8).
+SID=""
+RC=0
 DELEGATE="${AIGENT_STATUSLINE_DELEGATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline-command.sh}"
 
 if [ "${CTX_TELEMETRY_FORCE_NODE:-0}" != "1" ] && command -v jq >/dev/null 2>&1; then
   HAS_JQ=1
   # Only a string that is wholly a plain token: `.session_id // empty` printed a number as digits and a
-  # string ending in a newline as its text once the shell stripped the newline (review round 7).
-  SID=$(printf '%s' "$INPUT" | jq -r 'if (.session_id | type) == "string" and (.session_id | test("\\A[A-Za-z0-9_-]+\\z")) then .session_id else empty end' 2>/dev/null)
+  # string ending in a newline as its text once the shell stripped the newline (review round 7). The id is
+  # taken JSON-quoted, so a newline or NUL stays escaped and fails the match; no jq regex, which a jq built
+  # without Oniguruma lacks (review round 8).
+  SID=$(printf '%s' "$INPUT" | jq -r 'if (.session_id | type) == "string" then (.session_id | @json) else empty end' 2>/dev/null)
+  if [[ "$SID" =~ ^\"([A-Za-z0-9_-]+)\"$ ]]; then SID="${BASH_REMATCH[1]}"; else SID=""; fi
   PCT=$(printf '%s' "$INPUT" | jq -r '.context_window.used_percentage // empty' 2>/dev/null)
 
   # Refuse to build a path from a session id that isn't a plain token, and
@@ -70,6 +76,7 @@ fi
 # Display: delegate to an existing statusline script unchanged, if one is wired.
 if [ -f "$DELEGATE" ]; then
   printf '%s' "$INPUT" | bash "$DELEGATE"
+  RC=$?
 elif [ "$HAS_JQ" -eq 1 ]; then
   # Minimal built-in fallback: model name + context usage. `|| true` so an
   # unparseable payload shows an empty line rather than a failing statusline.
@@ -90,15 +97,16 @@ fi
 ALERT_SID=${SID:-}
 # Only the file name is a pattern: the directory is quoted, so glob characters in $HOME match literally
 # (review round 7).
-if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && (cd -- "$SENSOR_DIR" 2>/dev/null && compgen -G '*.alert' >/dev/null 2>&1) \
+if [ -z "$ALERT_SID" ] && [ "$HAS_JQ" -ne 1 ] && (CDPATH= cd -- "$SENSOR_DIR" >/dev/null 2>&1 && compgen -G '*.alert' >/dev/null 2>&1) \
   && command -v node >/dev/null 2>&1; then
   ALERT_SID=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const v=JSON.parse(s).session_id;if(typeof v==="string"&&/^[A-Za-z0-9_-]+$/.test(v))process.stdout.write(v)}catch{}})' 2>/dev/null)
   [[ "$ALERT_SID" =~ ^[A-Za-z0-9_-]+$ ]] || ALERT_SID=""
 fi
 if [ -n "$ALERT_SID" ] && [ -f "$SENSOR_DIR/$ALERT_SID.alert" ]; then
-  ALERT=$(head -c 200 "$SENSOR_DIR/$ALERT_SID.alert" | LC_ALL=C tr -cd '\040-\176')
+  ALERT=$(head -c 200 < "$SENSOR_DIR/$ALERT_SID.alert" | LC_ALL=C tr -cd '\040-\176')
   ALERT=${ALERT#"${ALERT%%[! ]*}"}
   if [ -n "$ALERT" ]; then
     printf '⚠ %s\n' "$ALERT"
   fi
 fi
+exit "$RC"
