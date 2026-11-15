@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-14-ce7247a2",
-  "public_product_commit": "ce7247a2c992b75f9b9776d2d8681758f5d098aa",
+  "baseline_id": "aigent-os-2026-11-15-5966c0a4",
+  "public_product_commit": "5966c0a45c1dab66298f13ad4aa2dd43dd138bd2",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -60,10 +60,11 @@
     "v8 recut for composer-guard alert round 6 (5a0ae45c): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. pty-runner.mjs abandons an alert-file operation with no completion after 30 s and ignores its late completion, and rewrites a wanted alert hourly; statusline-ctx.sh shows the alert without jq and exits 0 when it prints nothing. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for composer-guard alert round 7 (4178a273): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. pty-runner.mjs keeps one alert-file operation at a time with no deadline, logs a stall once, and rewrites a wanted alert hourly; statusline-ctx.sh takes the top-level session_id from jq or node. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for composer-guard-alert-round8 (6fa40597): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. composer-guard alert, round 8, on master 16dda3e9. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for composer-guard alert round 9 (ce7247a2): pins that moved: daemons/statusline-ctx.sh. statusline-ctx.sh takes SID only from the payload, without a jq regex, and passes the delegate's exit status on. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for composer-guard alert round 9 (ce7247a2): pins that moved: daemons/statusline-ctx.sh. statusline-ctx.sh takes SID only from the payload, without a jq regex, and passes the delegate's exit status on. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for composer-guard alert round 10 (5966c0a4): pins that moved: daemons/statusline-ctx.sh. statusline-ctx.sh exits 0 whenever it prints the alert. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
-    "daemons/statusline-ctx.sh": "162d3895d21d65f317ad438ca9ecf6aa99e1978497ecfed22e8a88e795d8b805",
+    "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
     "daemons/sessionstart-reinject.mjs": "3d8eda506714ffbf8e04a5c7e428252fedba0d01f2153b22e9f256b642de641e",
     "daemons/resume-verb.mjs": "9486500ddb3cd6cc95f267a0eab5a90617c398bb146ffada7f45e9f681dc3442",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
