@@ -1254,6 +1254,22 @@ export class AutoClearTransport {
     this._capsuleAckMs = clockMs(this.now);
   }
 
+  // When this cycle's capsule request reached the seat, in ms, or null: the
+  // host's transcript record of it (noteCheckpointRequestRecorded) or the
+  // PostToolUse nudge that told the seat mid-turn (capsule-nudge.mjs writes
+  // <memRoot>/runtime/capsule-nudge.json {cycle_id, at}), whichever is first.
+  _requestDeliveredAt() {
+    const recorded = recordedAtFor(this.state);
+    let nudged = null;
+    try {
+      const marker = JSON.parse(this.fs.readFileSync(path.join(this.memRoot, 'runtime', 'capsule-nudge.json'), 'utf8'));
+      const at = Date.parse(marker?.at);
+      if (marker?.cycle_id === this.state?.cycle_id && Number.isFinite(at)) nudged = at;
+    } catch { /* no nudge for this cycle */ }
+    if (recorded === null) return nudged;
+    return nudged === null ? recorded : Math.min(recorded, nudged);
+  }
+
   /**
    * The host has recorded this cycle's capsule request in the transcript
    * (runner: capsule-request-recorded), so the request reached the seat and
@@ -1690,9 +1706,10 @@ export class AutoClearTransport {
       && this.state.checkpoint_wait_attempts >= 0 ? this.state.checkpoint_wait_attempts : 0) + 1;
     const elapsedMs = Math.max(0, clockMs(this.now) - Date.parse(startedAt));
     const bookkeeping = { checkpoint_wait_started_at: startedAt, checkpoint_wait_attempts: attempts };
-    // A request the host has RECORDED for this cycle is being answered: the
-    // answer bound runs from that record. Not recorded, the #151 bound holds.
-    const recorded = recordedAtFor(this.state);
+    // A request the host has RECORDED for this cycle, or a capsule nudge the
+    // seat was shown mid-turn (capsule-nudge.mjs), is being answered: the
+    // answer bound runs from the earlier of the two. Neither, the #151 bound.
+    const recorded = this._requestDeliveredAt();
     const sent = recorded !== null;
     const boundMs = sent ? CHECKPOINT_ANSWER_TIMEOUT_MS : CHECKPOINT_WAIT_TIMEOUT_MS;
     const clockedMs = sent ? Math.max(0, clockMs(this.now) - recorded) : elapsedMs;
