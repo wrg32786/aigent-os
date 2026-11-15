@@ -39,14 +39,26 @@ export const DEFAULT_PRESSURE_THRESHOLD_PCT = 80;
 // cannot still run. The equal cooldown gives delivery a full open window
 // even when pressure stays high. Both are driven solely by tick().
 export const CHECKPOINT_WAIT_TIMEOUT_MS = 300_000;
-// Once the capsule request has actually gone out, the seat is WRITING the
+// Once the host has RECORDED this cycle's capsule request (the request is a
+// turn in the transcript, so it reached the seat), the seat is writing the
 // capsule, and that turn is long: measured 2026-11-14, Titus 6 min 12 s, Pheme
-// 8 min 48 s, DaVinci 10 min 31 s. Abandoning at 5 min threw away Titus's
-// answer (it arrived 82 s after the abandon and was consumed as retired), so
-// the clear never came. From the request's own send, the seat gets this long.
-// Before the send (a deferred request) the #151 bound above still applies.
+// 8 min 48 s, DaVinci 10 min 31 s. Abandoning at 5 min threw away an answer
+// that arrived 82 s later, so the clear never came. From the first record, the
+// seat gets this long. Until a record, the #151 bound above still applies: a
+// request that never reached the seat (deferred, or its Enter stranded) gets no
+// longer. Recorded once per cycle, so a relaunch that re-requests cannot
+// restart it: the wait is never longer than WAIT + ANSWER from its start.
 export const CHECKPOINT_ANSWER_TIMEOUT_MS = 1_200_000;
 export const CHECKPOINT_RETRY_COOLDOWN_MS = 300_000;
+
+// When the host recorded the live cycle's capsule request, in ms, or null. A
+// record for any other cycle (or a malformed one) is no record.
+function recordedAtFor(state) {
+  const r = state?.checkpoint_request_recorded;
+  if (r === null || typeof r !== 'object' || Array.isArray(r) || r.cycle_id !== state.cycle_id) return null;
+  const at = Date.parse(r.at);
+  return Number.isFinite(at) ? at : null;
+}
 
 // The capsule verb's mandated closing line (skills/context-capsule step 6).
 // The seat emits EXACTLY this when its capsule is written and confirmed. It is
@@ -1243,6 +1255,25 @@ export class AutoClearTransport {
   }
 
   /**
+   * The host has recorded this cycle's capsule request in the transcript
+   * (runner: capsule-request-recorded), so the request reached the seat and
+   * the answer bound applies from now. FIRST RECORD ONLY: a relaunch that
+   * re-requests the same cycle does not move it. Bound to the live cycle and
+   * persisted with it, so it dies with the cycle. Returns true when written.
+   */
+  noteCheckpointRequestRecorded(detail = {}) {
+    if (this._cycleUnreadable !== null) return false;
+    const cycleId = detail && typeof detail === 'object' ? detail.cycleId : undefined;
+    if (typeof cycleId !== 'string' || cycleId.length === 0 || cycleId !== this.state?.cycle_id) return false;
+    if (recordedAtFor(this.state) !== null) return false;
+    this._atomicWrite({
+      ...this.state,
+      checkpoint_request_recorded: { cycle_id: cycleId, at: clockIso(this.now) },
+    });
+    return true;
+  }
+
+  /**
    * Record, in the cycle's own durable record, how far the runner has
    * classified its acknowledgement evidence and how many retired requests are
    * still owed an answer (#90/#91 re-review 5556245936, S1). See the
@@ -1320,14 +1351,6 @@ export class AutoClearTransport {
       && sameShape(current.accepted, nextAccepted)) {
       return clone(current);
     }
-    // A request that has just gone out restarts the checkpoint clock: the
-    // answer bound runs from the send, not from when the cycle began waiting
-    // (time spent deferred is not time the seat had to answer).
-    const sentNow = issued > (current !== null && Number.isSafeInteger(current.requests_issued)
-      ? current.requests_issued : 0);
-    const clock = sentNow
-      ? { checkpoint_wait_started_at: clockIso(this.now), checkpoint_wait_attempts: 0 }
-      : {};
     const record = {
       cycle_id: cycleId,
       session_id: this.sessionId,
@@ -1339,7 +1362,7 @@ export class AutoClearTransport {
       accepted: nextAccepted,
       updated_at: clockIso(this.now),
     };
-    this._atomicWrite({ ...this.state, ...clock, ack_classification: record });
+    this._atomicWrite({ ...this.state, ack_classification: record });
     return clone(record);
   }
 
@@ -1667,15 +1690,13 @@ export class AutoClearTransport {
       && this.state.checkpoint_wait_attempts >= 0 ? this.state.checkpoint_wait_attempts : 0) + 1;
     const elapsedMs = Math.max(0, clockMs(this.now) - Date.parse(startedAt));
     const bookkeeping = { checkpoint_wait_started_at: startedAt, checkpoint_wait_attempts: attempts };
-    // A request this cycle has SENT (the runner's durable tally) is being
-    // answered: noteAckClassification restarted the clock at the send. Not
-    // sent yet, the #151 bound holds so a deferral cannot close delivery.
-    const record = this.state.ack_classification;
-    const sent = record !== null && typeof record === 'object' && !Array.isArray(record)
-      && record.cycle_id === this.state.cycle_id
-      && Number.isSafeInteger(record.requests_issued) && record.requests_issued > 0;
+    // A request the host has RECORDED for this cycle is being answered: the
+    // answer bound runs from that record. Not recorded, the #151 bound holds.
+    const recorded = recordedAtFor(this.state);
+    const sent = recorded !== null;
     const boundMs = sent ? CHECKPOINT_ANSWER_TIMEOUT_MS : CHECKPOINT_WAIT_TIMEOUT_MS;
-    if (elapsedMs < boundMs) {
+    const clockedMs = sent ? Math.max(0, clockMs(this.now) - recorded) : elapsedMs;
+    if (clockedMs < boundMs) {
       // Keep the deadline and attempts through hold changes and relaunches.
       // Do not change entered_at merely because another check was attempted.
       this._atomicWrite({ ...this.state, ...bookkeeping });
@@ -1695,7 +1716,7 @@ export class AutoClearTransport {
       abandoned_cycle_id: abandoned,
       checkpoint_retry_after: new Date(clockMs(this.now) + CHECKPOINT_RETRY_COOLDOWN_MS).toISOString(),
     });
-    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}${sent ? ' request=sent' : ''}`);
+    this.log(`cycle-abandoned-checkpoint-timeout cycle=${abandoned ?? 'null'} hold=${holdCode} elapsed_ms=${elapsedMs} attempts=${attempts}${sent ? ` request=recorded answer_ms=${clockedMs}` : ''}`);
     return resultFor(next, {
       transitioned: true, status: 'cycle-abandoned-checkpoint-timeout', abandoned_cycle_id: abandoned,
     });
