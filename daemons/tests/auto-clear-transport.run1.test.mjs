@@ -1089,10 +1089,12 @@ test('statusline alert: both paths take only a plain-token string session_id', (
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, '123.alert'), 'NUMBER ALERT\n');
     fs.writeFileSync(path.join(dir, 'right.alert'), 'NEWLINE ALERT\n');
+    // A raw string would lose its NUL in the shell and name xy (review round 9): the row must be able to fail.
+    fs.writeFileSync(path.join(dir, 'xy.alert'), 'NUL ALERT\n');
     for (const forceNode of hasJq ? ['0', '1'] : ['1']) {
       for (const [payload, banned] of [
         ['{"session_id":123,"context_window":{"used_percentage":50}}', /NUMBER ALERT/],
-        ['{"session_id":"x\\u0000y","context_window":{"used_percentage":50}}', /NUMBER ALERT|NEWLINE ALERT/],
+        ['{"session_id":"x\\u0000y","context_window":{"used_percentage":50}}', /NUL ALERT/],
         ['{"session_id":"right\n","context_window":{"used_percentage":50}}', /NEWLINE ALERT/],
       ]) {
         const res = spawnSync('bash', [STATUSLINE], {
@@ -1104,7 +1106,8 @@ test('statusline alert: both paths take only a plain-token string session_id', (
         assert.doesNotMatch(res.stdout, banned, `${forceNode === '1' ? 'node' : 'jq'} path, ${payload}: no alert for a session id that is not a plain-token string`);
       }
     }
-    assert.ok(!fs.existsSync(path.join(dir, '123.json')) && !fs.existsSync(path.join(dir, 'right.json')),
+    assert.ok(!fs.existsSync(path.join(dir, '123.json')) && !fs.existsSync(path.join(dir, 'right.json'))
+      && !fs.existsSync(path.join(dir, 'xy.json')),
       'and no pressure file is written under such an id either');
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
@@ -1165,7 +1168,19 @@ test('statusline alert: CDPATH, a leading-dash home and the delegate status', ()
         env: { ...process.env, HOME: root, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: delegate },
       });
       assert.match(res.stdout, /DELEGATE/);
-      assert.equal(res.status, 3, `force_node=${forceNode}: the delegate's exit status is passed on, as before the alert block`);
+      assert.equal(res.status, 3, `force_node=${forceNode}: with no alert, the delegate's exit status is passed on`);
+    }
+    // Review round 9: the host blanks the line on a nonzero exit, so a shown alert exits 0 even over a failing delegate.
+    fs.mkdirSync(path.join(root, '.claude', 'ctx-refresh'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude', 'ctx-refresh', 'failing.alert'), 'FAILING ALERT\n');
+    for (const forceNode of ['0', '1']) {
+      const res = spawnSync('bash', [STATUSLINE], {
+        input: JSON.stringify({ session_id: 'failing', model: { display_name: 'M' } }),
+        encoding: 'utf8',
+        env: { ...process.env, HOME: root, CTX_TELEMETRY_FORCE_NODE: forceNode, AIGENT_STATUSLINE_DELEGATE: delegate },
+      });
+      assert.match(res.stdout, /DELEGATE[\s\S]*⚠ FAILING ALERT/);
+      assert.equal(res.status, 0, `force_node=${forceNode}: the alert is never blanked by the delegate's failure`);
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

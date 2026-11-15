@@ -107,6 +107,9 @@ if [ -n "$ALERT_SID" ] && [ -f "$SENSOR_DIR/$ALERT_SID.alert" ]; then
   ALERT=${ALERT#"${ALERT%%[! ]*}"}
   if [ -n "$ALERT" ]; then
     printf '⚠ %s\n' "$ALERT"
+    # The host blanks the whole status line on a nonzero exit (Claude Code shows stdout only on status 0),
+    # so the alert must survive a failing delegate (review round 9).
+    RC=0
   fi
 fi
 exit "$RC"
