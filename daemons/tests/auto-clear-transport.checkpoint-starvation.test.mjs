@@ -284,3 +284,87 @@ for (const state of ['checkpoint-requested', 'HOLD:checkpoint-transcript-short',
     }));
   }
 }
+
+// ── 2026-11-14: the bound for a request the host has recorded ───────────────────
+// Titus cycle 155: the capsule request reached the seat, the seat spent 6 min
+// 12 s writing its capsule, the cycle was abandoned at the 5-min bound, and the
+// answer that arrived 82 s later was consumed as a retired request's. No clear
+// came; the operator cleared by hand. The answer bound now runs from the host's
+// record of the request (the runner's capsule-request-recorded), once per cycle.
+const ANSWER_MS = 1_200_000;
+const record = (t, cycleId) => t.noteCheckpointRequestRecorded({ cycleId });
+
+test('11-14 replay: a capsule turn longer than 5 min, recorded 10 s into the wait, gets its answer time', () => withFixture((f) => {
+  const t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short');
+  f.clock.advance(10_000);
+  assert.equal(record(t, cycleId), true, 'the host recorded the request');
+  for (let i = 0; i < 6; i += 1) {
+    f.busy();
+    f.clock.advance(62_000);      // the seat writes its capsule: 6 min 12 s
+    assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short',
+      `minute ${i + 1} of the capsule turn: still waiting (the old bound abandoned at 5:00)`);
+  }
+  assert.equal(f.logs.some((line) => line.includes('cycle-abandoned-checkpoint-timeout')), false);
+  f.healthy();
+  assert.equal(t.tick().state.state, 'checkpoint-confirmed');
+  assert.equal(disk(f).cycle_id, cycleId, 'the same cycle goes on to its clear');
+}));
+
+test('a recorded request that is never answered is abandoned at the answer bound from the record, across a relaunch', () => withFixture((f) => {
+  let t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  f.clock.advance(60_000);
+  record(t, cycleId);
+  f.clock.advance(ANSWER_MS - 1);
+  f.busy();
+  t = f.create();
+  assert.equal(t.tick().state.state, 'HOLD:checkpoint-transcript-short');
+  f.clock.advance(1);
+  assert.equal(t.tick().status, 'cycle-abandoned-checkpoint-timeout');
+  const line = f.logs.find((l) => l.includes('cycle-abandoned-checkpoint-timeout'));
+  assert.match(line, new RegExp(`request=recorded answer_ms=${ANSWER_MS}`));
+  assert.equal(core.CHECKPOINT_ANSWER_TIMEOUT_MS, ANSWER_MS);
+}));
+
+test('#151 kept: a request the runner tallied but the host never recorded (stranded Enter) abandons at the original bound', () => withFixture((f) => {
+  const t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  // The tally goes up before the text is written; nothing proves the seat got it.
+  t.noteAckClassification({ cycleId, classifiedThrough: 0, debtsOutstanding: 0, requestsIssued: 1, answersSettled: 0 });
+  f.clock.advance(WAIT_MS);
+  assert.equal(t.tick().status, 'cycle-abandoned-checkpoint-timeout');
+  assert.doesNotMatch(f.logs.find((l) => l.includes('cycle-abandoned-checkpoint-timeout')), /request=recorded/);
+}));
+
+test('the record is first-only and live-cycle-only: re-requests after a relaunch cannot extend the wait', () => withFixture((f) => {
+  let t = f.create();
+  request(t);
+  const cycleId = disk(f).cycle_id;
+  f.busy();
+  t.tick();
+  assert.equal(record(t, 'some-other-cycle'), false, 'another cycle\'s record is refused');
+  assert.equal(record(t, cycleId), true);
+  const first = disk(f).checkpoint_request_recorded.at;
+  for (let i = 0; i < 4; i += 1) {   // a relaunch every 4 min, each re-requesting
+    f.clock.advance(4 * 60_000);
+    t = f.create();
+    assert.equal(record(t, cycleId), false, `relaunch ${i + 1}: the later record does not move the clock`);
+    f.busy();
+    t.tick();
+  }
+  assert.equal(disk(f).checkpoint_request_recorded.at, first);
+  f.clock.advance(ANSWER_MS - 16 * 60_000);
+  f.busy();
+  assert.equal(t.tick().status, 'cycle-abandoned-checkpoint-timeout',
+    'abandoned 20 min after the FIRST record, however many relaunches came between');
+}));
