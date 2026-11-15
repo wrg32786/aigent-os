@@ -144,3 +144,66 @@ test('a nudge recorded for another cycle is no delivery: the #151 bound holds', 
   f.busy();
   assert.equal(f.t.tick().status, 'cycle-abandoned-checkpoint-timeout');
 }));
+
+// ── review of 7b3f57b ──────────────────────────────────────────────────────────────────
+test('P1: a subagent tool call is never nudged, and does not spend the main loop\'s nudge', () => {
+  const f = fixture(waiting());
+  try {
+    const late = () => T0 + 5 * 60_000;
+    assert.equal(nudgeFor({ payload: { ...payload, agent_id: 'a1b2c3' }, env: f.env, now: late }), null);
+    assert.equal(fs.existsSync(path.join(f.runtime, NUDGE_FILE)), false, 'no marker credited for a subagent');
+    assert.ok(nudgeFor({ payload, env: f.env, now: late }), 'the main loop is still nudged');
+  } finally { f.done(); }
+});
+
+test('P2: a cycle whose typed request the host recorded is in its capsule turn: no nudge', () => {
+  const f = fixture(waiting({ checkpoint_request_recorded: { cycle_id: 'cyc-157', at: new Date(T0 + 5000).toISOString() } }));
+  try {
+    assert.equal(nudgeFor({ payload, env: f.env, now: () => T0 + 65_000 }), null);
+    f.writeCycle(waiting({ checkpoint_request_recorded: { cycle_id: 'an-older-cycle', at: new Date(T0).toISOString() } }));
+    assert.ok(nudgeFor({ payload, env: f.env, now: () => T0 + 65_000 }), 'another cycle\'s record is not this one\'s');
+  } finally { f.done(); }
+});
+
+test('P3: a claimed cycle prints once; a cycle file nobody ticks is not nudged; the kill switch takes off/false/no', () => {
+  const f = fixture(waiting());
+  try {
+    fs.writeFileSync(path.join(f.runtime, 'capsule-nudge.cyc-157.claim'), '');
+    assert.equal(nudgeFor({ payload, env: f.env, now: () => T0 + 5 * 60_000 }), null, 'a parallel hook already claimed the cycle');
+    f.writeCycle(waiting({ cycle_id: 'cyc-159' }));
+    const cycleFile = path.join(f.runtime, 'auto-clear-cycle.json');
+    const old = new Date(Date.now() - 3 * 3600 * 1000);
+    fs.utimesSync(cycleFile, old, old);
+    assert.equal(nudgeFor({ payload, env: f.env }), null, 'a 3-hour-stale cycle file: automation is not ticking');
+    for (const off of ['off', 'FALSE', ' no ']) {
+      f.writeCycle(waiting({ cycle_id: `cyc-off-${off.trim()}` }));
+      assert.equal(nudgeFor({ payload, env: { ...f.env, AIGENT_CAPSULE_NUDGE: off }, now: () => T0 + 5 * 60_000 }), null, off);
+    }
+  } finally { f.done(); }
+});
+
+test('the skill the text names is the command the runner types (drift guard)', async () => {
+  const { CAPSULE_SKILL } = await import('../capsule-nudge.mjs');
+  const { CAPSULE_REQUEST_TEXT } = await import('../pty-runner.mjs');
+  assert.equal(`/${CAPSULE_SKILL}`, CAPSULE_REQUEST_TEXT);
+});
+
+test('a delivery dated in the future is no delivery: marker and record keep the #151 bound', () => transportFixture((f) => {
+  start(f.t);
+  f.busy();
+  f.t.tick();
+  const cycleId = f.t.state.cycle_id;
+  fs.writeFileSync(path.join(f.memRoot, 'runtime', NUDGE_FILE), JSON.stringify({ cycle_id: cycleId, at: new Date(f.clock().getTime() + 86400000).toISOString() }));
+  f.clock.advance(core.CHECKPOINT_WAIT_TIMEOUT_MS);
+  f.busy();
+  assert.equal(f.t.tick().status, 'cycle-abandoned-checkpoint-timeout', 'a marker a day ahead does not hold the cycle');
+}));
+
+test('an unreadable marker (not just a missing one) is logged once, and the #151 bound applies', () => transportFixture((f) => {
+  start(f.t);
+  f.busy();
+  f.t.tick();
+  fs.writeFileSync(path.join(f.memRoot, 'runtime', NUDGE_FILE), '{not json');
+  for (let i = 0; i < 3; i += 1) { f.clock.advance(60_000); f.busy(); f.t.tick(); }
+  assert.equal(f.logs.filter((l) => l.includes('capsule nudge marker unreadable')).length, 1);
+}));

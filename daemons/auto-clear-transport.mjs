@@ -53,11 +53,12 @@ export const CHECKPOINT_RETRY_COOLDOWN_MS = 300_000;
 
 // When the host recorded the live cycle's capsule request, in ms, or null. A
 // record for any other cycle (or a malformed one) is no record.
-function recordedAtFor(state) {
+function recordedAtFor(state, nowMs = Infinity) {
   const r = state?.checkpoint_request_recorded;
   if (r === null || typeof r !== 'object' || Array.isArray(r) || r.cycle_id !== state.cycle_id) return null;
   const at = Date.parse(r.at);
-  return Number.isFinite(at) ? at : null;
+  // A time later than now (a clock stepped back, a foreign writer) proves no delivery.
+  return Number.isFinite(at) && at <= nowMs ? at : null;
 }
 
 // The capsule verb's mandated closing line (skills/context-capsule step 6).
@@ -1259,13 +1260,21 @@ export class AutoClearTransport {
   // PostToolUse nudge that told the seat mid-turn (capsule-nudge.mjs writes
   // <memRoot>/runtime/capsule-nudge.json {cycle_id, at}), whichever is first.
   _requestDeliveredAt() {
-    const recorded = recordedAtFor(this.state);
+    const nowMs = clockMs(this.now);
+    const recorded = recordedAtFor(this.state, nowMs);
     let nudged = null;
     try {
       const marker = JSON.parse(this.fs.readFileSync(path.join(this.memRoot, 'runtime', 'capsule-nudge.json'), 'utf8'));
       const at = Date.parse(marker?.at);
-      if (marker?.cycle_id === this.state?.cycle_id && Number.isFinite(at)) nudged = at;
-    } catch { /* no nudge for this cycle */ }
+      if (marker?.cycle_id === this.state?.cycle_id && Number.isFinite(at) && at <= nowMs) nudged = at;
+    } catch (error) {
+      // No marker is the ordinary case. Anything else drops a nudged seat back to the #151
+      // bound, so it is said, once per cycle.
+      if (error?.code !== 'ENOENT' && this._nudgeReadLoggedFor !== this.state?.cycle_id) {
+        this._nudgeReadLoggedFor = this.state?.cycle_id ?? null;
+        this.log(`capsule nudge marker unreadable for cycle ${this.state?.cycle_id ?? 'null'}: ${error?.code || error?.message || error}; the #151 bound applies`);
+      }
+    }
     if (recorded === null) return nudged;
     return nudged === null ? recorded : Math.min(recorded, nudged);
   }
@@ -1274,8 +1283,9 @@ export class AutoClearTransport {
    * The host has recorded this cycle's capsule request in the transcript
    * (runner: capsule-request-recorded), so the request reached the seat and
    * the answer bound applies from now. FIRST RECORD ONLY: a relaunch that
-   * re-requests the same cycle does not move it. Bound to the live cycle and
-   * persisted with it, so it dies with the cycle. Returns true when written.
+   * re-requests the same cycle does not move it. Bound to the live cycle by its
+   * cycle_id: a later cycle (ids are unique) never reads it as its own. Returns
+   * true when written.
    */
   noteCheckpointRequestRecorded(detail = {}) {
     if (this._cycleUnreadable !== null) return false;
