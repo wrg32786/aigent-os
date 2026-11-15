@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-14-fda84410",
-  "public_product_commit": "fda844104a749ae904e40d696c81e5b982848fad",
+  "baseline_id": "aigent-os-2026-11-15-e36da261",
+  "public_product_commit": "e36da2615071becf3f2dc03bda6e70989977fc6c",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -58,7 +58,8 @@
     "v8 recut for interlock-id-match-2 (6bb16540): pins that moved: daemons/pre-permission-interlock.mjs, daemons/pty-runner.mjs. leg 4 by tool_use_id: overflow sentinel, main-loop ids, every forgiveness logged. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for checkpoint-answer-time (7359c65f): pins that moved: daemons/auto-clear-transport.mjs. a sent capsule request gets 20 min to be answered. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for checkpoint answer time, round 2 (56a88c06): pins that moved: daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. the answer bound starts at the host's first request record of the cycle. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for capsule nudge (fda84410): pins that moved: .claude/settings.json.template, daemons/auto-clear-transport.mjs. daemons/capsule-nudge.mjs is added as a pinned PostToolUse hook command; the transport reads its marker as delivery. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; one pin was added (daemons/capsule-nudge.mjs, also listed in hook_commands) and none removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for capsule nudge (fda84410): pins that moved: .claude/settings.json.template, daemons/auto-clear-transport.mjs. daemons/capsule-nudge.mjs is added as a pinned PostToolUse hook command; the transport reads its marker as delivery. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; one pin was added (daemons/capsule-nudge.mjs, also listed in hook_commands) and none removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for capsule nudge, round 2 (e36da261): pins that moved: daemons/capsule-nudge.mjs, daemons/auto-clear-transport.mjs. capsule-nudge.mjs skips subagents, recorded capsule turns and stale cycle files, and claims each cycle once. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "7db9b1f6a8a23ed2e4e49db5924d52b94a48f00e15bd88ac6bf865efff4d3dc5",
@@ -70,7 +71,7 @@
     "daemons/ctx-refresh-sensor.mjs": "0978848f6fac08f66fa7c6842e666c19eed6d05b82836a316b9c3c2be49e6cfb",
     "daemons/model-tier-guard.mjs": "471711d5e2905d403fbc95d957de244759dad5e49269fad220483bbc116104fc",
     "daemons/pre-permission-interlock.mjs": "c2bbb71ddde69299ceb40a44bc3dc6e99caa6fd6468bd90ed72f237536716b5d",
-    "daemons/capsule-nudge.mjs": "b1b60a889992bbf95f69ca75110e1aacdfea626d83028026f0db800831d77bc8",
+    "daemons/capsule-nudge.mjs": "8d8ede1a6d4f543b00e11a53e87dbb14f23a11e4933b082bb8324d8bca294a10",
     "daemons/gateguard.mjs": "5135ec0d86c96867c86cf318cdbee84ea0e0ef97e91a1ea4d1b2d46d0fba8e4d",
     "daemons/memory-budget-guard.mjs": "78098d5281c28e61380bf09956f609a6721eff47f5e63a9fe80589250f0b10a2",
     "hooks/suggest-compact.sh": "a7aaf8d9eee7f2c7d5269167566a51677f22319f8343cb904ea82ba2390197f4",
@@ -84,7 +85,7 @@
     ".claude/settings.json.template": "6fcae19add9de8c245e29e29676aa07c6ade44f4d76adfc510f892f003f46aef",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "052c7c7f0df48d3aacb69861df3025ef1d932eea07a0a7a88392315a5a241986",
-    "daemons/auto-clear-transport.mjs": "788e0387e55db8ee76cfd5353c00d222f12683f94a7342c6c4126b22cad876e0",
+    "daemons/auto-clear-transport.mjs": "91ded62ff539357e6a746a3a6b7b5de838977fd4ce81a82e3a6fa4f5e1765785",
     "daemons/lifecycle-common.mjs": "64502ea7182f1cf50bc1d40f81ac8f050798ccf3ba4593b6c34137e1473d4371",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
