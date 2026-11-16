@@ -2966,6 +2966,22 @@ export class ManagedPtyRunner {
     return this.capsuleAckWatch;
   }
 
+  // The transcript offset the capsule-nudge hook recorded when it asked THIS
+  // cycle of THIS session to capsule, or null. Any doubt is null: the request
+  // is then typed as before.
+  _nudgeDeliveredFor(cycleId) {
+    try {
+      const marker = JSON.parse(fs.readFileSync(path.join(this.memRoot, 'runtime', 'capsule-nudge.json'), 'utf8'));
+      const at = Date.parse(marker?.at);
+      const from = marker?.transcript_offset;
+      if (marker?.cycle_id !== cycleId || marker?.session_id !== this.sessionId) return null;
+      if (!Number.isFinite(at) || at > this.now().getTime()) return null;
+      if (!Number.isSafeInteger(from) || from < 0) return null;
+      const size = this._transcriptEnd();
+      return size !== null && from <= size ? from : null;
+    } catch { return null; }
+  }
+
   _ackAlreadySpent(cycleId) {
     return this.capsuleAckSpent !== null
       && this.capsuleAckSpent.cycle_id === cycleId
@@ -4012,6 +4028,21 @@ export class ManagedPtyRunner {
 
   _writeCapsuleRequest(cycleId) {
     if (this.capsuleRequestCycleId === cycleId) return false;
+    // ASKED BY THE HOOK (capsule-nudge.mjs; review of dfcf696, F3). A seat the
+    // hook has already told to capsule is running that capsule, and typing the
+    // request now would queue a second one behind it. The hook's marker names
+    // the cycle and the transcript end before the seat read the instruction, so
+    // the window opens there and the nudged capsule's ack is this cycle's
+    // answer. The latch is spent: the cycle's one ask was the hook's. Nothing
+    // is written, and nothing is persisted as a request (requests_issued stays
+    // 0): a relaunch finds no boundary and re-requests, the fail-safe it has.
+    const nudged = this._nudgeDeliveredFor(cycleId);
+    if (nudged !== null) {
+      this.capsuleRequestCycleId = cycleId;
+      this._armCapsuleAckWatch(cycleId, nudged);
+      this._event('capsule-request-nudged', { cycle_id: cycleId, from: nudged });
+      return false;
+    }
     // COMPOSER GUARD (measured live 2026-09-24): the request fired while the
     // operator had a partially typed prompt in the composer. No hold and no
     // pending Enter exist at this boundary, so those bytes had already passed

@@ -1272,7 +1272,7 @@ export class AutoClearTransport {
       // bound, so it is said, once per cycle.
       if (error?.code !== 'ENOENT' && this._nudgeReadLoggedFor !== this.state?.cycle_id) {
         this._nudgeReadLoggedFor = this.state?.cycle_id ?? null;
-        this.log(`capsule nudge marker unreadable for cycle ${this.state?.cycle_id ?? 'null'}: ${error?.code || error?.message || error}; the #151 bound applies`);
+        this.log(`capsule nudge marker unreadable for cycle ${this.state?.cycle_id ?? 'null'}: ${error?.code || error?.message || error}; without a host record of the request, the #151 bound applies`);
       }
     }
     if (recorded === null) return nudged;
