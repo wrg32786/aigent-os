@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-16-0501c487",
-  "public_product_commit": "0501c4876ff0a1daead2974f7fdb2ab22c63e63d",
+  "baseline_id": "aigent-os-2026-11-16-405a2d60",
+  "public_product_commit": "405a2d6019bb2a5cc56ab8895a4c8d7e23cd0257",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -68,11 +68,12 @@
     "v8 recut for composer-guard alert round 10 (5966c0a4): pins that moved: daemons/statusline-ctx.sh. statusline-ctx.sh exits 0 whenever it prints the alert. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 38 pinned, 38 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for composer-guard alert on the capsule answer-time branch (357d0f49): pins that moved: daemons/statusline-ctx.sh, daemons/pty-runner.mjs. the composer-guard alert (2ee52a3, SHIP) merged with the capsule answer-time branch (bb3dd2c, SHIP). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the capsule-nudge Stop leg (41e52db5): pins that moved: daemons/capsule-nudge.mjs, .claude/settings.json.template, daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. capsule-nudge.mjs also runs as a Stop hook with one ask per cycle across both legs, and the runner opens its ack window at a hook's ask instead of typing the request (Titus 2026-11-15 16:57 PT; review of dfcf696). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for the stale-capsule pick (0501c487): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. selectCapsule returns the newest resumed capsule, flagged reused, over an older active one; the session-start pointer labels the reuse (fleet restart 2026-11-16). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for the stale-capsule pick (0501c487): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. selectCapsule returns the newest resumed capsule, flagged reused, over an older active one; the session-start pointer labels the reuse (fleet restart 2026-11-16). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for the reinject reuse label (405a2d60): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. only a resumed capsule is pointed at as already resumed once (review of b9e12f55, F1). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
-    "daemons/sessionstart-reinject.mjs": "42e64fd90ddbfb24469158704ee77567b5613c1619291a3693168576140abab0",
+    "daemons/sessionstart-reinject.mjs": "4d9880afc2d03109486bb6533a1fa85d56d5eb1668099cc6952c8077518e865c",
     "daemons/resume-verb.mjs": "9486500ddb3cd6cc95f267a0eab5a90617c398bb146ffada7f45e9f681dc3442",
     "daemons/lifecycle-extension.mjs": "b5a1557a50b946e31205e7930e0363bf81c06bac7dfef1115ea8cfc1e1b74f67",
     "daemons/userpromptsubmit-journal.mjs": "9ae9f9953e3a132b0671b8c017324366463b8efd5bdb687901522573fdc13462",
@@ -95,7 +96,7 @@
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "216201b53e3de723a66cd388d34babee39ab16fb3b950dc63180e9990805c9d5",
     "daemons/auto-clear-transport.mjs": "f811e109e1076247e22533f6a2fd263e2c342517f34a5e37aeab011134413d0b",
-    "daemons/lifecycle-common.mjs": "9b8e7397581679129693ce57813b34c6111d3460f152769398168bc4209969bb",
+    "daemons/lifecycle-common.mjs": "0ceba10b4153ab65f692a725ca9883e679d3f119c9bf15681cdcfb7990dcc2e9",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
