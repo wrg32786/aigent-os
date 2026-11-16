@@ -206,6 +206,9 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
   // real content, not junk -- so a re-resume off spent state can be the loud
   // half instead of looking exactly like a fresh install.
   let newestConsumed = null;
+  // The newest capsule a resume already loaded (status `resumed` only: a
+  // `resolved` or `superseded` capsule was retired on purpose). See below.
+  let newestResumed = null;
   for (const name of entries) {
     const full = path.join(dir, name);
     let doc;
@@ -229,6 +232,10 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
       if (id && id.trim() && Number.isFinite(created) && objective && objective.trim() && nextAction && nextAction.trim()
         && (!newestConsumed || created > newestConsumed.created)) {
         newestConsumed = { path: full, id, created, createdRaw };
+      }
+      if (status === 'resumed' && id && id.trim() && Number.isFinite(created) && objective && objective.trim()
+        && nextAction && nextAction.trim() && (!newestResumed || created > newestResumed.created)) {
+        newestResumed = { path: full, id, created, createdRaw };
       }
       continue;
     }
@@ -298,6 +305,16 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
   // the placeholder never existing.
   if (best) {
     if (fallback) note(path.basename(fallback.path), 'placeholder-demoted', fallback.why);
+    // AN ACTIVE CAPSULE OLDER THAN THE LAST ONE RESUMED IS STALE (fleet restart
+    // 2026-11-16: three of five seats booted into capsules a day old). A seat
+    // restarted with no new capsule had its newest capsule marked `resumed` by
+    // its last clear, and the newest never-resumed one was older work the seat
+    // had already moved past. The newest resumed capsule is the truth: reused,
+    // and flagged so.
+    if (newestResumed && newestResumed.created > best.created) {
+      note(path.basename(best.path), 'superseded-by-resumed', newestResumed.id);
+      return { capsule: newestResumed, rejected, reused: true };
+    }
     return { capsule: best, rejected };
   }
   // Spent-but-real outranks active-but-empty. A structurally valid consumed
