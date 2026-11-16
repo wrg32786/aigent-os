@@ -231,11 +231,11 @@ export function selectCapsule(memoryRoot, { sessionCapsulePath } = {}) {
       // consumed capsule that fails it is junk, not a reuse candidate.
       if (id && id.trim() && Number.isFinite(created) && objective && objective.trim() && nextAction && nextAction.trim()
         && (!newestConsumed || created > newestConsumed.created)) {
-        newestConsumed = { path: full, id, created, createdRaw };
+        newestConsumed = { path: full, id, created, createdRaw, status };
       }
       if (status === 'resumed' && id && id.trim() && Number.isFinite(created) && objective && objective.trim()
         && nextAction && nextAction.trim() && (!newestResumed || created > newestResumed.created)) {
-        newestResumed = { path: full, id, created, createdRaw };
+        newestResumed = { path: full, id, created, createdRaw, status };
       }
       continue;
     }

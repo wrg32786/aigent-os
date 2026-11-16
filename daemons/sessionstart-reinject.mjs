@@ -171,9 +171,11 @@ try {
   }
 
   // NEWEST ACTIVE CAPSULE — the same selector resume-verb.mjs uses; no pointer.
-  // A reuse is shown, flagged: a seat restarted with no new capsule still points at its newest one.
+  // A reuse of the newest RESUMED capsule is shown, flagged: a seat restarted with no new capsule
+  // still points at its newest one. A reuse of a capsule retired on purpose (resolved, superseded) is
+  // not a pointer to resume from, so it reads as no active capsule, as before (review of b9e12f55).
   const picked = selectCapsule(MEM);
-  const newest = picked.capsule;
+  const newest = picked.reused && picked.capsule?.status !== 'resumed' ? null : picked.capsule;
   if (newest) {
     try {
       const doc = unsafeRawCapsuleDocument(
