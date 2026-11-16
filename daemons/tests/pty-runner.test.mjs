@@ -5393,6 +5393,60 @@ test('C1 partial operator text defers the capsule request; the operator bytes ar
   }
 });
 
+// ASKED BY THE HOOK (review of dfcf696, F3). capsule-nudge.mjs told the seat to capsule and recorded
+// the transcript end at that moment. Typing the request too would queue a second capsule behind the
+// one the seat is running; the runner opens its window at the recorded end instead, and the nudged
+// capsule's ack answers the cycle.
+function writeNudgeMarker(harness, over = {}) {
+  writeJson(path.join(harness.fixture.memRoot, 'runtime', 'capsule-nudge.json'), {
+    cycle_id: harness.cycleId(),
+    session_id: SESSION_ID,
+    at: new Date(harness.fixture.clock.ms()).toISOString(),
+    transcript_offset: fs.statSync(harness.fixture.transcriptPath).size,
+    ...over,
+  });
+}
+
+test('N-F3 a cycle the hook already asked is never typed; the nudged capsule\'s ack answers it', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    assert.equal(harness.core.tick().state.state, 'pressure');
+    writeNudgeMarker(harness);
+    harness.drive();
+    assert.equal(capsuleTextWriteCount(harness), 0, 'no request typed over the capsule the seat is running');
+    assert.equal(harness.events('capsule-request-nudged').length, 1);
+    assert.equal(harness.runner.capsuleRequestCycleId, harness.cycleId(), 'the cycle\'s one ask is spent');
+    appendExactCapsuleAck(harness);
+    for (let i = 0; i < 3; i += 1) harness.drive();
+    assert.equal(harness.events('capsule-ack-observed').length, 1, 'the nudged capsule\'s ack is seen');
+    assert.equal(capsuleTextWriteCount(harness), 0, 'and still nothing typed');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('N-F3 any doubt about the marker types the request as before', () => {
+  const variants = {
+    'another cycle': (h) => ({ cycle_id: 'some-earlier-cycle' }),
+    'another session': () => ({ session_id: 'other-session' }),
+    'dated ahead': (h) => ({ at: new Date(h.fixture.clock.ms() + 86400000).toISOString() }),
+    'no offset': () => ({ transcript_offset: undefined }),
+    'offset past the end': (h) => ({ transcript_offset: fs.statSync(h.fixture.transcriptPath).size + 1 }),
+  };
+  for (const [name, over] of Object.entries(variants)) {
+    const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+    try {
+      assert.equal(harness.core.tick().state.state, 'pressure');
+      writeNudgeMarker(harness, over(harness));
+      harness.drive();
+      assert.equal(capsuleTextWriteCount(harness), 1, name);
+      assert.equal(harness.events('capsule-request-nudged').length, 0, name);
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
 // The floor: on a live seat one cycle deferred three times, five minutes apart, with the tracker unknown
 // and nobody told, until native compaction. One deferred cycle is ordinary (the operator is mid-prompt);
 // a deferral that outlives a re-arm is put on the status line, and the request going out takes it down.

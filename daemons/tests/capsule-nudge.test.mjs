@@ -199,6 +199,136 @@ test('a delivery dated in the future is no delivery: marker and record keep the 
   assert.equal(f.t.tick().status, 'cycle-abandoned-checkpoint-timeout', 'a marker a day ahead does not hold the cycle');
 }));
 
+for (const [offsetMs, abandoned] of [[86400000, true], [0, false]]) {
+  test(`N3: a host record dated ${offsetMs ? 'in the future is no delivery' : 'now is a delivery (control)'}`, () => transportFixture((f) => {
+    start(f.t);
+    f.busy();
+    f.t.tick();
+    const cycleFile = path.join(f.memRoot, 'runtime', 'auto-clear-cycle.json');
+    const cycle = JSON.parse(fs.readFileSync(cycleFile, 'utf8'));
+    fs.writeFileSync(cycleFile, JSON.stringify({ ...cycle, checkpoint_request_recorded: { cycle_id: cycle.cycle_id, at: new Date(f.clock().getTime() + offsetMs).toISOString() } }));
+    f.clock.advance(core.CHECKPOINT_WAIT_TIMEOUT_MS);
+    f.busy();
+    assert.equal(f.t.tick().status === 'cycle-abandoned-checkpoint-timeout', abandoned);
+  }));
+}
+
+test('N3: a missing marker is the ordinary case: nothing is logged', () => transportFixture((f) => {
+  start(f.t);
+  for (let i = 0; i < 3; i += 1) { f.clock.advance(60_000); f.busy(); f.t.tick(); }
+  assert.equal(f.logs.some((l) => l.includes('capsule nudge marker unreadable')), false);
+}));
+
+test('N3: a claim prunes every other claim, an older build\'s .stop claim too', () => {
+  const f = fixture(waiting());
+  try {
+    fs.writeFileSync(path.join(f.runtime, 'capsule-nudge.cyc-100.claim'), '');
+    fs.writeFileSync(path.join(f.runtime, 'capsule-nudge.cyc-100.stop.claim'), '');
+    fs.writeFileSync(path.join(f.runtime, 'capsule-nudge.cyc-157.stop.claim'), '');
+    assert.ok(nudgeFor({ payload, env: f.env, now: () => T0 + 5 * 60_000 }));
+    assert.deepEqual(fs.readdirSync(f.runtime).filter((n) => n.endsWith('.claim')), ['capsule-nudge.cyc-157.claim']);
+  } finally { f.done(); }
+});
+
+test('N1: a failed marker write gives the claim back, so a later call can retry', () => {
+  const f = fixture(waiting());
+  try {
+    const failing = { ...fs, renameSync: () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); } };
+    assert.equal(nudgeFor({ payload, env: f.env, fsImpl: failing, now: () => T0 + 5 * 60_000 }), null);
+    assert.equal(fs.existsSync(path.join(f.runtime, 'capsule-nudge.cyc-157.claim')), false, 'claim returned');
+    assert.equal(fs.readdirSync(f.runtime).some((n) => n.endsWith('.tmp')), false, 'no temp left');
+    assert.ok(nudgeFor({ payload, env: f.env, now: () => T0 + 5 * 60_000 }), 'the retry nudges');
+  } finally { f.done(); }
+});
+
+// ── the Stop leg (Titus 2026-11-15 16:57 PT: an idle seat had no tool call to ride) ───────
+const stopPayload = { session_id: SESSION, hook_event_name: 'Stop', stop_hook_active: false, cwd: os.tmpdir() };
+
+test('Stop: a cycle in pressure is asked at once, before the PostToolUse minute', () => {
+  const f = fixture(waiting({ state: 'pressure', checkpoint_wait_started_at: undefined }));
+  try {
+    const text = nudgeFor({ payload: stopPayload, env: f.env, now: () => T0 + 5000 });
+    assert.match(text, /Before you stop: run the context-capsule skill now/);
+    assert.match(text, /at 86% of its context refresh threshold/);
+    assert.match(text, /put it in the capsule's waiting_on/, 'F4: an open question survives the clear');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.runtime, NUDGE_FILE), 'utf8')).cycle_id, 'cyc-157');
+    assert.equal(nudgeFor({ payload: stopPayload, env: f.env, now: () => T0 + 6000 }), null, 'once per cycle');
+    for (const state of ['idle', 'checkpoint-confirmed', 'clear-submitted']) {
+      f.writeCycle(waiting({ state, cycle_id: `cyc-${state}` }));
+      assert.equal(nudgeFor({ payload: stopPayload, env: f.env, now: () => T0 + 5000 }), null, state);
+    }
+  } finally { f.done(); }
+});
+
+test('F2: a stop another hook already blocked (stop_hook_active) is still asked, once', () => {
+  const f = fixture(waiting());
+  try {
+    const late = () => T0 + 5 * 60_000;
+    const active = { ...stopPayload, stop_hook_active: true };
+    assert.ok(nudgeFor({ payload: active, env: f.env, now: late }), 'a brevity gate blocked first: still asked');
+    assert.equal(nudgeFor({ payload: active, env: f.env, now: late }), null, 'the claim is the loop guard');
+  } finally { f.done(); }
+});
+
+test('Stop: never a subagent, or a cycle whose request was recorded', () => {
+  const f = fixture(waiting());
+  try {
+    const late = () => T0 + 5 * 60_000;
+    assert.equal(nudgeFor({ payload: { ...stopPayload, agent_id: 'a1b2c3' }, env: f.env, now: late }), null, 'subagent');
+    f.writeCycle(waiting({ checkpoint_request_recorded: { cycle_id: 'cyc-157', at: new Date(T0).toISOString() } }));
+    assert.equal(nudgeFor({ payload: stopPayload, env: f.env, now: late }), null, 'recorded');
+    assert.equal(fs.existsSync(path.join(f.runtime, NUDGE_FILE)), false, 'nothing recorded when nothing was said');
+  } finally { f.done(); }
+});
+
+test('F1: one ask per cycle across both legs, in either order', () => {
+  for (const [first, second] of [[payload, stopPayload], [stopPayload, payload]]) {
+    const f = fixture(waiting());
+    try {
+      const late = () => T0 + 5 * 60_000;
+      assert.ok(nudgeFor({ payload: first, env: f.env, now: late }), first.hook_event_name ?? 'PostToolUse');
+      assert.equal(nudgeFor({ payload: second, env: f.env, now: late }), null, 'the seat already asked is not asked again');
+    } finally { f.done(); }
+  }
+});
+
+test('F3: the marker carries the transcript end at the ask, for the runner\'s ack window', () => {
+  const f = fixture(waiting());
+  try {
+    const transcript = path.join(f.base, 'transcript.jsonl');
+    fs.writeFileSync(transcript, 'x'.repeat(1234));
+    assert.ok(nudgeFor({ payload: { ...stopPayload, transcript_path: transcript }, env: f.env, now: () => T0 + 5000 }));
+    const marker = JSON.parse(fs.readFileSync(path.join(f.runtime, NUDGE_FILE), 'utf8'));
+    assert.equal(marker.transcript_offset, 1234);
+    assert.equal(marker.session_id, SESSION);
+    f.writeCycle(waiting({ cycle_id: 'cyc-160' }));
+    assert.ok(nudgeFor({ payload: stopPayload, env: f.env, now: () => T0 + 5000 }), 'no transcript: still asked');
+    assert.equal('transcript_offset' in JSON.parse(fs.readFileSync(path.join(f.runtime, NUDGE_FILE), 'utf8')), false,
+      'and no offset, so the runner types the request as before');
+  } finally { f.done(); }
+});
+
+test('the hook process prints the Stop block shape', () => {
+  const f = fixture(waiting({ state: 'pressure' }));
+  try {
+    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(stopPayload), encoding: 'utf8', env: { ...process.env, ...f.env } });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.deepEqual(Object.keys(out).sort(), ['decision', 'reason']);
+    assert.equal(out.decision, 'block');
+    assert.match(out.reason, /context-capsule skill/);
+    const again = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ ...stopPayload, stop_hook_active: true }), encoding: 'utf8', env: { ...process.env, ...f.env } });
+    assert.equal(again.stdout, '', 'the continuation is not blocked again: the cycle is claimed');
+  } finally { f.done(); }
+});
+
+test('the template wires the hook on Stop, within the hook budget', () => {
+  const template = JSON.parse(fs.readFileSync(path.resolve(path.dirname(HOOK), '..', '.claude', 'settings.json.template'), 'utf8'));
+  const hook = template.hooks.Stop.flatMap((e) => e.hooks).find((h) => /daemons\/capsule-nudge\.mjs/.test(h.command));
+  assert.ok(hook, 'wired');
+  assert.ok(hook.timeout <= 10, 'inside the 10 s hook budget');
+});
+
 test('an unreadable marker (not just a missing one) is logged once, and the #151 bound applies', () => transportFixture((f) => {
   start(f.t);
   f.busy();
