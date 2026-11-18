@@ -129,6 +129,21 @@ export const CAPSULE_REQUEST_TEXT = '/context-capsule';
 // single chunk of text+CR is read by the terminal as PASTED CONTENT, so the
 // CR lands in the composer instead of submitting. The Enter rides its own
 // delayed write (see _fireWake / _writeWakeEnter, mirroring _writeControl).
+// How far into a fresh transcript the clear's own rows are looked for (hook output comes first).
+export const CLEAR_ROW_SCAN_BYTES = 4 * 1024 * 1024;
+const CLEAR_DONE_TAGS = ['<command-name>/clear</command-name>', '<local-command-caveat>'];
+// One transcript line is the clear's own row: a user row whose text STARTS with the tag.
+export function isClearDoneRow(line) {
+  if (!line || !line.includes('"type":"user"')) return false;
+  let row;
+  try { row = JSON.parse(line); } catch { return false; }
+  if (!row || row.type !== 'user') return false;
+  const c = row.message && row.message.content;
+  const text = typeof c === 'string' ? c
+    : Array.isArray(c) ? c.map((part) => (part && typeof part.text === 'string' ? part.text : '')).join('') : '';
+  const head = text.trimStart();
+  return CLEAR_DONE_TAGS.some((tag) => head.startsWith(tag));
+}
 export const WAKE_MESSAGE = '[aigent] post-clear resume: run the resume procedure staged at session start now -- load the selected capsule, re-ground, and act. If none is staged, load the newest valid capsule from the capsules directory under this install\'s memory root and proceed.';
 // ─── NO AUTOMATIC TEXT LITERAL MAY CONTAIN A DIGIT (#104 M6) ────────────────
 // The ungated automatic TEXT writes are safe for a reason that used to be only
@@ -2156,6 +2171,10 @@ export class ManagedPtyRunner {
     scheduleEnter = (callback, milliseconds) => setTimeout(callback, milliseconds),
     clearEnter = (handle) => clearTimeout(handle),
     controlEnterDelayMs = DEFAULT_CONTROL_ENTER_DELAY_MS,
+    // The post-clear wake waits for the clear to finish (see _maybeFirePendingWake). Off by default
+    // so harnesses that rebind by hand keep their immediate wake; the managed launch turns it on.
+    wakeAwaitsClearRow = false,
+    wakeClearRowMaxWaitMs = 60_000,
     tickMs = DEFAULT_RUNNER_TICK_MS,
     inputHoldTtlMs = DEFAULT_INPUT_HOLD_TTL_MS,
     clearVerifyTtlMs = DEFAULT_CLEAR_VERIFY_TTL_MS,
@@ -2211,6 +2230,9 @@ export class ManagedPtyRunner {
     this.scheduleEnter = scheduleEnter;
     this.clearEnter = clearEnter;
     this.controlEnterDelayMs = controlEnterDelayMs;
+    this.wakeAwaitsClearRow = wakeAwaitsClearRow;
+    this.wakeClearRowMaxWaitMs = wakeClearRowMaxWaitMs;
+    this.wakePending = null;   // { sessionId, since } while the wake waits for the clear to finish
     this.enterHandle = null;
     this.enterToken = 0;
     this.wakeEnterHandle = null;
@@ -5828,7 +5850,7 @@ export class ManagedPtyRunner {
     //     is still in the composer, so they go through the ordinary queue and
     //     the flush below leads with the kill-line that destroys it.
     const takeover = !this.inputHold
-      && this.wakeEnterHandle === null
+      && !this._wakeOwnsComposer()
       && this._strandDeferredEnter('operator-input');
 
     // Queue whenever automatic command text may still occupy the composer: a
@@ -5837,7 +5859,7 @@ export class ManagedPtyRunner {
     // schedule/write. Live bytes written through here concatenate onto that
     // text and their CR submits the blend (PATCH-001S-r2).
     if (this.inputHold
-      || this.wakeEnterHandle !== null
+      || this._wakeOwnsComposer()
       || this.enterHandle !== null
       || this.composerMayHoldControlText) {
       this.queuedInput.push(chunk);
@@ -6247,7 +6269,7 @@ export class ManagedPtyRunner {
   _flushQueuedInput() {
     // Wake text owns the child composer until its dedicated Enter physically
     // lands. Keep every unrelated queued chunk behind that write.
-    if (this.wakeEnterHandle !== null) return true;
+    if (this._wakeOwnsComposer()) return true;
 
     // Same ownership rule for the shared control Enter slot (PATCH-001S):
     // while a capsule request's (or clear's) delayed Enter is pending, the
@@ -6475,7 +6497,7 @@ export class ManagedPtyRunner {
       this._disableAutomation(reason, { source: 'cancellation' });
       return true;
     }
-    if (this.wakeEnterHandle !== null || this.wakeSubmission !== null) {
+    if (this._wakeOwnsComposer() || this.wakeSubmission !== null) {
       this._disableAutomation(reason, { source: 'cancellation' });
       return true;
     }
@@ -7194,22 +7216,85 @@ export class ManagedPtyRunner {
     });
     if (this.wakeSessionId !== receipt.session_id) {
       this.wakeSessionId = receipt.session_id;
-      try {
-        this._fireWake();
-        this._event('wake-injected', {
-          session_id: receipt.session_id,
-        });
-      } catch (error) {
-        this.lastReason = {
-          code: error?.code || 'runner-wake-write-failed',
-          detail: error?.detail ?? errorText(error),
-        };
-        this._event('wake-write-failed', this.lastReason);
-        this._disableAutomation(this.lastReason.code, this.lastReason.detail);
-        return false;
+      // Titus 2026-11-18 06:49:56Z: the boot receipt is written by an EARLY start-up hook, and the CLI
+      // takes no input until its start-up hooks finish (06:50:01.897Z, the /clear row). The wake typed
+      // at rebound fell into that gap and was lost; a reviewer's message then took the first turn. So
+      // the wake waits for the clear's own row in the new transcript; typed after it, the CLI runs it
+      // or queues it behind whatever came first, and it is never lost.
+      if (this.wakeAwaitsClearRow) {
+        this.wakePending = { sessionId: receipt.session_id, since: this.now().getTime() };
+        this._event('wake-deferred', { session_id: receipt.session_id, until: 'clear-row' });
+        return true;
       }
+      return this._injectWake(receipt.session_id);
     }
     return true;
+  }
+
+  _injectWake(sessionId) {
+    this.wakePending = null;
+    try {
+      this._fireWake();
+      this._event('wake-injected', { session_id: sessionId });
+    } catch (error) {
+      this.lastReason = {
+        code: error?.code || 'runner-wake-write-failed',
+        detail: error?.detail ?? errorText(error),
+      };
+      this._event('wake-write-failed', this.lastReason);
+      this._disableAutomation(this.lastReason.code, this.lastReason.detail);
+      return false;
+    }
+    return true;
+  }
+
+  // A wake owns the composer from the rebind until its Enter lands: while it is owed (deferred) and
+  // while its Enter is pending. Every guard that kept operator bytes and lifecycle work behind the wake
+  // asks this (review of c02f1ae, F3: queued bytes otherwise went ahead of a deferred wake).
+  _wakeOwnsComposer() {
+    return this.wakeEnterHandle !== null || this.wakePending !== null;
+  }
+
+  // The clear is done once the CLI has written the /clear command's own USER rows into the NEW
+  // session's transcript (measured: they land when the start-up hooks have finished, after ~54 KB of
+  // hook rows on Titus 337090f3). Parsed, never substring-matched: hook rows written before them quote
+  // capsule text, which may name these tags (review of c02f1ae, F1/F2). Read up to CLEAR_ROW_SCAN_BYTES.
+  // Bounded in time: past wakeClearRowMaxWaitMs the wake goes anyway, as before this change.
+  // THE KILL SWITCH WINS (review of 3e1e3b9, F4): typed under a thrown switch, the wake's Enter was then
+  // cancelled by the same tick's disable, stranding its text in the composer. So an owed wake is DROPPED,
+  // by name, while the switch is on or unreadable: nothing automatic is typed, and operator input is not
+  // held behind a wake that will never go (the operator resumes by hand), as with the switch on at rebound.
+  _maybeFirePendingWake() {
+    const pending = this.wakePending;
+    if (!pending) return;
+    if (pending.sessionId !== this.sessionId) {
+      this.wakePending = null;
+      this._event('wake-dropped-session-changed', { owed_to: pending.sessionId, session_id: this.sessionId });
+      return;
+    }
+    const killed = this._readKillSwitch();
+    if (!killed.ok || killed.observation?.active) {
+      this.wakePending = null;
+      this._event('wake-dropped-kill-switch', { session_id: pending.sessionId, ...(killed.ok ? {} : { problem: killed.problem?.code }) });
+      return;
+    }
+    let done = false;
+    try {
+      const transcript = this._transcriptPath();
+      if (transcript) {
+        const fd = fs.openSync(transcript, 'r');
+        try {
+          const size = Math.min(fs.fstatSync(fd).size, CLEAR_ROW_SCAN_BYTES);
+          const buf = Buffer.alloc(size);
+          const got = fs.readSync(fd, buf, 0, size, 0);
+          done = buf.subarray(0, got).toString('utf8').split('\n').some(isClearDoneRow);
+        } finally { fs.closeSync(fd); }
+      }
+    } catch { done = false; }   // no file yet: the clear has not finished
+    const waited = this.now().getTime() - pending.since;
+    if (!done && waited < this.wakeClearRowMaxWaitMs) return;
+    if (!done) this._event('wake-clear-row-timeout', { session_id: pending.sessionId, waited_ms: waited });
+    this._injectWake(pending.sessionId);
   }
 
   // Two writes, never one: the text, then the Enter on its own delayed write
@@ -7479,6 +7564,7 @@ export class ManagedPtyRunner {
 
   tick() {
     if (this.closed) return { status: 'closed' };
+    this._maybeFirePendingWake();
 
     // The composer-guard alert, every tick (review round 4): it comes down once the composer is known
     // empty, and its file work goes on whatever the cycle is doing. Asynchronous and best effort.
@@ -7552,7 +7638,7 @@ export class ManagedPtyRunner {
     // problem is deliberately ignored here: _interlockReadiness re-runs it and
     // is where the refusal is named.
     if (interlockEnabled(this.env)) this._ensureInterlockProof();
-    if (this.wakeEnterHandle !== null) {
+    if (this._wakeOwnsComposer()) {
       return { status: 'wake-enter-pending' };
     }
     if (!this.inputHold && this.queuedInput.length > 0
@@ -7601,7 +7687,7 @@ export class ManagedPtyRunner {
       // BEFORE any other lifecycle work. The wake text and its protected Enter
       // own the composer for the rest of this tick; the top-of-tick
       // wake-enter-pending guard owns every later tick until the Enter lands.
-      if (rebound && this.wakeEnterHandle !== null) {
+      if (rebound && this._wakeOwnsComposer()) {
         return { status: 'wake-enter-pending' };
       }
       if (!this.automationEnabled) {
@@ -8448,6 +8534,7 @@ export function runPtySession({
   try {
     runner = new ManagedPtyRunner({
       ptyProcess,
+      wakeAwaitsClearRow: true,
       memRoot: memoryRoot,
       transportFactory,
       baselineBootSequence: baselineSequence(beforeBoot),
