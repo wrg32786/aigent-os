@@ -619,6 +619,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 aigent-OS is the free, open-source harness of [The AIgent](https://theaigent.xyz), a media project for people building with AI. The rest of what's free to take lives at the [public tools](https://tools.theaigent.xyz).
 
+## Get guidance
+
+Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. See the [terms](https://theaigent.co/terms). [Join The AIgent Academy](https://www.skool.com/the-aigent-academy/about).
+
 ---
 
 <div align="center">
