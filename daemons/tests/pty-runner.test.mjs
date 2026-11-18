@@ -15177,3 +15177,58 @@ test('WAKE-3 the managed launch turns the wait on (source pin)', () => {
   const launch = src.slice(src.indexOf('runner = new ManagedPtyRunner({'));
   assert.match(launch.slice(0, 400), /wakeAwaitsClearRow: true/);
 });
+
+// Review of c02f1ae (Titus), his vectors, kept as written: F2 a hook row quoting the tag, F1 the clear
+// rows past 64 KB of hook output, F3 operator bytes queued behind the clear.
+test('WAKE-X1 a hook row that quotes the tag does not count as the clear row', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    writeNewTranscript(harness, NEXT_SESSION_ID, [
+      { type: 'attachment', attachment: { type: 'hook_success', hookName: 'SessionStart:clear', stdout: 'capsule: the <local-command-caveat> row landed 5 s after the wake' } },
+      { type: 'user', message: { role: 'user', content: 'the operator wrote about <command-name>/clear</command-name> mid-sentence' } },
+    ]);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 0, 'only quotes so far: the CLI is still booting');
+  } finally { harness.cleanup(); }
+});
+test('WAKE-X2 clear rows that sit past 64 KB of hook output still count', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    writeNewTranscript(harness, NEXT_SESSION_ID, [
+      { type: 'attachment', attachment: { type: 'hook_success', hookName: 'SessionStart:clear', stdout: 'x'.repeat(70000) } },
+      { type: 'user', message: { role: 'user', content: '<local-command-caveat>Caveat</local-command-caveat>' } },
+      { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' } },
+    ]);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 1, 'the clear is done');
+  } finally { harness.cleanup(); }
+});
+test('WAKE-X3 operator bytes queued behind the clear stay behind the deferred wake', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner.queuedInput.push(Buffer.from('operator-typed-during-the-cycle\r'));
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    harness.runner._flushQueuedInput();   // what the release path does right after a rebind
+    const typed = () => harness.pty.writes.some((w) => w.toString().includes('operator-typed-during-the-cycle'));
+    assert.equal(typed(), false, 'nothing is typed ahead of the wake');
+    harness.operator(Buffer.from('live keys'));
+    assert.equal(harness.pty.writes.some((w) => w.toString().includes('live keys')), false, 'live operator bytes queue behind the owed wake too');
+  } finally { harness.cleanup(); }
+});
+test('WAKE-4 a wake owed to a session that is no longer current is dropped, named', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    harness.runner.sessionId = 'some-other-session';
+    harness.runner._maybeFirePendingWake();
+    assert.equal(harness.runner.wakePending, null);
+    assert.equal(wakeEventCount(harness, 'wake-dropped-session-changed'), 1);
+    assert.equal(wakeWriteCount(harness), 0);
+  } finally { harness.cleanup(); }
+});
