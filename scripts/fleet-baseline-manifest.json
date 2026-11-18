@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-17-cdcb7241",
-  "public_product_commit": "cdcb724185ffdc9405b9b670011e63d519e58d77",
+  "baseline_id": "aigent-os-2026-11-18-0966b3b1",
+  "public_product_commit": "0966b3b1a3aa273b5098d41f4310d5d75be26d17",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -70,7 +70,8 @@
     "v8 recut for the capsule-nudge Stop leg (41e52db5): pins that moved: daemons/capsule-nudge.mjs, .claude/settings.json.template, daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. capsule-nudge.mjs also runs as a Stop hook with one ask per cycle across both legs, and the runner opens its ack window at a hook's ask instead of typing the request (Titus 2026-11-15 16:57 PT; review of dfcf696). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the stale-capsule pick (0501c487): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. selectCapsule returns the newest resumed capsule, flagged reused, over an older active one; the session-start pointer labels the reuse (fleet restart 2026-11-16). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the reinject reuse label (405a2d60): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. only a resumed capsule is pointed at as already resumed once (review of b9e12f55, F1). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for the post-clear wake (cdcb7241): pins that moved: daemons/pty-runner.mjs. the runner types the post-clear wake only once the new transcript holds the clear's rows (Titus 2026-11-18). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for the post-clear wake (cdcb7241): pins that moved: daemons/pty-runner.mjs. the runner types the post-clear wake only once the new transcript holds the clear's rows (Titus 2026-11-18). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for the wake fix round (0966b3b1): pins that moved: daemons/pty-runner.mjs. the deferred wake parses the clear rows and owns the composer while owed (review of c02f1ae). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
@@ -95,7 +96,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "9bcf179bb03cd91cd71a8863e75309c36bc350f7926aaa50ad3c40d7840e483e",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "b433629264525915b6ffdaa160cb15e89f277a2a44ce5aea21ad8c23d6bbdace",
+    "daemons/pty-runner.mjs": "42be2c0dd322b593c38ebb8fcac62622a622cc29b536f0b80de3f23672282780",
     "daemons/auto-clear-transport.mjs": "f811e109e1076247e22533f6a2fd263e2c342517f34a5e37aeab011134413d0b",
     "daemons/lifecycle-common.mjs": "0ceba10b4153ab65f692a725ca9883e679d3f119c9bf15681cdcfb7990dcc2e9",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
