@@ -15119,3 +15119,61 @@ test('checkpoint answer bound: a request the host recorded gets its answer time,
     assert.equal(harness.cycleState().cycle_id, cycleId);
   } finally { harness.cleanup(); }
 });
+
+// Titus 2026-11-18 06:49:56Z: the boot receipt (an EARLY start-up hook) triggered the wake 5 s before
+// the CLI finished its start-up hooks and took input (the /clear rows, 06:50:01.897Z). The typed wake
+// was lost and a reviewer's message took the first turn. The wake now waits for the clear's own row.
+function writeNewTranscript(harness, sessionId, rows) {
+  const p = transcriptPathFor({ cwd: harness.fixture.cwd, sessionId, homeDir: harness.fixture.homeDir });
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+}
+
+test('WAKE-1 the post-clear wake waits for the clear to finish, then fires once', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    assert.equal(harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID)), true);
+    assert.equal(wakeWriteCount(harness), 0, 'red before the fix: typed at once, into a CLI still booting');
+    assert.equal(wakeEventCount(harness, 'wake-deferred'), 1);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 0, 'no transcript yet: still waiting');
+    writeNewTranscript(harness, NEXT_SESSION_ID, [{ type: 'progress' }]);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 0, 'a transcript without the clear rows: still waiting');
+    writeNewTranscript(harness, NEXT_SESSION_ID, [
+      { type: 'user', message: { role: 'user', content: '<local-command-caveat>Caveat</local-command-caveat>' } },
+      { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' } },
+    ]);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 1, 'the clear is done: the wake goes');
+    assert.equal(wakeEventCount(harness, 'wake-injected'), 1);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 1, 'once');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('WAKE-2 a clear row that never appears: the wake goes at the bound, named', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    harness.fixture.clock.advance(harness.runner.wakeClearRowMaxWaitMs - 1);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 0);
+    harness.fixture.clock.advance(1);
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 1);
+    assert.equal(wakeEventCount(harness, 'wake-clear-row-timeout'), 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('WAKE-3 the managed launch turns the wait on (source pin)', () => {
+  const src = fs.readFileSync(new URL('../pty-runner.mjs', import.meta.url), 'utf8');
+  const launch = src.slice(src.indexOf('runner = new ManagedPtyRunner({'));
+  assert.match(launch.slice(0, 400), /wakeAwaitsClearRow: true/);
+});

@@ -2156,6 +2156,10 @@ export class ManagedPtyRunner {
     scheduleEnter = (callback, milliseconds) => setTimeout(callback, milliseconds),
     clearEnter = (handle) => clearTimeout(handle),
     controlEnterDelayMs = DEFAULT_CONTROL_ENTER_DELAY_MS,
+    // The post-clear wake waits for the clear to finish (see _maybeFirePendingWake). Off by default
+    // so harnesses that rebind by hand keep their immediate wake; the managed launch turns it on.
+    wakeAwaitsClearRow = false,
+    wakeClearRowMaxWaitMs = 60_000,
     tickMs = DEFAULT_RUNNER_TICK_MS,
     inputHoldTtlMs = DEFAULT_INPUT_HOLD_TTL_MS,
     clearVerifyTtlMs = DEFAULT_CLEAR_VERIFY_TTL_MS,
@@ -2211,6 +2215,9 @@ export class ManagedPtyRunner {
     this.scheduleEnter = scheduleEnter;
     this.clearEnter = clearEnter;
     this.controlEnterDelayMs = controlEnterDelayMs;
+    this.wakeAwaitsClearRow = wakeAwaitsClearRow;
+    this.wakeClearRowMaxWaitMs = wakeClearRowMaxWaitMs;
+    this.wakePending = null;   // { sessionId, since } while the wake waits for the clear to finish
     this.enterHandle = null;
     this.enterToken = 0;
     this.wakeEnterHandle = null;
@@ -7194,22 +7201,62 @@ export class ManagedPtyRunner {
     });
     if (this.wakeSessionId !== receipt.session_id) {
       this.wakeSessionId = receipt.session_id;
-      try {
-        this._fireWake();
-        this._event('wake-injected', {
-          session_id: receipt.session_id,
-        });
-      } catch (error) {
-        this.lastReason = {
-          code: error?.code || 'runner-wake-write-failed',
-          detail: error?.detail ?? errorText(error),
-        };
-        this._event('wake-write-failed', this.lastReason);
-        this._disableAutomation(this.lastReason.code, this.lastReason.detail);
-        return false;
+      // Titus 2026-11-18 06:49:56Z: the boot receipt is written by an EARLY start-up hook, and the CLI
+      // takes no input until its start-up hooks finish (06:50:01.897Z, the /clear row). The wake typed
+      // at rebound fell into that gap and was lost; a reviewer's message then took the first turn. So
+      // the wake waits for the clear's own row in the new transcript; typed after it, the CLI runs it
+      // or queues it behind whatever came first, and it is never lost.
+      if (this.wakeAwaitsClearRow) {
+        this.wakePending = { sessionId: receipt.session_id, since: this.now().getTime() };
+        this._event('wake-deferred', { session_id: receipt.session_id, until: 'clear-row' });
+        return true;
       }
+      return this._injectWake(receipt.session_id);
     }
     return true;
+  }
+
+  _injectWake(sessionId) {
+    this.wakePending = null;
+    try {
+      this._fireWake();
+      this._event('wake-injected', { session_id: sessionId });
+    } catch (error) {
+      this.lastReason = {
+        code: error?.code || 'runner-wake-write-failed',
+        detail: error?.detail ?? errorText(error),
+      };
+      this._event('wake-write-failed', this.lastReason);
+      this._disableAutomation(this.lastReason.code, this.lastReason.detail);
+      return false;
+    }
+    return true;
+  }
+
+  // The clear is done once the CLI has written the /clear command's own rows into the NEW session's
+  // transcript (measured: the <command-name>/clear</command-name> and <local-command-caveat> rows land
+  // when the start-up hooks have finished). Bounded: past wakeClearRowMaxWaitMs the wake goes anyway,
+  // as before this change.
+  _maybeFirePendingWake() {
+    const pending = this.wakePending;
+    if (!pending || pending.sessionId !== this.sessionId) return;
+    let done = false;
+    try {
+      const transcript = this._transcriptPath();
+      if (transcript) {
+        const fd = fs.openSync(transcript, 'r');
+        try {
+          const buf = Buffer.alloc(65536);
+          const got = fs.readSync(fd, buf, 0, buf.length, 0);
+          const head = buf.subarray(0, got).toString('utf8');
+          done = head.includes('<command-name>/clear</command-name>') || head.includes('<local-command-');
+        } finally { fs.closeSync(fd); }
+      }
+    } catch { done = false; }   // no file yet: the clear has not finished
+    const waited = this.now().getTime() - pending.since;
+    if (!done && waited < this.wakeClearRowMaxWaitMs) return;
+    if (!done) this._event('wake-clear-row-timeout', { session_id: pending.sessionId, waited_ms: waited });
+    this._injectWake(pending.sessionId);
   }
 
   // Two writes, never one: the text, then the Enter on its own delayed write
@@ -7479,6 +7526,7 @@ export class ManagedPtyRunner {
 
   tick() {
     if (this.closed) return { status: 'closed' };
+    this._maybeFirePendingWake();
 
     // The composer-guard alert, every tick (review round 4): it comes down once the composer is known
     // empty, and its file work goes on whatever the cycle is doing. Asynchronous and best effort.
@@ -8448,6 +8496,7 @@ export function runPtySession({
   try {
     runner = new ManagedPtyRunner({
       ptyProcess,
+      wakeAwaitsClearRow: true,
       memRoot: memoryRoot,
       transportFactory,
       baselineBootSequence: baselineSequence(beforeBoot),
