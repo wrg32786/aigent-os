@@ -15232,3 +15232,23 @@ test('WAKE-4 a wake owed to a session that is no longer current is dropped, name
     assert.equal(wakeWriteCount(harness), 0);
   } finally { harness.cleanup(); }
 });
+
+// Review of 3e1e3b9 (Titus), F4: typed under a thrown kill switch, the wake's Enter was cancelled by the
+// same tick's disable, stranding the text. The kill switch wins: the owed wake is dropped, by name, and
+// nothing is typed; operator bytes are no longer held behind it.
+test('WAKE-X4 the kill switch wins: an owed wake is dropped, never typed into a disable', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    harness.runner.wakeAwaitsClearRow = true;
+    harness.runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID));
+    writeNewTranscript(harness, NEXT_SESSION_ID, [
+      { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' } },
+    ]);
+    harness.guards.killSwitch = true;
+    harness.runner._maybeFirePendingWake();
+    assert.equal(wakeWriteCount(harness), 0, 'red before the fix: typed, then its Enter cancelled');
+    assert.equal(wakeEventCount(harness, 'wake-dropped-kill-switch'), 1);
+    assert.equal(wakeEventCount(harness, 'wake-enter-cancelled'), 0);
+    assert.equal(harness.runner._wakeOwnsComposer(), false, 'operator input is not held behind a dropped wake');
+  } finally { harness.cleanup(); }
+});

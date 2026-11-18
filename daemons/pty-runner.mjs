@@ -7259,15 +7259,23 @@ export class ManagedPtyRunner {
   // session's transcript (measured: they land when the start-up hooks have finished, after ~54 KB of
   // hook rows on Titus 337090f3). Parsed, never substring-matched: hook rows written before them quote
   // capsule text, which may name these tags (review of c02f1ae, F1/F2). Read up to CLEAR_ROW_SCAN_BYTES.
-  // Bounded in time: past wakeClearRowMaxWaitMs the wake goes anyway, as before this change. It runs
-  // above the kill-switch read on purpose: the runner already cleared this seat, and a seat left
-  // un-woken after its own clear is the failure this exists to prevent.
+  // Bounded in time: past wakeClearRowMaxWaitMs the wake goes anyway, as before this change.
+  // THE KILL SWITCH WINS (review of 3e1e3b9, F4): typed under a thrown switch, the wake's Enter was then
+  // cancelled by the same tick's disable, stranding its text in the composer. So an owed wake is DROPPED,
+  // by name, while the switch is on or unreadable: nothing automatic is typed, and operator input is not
+  // held behind a wake that will never go (the operator resumes by hand), as with the switch on at rebound.
   _maybeFirePendingWake() {
     const pending = this.wakePending;
     if (!pending) return;
     if (pending.sessionId !== this.sessionId) {
       this.wakePending = null;
       this._event('wake-dropped-session-changed', { owed_to: pending.sessionId, session_id: this.sessionId });
+      return;
+    }
+    const killed = this._readKillSwitch();
+    if (!killed.ok || killed.observation?.active) {
+      this.wakePending = null;
+      this._event('wake-dropped-kill-switch', { session_id: pending.sessionId, ...(killed.ok ? {} : { problem: killed.problem?.code }) });
       return;
     }
     let done = false;
