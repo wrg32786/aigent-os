@@ -443,10 +443,11 @@ export function newestValidCapsule(memoryRoot, options) {
   return { ...capsule, rejected };
 }
 
-// Shared grouping/dedup key: discard list decoration and the undated clock
-// stamp without changing speaker tags or attempting to sort chronology.
+// Shared grouping/dedup key: discard list decoration and the clock stamp
+// (dated `YYYY-MM-DDTHH:MMZ`, or the legacy bare `HH:MM` on older capsules)
+// without changing speaker tags or attempting to sort chronology.
 export function capsuleRowKey(row) {
-  return collapseLineBreaking(row).replace(/[ \t]+/g, ' ').trim().replace(/^(?:[-*+] |\d+\.[ \t]+)/, '').replace(/^\d{2}:\d{2} /, '');
+  return collapseLineBreaking(row).replace(/[ \t]+/g, ' ').trim().replace(/^(?:[-*+] |\d+\.[ \t]+)/, '').replace(/^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z|\d{2}:\d{2}) /, '');
 }
 
 // Only the writer's closed speaker vocabulary is metadata; other tags are content.
@@ -550,6 +551,18 @@ export function inert(value, max = 500) {
 // Decoded, single-line data for storage or further bounded rendering.
 export function storedData(value, maximum = 240) {
   return JSON.parse(inert(value, maximum));
+}
+
+// A Done row is read by people: cut at a sentence end, else a word end, never
+// mid-word, as long as the cut keeps at least half the cap.
+export function doneRowText(value, maximum = 240) {
+  const s = storedData(value, Infinity);
+  if (s.length <= maximum) return s;
+  const head = s.slice(0, maximum + 1);
+  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  const word = head.lastIndexOf(' ');
+  const cut = sentence >= maximum / 2 ? sentence + 1 : word >= maximum / 2 ? word : maximum;
+  return `${s.slice(0, cut)}…[+${s.length - cut} chars]`;
 }
 
 // Fixed field order keeps pipes inside quoted values from becoming metadata.

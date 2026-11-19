@@ -35,7 +35,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  CAPSULE_SECTIONS, classifyMcpEffect, capsuleRowKey, doneRowPriority, DONE_LIMITS, DONE_TAG, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, effectKey, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
+  CAPSULE_SECTIONS, classifyMcpEffect, capsuleRowKey, doneRowPriority, doneRowText, DONE_LIMITS, DONE_TAG, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, effectKey, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
@@ -585,7 +585,10 @@ try {
     // objective + the [OPERATOR] sweep.
     if (/^Another Claude session sent a message/i.test(t) || /^<teammate-message\b/i.test(t)) {
       const pm = t.match(/teammate_id="([\w-]+)"/i);
-      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t };
+      // An idle_notification is the harness saying a teammate went idle, not
+      // speech; stored as Done rows they took 10 of 169 rows on a live autosave.
+      const idle = /"type"\s*:\s*"idle_notification"/.test(t);
+      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle };
     }
     // Harness/supervisor injections ([supervisor-resume], [refresh-cycle],
     // [auto-pull], loop ticks, ...) arrive as PLAIN user strings and would
@@ -610,7 +613,8 @@ try {
     return { who: 'OPERATOR', human: true, t: bare };
   };
   const tagUtterance = (cl, messageId) => {
-    const row = `[${cl.who}] ${storedData(cl.t, 240)}`;
+    if (cl.idle) return;
+    const row = `[${cl.who}] ${doneRowText(cl.t, 240)}`;
     const key = capsuleRowKey(row);
     // Deduplicate before the cap so repeats cannot evict distinct speech.
     // Keep the latest occurrence in capture order, matching the stored rows.
@@ -989,7 +993,8 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
     return !key || DONE_TAG.test(key)
       ? key : `[ASSISTANT] ${key}`;
   };
-  const ts = new Date().toISOString().slice(11, 16);
+  // Dated UTC stamp: a reader could not place a bare HH:MM on any day.
+  const ts = `${new Date().toISOString().slice(0, 16)}Z`;
   // Speaker-tagged utterances land under Done — a sweep can grep `[OPERATOR]` there.
   // Autosaves store accepted speech newest-first; readers preserve file order.
   const bulletsBySection = {
