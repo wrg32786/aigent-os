@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-18-2f9c6b58",
-  "public_product_commit": "2f9c6b58a69809b481bbbbfddaf2ae6ceb59433e",
+  "baseline_id": "aigent-os-2026-11-19-b97f47f5",
+  "public_product_commit": "b97f47f50bd7e5f8cbf04a5de864b83a23c0e080",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -72,7 +72,8 @@
     "v8 recut for the reinject reuse label (405a2d60): pins that moved: daemons/sessionstart-reinject.mjs, daemons/lifecycle-common.mjs. only a resumed capsule is pointed at as already resumed once (review of b9e12f55, F1). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the post-clear wake (cdcb7241): pins that moved: daemons/pty-runner.mjs. the runner types the post-clear wake only once the new transcript holds the clear's rows (Titus 2026-11-18). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the wake fix round (0966b3b1): pins that moved: daemons/pty-runner.mjs. the deferred wake parses the clear rows and owns the composer while owed (review of c02f1ae). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for the wake kill-switch rule (2f9c6b58): pins that moved: daemons/pty-runner.mjs. an owed wake is dropped while the kill switch is on (review of 3e1e3b9, F4). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for the wake kill-switch rule (2f9c6b58): pins that moved: daemons/pty-runner.mjs. an owed wake is dropped while the kill switch is on (review of 3e1e3b9, F4). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for the stop-writer Done fidelity fix (b97f47f5): pins that moved: daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs. Done rows are cut at a sentence or word end (doneRowText), Done and error bullets carry a dated YYYY-MM-DDTHH:MMZ stamp that capsuleRowKey strips alongside the legacy HH:MM, and teammate idle_notification envelopes are not stored as Done rows. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
@@ -90,7 +91,7 @@
     "hooks/suggest-compact.sh": "a7aaf8d9eee7f2c7d5269167566a51677f22319f8343cb904ea82ba2390197f4",
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
-    "daemons/stop-capsule-writer.mjs": "890779002c07d18b8529765058efbc1ab365c7bacbb2d1915d966691c2d4666c",
+    "daemons/stop-capsule-writer.mjs": "35e18258626809a1f1d1be902437639eb141234769896784350ccd44e208de12",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
     "hooks/log-token-usage.sh": "d6940138f66a9ef407d7a0a92a2a67d7a5f76270ea17004159a733b2a20d9700",
@@ -99,7 +100,7 @@
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
     "daemons/pty-runner.mjs": "79b37eff9c89d87eedc3c3c6ef707bb588c5fe6c62ba0f2162445207f207961b",
     "daemons/auto-clear-transport.mjs": "f811e109e1076247e22533f6a2fd263e2c342517f34a5e37aeab011134413d0b",
-    "daemons/lifecycle-common.mjs": "0ceba10b4153ab65f692a725ca9883e679d3f119c9bf15681cdcfb7990dcc2e9",
+    "daemons/lifecycle-common.mjs": "22a92bd1de14683f68e4cac2e69676af39b7c878fad007e32dd779943775bc32",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
     "daemons/memory-root.cjs": "082335e97ebbe14969b1a1881013bb8b901fed8a6a803eeab6a8eba0f7fcb56c",
     "daemons/memory-root.sh": "8bca14d0dc739a2fb6847219f71dd8d3f0b319f38185e742ec45b424368c7fad",
