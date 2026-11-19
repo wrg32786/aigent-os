@@ -54,6 +54,11 @@ Read, in order:
 7. Staged `NIGHTLY_CAPTURE_CANDIDATES.jsonl` rows from the prior fire as
    discovery and pressure signals only.
 8. Explicitly supplied local Git or command evidence.
+9. Dated daily notes in both the live `<root>/vault/daily` tree written by
+   `hooks/auto-capture.sh` and the declared vault's `daily` folder (beside
+   the resolved memory root). Read the union within the window, including
+   distinct files with the same date. Run `node daemons/dream-daily.mjs --root <root>`
+   and print each tree's newest dated filename, or `none`, in Sources reviewed.
 
 Record exact source references. A capsule or Session Log entry can establish
 that a claim occurred; it cannot prove the claim true.

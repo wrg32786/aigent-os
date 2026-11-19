@@ -208,8 +208,15 @@ function bashExecutable() {
 }
 
 function stagedMemoryCandidateCount(paths) {
-  const text = optionalText(paths, 'MEMORY_CANDIDATES.md', { required: true });
-  return (maskMarkdownFences(text).match(/\|[ \t]*staged[ \t]*\|/gi) || []).length;
+  const args = [path.join(DAEMON_DIR, 'memory_candidates.py'), resolveMemoryRelative(paths, 'MEMORY_CANDIDATES.md')];
+  let result = spawnSync('python3', args, { encoding: 'utf8', windowsHide: true });
+  if (result.error?.code === 'ENOENT') {
+    result = spawnSync('python', args, { encoding: 'utf8', windowsHide: true });
+  }
+  if (result.status !== 0 || !/^\d+$/.test(result.stdout.trim())) {
+    throw new Error('could not count staged entries in MEMORY_CANDIDATES.md');
+  }
+  return Number(result.stdout.trim());
 }
 
 export function stagedNightlyCandidateCount(paths) {
@@ -405,7 +412,7 @@ function commandPostcondition(root, checkpoint, state, exitCode, now) {
       return {
         ok: actualExit === exitCode,
         output: `DIGEST_POSTCONDITION ${actualExit === 0 ? 'PASS' : 'FAIL'}`
-          + ` staged=${staged} source=memory/MEMORY_CANDIDATES.md`,
+          + ` staged=${staged} source=${paths.layout}/MEMORY_CANDIDATES.md`,
         actualExit,
       };
     }
@@ -440,17 +447,12 @@ function artifactCheck(root, ref, {
   if (!ARTIFACT_SCHEMES[checkpoint]?.includes(scheme)) {
     return { ok: false, detail: `${scheme}: artifact is not allowed for ${checkpoint}` };
   }
-  if (checkpoint === 'digest') {
-    const staged = stagedMemoryCandidateCount(paths);
-    if (status === 'skipped' && (scheme !== 'none' || staged !== 0)) {
-      return {
-        ok: false,
-        detail: `digest skip requires zero staged rows; observed=${staged}`,
-      };
-    }
-    if (status === 'pass' && staged === 0) {
-      return { ok: false, detail: 'digest pass requires at least one staged row to surface' };
-    }
+  // Each artifact branch below counts its live ledger once.
+  if (checkpoint === 'digest' && status === 'skipped' && scheme !== 'none') {
+    return { ok: false, detail: 'digest skip requires none:no-staged-candidates' };
+  }
+  if (checkpoint === 'digest' && status === 'pass' && scheme !== 'file') {
+    return { ok: false, detail: 'digest pass requires the candidate file' };
   }
 
   if (scheme === 'none') {

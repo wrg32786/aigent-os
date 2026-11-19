@@ -35,9 +35,10 @@ default channel; no external coordination service is required.
 
 ## Root, memory, date, and environment
 
-Run from the aigent-OS root. The normal operational memory root is
-`vault/memory`; the daemon also supports the documented `memory` fallback used
-by minimal forks and honors `AIGENT_STATE_HOME_DIR` for isolated probes.
+Run from the aigent-OS root. Resolve the memory root with
+`node daemons/memory-root.cjs --root <root>` (use the state-home as the base
+when `AIGENT_STATE_HOME_DIR` is set). The resolver honors `.aigent/state.json`
+field `memory_root`, defaults to `vault/memory`, and handles the legacy fallback.
 
 One time zone is used for pass dating, alert scopes, ledger review, and
 freshness. Configure it with `AIGENT_NIGHTLY_TIME_ZONE`; the documented default
@@ -62,11 +63,10 @@ node daemons/nightly-pass.mjs begin --root <aigent-root> [--date YYYY-MM-DD] [--
 
 Begin requires both canonical inputs to exist and be readable:
 
-- `vault/memory/MEMORY_CANDIDATES.md`
-- `vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
+- `<memory-root>/MEMORY_CANDIDATES.md`
+- `<memory-root>/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
 
-The exact prefix may be `memory/` only when the root uses the documented
-fallback layout. Missing input is a failed invocation, never an empty or skip
+Missing input is a failed invocation, never an empty or skip
 claim.
 
 `--replace` is recovery-only. It abandons an interrupted `status=running` pass
@@ -149,7 +149,9 @@ are allowlisted and reproduced from live state.
 
 Execute `skills/dream/SKILL.md` directly. The leg runs on every fire and appends
 one canonical dated synthesis, including an explicit zero-lesson result when
-there is no new signal.
+there is no new signal. Read the hook's live `<root>/vault/daily` and the
+declared vault's `daily` folder. Run `node daemons/dream-daily.mjs --root <root>`
+and print each tree's newest dated file in the Dream evidence.
 
 PASS requires:
 
@@ -224,8 +226,10 @@ nonnegative integer `total_notes`. A fresh mtime with stale content is red.
 
 ## Leg D - Digest
 
-Read the canonical `MEMORY_CANDIDATES.md` table and count exact
-`status=staged` rows by type. Do not promote, skip, supersede, or simulate an
+Read `<memory-root>/MEMORY_CANDIDATES.md` under the resolved root above.
+Count rows whose Status column is `staged` or `unscanned`, plus bullets
+under dated capsule-cycle headings unless marked banked, ruled, discharged,
+skipped, or superseded. Group by type where present. Do not promote, skip, supersede, or simulate an
 operator answer.
 
 - Zero staged rows: `status=skipped exit=0
@@ -262,7 +266,7 @@ discovery inputs. A source cannot verify its own confident claim.
 
 Judgment-bearing proposals append through the sole writer to:
 
-`vault/memory/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
+`<memory-root>/runtime/NIGHTLY_CAPTURE_CANDIDATES.jsonl`
 
 Direct ledger mutation is legal only through an existing ledger owner after a
 green allowlisted executable predicate with structured arguments, observed

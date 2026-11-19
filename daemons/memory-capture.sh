@@ -29,6 +29,7 @@ INPUT=$(cat 2>/dev/null)
 # Pass vars via env — NOT string interpolation — so quotes/special chars in
 # prompt can't break the Python heredoc. Single-quoted 'PYEOF' prevents all
 # shell expansion inside.
+CAPTURE_DAEMON_DIR="$DAEMON_DIR" \
 INPUT="$INPUT" \
 CANDIDATES="$CANDIDATES" \
 DAEMON_ERR_LOG="$DAEMON_ERR_LOG" \
@@ -212,7 +213,10 @@ row_re = re.compile(
     r'^\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*("(?:\\.|[^"\\])*")\s*\|.*?\|\s*(unscanned|staged|promoted|skipped|superseded)\s*\|',
     re.MULTILINE
 )
-staged_count = 0
+sys.path.insert(0, fix_path(os.environ["CAPTURE_DAEMON_DIR"]))
+from memory_candidates import staged_count as count_pending
+
+staged_count = count_pending(content)
 recent_staged_phrases = []  # (normalized_phrase, captured_at)
 now_utc = datetime.now(timezone.utc)
 window_24h = now_utc - timedelta(hours=24)
@@ -225,7 +229,6 @@ for m in row_re.finditer(content):
         row_phrase = m.group(2)[1:-1]
     row_status = m.group(3)
     if row_status in ("staged", "unscanned"):
-        staged_count += 1
         # Parse row_date as date-only; treat as UTC midnight for dedup window
         try:
             row_dt = datetime.strptime(row_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)

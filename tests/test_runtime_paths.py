@@ -43,6 +43,26 @@ fitness_report_spec.loader.exec_module(agent_fitness_report)
 
 
 class RuntimePathTests(unittest.TestCase):
+    def test_digest_counts_pending_status_cells_and_unbanked_capsule_bullets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".aigent").mkdir()
+            (root / ".aigent/state.json").write_text('{"memory_root":"notes/mem"}')
+            (root / "notes/mem").mkdir(parents=True)
+            (root / "vault/memory").mkdir(parents=True)
+            ledger = root / "notes/mem/MEMORY_CANDIDATES.md"
+            ledger.write_text(
+                "| Status | Note |\n|---|---|\n| promoted | staged |\n"
+                "| staged | first |\n| unscanned | second |\n\n"
+                "## 2026-11-18 (reviewer, capsule cycle)\n"
+                "- third\n- fourth\n- archived. Banked in [[note]].\n"
+                "- resolved\n  Banked as a decision.\n- filed. Banked: [[note]].\n"
+                "## Instructions\n- a non-candidate\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"AIGENT_STATE_HOME_DIR": str(root)}):
+                self.assertEqual(runtime_state.count_memory_candidates(root), 4)
+
     def test_python_reader_exports_no_undeclared_raw_access_path(self):
         self.assertEqual(
             render_boundary.__all__,

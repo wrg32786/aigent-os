@@ -13,6 +13,7 @@ MEMORY_ROOT="$(aigent_memory_root "${AIGENT_STATE_HOME_DIR:-$ROOT}" 2>&1)" \
   || { printf '%s\n' "$MEMORY_ROOT" >&2; exit 0; }
 CANDIDATES="$MEMORY_ROOT/MEMORY_CANDIDATES.md"
 [ -f "$CANDIDATES" ] || exit 0
-COUNT=$(grep -c "| staged |" "$CANDIDATES" 2>/dev/null || echo 0)
+PYTHON=$(command -v python3 || command -v python) || exit 0
+COUNT=$("$PYTHON" "$SELF_DIR/memory_candidates.py" "$CANDIDATES") || exit 0
 [ "$COUNT" -gt 0 ] && echo "[SOMATIC:digest] $COUNT memory candidates staged — run /digest"
 exit 0

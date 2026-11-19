@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from memory_candidates import staged_count
 from memory_root import MemoryRootError, die, env_seat_base, resolve_memory_root, seat_base_from_env  # noqa: E402
 from typing import Any, Iterable
 
@@ -212,10 +213,10 @@ def get_next_action(vault: Path) -> str | None:
 def count_memory_candidates(vault: Path) -> int:
     path = memory_path(vault) / "MEMORY_CANDIDATES.md"
     try:
-        content = path.read_text(encoding="utf-8").lower()
+        content = path.read_text(encoding="utf-8")
     except OSError:
         return 0
-    return content.count("status:staged") + content.count("status: staged")
+    return staged_count(content)
 
 
 def _older_than(value: str, today: date, days: int) -> bool:
