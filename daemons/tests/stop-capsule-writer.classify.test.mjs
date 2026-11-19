@@ -56,8 +56,8 @@ writeFileSync(transcript, [
   check('speaker-tag: worker flushed', (r.stdout || '').includes('SWE_OUTCOME:flushed'), JSON.stringify(r.stdout));
   const ptr = readPointer();
   const cap = readFileSync(path.join(SANDBOX, ptr.path), 'utf8');
-  check('speaker-tag: [OPERATOR] bullet in Done', /- \d{2}:\d{2} \[OPERATOR\] Do the thing tomorrow at nine/.test(cap));
-  check('speaker-tag: [RELAY:agent-a] bullet, prefix normalized on bullet lines', /- \d{2}:\d{2} \[RELAY:agent-a\] relay: stand back up/.test(cap) && !/^- .*\[room from/m.test(cap));
+  check('speaker-tag: [OPERATOR] bullet in Done', /- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z \[OPERATOR\] Do the thing tomorrow at nine/.test(cap));
+  check('speaker-tag: [RELAY:agent-a] bullet, prefix normalized on bullet lines', /- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z \[RELAY:agent-a\] relay: stand back up/.test(cap) && !/^- .*\[room from/m.test(cap));
   const r2 = run('stop-capsule-writer.mjs', ['--worker', JSON.stringify({ __root: SANDBOX, session_id: 'zl2', transcript_path: transcript })]);
   check('speaker-tag: rerun dedups (no-delta)', (r2.stdout || '').includes('SWE_OUTCOME:noop:no-delta'));
   const capAfter = readFileSync(path.join(SANDBOX, ptr.path), 'utf8');

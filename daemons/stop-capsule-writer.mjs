@@ -35,7 +35,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
-  CAPSULE_SECTIONS, classifyMcpEffect, capsuleRowKey, doneRowPriority, DONE_LIMITS, DONE_TAG, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, effectKey, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
+  CAPSULE_SECTIONS, classifyMcpEffect, capsuleRowKey, doneRowPriority, doneRowText, DONE_LIMITS, DONE_TAG, locateCapsuleSection, parseSideEffectRow, formatSideEffectRow, effectKey, inert, storedData, memRoot as resolveMemRoot, scalar, unsafeRawCapsuleDocument,
 } from './lifecycle-common.mjs';
 import { unsafeRawTranscriptDelta } from './raw-acquisitions.mjs';
 import { framingFrontmatter, framingBanner } from './memory-hygiene/resume-framing.mjs';
@@ -573,8 +573,33 @@ try {
     return t;
   };
 
-  const classify = (s) => {
-    const t = storedData(s, 2000);
+  // An idle_notification is the harness saying a teammate went idle, not
+  // speech; stored as Done rows they took 10 of 169 rows on a live autosave.
+  // Read from the RAW event text, before stripMeta or any normalizing (either
+  // can turn an invalid body into valid JSON): one envelope, quoted attributes
+  // respected, whose whole body parses as a JSON object with top-level type
+  // idle_notification. Only complete system-reminder blocks the harness adds
+  // BEFORE or AFTER the envelope are tolerated, each consumed through its own
+  // closer and never across another tag, so speech between two reminders keeps
+  // the event. Nothing inside the body is stripped. Anything else, including a
+  // report that quotes the word, is speech.
+  const REMINDER_BLOCK = String.raw`<system-reminder>(?:(?!<\/?system-reminder>)[\s\S])*<\/system-reminder>`;
+  const IDLE_ENVELOPE = new RegExp(String.raw`^(?:\s*${REMINDER_BLOCK})*\s*(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>(?:\s*${REMINDER_BLOCK})*\s*$`, 'i');
+  const isIdleEnvelope = (raw) => {
+    const body = IDLE_ENVELOPE.exec(String(raw).trim())?.[1];
+    if (body === undefined) return false;
+    try {
+      const parsed = JSON.parse(body.trim());
+      return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.type === 'idle_notification';
+    } catch {
+      return false;
+    }
+  };
+
+  const classify = (s, raw = s) => {
+    // Full normalized text: the Done row and the objective apply their own
+    // caps, so a pre-cut here would make the Done row's dropped count wrong.
+    const t = storedData(s, Infinity);
     let m;
     // [^\]]*\] consumes any "@ <timestamp>" suffix a relay might add before the ]
     if ((m = t.match(/^\[room from ([\w-]+)[^\]]*\]\s*/i))) return { who: `RELAY:${m[1].toLowerCase()}`, human: false, t: t.slice(m[0].length) };
@@ -585,7 +610,7 @@ try {
     // objective + the [OPERATOR] sweep.
     if (/^Another Claude session sent a message/i.test(t) || /^<teammate-message\b/i.test(t)) {
       const pm = t.match(/teammate_id="([\w-]+)"/i);
-      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t };
+      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle: isIdleEnvelope(raw) };
     }
     // Harness/supervisor injections ([supervisor-resume], [refresh-cycle],
     // [auto-pull], loop ticks, ...) arrive as PLAIN user strings and would
@@ -610,7 +635,10 @@ try {
     return { who: 'OPERATOR', human: true, t: bare };
   };
   const tagUtterance = (cl, messageId) => {
-    const row = `[${cl.who}] ${storedData(cl.t, 240)}`;
+    if (cl.idle) return;
+    // A cut row carries the full-text sha256, so the row key is the identity
+    // of the whole utterance within a write and across writes.
+    const row = `[${cl.who}] ${doneRowText(cl.t, 240)}`;
     const key = capsuleRowKey(row);
     // Deduplicate before the cap so repeats cannot evict distinct speech.
     // Keep the latest occurrence in capture order, matching the stored rows.
@@ -719,13 +747,13 @@ try {
       const c = ev.message?.content;
       if (typeof c === 'string' && speech) {
         const clean = stripMeta(c);
-        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
+        if (clean && !clean.startsWith('<')) { const cl = classify(clean, c); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
           if (speech && b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
-            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
+            if (clean && !clean.startsWith('<')) { const cl = classify(clean, b.text); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = resultText(b.content);
@@ -989,7 +1017,8 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
     return !key || DONE_TAG.test(key)
       ? key : `[ASSISTANT] ${key}`;
   };
-  const ts = new Date().toISOString().slice(11, 16);
+  // Dated UTC stamp: a reader could not place a bare HH:MM on any day.
+  const ts = `${new Date().toISOString().slice(0, 16)}Z`;
   // Speaker-tagged utterances land under Done — a sweep can grep `[OPERATOR]` there.
   // Autosaves store accepted speech newest-first; readers preserve file order.
   const bulletsBySection = {
