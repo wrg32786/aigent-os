@@ -554,9 +554,10 @@ export function storedData(value, maximum = 240) {
 }
 
 // A Done row is read by people: cut at a sentence end, else a word end, never
-// mid-word, as long as the cut keeps at least half the cap. A cut row names a
-// short hash of the full text, so two long rows that share their opening stay
-// two rows wherever rows are deduplicated by text.
+// mid-word, as long as the cut keeps at least half the cap. A cut row names the
+// full sha256 of the full text (a short prefix collided in review), so two
+// long rows that share their opening stay two rows wherever rows are
+// deduplicated by text, within a write and across writes.
 export function doneRowText(value, maximum = 240) {
   const s = storedData(value, Infinity);
   if (s.length <= maximum) return s;
@@ -564,7 +565,7 @@ export function doneRowText(value, maximum = 240) {
   const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? ')) + 1;
   const word = head.lastIndexOf(' ');
   const cut = sentence >= maximum / 2 ? sentence : word >= maximum / 2 ? word : maximum;
-  const id = createHash('sha256').update(s).digest('hex').slice(0, 8);
+  const id = createHash('sha256').update(s).digest('hex');
   return `${s.slice(0, cut)}…[+${s.length - cut} chars #${id}]`;
 }
 

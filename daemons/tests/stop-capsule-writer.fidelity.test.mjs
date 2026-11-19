@@ -58,19 +58,18 @@ function runWorker(events) {
   }
 }
 
-// Flush once, rewrite the assistant row into the pre-fix rendering (240-char
-// raw cut, bare HH:MM stamp) an older writer stored, drop the offset so the
-// same span replays, flush again.
-function runWorkerTwiceWithLegacySeed(events, text) {
+// Flush `first`, rewrite its assistant row into the pre-fix rendering an older
+// writer stored (240-char raw cut, bare HH:MM stamp), keep the saved offset,
+// then flush `first` plus `more` so only the new events are read.
+function runAfterLegacyRow(first, more, text) {
   const fixture = makeRoot();
   try {
-    const capsule = flush(fixture, events);
+    const capsule = flush(fixture, first);
     const legacy = `- 07:49 [ASSISTANT] ${text.slice(0, 240)}…[+${text.length - 240} chars]`;
     const doc = readFileSync(capsule, 'utf8').split(/\r?\n/)
       .map((line) => (line.startsWith('- ') && line.includes('[ASSISTANT]') ? legacy : line)).join('\n');
     writeFileSync(capsule, doc);
-    rmSync(fixture.statePath, { force: true });
-    flush(fixture, events);
+    flush(fixture, [...first, ...more]);
     return doneRows(readFileSync(capsule, 'utf8'));
   } finally {
     rmSync(fixture.base, { recursive: true, force: true });
@@ -87,7 +86,7 @@ test('a long Done row is cut at a sentence end, never mid-word, and counts what 
   const rows = runWorker([assistant(text)]);
   const row = rows.find((r) => r.includes('[ASSISTANT]'));
   assert.ok(row, `assistant row missing: ${rows.join('\n')}`);
-  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{64}\]$/);
   assert.ok(m, `row must carry the truncation marker: ${row}`);
   assert.equal(m[1].trimEnd(), first, 'kept text must end at the sentence boundary');
   assert.equal(Number(m[2]), text.length - m[1].length, 'marker must count the dropped characters');
@@ -98,7 +97,7 @@ test('a Done row with no sentence end in reach is cut at a word boundary', () =>
   const text = `${'alphabet soup kitchen '.repeat(14)}omega`;
   const rows = runWorker([assistant(text)]);
   const row = rows.find((r) => r.includes('[ASSISTANT]'));
-  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{64}\]$/);
   assert.ok(m, `row must carry the truncation marker: ${row}`);
   assert.match(m[1], /(alphabet|soup|kitchen)$/, `cut must land after a whole word: ${m[1].slice(-30)}`);
   assert.equal(Number(m[2]), text.length - m[1].length);
@@ -148,17 +147,11 @@ test('two long reports sharing their first sentence stay two Done rows', () => {
   assert.equal(rows.filter((r) => r.includes('[ASSISTANT]') && r.includes('release checklist')).length, 2, rows.join('\n'));
 });
 
-test('replaying an utterance an older writer stored in the legacy cut does not duplicate it', () => {
-  const text = 'The dream log holds 189 improvement candidates from 65 nightly runs since July 25, and only one was ever formally adopted. A read-only agent is now sorting all 189 into done in code, done as a note, superseded, stale and open, with a ranked shortlist on top.';
-  const rows = runWorkerTwiceWithLegacySeed([assistant(text)], text);
-  assert.equal(rows.filter((r) => r.includes('The dream log holds 189')).length, 1, rows.join('\n'));
-});
-
 test('a long operator message reports the true number of dropped characters', () => {
   const words = Array.from({ length: 1000 }, (_, i) => `word${i % 10}`).join(' ');
   const rows = runWorker([user(words), assistant('ok')]);
   const row = rows.find((r) => r.includes('[OPERATOR]'));
-  const m = row.match(/\[OPERATOR\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  const m = row.match(/\[OPERATOR\] (.*)…\[\+(\d+) chars #[0-9a-f]{64}\]$/);
   assert.ok(m, row);
   assert.equal(Number(m[2]), words.length - m[1].length);
 });
@@ -167,7 +160,43 @@ test('a sentence of exactly half the cap is kept whole', () => {
   const half = `${'b'.repeat(119)}.`; // 120 chars: exactly half of the 240 cap
   const text = `${half} ${'c'.repeat(60)} ${'d'.repeat(60)} ${'e'.repeat(60)}`;
   const rows = runWorker([assistant(text)]);
-  const m = rows.find((r) => r.includes('[ASSISTANT]')).match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  const m = rows.find((r) => r.includes('[ASSISTANT]')).match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{64}\]$/);
   assert.ok(m);
   assert.equal(m[1], half);
+});
+
+// Third review of bbbd1724 (titus, 2026-11-19). Ruling taken with it: no
+// legacy-rendering alias. An older row cannot tell a replay from new speech
+// that shares its first 240 characters, and dropping speech is worse than
+// one repeated row when a pre-fix capsule's span is replayed.
+
+const sharedOpening = 'The release checklist passed every gate tonight and the build artifacts are signed, verified and staged for the morning window as planned.'
+  + ' Smoke tests ran against the staging copy with no errors and the rollback plan is written down in the runbook for anyone on call.';
+
+test('a legacy row sharing the first 240 characters never suppresses new speech', () => {
+  const east = `${sharedOpening} Deploy east.`;
+  const west = `${sharedOpening} Deploy west.`;
+  const rows = runAfterLegacyRow([assistant(east)], [user('next'), assistant(west)], east);
+  assert.equal(rows.filter((r) => r.includes('release checklist')).length, 2, rows.join('\n'));
+});
+
+test('two long reports whose short hashes collide stay two rows', () => {
+  const a = `${'x'.repeat(250)}009753`;
+  const b = `${'x'.repeat(250)}017528`;
+  const rows = runWorker([assistant(a), user('next'), assistant(b)]);
+  assert.equal(rows.filter((r) => r.includes('[ASSISTANT] xxxx')).length, 2, rows.join('\n'));
+});
+
+test('a peer report whose body is not valid JSON as sent is kept, even if flattening would make it parse', () => {
+  const report = 'Another Claude session sent a message:\n<teammate-message teammate_id="builder-n" color="green">\n'
+    + '{"type":"idle_notification","note":"line one\nline two"}\n</teammate-message>';
+  const rows = runWorker([user(report), assistant('Noted.')]);
+  assert.ok(rows.some((r) => r.includes('[PEER:builder-n]')), rows.join('\n'));
+});
+
+test('an idle envelope with a > inside a quoted attribute is still dropped', () => {
+  const idle = 'Another Claude session sent a message:\n<teammate-message teammate_id="builder-w" summary="wait > budget">\n'
+    + '{"type":"idle_notification","from":"builder-w","idleReason":"available"}\n</teammate-message>';
+  const rows = runWorker([user(idle), assistant('Read it.')]);
+  assert.equal(rows.filter((r) => r.includes('[PEER:builder-w]')).length, 0, rows.join('\n'));
 });

@@ -573,6 +573,24 @@ try {
     return t;
   };
 
+  // An idle_notification is the harness saying a teammate went idle, not
+  // speech; stored as Done rows they took 10 of 169 rows on a live autosave.
+  // Read from the ORIGINAL text (normalizing first can turn an invalid body
+  // into valid JSON): one envelope, quoted attributes respected, whose whole
+  // body parses as a JSON object with top-level type idle_notification.
+  // Anything else, including a report that quotes the word, is speech.
+  const IDLE_ENVELOPE = /^(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>\s*$/i;
+  const isIdleEnvelope = (raw) => {
+    const body = IDLE_ENVELOPE.exec(String(raw).trim())?.[1];
+    if (body === undefined) return false;
+    try {
+      const parsed = JSON.parse(body.trim());
+      return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.type === 'idle_notification';
+    } catch {
+      return false;
+    }
+  };
+
   const classify = (s) => {
     // Full normalized text: the Done row and the objective apply their own
     // caps, so a pre-cut here would make the Done row's dropped count wrong.
@@ -587,17 +605,7 @@ try {
     // objective + the [OPERATOR] sweep.
     if (/^Another Claude session sent a message/i.test(t) || /^<teammate-message\b/i.test(t)) {
       const pm = t.match(/teammate_id="([\w-]+)"/i);
-      // An idle_notification is the harness saying a teammate went idle, not
-      // speech; stored as Done rows they took 10 of 169 rows on a live autosave.
-      // Only an envelope whose whole body is that JSON object is dropped; a
-      // report that merely quotes the word is speech and stays.
-      const body = /<teammate-message\b[^>]*>([\s\S]*?)<\/teammate-message>\s*$/i.exec(t)?.[1];
-      let idle = false;
-      try {
-        const parsed = body === undefined ? null : JSON.parse(body.trim());
-        idle = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.type === 'idle_notification';
-      } catch { idle = false; }
-      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle };
+      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle: isIdleEnvelope(s) };
     }
     // Harness/supervisor injections ([supervisor-resume], [refresh-cycle],
     // [auto-pull], loop ticks, ...) arrive as PLAIN user strings and would
@@ -623,17 +631,15 @@ try {
   };
   const tagUtterance = (cl, messageId) => {
     if (cl.idle) return;
-    // The cut row carries a hash of the full text, so two reports that share
-    // their first sentence stay two rows. `legacy` is the pre-fix rendering,
-    // used only to recognise rows older capsules already hold.
+    // A cut row carries the full-text sha256, so the row key is the identity
+    // of the whole utterance within a write and across writes.
     const row = `[${cl.who}] ${doneRowText(cl.t, 240)}`;
-    const legacy = `[${cl.who}] ${storedData(cl.t, 240)}`;
     const key = capsuleRowKey(row);
     // Deduplicate before the cap so repeats cannot evict distinct speech.
     // Keep the latest occurrence in capture order, matching the stored rows.
     const prior = utterances.findIndex((utterance) => capsuleRowKey(utterance.row) === key);
     if (prior !== -1) utterances.splice(prior, 1);
-    utterances.push({ row, legacy, messageId });
+    utterances.push({ row, messageId });
     // Protect only the latest assistant row; older claims yield to operators.
     if (utterances.length > DONE_LIMITS.delta) {
       const latestAssistant = utterances.findLastIndex(({ row }) => DONE_TAG.exec(row)?.[1] === 'ASSISTANT');
@@ -933,7 +939,7 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
 
   // The shared row key ignores list markers and volatile HH:MM stamps, so
   // replaying a span at another wall-clock minute cannot duplicate its rows.
-  function mergeUnder(definition, bullets, keyFn = capsuleRowKey, replace = false, aliases = null) {
+  function mergeUnder(definition, bullets, keyFn = capsuleRowKey, replace = false) {
     if (!bullets.length) return;
     const { anchor } = definition;
     const section = locateCapsuleSection(doc, definition);
@@ -974,7 +980,6 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
     const fresh = bullets.filter((bullet) => {
       const key = keyFn(bullet);
       if (existingNorm.has(key)) return false;
-      if (aliases?.has(bullet) && existingNorm.has(keyFn(aliases.get(bullet)))) return false;
       existingNorm.add(key);
       return true;
     });
@@ -1020,9 +1025,6 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
     errors: errors.map((e) => `- ${ts} ${e} → (unresolved at capture; check next Done bullet)`),
     rows: [...claimedRows].map((r) => `- ${r} (claimed this session — re-verify against memory at reinject)`),
   };
-  // Each Done bullet mapped to its pre-fix rendering, so replaying a span an
-  // older writer already stored does not add the same utterance twice.
-  const doneAliases = new Map(utterances.map(({ row, legacy }) => [`- ${ts} ${row}`, `- ${ts} ${legacy}`]));
 
   const updates = new Map(effectCalls);
   for (const [op, result] of effectResults) {
@@ -1052,8 +1054,7 @@ ${CAPSULE_SECTIONS.map(({ title, anchor }) => `## ${title}\n${anchor}`).join('\n
   });
   for (const definition of CAPSULE_SECTIONS) {
     if (definition.key !== 'effects') {
-      mergeUnder(definition, bulletsBySection[definition.key] || [], definition.key === 'done' ? doneKey : capsuleRowKey,
-        false, definition.key === 'done' ? doneAliases : null);
+      mergeUnder(definition, bulletsBySection[definition.key] || [], definition.key === 'done' ? doneKey : capsuleRowKey);
       continue;
     }
     // Earlier merges can shift offsets; locate again before restoring the anchor.
