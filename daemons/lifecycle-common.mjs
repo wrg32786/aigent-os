@@ -554,15 +554,18 @@ export function storedData(value, maximum = 240) {
 }
 
 // A Done row is read by people: cut at a sentence end, else a word end, never
-// mid-word, as long as the cut keeps at least half the cap.
+// mid-word, as long as the cut keeps at least half the cap. A cut row names a
+// short hash of the full text, so two long rows that share their opening stay
+// two rows wherever rows are deduplicated by text.
 export function doneRowText(value, maximum = 240) {
   const s = storedData(value, Infinity);
   if (s.length <= maximum) return s;
   const head = s.slice(0, maximum + 1);
-  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  const sentence = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? ')) + 1;
   const word = head.lastIndexOf(' ');
-  const cut = sentence >= maximum / 2 ? sentence + 1 : word >= maximum / 2 ? word : maximum;
-  return `${s.slice(0, cut)}…[+${s.length - cut} chars]`;
+  const cut = sentence >= maximum / 2 ? sentence : word >= maximum / 2 ? word : maximum;
+  const id = createHash('sha256').update(s).digest('hex').slice(0, 8);
+  return `${s.slice(0, cut)}…[+${s.length - cut} chars #${id}]`;
 }
 
 // Fixed field order keeps pipes inside quoted values from becoming metadata.

@@ -17,34 +17,63 @@ import { capsuleRowKey } from '../lifecycle-common.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON = process.env.SCW_DAEMON || path.join(__dirname, '..', 'stop-capsule-writer.mjs');
 
-function runWorker(events) {
+const SESSION = '89abcdef-fidelity-session';
+
+function makeRoot() {
   const base = mkdtempSync(path.join(tmpdir(), 'scw-fidelity-'));
+  const root = path.join(base, 'test-root');
+  const memory = path.join(root, 'memory');
+  mkdirSync(path.join(memory, 'capsules'), { recursive: true });
+  writeFileSync(path.join(memory, 'BODY_STATE.json'), JSON.stringify({ state: {} }));
+  return { base, root, memory, statePath: path.join(memory, 'runtime', 'stop-writer', `${SESSION}.json`) };
+}
+
+function flush({ root, statePath }, events) {
+  const transcriptPath = path.join(root, `${SESSION}.jsonl`);
+  writeFileSync(transcriptPath, `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const run = spawnSync(process.execPath, [DAEMON, '--worker', JSON.stringify({
+    __root: root, session_id: SESSION, transcript_path: transcriptPath,
+  })], {
+    cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    env: {
+      ...process.env, AIGENT_ROOT: root, AIGENT_STATE_HOME_DIR: '', AIGENT_SEAT_ID: '',
+      CLAUDE_PROJECT_DIR: '', LIFECYCLE_KILL_STOP_WRITER: '0',
+    },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : null;
+  assert.ok(state?.capsule_path && existsSync(state.capsule_path), 'worker must land a capsule');
+  return state.capsule_path;
+}
+
+const doneRows = (doc) => doc.split('<!-- swe:done -->')[1].split(/\r?\n## /)[0]
+  .split(/\r?\n/).filter((line) => line.startsWith('- '));
+
+function runWorker(events) {
+  const fixture = makeRoot();
   try {
-    const root = path.join(base, 'test-root');
-    const memory = path.join(root, 'memory');
-    mkdirSync(path.join(memory, 'capsules'), { recursive: true });
-    writeFileSync(path.join(memory, 'BODY_STATE.json'), JSON.stringify({ state: {} }));
-    const sessionId = '89abcdef-fidelity-session';
-    const transcriptPath = path.join(root, `${sessionId}.jsonl`);
-    writeFileSync(transcriptPath, `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
-    const run = spawnSync(process.execPath, [DAEMON, '--worker', JSON.stringify({
-      __root: root, session_id: sessionId, transcript_path: transcriptPath,
-    })], {
-      cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
-      env: {
-        ...process.env, AIGENT_ROOT: root, AIGENT_STATE_HOME_DIR: '', AIGENT_SEAT_ID: '',
-        CLAUDE_PROJECT_DIR: '', LIFECYCLE_KILL_STOP_WRITER: '0',
-      },
-    });
-    assert.equal(run.status, 0, run.stderr);
-    const statePath = path.join(memory, 'runtime', 'stop-writer', `${sessionId}.json`);
-    const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : null;
-    assert.ok(state?.capsule_path && existsSync(state.capsule_path), 'worker must land a capsule');
-    const doc = readFileSync(state.capsule_path, 'utf8');
-    const done = doc.split('<!-- swe:done -->')[1].split(/\r?\n## /)[0];
-    return done.split(/\r?\n/).filter((line) => line.startsWith('- '));
+    return doneRows(readFileSync(flush(fixture, events), 'utf8'));
   } finally {
-    rmSync(base, { recursive: true, force: true });
+    rmSync(fixture.base, { recursive: true, force: true });
+  }
+}
+
+// Flush once, rewrite the assistant row into the pre-fix rendering (240-char
+// raw cut, bare HH:MM stamp) an older writer stored, drop the offset so the
+// same span replays, flush again.
+function runWorkerTwiceWithLegacySeed(events, text) {
+  const fixture = makeRoot();
+  try {
+    const capsule = flush(fixture, events);
+    const legacy = `- 07:49 [ASSISTANT] ${text.slice(0, 240)}…[+${text.length - 240} chars]`;
+    const doc = readFileSync(capsule, 'utf8').split(/\r?\n/)
+      .map((line) => (line.startsWith('- ') && line.includes('[ASSISTANT]') ? legacy : line)).join('\n');
+    writeFileSync(capsule, doc);
+    rmSync(fixture.statePath, { force: true });
+    flush(fixture, events);
+    return doneRows(readFileSync(capsule, 'utf8'));
+  } finally {
+    rmSync(fixture.base, { recursive: true, force: true });
   }
 }
 
@@ -58,7 +87,7 @@ test('a long Done row is cut at a sentence end, never mid-word, and counts what 
   const rows = runWorker([assistant(text)]);
   const row = rows.find((r) => r.includes('[ASSISTANT]'));
   assert.ok(row, `assistant row missing: ${rows.join('\n')}`);
-  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars\]$/);
+  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
   assert.ok(m, `row must carry the truncation marker: ${row}`);
   assert.equal(m[1].trimEnd(), first, 'kept text must end at the sentence boundary');
   assert.equal(Number(m[2]), text.length - m[1].length, 'marker must count the dropped characters');
@@ -69,7 +98,7 @@ test('a Done row with no sentence end in reach is cut at a word boundary', () =>
   const text = `${'alphabet soup kitchen '.repeat(14)}omega`;
   const rows = runWorker([assistant(text)]);
   const row = rows.find((r) => r.includes('[ASSISTANT]'));
-  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars\]$/);
+  const m = row.match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
   assert.ok(m, `row must carry the truncation marker: ${row}`);
   assert.match(m[1], /(alphabet|soup|kitchen)$/, `cut must land after a whole word: ${m[1].slice(-30)}`);
   assert.equal(Number(m[2]), text.length - m[1].length);
@@ -98,4 +127,47 @@ test('row keys ignore both the new dated stamp and the legacy HH:MM stamp', () =
   const body = '[ASSISTANT] Capsule confirmed.';
   assert.equal(capsuleRowKey(`- 2026-11-19T07:49Z ${body}`), body);
   assert.equal(capsuleRowKey(`- 07:49 ${body}`), body);
+});
+
+// Review of 86a21a8a (titus, 2026-11-19): five regressions, one test each.
+
+test('a peer report that only quotes idle_notification is kept', () => {
+  const report = 'Another Claude session sent a message:\n<teammate-message teammate_id="builder-q" color="green">\n'
+    + 'I fixed the {"type":"idle_notification"} parser.\n</teammate-message>';
+  const rows = runWorker([user(report), assistant('Noted.')]);
+  assert.ok(rows.some((r) => r.includes('[PEER:builder-q]') && r.includes('parser')), rows.join('\n'));
+});
+
+test('two long reports sharing their first sentence stay two Done rows', () => {
+  const opening = 'The release checklist passed every gate tonight and the build artifacts are signed, verified and staged for the morning window as planned.';
+  const filler = ' Smoke tests ran against the staging copy with no errors and the rollback plan is written down in the runbook for anyone on call.';
+  const east = `${opening}${filler} Deploy east.`;
+  const west = `${opening}${filler} Deploy west.`;
+  assert.equal(east.length, west.length);
+  const rows = runWorker([assistant(east), user('next'), assistant(west)]);
+  assert.equal(rows.filter((r) => r.includes('[ASSISTANT]') && r.includes('release checklist')).length, 2, rows.join('\n'));
+});
+
+test('replaying an utterance an older writer stored in the legacy cut does not duplicate it', () => {
+  const text = 'The dream log holds 189 improvement candidates from 65 nightly runs since July 25, and only one was ever formally adopted. A read-only agent is now sorting all 189 into done in code, done as a note, superseded, stale and open, with a ranked shortlist on top.';
+  const rows = runWorkerTwiceWithLegacySeed([assistant(text)], text);
+  assert.equal(rows.filter((r) => r.includes('The dream log holds 189')).length, 1, rows.join('\n'));
+});
+
+test('a long operator message reports the true number of dropped characters', () => {
+  const words = Array.from({ length: 1000 }, (_, i) => `word${i % 10}`).join(' ');
+  const rows = runWorker([user(words), assistant('ok')]);
+  const row = rows.find((r) => r.includes('[OPERATOR]'));
+  const m = row.match(/\[OPERATOR\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  assert.ok(m, row);
+  assert.equal(Number(m[2]), words.length - m[1].length);
+});
+
+test('a sentence of exactly half the cap is kept whole', () => {
+  const half = `${'b'.repeat(119)}.`; // 120 chars: exactly half of the 240 cap
+  const text = `${half} ${'c'.repeat(60)} ${'d'.repeat(60)} ${'e'.repeat(60)}`;
+  const rows = runWorker([assistant(text)]);
+  const m = rows.find((r) => r.includes('[ASSISTANT]')).match(/\[ASSISTANT\] (.*)…\[\+(\d+) chars #[0-9a-f]{8}\]$/);
+  assert.ok(m);
+  assert.equal(m[1], half);
 });
