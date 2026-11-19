@@ -194,7 +194,7 @@ export function reconcileAttention({
     if (!indexes.has(notes)) indexes.set(notes, suppliedProjectIndex(notes));
     return indexes.get(notes);
   };
-  const entryFile = (date, entry) => (typeof entry === 'string'
+  const entryFile = (date, entry) => (entry === null || typeof entry !== 'object'
     ? { source: `daily/${date}.md`, body: entry, index: projectIndex }
     : { source: entry.source, body: entry.text, index: entry.projectNotes ? indexOf(entry.projectNotes) : projectIndex });
   const files = selected.flatMap(([date, value]) => (Array.isArray(value)
@@ -286,12 +286,19 @@ if (direct) {
         const match = entry.name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
         if (!match || match[1] < start || match[1] > asOf) continue;
         const file = path.join(dailyRoot, entry.name);
+        const source = path.relative(paths.repositoryRoot, file).split(path.sep).join('/');
+        // A dated note in the window that cannot be checked or read is a
+        // measurement gap: fail the run by name, never a PASS without it.
+        const unreadable = (error) => new Error(
+          `RECONCILE FAIL reason=daily-note-unreadable path=${source} code=${error?.code || 'unknown'}`,
+        );
         let target;
-        try { target = statSync(file); } catch { continue; }
+        try { target = statSync(file); } catch (error) { throw unreadable(error); }
         if (!target.isFile()) continue;
         vaultNotes ??= projectIndexFromRoot(vault);
-        const source = path.relative(paths.repositoryRoot, file).split(path.sep).join('/');
-        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: readFileSync(file, 'utf8'), projectNotes: vaultNotes }];
+        let body;
+        try { body = readFileSync(file, 'utf8'); } catch (error) { throw unreadable(error); }
+        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: body, projectNotes: vaultNotes }];
       }
     }
     const result = reconcileAttention({

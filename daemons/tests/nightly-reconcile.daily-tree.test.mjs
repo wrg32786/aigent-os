@@ -91,13 +91,14 @@ test('the receipt counts and lists every file it scored', () => {
 });
 
 test('one folder reached by two spellings is read once (case-insensitive volume)', (t) => {
+  let foldsCase = false;
   const r = reconcile((root) => {
     write(root, '.aigent/state.json', JSON.stringify({ memory_root: 'Vault/memory' }));
     write(root, 'Vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
     write(root, `vault/daily/${AS_OF}.md`, '- Alpha\n- Beta\n');
-    if (!existsSync(path.join(root, 'VAULT', 'daily'))) t.skip('case-sensitive volume: the two spellings are two folders');
+    foldsCase = existsSync(path.join(root, 'VAULT', 'daily'));
   });
-  if (r.status === null) return;
+  if (!foldsCase) { t.skip('Windows and macOS case-insensitive volumes only'); return; }
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /notes=1\b/, r.stdout);
   assert.match(r.stdout, /project=Alpha points=1 /, r.stdout);
@@ -151,7 +152,7 @@ test('an in-window note that is a symlink to a regular file is read', (t) => {
       symlinkSync(path.join(root, 'elsewhere', 'note.md'), path.join(root, 'vault', 'daily', `${AS_OF}.md`), 'file');
     } catch { linked = false; }
   });
-  if (!linked) { t.skip('this account cannot create symlinks'); return; }
+  if (!linked) { t.skip('POSIX accounts with symlink rights only'); return; }
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /project=Alpha points=1 /);
 });
@@ -167,7 +168,7 @@ test('a vault with no selected daily note never has its project notes opened', (
     chmodSync(gamma, 0o000);
     try { readFileSync(gamma); } catch { locked = true; }
   });
-  if (!locked) { t.skip('this platform or account can still read a chmod 000 file'); return; }
+  if (!locked) { t.skip('POSIX non-root accounts only'); return; }
   assert.equal(r.status, 0, r.stderr);
 });
 
@@ -178,7 +179,7 @@ test('reconcileAttention still scores an array of plain note strings for one dat
 });
 
 test('a receipt keeps a literal backslash in a POSIX directory name', (t) => {
-  if (process.platform === 'win32') { t.skip('backslash is the separator on win32'); return; }
+  if (process.platform === 'win32') { t.skip('POSIX directory names with a backslash only'); return; }
   const r = reconcile((root) => {
     write(root, 'seat\\archive/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
     write(root, `seat\\archive/vault/daily/${AS_OF}.md`, '- Alpha\n');
@@ -196,4 +197,26 @@ test('an invalid --as-of fails with the established error before any tree is sca
     assert.equal(r.status, 1, asOf);
     assert.match(r.stderr, /RECONCILE FAIL reason=invalid-as-of/, `${asOf}: ${r.stderr}`);
   }
+});
+
+// Third review of 96577e1c (titus, 2026-11-19).
+
+test('a null daily value is scored as an empty note, not a crash', () => {
+  const result = reconcileAttention({ prioritiesText: PRIORITIES, dailyNotes: { [AS_OF]: '- Alpha', '2026-11-17': null }, asOf: AS_OF });
+  assert.match(result.output, /project=Alpha points=1 /);
+});
+
+test('an in-window daily note that cannot be read fails the run loudly', (t) => {
+  let locked = false;
+  const r = reconcile((root) => {
+    write(root, 'vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, `vault/daily/${AS_OF}.md`, '- Alpha\n');
+    write(root, 'vault/daily/2026-11-17.md', '- Beta\n');
+    const sealed = path.join(root, 'vault', 'daily', '2026-11-17.md');
+    chmodSync(sealed, 0o000);
+    try { readFileSync(sealed); } catch { locked = true; }
+  });
+  if (!locked) { t.skip('POSIX non-root accounts only'); return; }
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /RECONCILE FAIL reason=daily-/, r.stderr);
 });
