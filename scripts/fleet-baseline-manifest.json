@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-19-e07f4b57",
-  "public_product_commit": "e07f4b5788d4b81fa13c1cfeb166f3204c9582e3",
+  "baseline_id": "aigent-os-2026-11-19-8925c5f6",
+  "public_product_commit": "8925c5f69029b5c4d9a4679e5a1eb13085d500fe",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -76,7 +76,8 @@
     "v8 recut for the stop-writer Done fidelity fix (b97f47f5): pins that moved: daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs. Done rows are cut at a sentence or word end (doneRowText), Done and error bullets carry a dated YYYY-MM-DDTHH:MMZ stamp that capsuleRowKey strips alongside the legacy HH:MM, and teammate idle_notification envelopes are not stored as Done rows. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the stop-writer Done fidelity review fixes (eec8f855): pins that moved: daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs. Envelope-level idle detection, a full-text hash on cut rows, legacy-rendering aliases on replay, true dropped counts, and the half-cap sentence boundary. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the stop-writer third review (c3f9628c): pins that moved: daemons/stop-capsule-writer.mjs, daemons/lifecycle-common.mjs. No legacy alias, the full sha256 on cut Done rows, and idle detection on the original envelope text. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for the stop-writer raw-text idle check (e07f4b57): pins that moved: daemons/stop-capsule-writer.mjs. Idle envelopes are judged on the raw event text. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for the stop-writer raw-text idle check (e07f4b57): pins that moved: daemons/stop-capsule-writer.mjs. Idle envelopes are judged on the raw event text. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for the stop-writer reminder-block matcher (8925c5f6): pins that moved: daemons/stop-capsule-writer.mjs. Reminder blocks end at their own closer and are tolerated on both envelope edges. Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
@@ -94,7 +95,7 @@
     "hooks/suggest-compact.sh": "a7aaf8d9eee7f2c7d5269167566a51677f22319f8343cb904ea82ba2390197f4",
     "hooks/auto-capture.sh": "47f3d26989b74ec9c3f32fc4f108e88f89bbbfb26b0a0231be7ec7d2f9eb8fff",
     "hooks/security-scan.sh": "64046ceec1afaae7f278ad47be7795c6574c3d5d22576087b1881d80259521f1",
-    "daemons/stop-capsule-writer.mjs": "def5f5341d13a0d2686815884a0f03b54a3216be7948b5f58695951329563247",
+    "daemons/stop-capsule-writer.mjs": "a7b34951b28da04233e645d2fd97cfa26204e4178641ca3e1f4a1f21ffc49a3d",
     "daemons/discipline-check.mjs": "8c0c43beea08d9349407fcd58697bb2127a0b5eafae0f9981fbefa0fb72e2181",
     "hooks/session-capture-summary.sh": "3867124cb1fd3b526a693eaf9b23d164644f04c61eec09d50552d6dc8ef53aef",
     "hooks/log-token-usage.sh": "d6940138f66a9ef407d7a0a92a2a67d7a5f76270ea17004159a733b2a20d9700",
