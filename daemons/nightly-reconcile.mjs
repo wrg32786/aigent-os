@@ -181,10 +181,13 @@ export function reconcileAttention({
   const selected = Object.entries(dailyNotes || {})
     .filter(([date]) => date >= start && date <= asOf)
     .sort(([left], [right]) => left.localeCompare(right));
-  for (const [, text] of selected) {
-    const scored = scoreNote(text, projects, projectIndex);
-    for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
-    nonTier += scored.nonTier;
+  // A date may carry one note per daily tree; each is scored on its own.
+  for (const [, dayNotes] of selected) {
+    for (const note of Array.isArray(dayNotes) ? dayNotes : [dayNotes]) {
+      const scored = scoreNote(note, projects, projectIndex);
+      for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
+      nonTier += scored.nonTier;
+    }
   }
   const denominator = [...totals.values()].reduce((sum, value) => sum + value, 0) + nonTier;
   if (!denominator) {
@@ -241,12 +244,20 @@ if (direct) {
   const asOf = dateIndex >= 0 ? process.argv[dateIndex + 1] : '';
   try {
     const paths = resolveNightlyPaths(root);
-    const dailyRoot = path.join(paths.vaultRoot, 'daily');
+    // The capture hooks write <root>/vault/daily. A declared memory root moves
+    // vaultRoot elsewhere, so read both trees (once when they are the same
+    // folder). Same-date notes stay separate entries, never joined text.
+    const dailyRoots = [...new Set([
+      path.join(paths.repositoryRoot, 'vault', 'daily'),
+      path.join(paths.vaultRoot, 'daily'),
+    ].map((dir) => path.resolve(dir)))];
     const dailyNotes = {};
-    if (existsSync(dailyRoot)) {
+    for (const dailyRoot of dailyRoots) {
+      if (!existsSync(dailyRoot)) continue;
       for (const name of readdirSync(dailyRoot)) {
         const match = name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
-        if (match) dailyNotes[match[1]] = readFileSync(path.join(dailyRoot, name), 'utf8');
+        if (!match) continue;
+        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), readFileSync(path.join(dailyRoot, name), 'utf8')];
       }
     }
     const result = reconcileAttention({
