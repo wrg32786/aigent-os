@@ -8,6 +8,8 @@ For changes to the kernel itself (the 16 numbered system documents and extended 
 
 ## [Unreleased]
 
+- README, docs and the installer point to The AIgent Academy, with a tagged join link and an opt-out (`AIGENT_NO_SKOOL=1`, also off in CI or when stdout is not a TTY). A Get help contact link is available on new issues.
+
 ## [1.2.0] (2026-11-10): "Native skill matching and Caddy retirement"
 
 ### Added

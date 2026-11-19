@@ -36,3 +36,6 @@ Or just the manual capsule plugin:
 - [context-capsule plugin](https://github.com/wrg32786/aigent-os/tree/master/plugins/context-capsule)
 - [Releases](https://github.com/wrg32786/aigent-os/releases) (current: [v1.2.0](https://github.com/wrg32786/aigent-os/releases/tag/v1.2.0))
 - [llms.txt](llms.txt)
+- [The AIgent Academy](https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os)
+
+The full walkthrough is in [The AIgent Academy](https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os).
