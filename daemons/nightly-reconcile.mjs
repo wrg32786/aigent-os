@@ -277,9 +277,20 @@ if (direct) {
     };
     const seenDaily = new Set();
     const dailyNotes = {};
+    // ENOENT means the tree is absent. Any other error (EACCES on a vault the
+    // run cannot traverse) is a measurement gap: fail loudly, never a PASS.
+    const treeExists = (dir) => {
+      try {
+        return statSync(dir).isDirectory();
+      } catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
+        const where = path.relative(paths.repositoryRoot, dir).split(path.sep).join('/');
+        throw new Error(`RECONCILE FAIL reason=daily-tree-unreadable path=${where} code=${error?.code || 'unknown'}`);
+      }
+    };
     for (const vault of [paths.vaultRoot, path.join(paths.repositoryRoot, 'vault')]) {
       const dailyRoot = path.join(vault, 'daily');
-      if (!existsSync(dailyRoot) || seenDaily.has(realKey(dailyRoot))) continue;
+      if (!treeExists(dailyRoot) || seenDaily.has(realKey(dailyRoot))) continue;
       seenDaily.add(realKey(dailyRoot));
       let vaultNotes = null;
       for (const entry of readdirSync(dailyRoot, { withFileTypes: true })) {

@@ -10,7 +10,7 @@
 // reading .davinci/vault/daily, last written 2026-11-10.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -26,7 +26,7 @@ function write(root, rel, text) {
   writeFileSync(file, text);
 }
 
-function reconcile(layout, { asOf = AS_OF, stateHome = null } = {}) {
+function reconcile(layout, { asOf = AS_OF, stateHome = null, cleanup = null } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'reconcile-daily-'));
   try {
     layout(root);
@@ -35,6 +35,7 @@ function reconcile(layout, { asOf = AS_OF, stateHome = null } = {}) {
       env: { ...process.env, AIGENT_STATE_HOME_DIR: stateHome ? path.join(root, stateHome) : '', AIGENT_ROOT: '' },
     });
   } finally {
+    if (cleanup) cleanup(root);
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -219,4 +220,21 @@ test('an in-window daily note that cannot be read fails the run loudly', (t) => 
   if (!locked) { t.skip('POSIX non-root accounts only'); return; }
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /RECONCILE FAIL reason=daily-/, r.stderr);
+});
+
+// Fourth review of cdc451fe (titus, 2026-11-19).
+
+test('a hook vault the run cannot traverse fails loudly instead of reading as absent', (t) => {
+  let sealed = false;
+  const r = reconcile((root) => {
+    write(root, '.aigent/state.json', JSON.stringify({ memory_root: '.seat/vault/memory' }));
+    write(root, '.seat/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, `.seat/vault/daily/${AS_OF}.md`, '- Alpha\n');
+    write(root, `vault/daily/${AS_OF}.md`, '- Beta\n');
+    chmodSync(path.join(root, 'vault'), 0o000);
+    try { readdirSync(path.join(root, 'vault', 'daily')); } catch { sealed = true; }
+  }, { cleanup: (root) => chmodSync(path.join(root, 'vault'), 0o700) });
+  if (!sealed) { t.skip('POSIX non-root accounts only'); return; }
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /RECONCILE FAIL reason=daily-tree-unreadable path=vault\/daily/, r.stderr);
 });
