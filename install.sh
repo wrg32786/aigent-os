@@ -1877,3 +1877,11 @@ fi
 # so any earlier failure aborts before this point.
 printf '  If aigent-OS saves you time, a star helps other people find it:\n'
 printf '    https://github.com/wrg32786/aigent-os\n\n'
+
+# Opt-out Academy invitation. Skipped when CI is set, stdout is not a TTY,
+# or AIGENT_NO_SKOOL=1 (also true/yes).
+_skool_flag="$(printf '%s' "${AIGENT_NO_SKOOL:-}" | tr '[:upper:]' '[:lower:]')"
+if [ -z "${CI:-}" ] && [ -t 1 ] && [ "$_skool_flag" != "1" ] && [ "$_skool_flag" != "true" ] && [ "$_skool_flag" != "yes" ]; then
+  printf '  Want help turning this into a business? Join The AIgent Academy:\n'
+  printf '    https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os\n\n'
+fi

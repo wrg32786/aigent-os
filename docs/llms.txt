@@ -31,4 +31,4 @@ aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, 
 
 ## Get guidance
 
-Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. Terms: https://theaigent.co/terms. Join: https://www.skool.com/the-aigent-academy/about.
+Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. Terms: https://theaigent.co/terms. The full walkthrough is in The AIgent Academy: https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os.

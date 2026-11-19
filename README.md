@@ -621,7 +621,9 @@ aigent-OS is the free, open-source harness of [The AIgent](https://theaigent.xyz
 
 ## Get guidance
 
-Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. See the [terms](https://theaigent.co/terms). [Join The AIgent Academy](https://www.skool.com/the-aigent-academy/about).
+Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. See the [terms](https://theaigent.co/terms). The full walkthrough is in [The AIgent Academy](https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os).
+
+The installer may print a short Academy invitation when it finishes. Set `AIGENT_NO_SKOOL=1` to turn it off. It also stays off when `CI` is set or stdout is not a TTY.
 
 ---
 

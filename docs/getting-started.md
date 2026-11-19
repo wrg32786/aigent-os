@@ -181,3 +181,7 @@ Common checks:
 ## Security
 
 Read [`install-security.md`](install-security.md) before installing into a sensitive project. Hooks run with the user's permissions, and the vault can contain private operational context. Use full-disk encryption when the threat model requires encryption at rest, and never commit `.aigent/` or generated embedding indexes.
+
+## Get guidance
+
+Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. See the [terms](https://theaigent.co/terms). The full walkthrough is in [The AIgent Academy](https://www.skool.com/the-aigent-academy/about?ref=gh-aigent-os).
