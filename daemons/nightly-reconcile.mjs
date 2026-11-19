@@ -2,7 +2,7 @@
 // Deterministic seven-calendar-day attention reconciliation.
 
 import {
-  existsSync, readFileSync, readdirSync, realpathSync,
+  existsSync, readFileSync, readdirSync, realpathSync, statSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -159,12 +159,7 @@ function scoreNote(text, projects, projectIndex) {
   };
 }
 
-export function reconcileAttention({
-  prioritiesText,
-  dailyNotes,
-  asOf,
-  projectNotes = [],
-} = {}) {
+function assertAsOf(asOf) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(asOf || ''))) {
     throw new Error('RECONCILE FAIL reason=invalid-as-of');
   }
@@ -173,6 +168,15 @@ export function reconcileAttention({
       || parsedAsOf.toISOString().slice(0, 10) !== asOf) {
     throw new Error('RECONCILE FAIL reason=invalid-as-of');
   }
+}
+
+export function reconcileAttention({
+  prioritiesText,
+  dailyNotes,
+  asOf,
+  projectNotes = [],
+} = {}) {
+  assertAsOf(asOf);
   const projects = parseIntendedShares(prioritiesText);
   const projectIndex = suppliedProjectIndex(projectNotes);
   const start = addDays(asOf, -6);
@@ -181,14 +185,23 @@ export function reconcileAttention({
   const selected = Object.entries(dailyNotes || {})
     .filter(([date]) => date >= start && date <= asOf)
     .sort(([left], [right]) => left.localeCompare(right));
-  // A date maps to one note (a string, labelled daily/<date>.md) or to one
-  // { source, text } entry per daily tree; every file is scored on its own and
-  // named on the receipt.
+  // A date maps to a note string (labelled daily/<date>.md), or to an array of
+  // note strings and { source, text, projectNotes } entries, one per daily
+  // file. Every file is scored on its own, against its own vault's project
+  // notes when it names them, and listed on the receipt.
+  const indexes = new Map();
+  const indexOf = (notes) => {
+    if (!indexes.has(notes)) indexes.set(notes, suppliedProjectIndex(notes));
+    return indexes.get(notes);
+  };
+  const entryFile = (date, entry) => (typeof entry === 'string'
+    ? { source: `daily/${date}.md`, body: entry, index: projectIndex }
+    : { source: entry.source, body: entry.text, index: entry.projectNotes ? indexOf(entry.projectNotes) : projectIndex });
   const files = selected.flatMap(([date, value]) => (Array.isArray(value)
-    ? value.map((entry) => ({ source: entry.source, body: entry.text }))
-    : [{ source: `daily/${date}.md`, body: value }]));
+    ? value.map((entry) => entryFile(date, entry))
+    : [entryFile(date, value)]));
   for (const file of files) {
-    const scored = scoreNote(file.body, projects, projectIndex);
+    const scored = scoreNote(file.body, projects, file.index);
     for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
     nonTier += scored.nonTier;
   }
@@ -247,45 +260,44 @@ if (direct) {
   );
   const asOf = dateIndex >= 0 ? process.argv[dateIndex + 1] : '';
   try {
+    assertAsOf(asOf);
     const paths = resolveNightlyPaths(root);
     // The capture hooks write <root>/vault/daily. A declared memory root moves
-    // vaultRoot elsewhere, so read both vaults: each folder once, by its real
-    // path (case-folded on win32, so a second spelling or a junction is not a
-    // second tree). Each vault adds its own project notes to the index. Only
-    // regular files inside the seven-day window are opened, and same-date
-    // files stay separate entries, never joined text.
-    const start = /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? addDays(asOf, -6) : null;
+    // vaultRoot elsewhere, so read both vaults: each daily folder once, by its
+    // real path (case-folded on win32, so a second spelling or a junction is
+    // not a second tree). Only dated notes inside the seven-day window whose
+    // target is a regular file are opened (a symlinked note counts). A vault's
+    // project notes are read only once one of its daily notes is selected, and
+    // each note is scored against its own vault's notes. Same-date files stay
+    // separate entries, never joined text.
+    const start = addDays(asOf, -6);
     const realKey = (dir) => {
       const real = realpathSync.native(dir);
       return process.platform === 'win32' ? real.toLowerCase() : real;
     };
-    const seenVaults = new Set();
     const seenDaily = new Set();
-    const projectNotes = new Map();
     const dailyNotes = {};
     for (const vault of [paths.vaultRoot, path.join(paths.repositoryRoot, 'vault')]) {
-      if (!existsSync(vault) || seenVaults.has(realKey(vault))) continue;
-      seenVaults.add(realKey(vault));
-      for (const [alias, canonical] of projectIndexFromRoot(vault)) {
-        if (!projectNotes.has(alias)) projectNotes.set(alias, canonical);
-      }
       const dailyRoot = path.join(vault, 'daily');
       if (!existsSync(dailyRoot) || seenDaily.has(realKey(dailyRoot))) continue;
       seenDaily.add(realKey(dailyRoot));
+      let vaultNotes = null;
       for (const entry of readdirSync(dailyRoot, { withFileTypes: true })) {
         const match = entry.name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
-        if (!match || !entry.isFile()) continue;
-        if (start && (match[1] < start || match[1] > asOf)) continue;
+        if (!match || match[1] < start || match[1] > asOf) continue;
         const file = path.join(dailyRoot, entry.name);
-        const source = path.relative(paths.repositoryRoot, file).replace(/\\/g, '/');
-        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: readFileSync(file, 'utf8') }];
+        let target;
+        try { target = statSync(file); } catch { continue; }
+        if (!target.isFile()) continue;
+        vaultNotes ??= projectIndexFromRoot(vault);
+        const source = path.relative(paths.repositoryRoot, file).split(path.sep).join('/');
+        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: readFileSync(file, 'utf8'), projectNotes: vaultNotes }];
       }
     }
     const result = reconcileAttention({
       prioritiesText: readFileSync(path.join(paths.memoryRoot, 'ACTIVE_PRIORITIES.md'), 'utf8'),
       dailyNotes,
       asOf,
-      projectNotes,
     });
     process.stdout.write(result.output + '\n');
     process.exit(0);

@@ -10,11 +10,12 @@
 // reading .davinci/vault/daily, last written 2026-11-10.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { reconcileAttention } from '../nightly-reconcile.mjs';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'nightly-reconcile.mjs');
 const AS_OF = '2026-11-18';
@@ -25,13 +26,13 @@ function write(root, rel, text) {
   writeFileSync(file, text);
 }
 
-function reconcile(layout) {
+function reconcile(layout, { asOf = AS_OF, stateHome = null } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'reconcile-daily-'));
   try {
     layout(root);
-    return spawnSync(process.execPath, [CLI, '--root', root, '--as-of', AS_OF], {
+    return spawnSync(process.execPath, [CLI, '--root', root, '--as-of', asOf], {
       encoding: 'utf8', timeout: 20_000, windowsHide: true,
-      env: { ...process.env, AIGENT_STATE_HOME_DIR: '', AIGENT_ROOT: '' },
+      env: { ...process.env, AIGENT_STATE_HOME_DIR: stateHome ? path.join(root, stateHome) : '', AIGENT_ROOT: '' },
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -121,4 +122,78 @@ test('a date-shaped directory or an out-of-window note is never opened', () => {
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /notes=1\b/);
+});
+
+// Second review of 6ca42d44 (titus, 2026-11-19): six findings, one test each.
+
+const aliasNote = (alias) => `---\naliases:\n  - ${alias}\n---\n# note\n`;
+
+test('each note resolves links against its own vault, so an alias in both vaults is not merged', () => {
+  const r = reconcile((root) => {
+    write(root, '.aigent/state.json', JSON.stringify({ memory_root: '.seat/vault/memory' }));
+    write(root, '.seat/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, '.seat/vault/projects/Alpha.md', aliasNote('Shared'));
+    write(root, 'vault/projects/Gamma.md', aliasNote('Shared'));
+    write(root, `vault/daily/${AS_OF}.md`, '- Alpha and [[Shared]]\n');
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /project=Alpha points=1 /, r.stdout);
+  assert.match(r.stdout, /non_tier_1 points=[1-9]/, r.stdout);
+});
+
+test('an in-window note that is a symlink to a regular file is read', (t) => {
+  let linked = true;
+  const r = reconcile((root) => {
+    write(root, 'vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, 'elsewhere/note.md', '- Alpha\n');
+    mkdirSync(path.join(root, 'vault', 'daily'), { recursive: true });
+    try {
+      symlinkSync(path.join(root, 'elsewhere', 'note.md'), path.join(root, 'vault', 'daily', `${AS_OF}.md`), 'file');
+    } catch { linked = false; }
+  });
+  if (!linked) { t.skip('this account cannot create symlinks'); return; }
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /project=Alpha points=1 /);
+});
+
+test('a vault with no selected daily note never has its project notes opened', (t) => {
+  let locked = false;
+  const r = reconcile((root) => {
+    write(root, '.aigent/state.json', JSON.stringify({ memory_root: '.seat/vault/memory' }));
+    write(root, '.seat/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, `.seat/vault/daily/${AS_OF}.md`, '- Alpha\n');
+    write(root, 'vault/projects/Gamma.md', '# Gamma\n');
+    const gamma = path.join(root, 'vault', 'projects', 'Gamma.md');
+    chmodSync(gamma, 0o000);
+    try { readFileSync(gamma); } catch { locked = true; }
+  });
+  if (!locked) { t.skip('this platform or account can still read a chmod 000 file'); return; }
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('reconcileAttention still scores an array of plain note strings for one date', () => {
+  const result = reconcileAttention({ prioritiesText: PRIORITIES, dailyNotes: { [AS_OF]: ['- Alpha', '- Alpha'] }, asOf: AS_OF });
+  assert.match(result.output, /project=Alpha points=2 /);
+  assert.match(result.output, /notes=2\b/);
+});
+
+test('a receipt keeps a literal backslash in a POSIX directory name', (t) => {
+  if (process.platform === 'win32') { t.skip('backslash is the separator on win32'); return; }
+  const r = reconcile((root) => {
+    write(root, 'seat\\archive/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+    write(root, `seat\\archive/vault/daily/${AS_OF}.md`, '- Alpha\n');
+  }, { stateHome: 'seat\\archive' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /sources=.*seat\\archive\/vault\/daily\//, r.stdout);
+});
+
+test('an invalid --as-of fails with the established error before any tree is scanned', () => {
+  for (const asOf of ['2026-13-01', 'bad']) {
+    const r = reconcile((root) => {
+      write(root, 'vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+      write(root, `vault/daily/${AS_OF}.md`, '- Alpha\n');
+    }, { asOf });
+    assert.equal(r.status, 1, asOf);
+    assert.match(r.stderr, /RECONCILE FAIL reason=invalid-as-of/, `${asOf}: ${r.stderr}`);
+  }
 });
