@@ -2,7 +2,7 @@
 // Deterministic seven-calendar-day attention reconciliation.
 
 import {
-  existsSync, readFileSync, readdirSync,
+  existsSync, readFileSync, readdirSync, realpathSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -181,13 +181,16 @@ export function reconcileAttention({
   const selected = Object.entries(dailyNotes || {})
     .filter(([date]) => date >= start && date <= asOf)
     .sort(([left], [right]) => left.localeCompare(right));
-  // A date may carry one note per daily tree; each is scored on its own.
-  for (const [, dayNotes] of selected) {
-    for (const note of Array.isArray(dayNotes) ? dayNotes : [dayNotes]) {
-      const scored = scoreNote(note, projects, projectIndex);
-      for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
-      nonTier += scored.nonTier;
-    }
+  // A date maps to one note (a string, labelled daily/<date>.md) or to one
+  // { source, text } entry per daily tree; every file is scored on its own and
+  // named on the receipt.
+  const files = selected.flatMap(([date, value]) => (Array.isArray(value)
+    ? value.map((entry) => ({ source: entry.source, body: entry.text }))
+    : [{ source: `daily/${date}.md`, body: value }]));
+  for (const file of files) {
+    const scored = scoreNote(file.body, projects, projectIndex);
+    for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
+    nonTier += scored.nonTier;
   }
   const denominator = [...totals.values()].reduce((sum, value) => sum + value, 0) + nonTier;
   if (!denominator) {
@@ -207,9 +210,9 @@ export function reconcileAttention({
   });
   const nonTierActual = Math.round((nonTier / denominator) * 1000) / 10;
   const lines = [
-    `RECONCILE PASS window=${start}..${asOf} notes=${selected.length}`,
-    `sources=${selected.length
-      ? selected.map(([date]) => `daily/${date}.md`).join(',')
+    `RECONCILE PASS window=${start}..${asOf} notes=${files.length}`,
+    `sources=${files.length
+      ? files.map((file) => file.source).join(',')
       : 'none'}`,
     ...rows.map((row) => (
       `project=${row.name} points=${row.points}`
@@ -223,6 +226,7 @@ export function reconcileAttention({
     ok: true,
     window: { start, end: asOf },
     notes: selected.map(([date]) => date),
+    sources: files.map((file) => file.source),
     rows,
     nonTier: {
       points: nonTier,
@@ -245,26 +249,43 @@ if (direct) {
   try {
     const paths = resolveNightlyPaths(root);
     // The capture hooks write <root>/vault/daily. A declared memory root moves
-    // vaultRoot elsewhere, so read both trees (once when they are the same
-    // folder). Same-date notes stay separate entries, never joined text.
-    const dailyRoots = [...new Set([
-      path.join(paths.repositoryRoot, 'vault', 'daily'),
-      path.join(paths.vaultRoot, 'daily'),
-    ].map((dir) => path.resolve(dir)))];
+    // vaultRoot elsewhere, so read both vaults: each folder once, by its real
+    // path (case-folded on win32, so a second spelling or a junction is not a
+    // second tree). Each vault adds its own project notes to the index. Only
+    // regular files inside the seven-day window are opened, and same-date
+    // files stay separate entries, never joined text.
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? addDays(asOf, -6) : null;
+    const realKey = (dir) => {
+      const real = realpathSync.native(dir);
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    };
+    const seenVaults = new Set();
+    const seenDaily = new Set();
+    const projectNotes = new Map();
     const dailyNotes = {};
-    for (const dailyRoot of dailyRoots) {
-      if (!existsSync(dailyRoot)) continue;
-      for (const name of readdirSync(dailyRoot)) {
-        const match = name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
-        if (!match) continue;
-        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), readFileSync(path.join(dailyRoot, name), 'utf8')];
+    for (const vault of [paths.vaultRoot, path.join(paths.repositoryRoot, 'vault')]) {
+      if (!existsSync(vault) || seenVaults.has(realKey(vault))) continue;
+      seenVaults.add(realKey(vault));
+      for (const [alias, canonical] of projectIndexFromRoot(vault)) {
+        if (!projectNotes.has(alias)) projectNotes.set(alias, canonical);
+      }
+      const dailyRoot = path.join(vault, 'daily');
+      if (!existsSync(dailyRoot) || seenDaily.has(realKey(dailyRoot))) continue;
+      seenDaily.add(realKey(dailyRoot));
+      for (const entry of readdirSync(dailyRoot, { withFileTypes: true })) {
+        const match = entry.name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
+        if (!match || !entry.isFile()) continue;
+        if (start && (match[1] < start || match[1] > asOf)) continue;
+        const file = path.join(dailyRoot, entry.name);
+        const source = path.relative(paths.repositoryRoot, file).replace(/\\/g, '/');
+        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: readFileSync(file, 'utf8') }];
       }
     }
     const result = reconcileAttention({
       prioritiesText: readFileSync(path.join(paths.memoryRoot, 'ACTIVE_PRIORITIES.md'), 'utf8'),
       dailyNotes,
       asOf,
-      projectNotes: projectIndexFromRoot(paths.vaultRoot),
+      projectNotes,
     });
     process.stdout.write(result.output + '\n');
     process.exit(0);
