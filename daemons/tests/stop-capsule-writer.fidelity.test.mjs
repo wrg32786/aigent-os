@@ -217,3 +217,26 @@ test('an idle envelope followed by a harness system-reminder is still dropped', 
   const rows = runWorker([user(idle), assistant('Read it.')]);
   assert.equal(rows.filter((r) => r.includes('[PEER:builder-s]')).length, 0, rows.join('\n'));
 });
+
+// Fifth review of ff77cd4b (titus, 2026-11-19): both event shapes, string
+// content and a text block, must agree.
+const textBlock = (text) => ({ type: 'user', isMeta: false, message: { content: [{ type: 'text', text }] } });
+const idleBody = (id) => 'Another Claude session sent a message:\n'
+  + `<teammate-message teammate_id="${id}" color="blue">\n`
+  + `{"type":"idle_notification","from":"${id}","idleReason":"available"}\n</teammate-message>`;
+
+test('speech between two trailing reminders keeps the event', () => {
+  for (const shape of [user, textBlock]) {
+    const event = `${idleBody('builder-t')}\n<system-reminder>One.</system-reminder>\nRelease is blocked.\n<system-reminder>Two.</system-reminder>`;
+    const rows = runWorker([shape(event), assistant('Read it.')]);
+    assert.equal(rows.filter((r) => r.includes('[PEER:builder-t]')).length, 1, `${shape.name}: ${rows.join('\n')}`);
+  }
+});
+
+test('a complete reminder before the preamble does not turn an idle envelope into a Done row', () => {
+  for (const shape of [user, textBlock]) {
+    const event = `<system-reminder>\nContext note.\n</system-reminder>\n${idleBody('builder-u')}`;
+    const rows = runWorker([shape(event), assistant('Read it.')]);
+    assert.equal(rows.filter((r) => r.includes('[PEER:builder-u]')).length, 0, `${shape.name}: ${rows.join('\n')}`);
+  }
+});

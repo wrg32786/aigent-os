@@ -578,10 +578,13 @@ try {
   // Read from the RAW event text, before stripMeta or any normalizing (either
   // can turn an invalid body into valid JSON): one envelope, quoted attributes
   // respected, whose whole body parses as a JSON object with top-level type
-  // idle_notification. Only complete system-reminder blocks the harness
-  // appends AFTER the closing tag are tolerated; nothing inside the body is
-  // stripped. Anything else, including a report that quotes the word, is speech.
-  const IDLE_ENVELOPE = /^(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)*\s*$/i;
+  // idle_notification. Only complete system-reminder blocks the harness adds
+  // BEFORE or AFTER the envelope are tolerated, each consumed through its own
+  // closer and never across another tag, so speech between two reminders keeps
+  // the event. Nothing inside the body is stripped. Anything else, including a
+  // report that quotes the word, is speech.
+  const REMINDER_BLOCK = String.raw`<system-reminder>(?:(?!<\/?system-reminder>)[\s\S])*<\/system-reminder>`;
+  const IDLE_ENVELOPE = new RegExp(String.raw`^(?:\s*${REMINDER_BLOCK})*\s*(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>(?:\s*${REMINDER_BLOCK})*\s*$`, 'i');
   const isIdleEnvelope = (raw) => {
     const body = IDLE_ENVELOPE.exec(String(raw).trim())?.[1];
     if (body === undefined) return false;
