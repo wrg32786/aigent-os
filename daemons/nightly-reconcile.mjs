@@ -277,16 +277,32 @@ if (direct) {
     };
     const seenDaily = new Set();
     const dailyNotes = {};
-    // ENOENT means the tree is absent. Any other error (EACCES on a vault the
-    // run cannot traverse) is a measurement gap: fail loudly, never a PASS.
+    // Only ENOENT means the tree is absent. Anything else is a measurement gap
+    // that fails loudly, never a PASS: EACCES on a vault the run cannot
+    // traverse, or a daily path that is not a directory (ENOTDIR). Windows
+    // reports a path through a regular file as ENOENT where POSIX says
+    // ENOTDIR, so on ENOENT the vault folder itself is checked too.
     const treeExists = (dir) => {
-      try {
-        return statSync(dir).isDirectory();
-      } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
+      const fail = (code) => {
         const where = path.relative(paths.repositoryRoot, dir).split(path.sep).join('/');
-        throw new Error(`RECONCILE FAIL reason=daily-tree-unreadable path=${where} code=${error?.code || 'unknown'}`);
+        throw new Error(`RECONCILE FAIL reason=daily-tree-unreadable path=${where} code=${code || 'unknown'}`);
+      };
+      let tree;
+      try {
+        tree = statSync(dir);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') fail(error?.code);
+        let parent = null;
+        try {
+          parent = statSync(path.dirname(dir));
+        } catch (parentError) {
+          if (parentError?.code !== 'ENOENT') fail(parentError?.code);
+        }
+        if (parent && !parent.isDirectory()) fail('ENOTDIR');
+        return false;
       }
+      if (!tree.isDirectory()) fail('ENOTDIR');
+      return true;
     };
     for (const vault of [paths.vaultRoot, path.join(paths.repositoryRoot, 'vault')]) {
       const dailyRoot = path.join(vault, 'daily');

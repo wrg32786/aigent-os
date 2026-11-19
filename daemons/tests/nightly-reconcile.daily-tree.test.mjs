@@ -238,3 +238,20 @@ test('a hook vault the run cannot traverse fails loudly instead of reading as ab
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /RECONCILE FAIL reason=daily-tree-unreadable path=vault\/daily/, r.stderr);
 });
+
+// Fifth review of d9fc974f (titus, 2026-11-19): only ENOENT skips a tree.
+
+test('a regular file where a daily folder belongs fails loudly with ENOTDIR', () => {
+  for (const shape of ['file-at-daily', 'file-at-vault']) {
+    const r = reconcile((root) => {
+      write(root, '.aigent/state.json', JSON.stringify({ memory_root: '.seat/vault/memory' }));
+      write(root, '.seat/vault/memory/ACTIVE_PRIORITIES.md', PRIORITIES);
+      write(root, `.seat/vault/daily/${AS_OF}.md`, '- Alpha\n');
+      if (shape === 'file-at-daily') write(root, 'vault/daily', 'not a folder\n');
+      else write(root, 'vault', 'not a folder\n');
+    });
+    assert.equal(r.status, 1, `${shape}: ${r.stdout}`);
+    assert.doesNotMatch(r.stdout, /RECONCILE PASS/, shape);
+    assert.match(r.stderr, /RECONCILE FAIL reason=daily-tree-unreadable path=vault\/daily code=ENOTDIR/, `${shape}: ${r.stderr}`);
+  }
+});
