@@ -575,11 +575,13 @@ try {
 
   // An idle_notification is the harness saying a teammate went idle, not
   // speech; stored as Done rows they took 10 of 169 rows on a live autosave.
-  // Read from the ORIGINAL text (normalizing first can turn an invalid body
-  // into valid JSON): one envelope, quoted attributes respected, whose whole
-  // body parses as a JSON object with top-level type idle_notification.
-  // Anything else, including a report that quotes the word, is speech.
-  const IDLE_ENVELOPE = /^(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>\s*$/i;
+  // Read from the RAW event text, before stripMeta or any normalizing (either
+  // can turn an invalid body into valid JSON): one envelope, quoted attributes
+  // respected, whose whole body parses as a JSON object with top-level type
+  // idle_notification. Only complete system-reminder blocks the harness
+  // appends AFTER the closing tag are tolerated; nothing inside the body is
+  // stripped. Anything else, including a report that quotes the word, is speech.
+  const IDLE_ENVELOPE = /^(?:Another Claude session sent a message:\s*)?<teammate-message(?:\s+[\w-]+="[^"]*")*\s*>([\s\S]*)<\/teammate-message>(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)*\s*$/i;
   const isIdleEnvelope = (raw) => {
     const body = IDLE_ENVELOPE.exec(String(raw).trim())?.[1];
     if (body === undefined) return false;
@@ -591,7 +593,7 @@ try {
     }
   };
 
-  const classify = (s) => {
+  const classify = (s, raw = s) => {
     // Full normalized text: the Done row and the objective apply their own
     // caps, so a pre-cut here would make the Done row's dropped count wrong.
     const t = storedData(s, Infinity);
@@ -605,7 +607,7 @@ try {
     // objective + the [OPERATOR] sweep.
     if (/^Another Claude session sent a message/i.test(t) || /^<teammate-message\b/i.test(t)) {
       const pm = t.match(/teammate_id="([\w-]+)"/i);
-      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle: isIdleEnvelope(s) };
+      return { who: pm ? `PEER:${pm[1].toLowerCase()}` : 'PEER:agent', human: false, t, idle: isIdleEnvelope(raw) };
     }
     // Harness/supervisor injections ([supervisor-resume], [refresh-cycle],
     // [auto-pull], loop ticks, ...) arrive as PLAIN user strings and would
@@ -742,13 +744,13 @@ try {
       const c = ev.message?.content;
       if (typeof c === 'string' && speech) {
         const clean = stripMeta(c);
-        if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
+        if (clean && !clean.startsWith('<')) { const cl = classify(clean, c); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
       } else if (Array.isArray(c)) {
         for (const b of c) {
           if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
           if (speech && b.type === 'text' && typeof b.text === 'string' && b.text) {
             const clean = stripMeta(b.text);
-            if (clean && !clean.startsWith('<')) { const cl = classify(clean); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
+            if (clean && !clean.startsWith('<')) { const cl = classify(clean, b.text); if (cl.human) latestRequest = storedData(cl.t, 300); tagUtterance(cl); }
           }
           if (b.type === 'tool_result' && b.is_error) {
             const txt = resultText(b.content);

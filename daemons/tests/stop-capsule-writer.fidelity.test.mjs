@@ -200,3 +200,20 @@ test('an idle envelope with a > inside a quoted attribute is still dropped', () 
   const rows = runWorker([user(idle), assistant('Read it.')]);
   assert.equal(rows.filter((r) => r.includes('[PEER:builder-w]')).length, 0, rows.join('\n'));
 });
+
+// Fourth review of ec80f561 (titus, 2026-11-19): idle is judged on the raw event.
+
+test('a report whose quoted newline sits inside a system-reminder span is kept', () => {
+  const report = 'Another Claude session sent a message:\n<teammate-message teammate_id="builder-r" color="green">\n'
+    + '{"type":"idle_notification","note":"start<system-reminder>a\nb</system-reminder>end"}\n</teammate-message>';
+  const rows = runWorker([user(report), assistant('Noted.')]);
+  assert.ok(rows.some((r) => r.includes('[PEER:builder-r]')), rows.join('\n'));
+});
+
+test('an idle envelope followed by a harness system-reminder is still dropped', () => {
+  const idle = 'Another Claude session sent a message:\n<teammate-message teammate_id="builder-s" color="blue">\n'
+    + '{"type":"idle_notification","from":"builder-s","idleReason":"available"}\n</teammate-message>\n'
+    + '<system-reminder>\nTodo list is empty.\n</system-reminder>';
+  const rows = runWorker([user(idle), assistant('Read it.')]);
+  assert.equal(rows.filter((r) => r.includes('[PEER:builder-s]')).length, 0, rows.join('\n'));
+});
