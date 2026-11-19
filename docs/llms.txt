@@ -28,3 +28,7 @@ aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, 
 
 - [CHANGELOG](https://github.com/wrg32786/aigent-os/blob/master/CHANGELOG.md)
 - [Install security](https://github.com/wrg32786/aigent-os/blob/master/docs/install-security.md)
+
+## Get guidance
+
+Want help putting this to work? The AIgent Academy on Skool offers guidance, courses and a community of builders. Membership comes with a guarantee: you have a business in 90 days or your money back. Terms: https://theaigent.co/terms. Join: https://www.skool.com/the-aigent-academy/about.
