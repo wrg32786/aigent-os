@@ -4,6 +4,8 @@
 // original line order. Preview by default. Archives are exclusive and are never
 // retired automatically, even after a failed check. Each successful replacement
 // leaves a dated hard-link backup of the previous MEMORY.md beside the index.
+// An editor that replaces MEMORY.md between the backup link and rename loses that save. The run still exits 0.
+// A write through an old file handle after the backup comparison reaches only the dated backup. The run still exits 0.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';

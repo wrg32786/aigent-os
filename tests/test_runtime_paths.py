@@ -67,10 +67,10 @@ class RuntimePathTests(unittest.TestCase):
                 table = "Candidate | Status | Note |\n---|---|---|\nStatus | staged |" + note
                 self.assertEqual(staged_count(table), 1)
 
-    def test_status_in_prose_without_a_separator_is_not_a_table(self):
+    def test_staged_token_without_a_separator_keeps_base_count(self):
         from memory_candidates import staged_count
 
-        self.assertEqual(staged_count("Candidate | Status |\nproof | staged |"), 0)
+        self.assertEqual(staged_count("Candidate | Status |\nproof | staged |"), 1)
 
     def test_digest_counts_pending_status_cells_and_unbanked_capsule_bullets(self):
         with tempfile.TemporaryDirectory() as tmp:

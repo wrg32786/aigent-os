@@ -96,13 +96,21 @@ test('indented continuations move with their bullet', t => {
 });
 
 test('archive is published with complete contents', t => {
+  const expected = [
+    '# Recent (1970-01-01 to 1970-01-01): 2 entries', '',
+    'Sub-index of MEMORY.md. One entry per memory; open the file for the fact.', '',
+    '- [second](second.md)', '  second detail', '', '  second paragraph',
+    '- [first](first.md)', '\tfirst detail', '',
+  ].join('\r\n');
   const hook = `
     const link = fs.linkSync;
     fs.linkSync = (src, dest) => {
       if (path.basename(dest).startsWith('index-')) {
         if (fs.existsSync(dest)) throw Error('destination visible before publication');
-        if (!fs.readFileSync(src, 'utf8').includes('second detail')) throw Error('incomplete temp file');
+        link(src, dest);
+        require('node:assert/strict').deepEqual(fs.readFileSync(dest), Buffer.from(${JSON.stringify(expected)}));
         console.log('observed complete file');
+        return;
       }
       return link(src, dest);
     };`;
@@ -120,7 +128,7 @@ test('one rename replaces the live index with its staged sibling', t => {
         const dir = path.dirname(dest);
         const backups = fs.readdirSync(dir).filter(name => name.startsWith('MEMORY.backup-compact')
           && fs.statSync(path.join(dir, name), { bigint: true }).ino === fs.statSync(dest, { bigint: true }).ino);
-        if (backups.length !== 1) throw Error('missing hard link to live index');
+        require('node:assert/strict').deepEqual(backups, ['MEMORY.backup-compact-1970-01-01-to-01-01']);
         if (path.dirname(src) !== dir) throw Error('temp file is not beside live index');
         console.log('replacing live index');
       }
