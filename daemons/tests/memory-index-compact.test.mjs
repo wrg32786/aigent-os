@@ -106,20 +106,21 @@ test('indented continuations move with their bullet', t => {
 });
 
 for (const target of ['backup', 'archive']) {
-  test(target + ' is published by rename with complete contents', t => {
+  test(target + ' is published with complete contents', t => {
     const hook = `
-      const rename = fs.renameSync;
-      fs.renameSync = (src, dest) => {
+      const op = ${target === 'backup' ? "'renameSync'" : "'linkSync'"};
+      const publish = fs[op];
+      fs[op] = (src, dest) => {
         if (${target === 'backup' ? "path.basename(dest) === 'MEMORY.backup-compact'" : "/^index-.*\\.md$/.test(path.basename(dest))"}) {
-          if (fs.existsSync(dest)) throw Error('destination visible before rename');
+          if (fs.existsSync(dest)) throw Error('destination visible before publication');
           if (!fs.readFileSync(src, 'utf8').includes('second detail')) throw Error('incomplete temp file');
-          console.log('observed complete rename');
+          console.log('observed complete file');
         }
-        return rename(src, dest);
+        return publish(src, dest);
       };`;
     const { result } = scenario(t, hook);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /observed complete rename/, target + ' was not published by rename');
+    assert.match(result.stdout, /observed complete file/, target + ' was not published complete');
   });
 }
 
@@ -129,8 +130,8 @@ for (const phase of ['compaction', 'rollback']) {
       const rename = fs.renameSync;
       let installs = 0;
       fs.renameSync = (src, dest) => {
-        if (path.basename(dest) === 'MEMORY.md' && ++installs === ${phase === 'rollback' ? 2 : 1}) {
-          fs.writeFileSync(dest, 'concurrent edit');
+        if (path.basename(src) === 'MEMORY.md' && ++installs === ${phase === 'rollback' ? 2 : 1}) {
+          fs.writeFileSync(src, 'concurrent edit');
         }
         return rename(src, dest);
       };`;
@@ -143,9 +144,9 @@ for (const phase of ['compaction', 'rollback']) {
 
 test('failed gate preserves an edited archive', t => {
   const hook = `
-    const rename = fs.renameSync;
-    fs.renameSync = (src, dest) => {
-      rename(src, dest);
+    const publish = fs.linkSync;
+    fs.linkSync = (src, dest) => {
+      publish(src, dest);
       if (path.basename(dest) === 'MEMORY.md') {
         const dir = path.dirname(dest);
         const archive = fs.readdirSync(dir).find(name => /^index-.*\\.md$/.test(name));
@@ -157,4 +158,94 @@ test('failed gate preserves an edited archive', t => {
   assert.ok(archive, 'rollback deleted the edited archive');
   assert.equal(readFileSync(archive, 'utf8'), 'edited archive');
   assert.match(result.stderr, /archive changed/);
+});
+
+test('failed install preserves the archive named by the live index', t => {
+  const hook = `
+    for (const op of ['renameSync', 'linkSync']) {
+      const publish = fs[op];
+      fs[op] = (src, dest) => {
+        publish(src, dest);
+        if (path.basename(dest) === 'MEMORY.md') {
+          fs.appendFileSync(dest, 'later edit');
+          throw Error('injected install failure');
+        }
+      };
+    }`;
+  const { result, index, archive } = scenario(t, hook);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /injected install failure/);
+  const live = readFileSync(index, 'utf8');
+  assert.match(live, /later edit$/);
+  assert.ok(archive, 'cleanup deleted the archive named by MEMORY.md');
+  assert.ok(live.includes('](' + path.basename(archive) + ')'));
+  assert.match(readFileSync(archive, 'utf8'), /second detail/);
+});
+
+test('compaction restores an index swapped by rename after the final compare', t => {
+  const hook = `
+    const rename = fs.renameSync;
+    let swapped = false;
+    fs.renameSync = (src, dest) => {
+      const index = [src, dest].find(file => path.basename(file) === 'MEMORY.md');
+      if (index && !swapped) {
+        swapped = true;
+        fs.writeFileSync(index + '.save', 'atomic save');
+        rename(index + '.save', index);
+      }
+      return rename(src, dest);
+    };`;
+  const { result, index } = scenario(t, hook);
+  assert.equal(readFileSync(index, 'utf8'), 'atomic save', 'compaction lost the atomic save');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /index changed/);
+});
+
+test('exclusive archive creation refuses a competing file at publication', t => {
+  const hook = `
+    const open = fs.openSync;
+    const plant = file => {
+      if (path.basename(file).startsWith('index-') && !fs.existsSync(file)) {
+        const fd = open(file, 'wx');
+        fs.writeSync(fd, 'competing archive');
+        fs.closeSync(fd);
+      }
+    };
+    fs.openSync = (file, flags, ...rest) => {
+      if (flags === 'wx') plant(file);
+      return open(file, flags, ...rest);
+    };
+    for (const op of ['renameSync', 'linkSync']) {
+      const publish = fs[op];
+      fs[op] = (src, dest) => {
+        plant(dest);
+        return publish(src, dest);
+      };
+    }`;
+  const { result, main, index, archive } = scenario(t, hook);
+  assert.equal(readFileSync(archive, 'utf8'), 'competing archive', 'publication replaced a competing archive');
+  assert.equal(result.status, 1);
+  assert.equal(readFileSync(index, 'utf8'), main);
+});
+
+test('archive cleanup preserves a replacement with identical contents', t => {
+  const hook = `
+    const rename = fs.renameSync;
+    const unlink = fs.unlinkSync;
+    let swapped = false;
+    const swap = file => {
+      if (swapped || !path.basename(file).startsWith('index-')) return;
+      swapped = true;
+      fs.copyFileSync(file, file + '.save');
+      rename(file + '.save', file);
+      console.log('replaced archive');
+    };
+    fs.unlinkSync = file => { swap(file); return unlink(file); };
+    fs.renameSync = (src, dest) => { swap(src); return rename(src, dest); };`;
+  const { result, main, index, archive } = scenario(t, hook, true);
+  assert.match(result.stdout, /replaced archive/, result.stderr);
+  assert.equal(result.status, 1);
+  assert.equal(readFileSync(index, 'utf8'), main);
+  assert.ok(archive, 'cleanup deleted the replacement archive');
+  assert.match(readFileSync(archive, 'utf8'), /second detail/);
 });

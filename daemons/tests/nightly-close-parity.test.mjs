@@ -784,3 +784,12 @@ test('digest refuses a no-staged-candidates skip for an indented table', () => {
   assert.notEqual(result.status, 0, 'digest accepted a skip with one staged row');
   assert.match(result.stdout + result.stderr, /staged rows exist/);
 });
+
+test('digest refuses a skip for a staged row without a leading pipe', () => {
+  const { root } = fixture();
+  begin(root);
+  write(root, 'vault/memory/MEMORY_CANDIDATES.md', 'Candidate | Status |\n---|---|\nproof | staged |\n');
+  const result = record(root, 'digest', { artifact: 'none:no-staged-candidates', status: 'skipped' });
+  assert.notEqual(result.status, 0, 'digest accepted a skip with one staged row');
+  assert.match(result.stdout + result.stderr, /staged rows exist/);
+});

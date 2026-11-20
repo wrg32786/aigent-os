@@ -154,3 +154,27 @@ test('restore reports a missing target without recreating it', () => fixture(({ 
   assert.equal(r.status, 2);
   assert.match(r.stderr, /expected [a-f0-9]{64}.*found missing/);
 }));
+
+for (const kind of ['identical replacement', 'discarded write']) {
+  test(kind + ' cannot run the mutant check', () => fixture(({ dir, target, helper, env }) => {
+    const before = readFileSync(target);
+    const calls = path.join(dir, 'calls');
+    const check = 'const fs = require("node:fs"); const calls = ' + JSON.stringify(calls)
+      + '; fs.appendFileSync(calls, "x"); process.exit(fs.statSync(calls).size === 1 ? 0 : 1);';
+    if (kind === 'discarded write') {
+      const preload = path.join(dir, 'discard.cjs');
+      writeFileSync(preload, 'const fs = require("node:fs"); const write = fs.writeFileSync;\n'
+        + 'fs.writeFileSync = (file, ...args) => { if (file !== ' + JSON.stringify(target)
+        + ') return write(file, ...args); };\nrequire("node:module").syncBuiltinESMExports();');
+      env.NODE_OPTIONS = '--require ' + JSON.stringify(preload.replaceAll('\\', '/'));
+    }
+    const replacement = kind === 'discarded write' ? 'text=two' : 'text=auto';
+    const result = helper('--file', target, '--find', 'text=auto', '--replace', replacement, '--',
+      process.execPath, '-e', check);
+    assert.deepEqual(readFileSync(target), before);
+    assert.ok(!existsSync(calls) || readFileSync(calls, 'utf8') === 'x', 'ran the mutant check on unchanged bytes');
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(result.stderr, /unchanged/);
+    assert.match(helper('--restore').stdout, /nothing pending/);
+  }));
+}

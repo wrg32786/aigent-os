@@ -83,18 +83,55 @@ function compact() {
 
   let keepWork = false;
 
-  function checkArchive() {
-    if (hash(fs.readFileSync(archive)) !== archiveHash) throw new Error('archive changed; kept ' + archive);
+  const stagedArchive = path.join(work, 'archive');
+  function checkArchive(file = archive) {
+    const owned = fs.statSync(stagedArchive, { bigint: true });
+    const found = fs.lstatSync(file, { bigint: true });
+    if (owned.dev !== found.dev || owned.ino !== found.ino || hash(fs.readFileSync(file)) !== archiveHash) {
+      throw new Error('archive changed; kept ' + archive);
+    }
+  }
+
+  function liveNamesArchive() {
+    return fs.readFileSync(index, 'utf8').toLowerCase().includes(path.basename(name, '.md'));
+  }
+
+  function removeArchive() {
+    if (liveNamesArchive()) return;
+    const retired = path.join(work, 'retired');
+    fs.renameSync(archive, retired);
+    try {
+      checkArchive(retired);
+      if (!liveNamesArchive()) {
+        fs.unlinkSync(retired);
+        return;
+      }
+    } finally {
+      if (fs.existsSync(retired)) {
+        // Restore this exact file without replacing another arrival.
+        const previous = keepWork;
+        keepWork = true;
+        fs.linkSync(retired, archive);
+        keepWork = previous;
+      }
+    }
   }
 
   function installIndex(expected, replacement) {
-    // Pin the displaced inode so a write through an open handle at rename time
-    // can still be detected and recovered after the name switches.
-    fs.linkSync(index, displaced);
     if (!fs.readFileSync(index).equals(expected)) throw new Error('index changed before rename');
-    fs.renameSync(pending, index);
+    fs.renameSync(index, displaced);
+    keepWork = true;
+    try {
+      // Publish only into the empty name. A save during the gap wins.
+      fs.linkSync(pending, index);
+    } catch (error) {
+      if (!fs.existsSync(index)) {
+        fs.linkSync(displaced, index);
+        keepWork = false;
+      }
+      throw error;
+    }
     if (!fs.readFileSync(displaced).equals(expected)) {
-      keepWork = true;
       if (!fs.readFileSync(index).equals(replacement)) {
         throw new Error('index changed again; displaced edit kept at ' + displaced);
       }
@@ -103,6 +140,8 @@ function compact() {
       throw new Error('index changed during rename');
     }
     fs.unlinkSync(displaced);
+    fs.unlinkSync(pending);
+    keepWork = false;
   }
 
   fs.mkdirSync(work);
@@ -116,9 +155,9 @@ function compact() {
     if (!fs.readFileSync(pending).equals(original)) throw new Error('index changed before backup');
     fs.renameSync(pending, backup);
     wroteBackup = true;
-    fs.writeFileSync(pending, contents);
-    if (fs.existsSync(archive)) throw new Error('archive already exists: ' + archive);
-    fs.renameSync(pending, archive);
+    // Keep a private link to the complete archive for ownership checks during cleanup.
+    fs.writeFileSync(stagedArchive, contents, { flag: 'wx' });
+    fs.linkSync(stagedArchive, archive);
     wroteArchive = true;
     fs.writeFileSync(pending, next, { mode });
     installIndex(original, next);
@@ -136,13 +175,10 @@ function compact() {
       keepBackup = false;
       console.error('Restored MEMORY.md from backup');
     }
-    if (wroteArchive) {
-      checkArchive();
-      fs.unlinkSync(archive);
-    }
+    if (wroteArchive) removeArchive();
     throw error;
   } finally {
-    if (wroteBackup && !keepBackup) fs.unlinkSync(backup);
+    if (wroteBackup && !keepBackup && !keepWork) fs.unlinkSync(backup);
     if (!keepWork) fs.rmSync(work, { recursive: true });
   }
 }

@@ -81,6 +81,7 @@ const opts = {};
 for (let i = 0; i < sep; i += 2) opts[argv[i].replace(/^--/, '')] = argv[i + 1];
 const cmd = argv.slice(sep + 1);
 if (!opts.file || opts.find === undefined || opts.replace === undefined) die(2, '--file, --find and --replace are required');
+if (opts.find === opts.replace) die(2, 'identical replacement leaves target unchanged');
 const file = checkedTarget(path.resolve(opts.file));
 const timeoutMs = Number(opts.timeout || 120) * 1000;
 const id = sha(file).slice(0, 16);
@@ -144,6 +145,13 @@ let verdict;
 try {
   activeRecord = recordPath;
   writeFileSync(file, mutated);
+  const landed = readFileSync(file);
+  if (landed.equals(original)) {
+    rmSync(recordPath);
+    rmSync(snapshot);
+    die(2, 'mutation write left target unchanged');
+  }
+  if (!landed.equals(mutated)) throw new Error('mutation write verification failed');
   console.log(`mutate-red: mutated ${file} in place (if a scheduler or server runs this path, mutate a copy instead)`);
   const mutant = await run();
   if (mutant.error || mutant.signal || mutant.status === null) verdict = 'INCOMPLETE';

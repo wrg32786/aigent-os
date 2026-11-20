@@ -27,7 +27,13 @@ def staged_count(text: str) -> int:
         if marker:
             fence = marker[1]
             continue
-        line = re.sub(r"^ {1,3}(?=\|)", "", line)
+        row = line.lstrip(" ")
+        cells = []
+        if "|" in row and not line.startswith("    ") and not row.startswith("\t"):
+            body = row.rstrip().removeprefix("|").removesuffix("|")
+            cells = [s.strip().lower() for s in re.split(r"(?<!\\)\|", body)]
+        if cells and (row.startswith("|") or "status" in cells or status_column is not None):
+            line = row
         if bullet and (line.startswith((" ", "\t")) or not line.strip()):
             bullet.append(line.strip())
             continue
@@ -38,10 +44,9 @@ def staged_count(text: str) -> int:
             capsule = bool(CAPSULE.match(line))
         if capsule and re.match(r"^[-*+] ", line):
             bullet = [line[2:]]
-        if not line.startswith("|"):
+        if not cells:
             status_column = None
             continue
-        cells = [s.strip().lower() for s in re.split(r"(?<!\\)\|", line.rstrip()[1:].removesuffix("|"))]
         if "status" in cells and (status_column is None or "source phrase" in cells):
             status_column = cells.index("status")
             continue
