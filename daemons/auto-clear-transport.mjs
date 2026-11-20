@@ -1013,8 +1013,8 @@ export class AutoClearTransport {
       : ({ sessionId: sid, bootSequence, enteredAt }) => `${sid}:${bootSequence}:${enteredAt}`;
     this.log = makeLogger({ memRoot: this.memRoot, fsImpl: this.fs, now: this.now, log });
     this.cyclePath = statePath(this.memRoot);
-    // undefined = the helper's own rename retry (most of a second, blocking). The runner sets [] while it
-    // is waiting out a locked cycle file, so each of its ticks costs one rename try and blocks nothing.
+    // The rename retry of the tick in progress; set and cleared by tick() itself, so nothing outlives the
+    // call. undefined = the helper's own retry (most of a second, blocking).
     this.renameRetryDelaysMs = undefined;
     this.lockHandle = acquireLock
       ? acquireRunnerLock({
@@ -1793,7 +1793,18 @@ export class AutoClearTransport {
   /**
    * Re-derive one persisted position from current observables.
    */
-  tick() {
+  // options.renameRetryDelaysMs: the rename retry for this call's cycle writes. The runner passes [] while
+  // it waits out a locked cycle file, so each of its ticks costs one rename try and blocks nothing.
+  tick(options = undefined) {
+    this.renameRetryDelaysMs = options?.renameRetryDelaysMs;
+    try {
+      return this._tick();
+    } finally {
+      this.renameRetryDelaysMs = undefined;
+    }
+  }
+
+  _tick() {
     this._refreshState();
     if (this._cycleUnreadable !== null) return this._cycleUnreadableResult();
     if (this._withdrawIntent) {

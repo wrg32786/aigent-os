@@ -217,13 +217,15 @@ const REFUSAL_DETAIL_MAX = 1200;
 // file briefly locked on Windows) used to disable automatic refresh until a relaunch. Each tick's
 // own state write already retries its rename, so this many failures in a row is not transient.
 export const TRANSPORT_TICK_FAILURE_LIMIT = 5;
-// A LOCKED cycle file is the exception: it is waited out by the clock, not counted. 2026-11-19
-// 17:58:28Z: five ticks failed on "EPERM ... rename auto-clear-cycle.json.tmp" in about 3 s, refresh
-// went off (runner-transport-tick-failed) and the seat ran unmanaged for the rest of the day; at
-// 01:01:10Z another seat's clear confirmation met the same lock three times before it let go.
+// A cycle file whose rename is LOCKED (the helper says so: error.renameLocked) is the exception: it is
+// waited out by the clock, not counted. 2026-11-19 17:58:28Z: five ticks failed on "EPERM ... rename
+// auto-clear-cycle.json.tmp" in about 3 s, refresh went off (runner-transport-tick-failed) and the
+// seat ran unmanaged for the rest of the day.
+// Only tick()'s own transport tick uses the wait. The clear confirmation and the release tick that
+// follows it already retry on every poll with no limit and never turn automation off; they still pay
+// the helper's blocking retry each time (the 2026-11-20 01:01:10Z lock was on that path: three polls).
 export const TRANSPORT_TICK_LOCK_WAIT_MS = 60_000;
 const TRANSPORT_TICK_LOCK_LOG_MS = 10_000;
-const TRANSPORT_LOCK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 function hasOwn(value, field) {
   return value !== null
@@ -6138,6 +6140,7 @@ export class ManagedPtyRunner {
       };
     }
     this.transport = created;
+    this._resetTransportTickFailures();
     this.sessionId = boot.receipt.session_id;
     this.baselineBootSequence = boot.receipt.boot_sequence;
     // NO WINDOW IS ARMED HERE. This is the production FIRST-BIND path -- a
@@ -7099,6 +7102,15 @@ export class ManagedPtyRunner {
     return { status: 'released', state: released.state };
   }
 
+  // The two failure streaks of tick()'s transport tick: consecutive failures that are not a lock, and the
+  // time a locked rename has been failing. A good tick, a failure of the other kind, and a new transport
+  // each end a streak.
+  _resetTransportTickFailures() {
+    this.transportTickFailures = 0;
+    this.transportTickLockedSince = null;
+    this.transportTickLockLoggedAt = null;
+  }
+
   _rebindAfterClear(receipt) {
     if (!receipt) return false;
     if (typeof this.transportFactory !== 'function') {
@@ -7177,6 +7189,8 @@ export class ManagedPtyRunner {
       session_id: receipt.session_id,
     });
     this.transport = next;
+    // A wait opened against the transport just replaced says nothing about this one.
+    this._resetTransportTickFailures();
     this.sessionId = receipt.session_id;
     this.baselineBootSequence = receipt.boot_sequence;
     this.lastCoreResult = null;
@@ -7705,25 +7719,30 @@ export class ManagedPtyRunner {
     const output = this.output.observe();
     let coreResult;
     try {
-      coreResult = this.transport.tick();
+      // While a locked rename is being waited out, each tick tries the rename once. The first failed tick
+      // already spent the helper's blocking retry; this thread also carries the operator's keystrokes and
+      // the seat's output, and a minute of blocking retries would freeze the terminal for that minute.
+      coreResult = this.transport.tick(
+        Number.isFinite(this.transportTickLockedSince) ? { renameRetryDelaysMs: [] } : undefined,
+      );
     } catch (error) {
-      // A failed tick changes nothing on disk (the cycle file is written last and atomically), so
-      // the next tick can simply run again.
+      // Each cycle-file write is atomic, so the next tick can simply run again. (A tick may commit an
+      // earlier write before the one that fails, so "rename failing for N ms" below is about the
+      // renames, not a claim that the file never changed.)
       const clock = this.now();
       const nowMs = clock instanceof Date ? clock.getTime() : Number(clock);
-      const locked = TRANSPORT_LOCK_CODES.has(error?.code);
+      const locked = error?.renameLocked === true;
       let retry;
       let log = true;
       if (locked) {
+        this.transportTickFailures = 0;   // the other streak ends here
         if (!Number.isFinite(this.transportTickLockedSince)) this.transportTickLockedSince = nowMs;
-        // The first failed tick already spent the helper's blocking retry. From here each tick tries the
-        // rename once: this thread also carries the operator's keystrokes and the seat's output, and a
-        // minute of blocking retries would freeze the terminal for that minute.
-        this.transport.renameRetryDelaysMs = [];
         retry = nowMs - this.transportTickLockedSince < TRANSPORT_TICK_LOCK_WAIT_MS;
         log = !(nowMs - this.transportTickLockLoggedAt < TRANSPORT_TICK_LOCK_LOG_MS);
         if (log) this.transportTickLockLoggedAt = nowMs;
       } else {
+        this.transportTickLockedSince = null;   // the other streak ends here
+        this.transportTickLockLoggedAt = null;
         this.transportTickFailures = (this.transportTickFailures || 0) + 1;
         retry = this.transportTickFailures < TRANSPORT_TICK_FAILURE_LIMIT;
       }
@@ -7742,7 +7761,7 @@ export class ManagedPtyRunner {
       this._disableAutomation(
         'runner-transport-tick-failed',
         locked
-          ? `cycle file locked for ${nowMs - this.transportTickLockedSince} ms; last: ${errorText(error)}`
+          ? `cycle file rename failing for ${nowMs - this.transportTickLockedSince} ms; last: ${errorText(error)}`
           : `${this.transportTickFailures} consecutive failures; last: ${errorText(error)}`,
       );
       return {
@@ -7751,10 +7770,7 @@ export class ManagedPtyRunner {
         detail: errorText(error),
       };
     }
-    this.transportTickFailures = 0;
-    this.transportTickLockedSince = null;
-    this.transportTickLockLoggedAt = null;
-    this.transport.renameRetryDelaysMs = undefined;
+    this._resetTransportTickFailures();
     this.lastCoreResult = coreResult;
     if (!coreResult || typeof coreResult !== 'object'
       || !hasOwn(coreResult, 'state')

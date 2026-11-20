@@ -103,10 +103,33 @@ test('the transport passes its rename retry setting to the state write', async (
   const state = { ...transport.state, entered_at: '2026-11-19T17:58:28.000Z' };
   transport.renameRetryDelaysMs = [];
   failuresLeft = 1; tries = 0;
-  assert.throws(() => transport._atomicWrite(state), (error) => error.code === 'EPERM');
+  assert.throws(() => transport._atomicWrite(state), (error) => error.code === 'EPERM' && error.renameLocked === true);
   assert.equal(tries, 1, 'one try, no retry -- red when the setting is not passed through');
   transport.renameRetryDelaysMs = undefined;
   failuresLeft = 1; tries = 0;
   transport._atomicWrite(state);
   assert.equal(tries, 2, 'the helper retried and committed');
+  // tick(options) sets the retry for that call only, and clears it even when the tick throws.
+  let during = 'unset';
+  transport._tick = () => { during = transport.renameRetryDelaysMs; throw new Error('tick failed'); };
+  assert.throws(() => transport.tick({ renameRetryDelaysMs: [] }), /tick failed/);
+  assert.deepEqual(during, [], 'set for the call');
+  assert.equal(transport.renameRetryDelaysMs, undefined, 'and gone after it -- red when the setting outlives the call');
+  transport._tick = () => { during = transport.renameRetryDelaysMs; return 'ok'; };
+  assert.equal(transport.tick(), 'ok');
+  assert.equal(during, undefined, 'a plain tick uses the helper\'s own retry');
+});
+
+test('only a rename that stayed locked is named a lock', () => {
+  const file = target();
+  const locked = lockedFs(file, 'EPERM', 99);
+  assert.throws(
+    () => atomicUpdate(file, () => 'x', { fsImpl: locked.fs, renameRetryDelaysMs: [] }),
+    (error) => error.code === 'EPERM' && error.renameLocked === true,
+  );
+  const other = lockedFs(file, 'ENOSPC', 99);
+  assert.throws(
+    () => atomicUpdate(file, () => 'x', { fsImpl: other.fs, renameRetryDelaysMs: [] }),
+    (error) => error.code === 'ENOSPC' && error.renameLocked === undefined,
+  );
 });
