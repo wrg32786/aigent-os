@@ -72,3 +72,41 @@ test('the default retry window stays under a second', () => {
   assert.equal(locked.attempts(), 7);
   assert.ok(Date.now() - started < 3000, 'bounded');
 });
+
+// 2026-11-19: the runner waits out a locked cycle file one rename try per tick (pty-runner.mjs,
+// TRANSPORT_TICK_LOCK_WAIT_MS). The transport hands its renameRetryDelaysMs to the helper, so [] really is
+// one try with no sleep, and undefined is still the helper's own retry.
+test('the transport passes its rename retry setting to the state write', async () => {
+  const { AutoClearTransport } = await import('../auto-clear-transport.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rename-lock-transport-'));
+  const memRoot = path.join(root, 'memory');
+  fs.mkdirSync(path.join(memRoot, 'runtime'), { recursive: true });
+  let failuresLeft = 0;
+  let tries = 0;
+  const fsImpl = {
+    ...fs,
+    renameSync(from, to) {
+      if (path.basename(String(to)) === 'auto-clear-cycle.json') {
+        tries += 1;
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
+        }
+      }
+      return fs.renameSync(from, to);
+    },
+  };
+  const transport = new AutoClearTransport({
+    memRoot, sessionId: 'session-a', cwd: root, homeDir: root, fsImpl, now: () => new Date('2026-11-19T17:58:28Z'),
+    env: {}, log: () => {}, acquireLock: false,
+  });
+  const state = { ...transport.state, entered_at: '2026-11-19T17:58:28.000Z' };
+  transport.renameRetryDelaysMs = [];
+  failuresLeft = 1; tries = 0;
+  assert.throws(() => transport._atomicWrite(state), (error) => error.code === 'EPERM');
+  assert.equal(tries, 1, 'one try, no retry -- red when the setting is not passed through');
+  transport.renameRetryDelaysMs = undefined;
+  failuresLeft = 1; tries = 0;
+  transport._atomicWrite(state);
+  assert.equal(tries, 2, 'the helper retried and committed');
+});

@@ -14859,14 +14859,14 @@ dialogCase('I23 CLAUDE_CONFIG_DIR: the wiring leg reads the profile the HOST use
 // count; only TRANSPORT_TICK_FAILURE_LIMIT failures in a row turn automation off, loudly.
 test('a transport tick that fails a few times is retried, not a permanent disable', async () => {
   const { TRANSPORT_TICK_FAILURE_LIMIT } = await import('../pty-runner.mjs');
-  assert.ok(Number.isInteger(TRANSPORT_TICK_FAILURE_LIMIT) && TRANSPORT_TICK_FAILURE_LIMIT > 1);
+  assert.equal(TRANSPORT_TICK_FAILURE_LIMIT, 5, 'a failure that is not a lock keeps the short count');
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     const transport = harness.runner.transport;
     const realTick = transport.tick.bind(transport);
-    const locked = () => { throw Object.assign(new Error("EPERM: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'"), { code: 'EPERM' }); };
+    const broken = () => { throw new Error('ATOMIC_STATE drift: not a lock'); };
     assert.equal(harness.runner.automationEnabled, true, 'precondition: automation on');
-    transport.tick = locked;
+    transport.tick = broken;
     for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) {
       const result = harness.drive();
       assert.equal(result.status, 'retrying', `failure ${i} is retried`);
@@ -14875,7 +14875,7 @@ test('a transport tick that fails a few times is retried, not a permanent disabl
     transport.tick = realTick;
     harness.drive();
     assert.equal(harness.runner.automationEnabled, true, 'a good tick');
-    transport.tick = locked;
+    transport.tick = broken;
     for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) harness.drive();
     assert.equal(harness.runner.automationEnabled, true, 'the good tick reset the count');
     const last = harness.drive();
@@ -14885,6 +14885,54 @@ test('a transport tick that fails a few times is retried, not a permanent disabl
     assert.ok(disabled.includes('runner-transport-tick-failed'), 'and says so');
   } finally {
     harness.cleanup();
+  }
+});
+
+// 2026-11-19 17:58:28Z: five ticks failed on "EPERM ... rename auto-clear-cycle.json.tmp" in about 3 s and
+// the seat's refresh stayed off for the day. A locked cycle file is waited out by the clock, one rename try
+// per tick, so the thread that carries keystrokes and output is never blocked while it waits.
+test('a locked cycle file is waited out for a minute by the clock, without blocking retries', async () => {
+  const { TRANSPORT_TICK_LOCK_WAIT_MS } = await import('../pty-runner.mjs');
+  assert.equal(TRANSPORT_TICK_LOCK_WAIT_MS, 60_000);
+  for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+    const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+    try {
+      const runner = harness.runner;
+      const transport = runner.transport;
+      const realTick = transport.tick.bind(transport);
+      const locked = () => { throw Object.assign(new Error(`${code}: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'`), { code }); };
+      let t = Date.parse('2026-11-19T17:58:28Z');
+      runner.now = () => new Date(t);
+      assert.equal(transport.renameRetryDelaysMs, undefined, 'precondition: the helper keeps its own retry');
+      transport.tick = locked;
+      // 100 failed ticks inside the minute: far past the old count of 5 -- red on master.
+      for (let i = 0; i < 100; i += 1) {
+        const result = harness.drive();
+        assert.equal(result.status, 'retrying', `${code}: tick ${i} inside the minute is retried`);
+        t += 500;
+      }
+      assert.equal(runner.automationEnabled, true, `${code}: still on after 50 s of a locked file`);
+      assert.deepEqual(transport.renameRetryDelaysMs, [], 'while waiting, each tick tries the rename once -- red when the wait blocks');
+      const lines = harness.events('transport-tick-failed-retrying').length;
+      assert.ok(lines >= 5 && lines <= 6, `one line per 10 s, not one per tick: ${lines}`);
+      // The lock lets go: everything is back to normal, and a later lock gets its own full minute.
+      transport.tick = realTick;
+      harness.drive();
+      assert.equal(transport.renameRetryDelaysMs, undefined, 'a good tick restores the helper retry');
+      t += 10 * 60_000;
+      transport.tick = locked;
+      assert.equal(harness.drive().status, 'retrying');
+      t += TRANSPORT_TICK_LOCK_WAIT_MS - 1;
+      assert.equal(harness.drive().status, 'retrying', 'one millisecond inside the minute');
+      t += 1;
+      const last = harness.drive();
+      assert.equal(last.status, 'disabled', `${code}: a full minute locked turns automation off`);
+      assert.equal(runner.automationEnabled, false);
+      const off = harness.events('automation-disabled').map((e) => e.detail);
+      assert.ok(off.some((d) => d?.code === 'runner-transport-tick-failed' && /cycle file locked for 60000 ms/.test(String(d?.detail))), 'and says how long');
+    } finally {
+      harness.cleanup();
+    }
   }
 });
 

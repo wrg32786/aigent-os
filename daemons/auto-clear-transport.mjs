@@ -1013,6 +1013,9 @@ export class AutoClearTransport {
       : ({ sessionId: sid, bootSequence, enteredAt }) => `${sid}:${bootSequence}:${enteredAt}`;
     this.log = makeLogger({ memRoot: this.memRoot, fsImpl: this.fs, now: this.now, log });
     this.cyclePath = statePath(this.memRoot);
+    // undefined = the helper's own rename retry (most of a second, blocking). The runner sets [] while it
+    // is waiting out a locked cycle file, so each of its ticks costs one rename try and blocks nothing.
+    this.renameRetryDelaysMs = undefined;
     this.lockHandle = acquireLock
       ? acquireRunnerLock({
         memRoot: this.memRoot,
@@ -1043,7 +1046,7 @@ export class AutoClearTransport {
     atomicUpdate(
       this.cyclePath,
       () => `${JSON.stringify(next, null, 2)}\n`,
-      { fsImpl: this.fs, now: () => clockMs(this.now) },
+      { fsImpl: this.fs, now: () => clockMs(this.now), renameRetryDelaysMs: this.renameRetryDelaysMs },
     );
     this.state = next;
     return next;
