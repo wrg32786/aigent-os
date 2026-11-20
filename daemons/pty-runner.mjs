@@ -213,10 +213,19 @@ export const HOLD_CLEAR_STALLED_AFTER_ACK = 'HOLD:clear-stalled-after-ack';
 // A refusal line carrying the ownership snapshot is longer than the 400-char
 // default; give it room so the snapshot is never the part that gets cut.
 const REFUSAL_DETAIL_MAX = 1200;
-// Consecutive failed transport ticks before automation is turned off. A tick that throws once (a
-// file briefly locked on Windows) used to disable automatic refresh until a relaunch. Each tick's
-// own state write already retries its rename, so this many failures in a row is not transient.
-export const TRANSPORT_TICK_FAILURE_LIMIT = 5;
+// How long tick()'s transport tick may fail, without one good tick, before automation is turned off.
+// ONE rule for every kind of failure, by the clock. It used to be a count of 5: on 2026-11-19 17:58:28Z
+// five ticks failed on "EPERM ... rename auto-clear-cycle.json.tmp" in about 3 s (a file lock on
+// Windows), refresh went off (runner-transport-tick-failed) and the seat ran unmanaged for the rest of
+// the day. A count cannot tell a lock that lasts ten seconds from a fault that lasts for ever; a minute
+// can, and a tick that fails changes nothing that the next one cannot redo.
+// A good tick ends the wait. So does a new binding: a new transport, or the transport taking a new
+// session id inside a failing tick.
+// Only tick()'s own transport tick uses the wait. The clear confirmation and the release tick that
+// follows it already retry on every poll with no limit and never turn automation off; they still pay
+// the helper's blocking rename retry each time (the 2026-11-20 01:01:10Z lock was on that path).
+export const TRANSPORT_TICK_FAILURE_WAIT_MS = 60_000;
+const TRANSPORT_TICK_FAILURE_LOG_MS = 10_000;
 
 function hasOwn(value, field) {
   return value !== null
@@ -6131,6 +6140,7 @@ export class ManagedPtyRunner {
       };
     }
     this.transport = created;
+    this._resetTransportTickFailures();
     this.sessionId = boot.receipt.session_id;
     this.baselineBootSequence = boot.receipt.boot_sequence;
     // NO WINDOW IS ARMED HERE. This is the production FIRST-BIND path -- a
@@ -7092,6 +7102,14 @@ export class ManagedPtyRunner {
     return { status: 'released', state: released.state };
   }
 
+  // The failure wait of tick()'s transport tick: when it began, for which session, and when it was last
+  // logged. Ended by a good tick and by a new transport.
+  _resetTransportTickFailures() {
+    this.transportTickFailingSince = null;
+    this.transportTickFailingSession = null;
+    this.transportTickFailLoggedAt = null;
+  }
+
   _rebindAfterClear(receipt) {
     if (!receipt) return false;
     if (typeof this.transportFactory !== 'function') {
@@ -7170,6 +7188,8 @@ export class ManagedPtyRunner {
       session_id: receipt.session_id,
     });
     this.transport = next;
+    // A wait opened against the transport just replaced says nothing about this one.
+    this._resetTransportTickFailures();
     this.sessionId = receipt.session_id;
     this.baselineBootSequence = receipt.boot_sequence;
     this.lastCoreResult = null;
@@ -7698,17 +7718,36 @@ export class ManagedPtyRunner {
     const output = this.output.observe();
     let coreResult;
     try {
-      coreResult = this.transport.tick();
+      // While ticks are failing, each one tries its rename once. The first failed tick already spent the
+      // helper's blocking retry; this thread also carries the operator's keystrokes and the seat's output,
+      // and a minute of blocking retries would freeze the terminal for that minute.
+      coreResult = this.transport.tick(
+        Number.isFinite(this.transportTickFailingSince) ? { renameRetryDelaysMs: [] } : undefined,
+      );
     } catch (error) {
-      // A failed tick changes nothing on disk (the cycle file is written last and atomically), so
-      // the next tick can simply run again.
-      this.transportTickFailures = (this.transportTickFailures || 0) + 1;
-      if (this.transportTickFailures < TRANSPORT_TICK_FAILURE_LIMIT) {
-        this._event('transport-tick-failed-retrying', {
-          failures: this.transportTickFailures,
-          limit: TRANSPORT_TICK_FAILURE_LIMIT,
-          detail: errorText(error),
-        });
+      // Each cycle-file write is atomic, so the next tick can simply run again. (A tick may commit an
+      // earlier write before the one that fails; "failing for N ms" is about the ticks, not a claim
+      // that the file never changed.)
+      const clock = this.now();
+      const nowMs = clock instanceof Date ? clock.getTime() : Number(clock);
+      // The transport can take a new session id inside the tick that then fails (a newer boot receipt).
+      // The wait belongs to the session it began in: the new one gets its own minute.
+      const session = this.transport?.sessionId ?? null;
+      if (!Number.isFinite(this.transportTickFailingSince) || this.transportTickFailingSession !== session) {
+        this.transportTickFailingSince = nowMs;
+        this.transportTickFailingSession = session;
+        this.transportTickFailLoggedAt = null;
+      }
+      const failingMs = nowMs - this.transportTickFailingSince;
+      if (failingMs < TRANSPORT_TICK_FAILURE_WAIT_MS) {
+        if (!(nowMs - this.transportTickFailLoggedAt < TRANSPORT_TICK_FAILURE_LOG_MS)) {
+          this.transportTickFailLoggedAt = nowMs;
+          this._event('transport-tick-failed-retrying', {
+            failing_ms: failingMs,
+            wait_ms: TRANSPORT_TICK_FAILURE_WAIT_MS,
+            detail: errorText(error),
+          });
+        }
         return {
           status: 'retrying',
           code: 'runner-transport-tick-failed',
@@ -7717,7 +7756,7 @@ export class ManagedPtyRunner {
       }
       this._disableAutomation(
         'runner-transport-tick-failed',
-        `${this.transportTickFailures} consecutive failures; last: ${errorText(error)}`,
+        `failing for ${failingMs} ms without one good tick; last: ${errorText(error)}`,
       );
       return {
         status: 'disabled',
@@ -7725,7 +7764,7 @@ export class ManagedPtyRunner {
         detail: errorText(error),
       };
     }
-    this.transportTickFailures = 0;
+    this._resetTransportTickFailures();
     this.lastCoreResult = coreResult;
     if (!coreResult || typeof coreResult !== 'object'
       || !hasOwn(coreResult, 'state')

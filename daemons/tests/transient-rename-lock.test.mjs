@@ -3,7 +3,7 @@
 // '...auto-clear-cycle.json.tmp-40516'", then automation-disabled runner-transport-tick-failed,
 // and stayed off until a relaunch. Two layers now absorb that: atomic-state retries a locked
 // rename for under a second, and the runner turns automation off only after
-// TRANSPORT_TICK_FAILURE_LIMIT consecutive failed ticks.
+// a minute of failing ticks (TRANSPORT_TICK_FAILURE_WAIT_MS).
 // Run: node --test daemons/tests/transient-rename-lock.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -72,3 +72,62 @@ test('the default retry window stays under a second', () => {
   assert.equal(locked.attempts(), 7);
   assert.ok(Date.now() - started < 3000, 'bounded');
 });
+
+// 2026-11-19: while its ticks are failing the runner tries the rename once per tick (pty-runner.mjs,
+// TRANSPORT_TICK_FAILURE_WAIT_MS). The transport hands its renameRetryDelaysMs to the helper, so [] really is
+// one try with no sleep, and undefined is still the helper's own retry.
+test('the transport passes its rename retry setting to the state write', async () => {
+  const { AutoClearTransport } = await import('../auto-clear-transport.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rename-lock-transport-'));
+  const memRoot = path.join(root, 'memory');
+  fs.mkdirSync(path.join(memRoot, 'runtime'), { recursive: true });
+  let failuresLeft = 0;
+  let tries = 0;
+  const fsImpl = {
+    ...fs,
+    renameSync(from, to) {
+      if (path.basename(String(to)) === 'auto-clear-cycle.json') {
+        tries += 1;
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
+        }
+      }
+      return fs.renameSync(from, to);
+    },
+  };
+  const transport = new AutoClearTransport({
+    memRoot, sessionId: 'session-a', cwd: root, homeDir: root, fsImpl, now: () => new Date('2026-11-19T17:58:28Z'),
+    env: {}, log: () => {}, acquireLock: false,
+  });
+  const state = { ...transport.state, entered_at: '2026-11-19T17:58:28.000Z' };
+  transport.renameRetryDelaysMs = [];
+  failuresLeft = 1; tries = 0;
+  assert.throws(() => transport._atomicWrite(state), (error) => error.code === 'EPERM');
+  assert.equal(tries, 1, 'one try, no retry -- red when the setting is not passed through');
+  transport.renameRetryDelaysMs = undefined;
+  failuresLeft = 1; tries = 0;
+  transport._atomicWrite(state);
+  assert.equal(tries, 2, 'the helper retried and committed');
+  // tick(options) sets the retry for that call only, and clears it even when the tick throws.
+  let during = 'unset';
+  transport._tick = () => { during = transport.renameRetryDelaysMs; throw new Error('tick failed'); };
+  assert.throws(() => transport.tick({ renameRetryDelaysMs: [] }), /tick failed/);
+  assert.deepEqual(during, [], 'set for the call');
+  assert.equal(transport.renameRetryDelaysMs, undefined, 'and gone after it -- red when the setting outlives the call');
+  transport._tick = () => { during = transport.renameRetryDelaysMs; return 'ok'; };
+  assert.equal(transport.tick(), 'ok');
+  assert.equal(during, undefined, 'a plain tick uses the helper\'s own retry');
+  // A tick entered from inside another puts the outer one's setting back (review of 101ed623, note 3).
+  let after = 'unset';
+  let depth = 0;
+  transport._tick = () => {
+    depth += 1;
+    if (depth === 1) { transport.tick(); after = transport.renameRetryDelaysMs; }
+    return 'ok';
+  };
+  transport.tick({ renameRetryDelaysMs: [] });
+  assert.deepEqual(after, [], 'the outer tick still has its setting -- red when the inner one clears it');
+  assert.equal(transport.renameRetryDelaysMs, undefined);
+});
+
