@@ -214,7 +214,8 @@ row_re = re.compile(
     re.MULTILINE
 )
 sys.path.insert(0, fix_path(os.environ["CAPTURE_DAEMON_DIR"]))
-from memory_candidates import staged_count as count_pending
+# The cap counts real pending rows; staged_count()'s old-matcher floor guards nightly's skip only.
+from memory_candidates import structured_count as count_pending
 
 staged_count = count_pending(content)
 recent_staged_phrases = []  # (normalized_phrase, captured_at)
