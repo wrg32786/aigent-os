@@ -1,18 +1,14 @@
 #!/usr/bin/env node
-// mutate-red.mjs: prove a check can go red (Law XV) without losing the file.
+// Prove a check can go red (Law XV). For a single user in a clean working tree.
+// Refuses dirty or outside targets and unchanged bytes. Restores on interrupt.
 //
 //   node scripts/mutate-red.mjs --file <path> --find <text> --replace <text> [--timeout <sec>] -- <test command...>
-//   node scripts/mutate-red.mjs --restore        restore every snapshot a killed run left behind
+//   node scripts/mutate-red.mjs --restore
 //
-// Runs the test once on the real file (must pass), applies the mutation, runs it
-// again (must fail), then restores FROM A BYTE SNAPSHOT and checks the hash. It
-// checks that the target is clean and inside this repository. The snapshot and a
-// pending record are written before the mutation, so a run killed mid-test is
-// recovered by `--restore`, and a new run on the same file refuses until then.
-// The test gets its own timeout, shorter than any outer runner cap, so this
-// process always reaches the restore step itself.
+// The check must pass on the original bytes and fail on the mutation.
+// --restore recovers a pending snapshot after a killed run.
 //
-// Exit 0: green then red (the check can fail). Exit 1: still green after the
+//// Exit 0: green then red (the check can fail). Exit 1: still green after the
 // mutation, or red before it. Exit 2: usage, find text missing or not unique,
 // pending restore, or restore failed (loud; the snapshot path is printed).
 import { createHash, randomUUID } from 'node:crypto';
@@ -76,7 +72,10 @@ if (argv[0] === '--restore') {
 }
 
 const sep = argv.indexOf('--');
-if (sep === -1 || sep === argv.length - 1) die(2, 'usage: --file F --find A --replace B [--timeout S] -- <test command...>');
+if (sep === -1 || sep === argv.length - 1) {
+  die(2, 'usage: --file F --find A --replace B [--timeout S] -- <test command...> | --restore\n'
+    + 'For a single user in a clean working tree. Refuses dirty or outside targets and unchanged bytes. Restores on interrupt.');
+}
 const opts = {};
 for (let i = 0; i < sep; i += 2) opts[argv[i].replace(/^--/, '')] = argv[i + 1];
 const cmd = argv.slice(sep + 1);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('compaction previews, moves the oldest loose entries, and rolls back a failed gate', (t) => {
+test('compaction previews, moves the oldest loose entries, and detects orphans', (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'memory-compact-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const run = (script, ...args) => spawnSync(process.execPath, [
@@ -30,16 +30,6 @@ test('compaction previews, moves the oldest loose entries, and rolls back a fail
   assert.deepEqual(readdirSync(dir), before);
   assert.equal(readFileSync(index, 'utf8'), original);
 
-  writeFileSync(index, original + 'See [[missing]].\r\n');
-  const dirty = readFileSync(index);
-  const rejected = compact('--apply');
-  assert.notEqual(rejected.status, 0);
-  assert.match(rejected.stdout + rejected.stderr, /DANGLING "missing\.md"/);
-  assert.match(rejected.stderr, /Restored MEMORY\.md from backup/);
-  assert.deepEqual(readFileSync(index), dirty);
-  assert.deepEqual(readdirSync(dir), before);
-
-  writeFileSync(index, original);
   const applied = compact('--apply');
   assert.equal(applied.status, 0, applied.stderr);
   const name = 'index-recent-2026-11-06-to-11-14.md';
@@ -105,59 +95,75 @@ test('indented continuations move with their bullet', t => {
   assert.match(readFileSync(index, 'utf8'), /\r\n  last detail/);
 });
 
-for (const target of ['backup', 'archive']) {
-  test(target + ' is published with complete contents', t => {
-    const hook = `
-      const op = ${target === 'backup' ? "'renameSync'" : "'linkSync'"};
-      const publish = fs[op];
-      fs[op] = (src, dest) => {
-        if (${target === 'backup' ? "path.basename(dest) === 'MEMORY.backup-compact'" : "/^index-.*\\.md$/.test(path.basename(dest))"}) {
-          if (fs.existsSync(dest)) throw Error('destination visible before publication');
-          if (!fs.readFileSync(src, 'utf8').includes('second detail')) throw Error('incomplete temp file');
-          console.log('observed complete file');
-        }
-        return publish(src, dest);
-      };`;
-    const { result } = scenario(t, hook);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /observed complete file/, target + ' was not published complete');
-  });
-}
-
-for (const phase of ['compaction', 'rollback']) {
-  test(phase + ' refuses an edit at the index rename boundary', t => {
-    const hook = `
-      const rename = fs.renameSync;
-      let installs = 0;
-      fs.renameSync = (src, dest) => {
-        if (path.basename(src) === 'MEMORY.md' && ++installs === ${phase === 'rollback' ? 2 : 1}) {
-          fs.writeFileSync(src, 'concurrent edit');
-        }
-        return rename(src, dest);
-      };`;
-    const { result, index } = scenario(t, hook, phase === 'rollback');
-    assert.equal(readFileSync(index, 'utf8'), 'concurrent edit', 'rename erased the concurrent edit');
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /index changed/);
-  });
-}
-
-test('failed gate preserves an edited archive', t => {
+test('archive is published with complete contents', t => {
   const hook = `
-    const publish = fs.linkSync;
+    const link = fs.linkSync;
     fs.linkSync = (src, dest) => {
-      publish(src, dest);
+      if (path.basename(dest).startsWith('index-')) {
+        if (fs.existsSync(dest)) throw Error('destination visible before publication');
+        if (!fs.readFileSync(src, 'utf8').includes('second detail')) throw Error('incomplete temp file');
+        console.log('observed complete file');
+      }
+      return link(src, dest);
+    };`;
+  const { result } = scenario(t, hook);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /observed complete file/);
+});
+
+test('one rename replaces the live index with its staged sibling', t => {
+  const hook = `
+    const rename = fs.renameSync;
+    fs.renameSync = (src, dest) => {
+      if (path.basename(src) === 'MEMORY.md') throw Error('moved the live index aside');
       if (path.basename(dest) === 'MEMORY.md') {
         const dir = path.dirname(dest);
-        const archive = fs.readdirSync(dir).find(name => /^index-.*\\.md$/.test(name));
-        if (archive) fs.writeFileSync(path.join(dir, archive), 'edited archive');
+        const backups = fs.readdirSync(dir).filter(name => name.startsWith('MEMORY.backup-compact')
+          && fs.statSync(path.join(dir, name), { bigint: true }).ino === fs.statSync(dest, { bigint: true }).ino);
+        if (backups.length !== 1) throw Error('missing hard link to live index');
+        if (path.dirname(src) !== dir) throw Error('temp file is not beside live index');
+        console.log('replacing live index');
       }
+      return rename(src, dest);
     };`;
-  const { result, archive } = scenario(t, hook, true);
-  assert.notEqual(result.status, 0);
-  assert.ok(archive, 'rollback deleted the edited archive');
-  assert.equal(readFileSync(archive, 'utf8'), 'edited archive');
-  assert.match(result.stderr, /archive changed/);
+  const { result, index, archive } = scenario(t, hook);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.split('replacing live index').length - 1, 1);
+  assert.ok(readFileSync(index, 'utf8').includes('](' + path.basename(archive) + ')'));
+});
+
+test('a backup edit at publication keeps both versions and reports their paths', t => {
+  const hook = `
+    for (const op of ['renameSync', 'linkSync']) {
+      const publish = fs[op];
+      fs[op] = (src, dest) => {
+        publish(src, dest);
+        if (path.basename(dest) === 'MEMORY.md') {
+          const dir = path.dirname(dest);
+          const backup = fs.readdirSync(dir).find(name => name.startsWith('MEMORY.backup-compact')
+            && fs.statSync(path.join(dir, name)).isFile());
+          fs.writeFileSync(path.join(dir, backup), 'edited original');
+          console.log('edited original');
+        }
+      };
+    }`;
+  const { result, index, archive } = scenario(t, hook);
+  assert.match(result.stdout, /edited original/);
+  assert.equal(result.status, 1, 'compaction accepted a changed backup');
+  const dir = path.dirname(index);
+  const backup = readdirSync(dir).find(name => name.startsWith('MEMORY.backup-compact'));
+  assert.equal(readFileSync(path.join(dir, backup), 'utf8'), 'edited original');
+  assert.ok(readFileSync(index, 'utf8').includes('](' + path.basename(archive) + ')'));
+  for (const file of [path.join(dir, backup), index]) assert.ok(result.stderr.includes(file), result.stderr);
+});
+
+test('a failed orphan check leaves the original index and keeps the new archive', t => {
+  const { result, main, index, archive, bullet } = scenario(t, '', true);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /DANGLING "missing\.md"/);
+  assert.equal(readFileSync(index, 'utf8'), main);
+  assert.ok(archive, 'failed gate deleted the new archive');
+  assert.ok(readFileSync(archive, 'utf8').includes(bullet('second')));
 });
 
 test('failed install preserves the archive named by the live index', t => {
@@ -180,25 +186,6 @@ test('failed install preserves the archive named by the live index', t => {
   assert.ok(archive, 'cleanup deleted the archive named by MEMORY.md');
   assert.ok(live.includes('](' + path.basename(archive) + ')'));
   assert.match(readFileSync(archive, 'utf8'), /second detail/);
-});
-
-test('compaction restores an index swapped by rename after the final compare', t => {
-  const hook = `
-    const rename = fs.renameSync;
-    let swapped = false;
-    fs.renameSync = (src, dest) => {
-      const index = [src, dest].find(file => path.basename(file) === 'MEMORY.md');
-      if (index && !swapped) {
-        swapped = true;
-        fs.writeFileSync(index + '.save', 'atomic save');
-        rename(index + '.save', index);
-      }
-      return rename(src, dest);
-    };`;
-  const { result, index } = scenario(t, hook);
-  assert.equal(readFileSync(index, 'utf8'), 'atomic save', 'compaction lost the atomic save');
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /index changed/);
 });
 
 test('exclusive archive creation refuses a competing file at publication', t => {
@@ -226,26 +213,4 @@ test('exclusive archive creation refuses a competing file at publication', t => 
   assert.equal(readFileSync(archive, 'utf8'), 'competing archive', 'publication replaced a competing archive');
   assert.equal(result.status, 1);
   assert.equal(readFileSync(index, 'utf8'), main);
-});
-
-test('archive cleanup preserves a replacement with identical contents', t => {
-  const hook = `
-    const rename = fs.renameSync;
-    const unlink = fs.unlinkSync;
-    let swapped = false;
-    const swap = file => {
-      if (swapped || !path.basename(file).startsWith('index-')) return;
-      swapped = true;
-      fs.copyFileSync(file, file + '.save');
-      rename(file + '.save', file);
-      console.log('replaced archive');
-    };
-    fs.unlinkSync = file => { swap(file); return unlink(file); };
-    fs.renameSync = (src, dest) => { swap(src); return rename(src, dest); };`;
-  const { result, main, index, archive } = scenario(t, hook, true);
-  assert.match(result.stdout, /replaced archive/, result.stderr);
-  assert.equal(result.status, 1);
-  assert.equal(readFileSync(index, 'utf8'), main);
-  assert.ok(archive, 'cleanup deleted the replacement archive');
-  assert.match(readFileSync(archive, 'utf8'), /second detail/);
 });

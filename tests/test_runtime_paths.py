@@ -59,6 +59,19 @@ class RuntimePathTests(unittest.TestCase):
                 table = "\n".join(" " * spaces + row for row in ("| Status |", "|---|", "| staged |"))
                 self.assertEqual(staged_count(table), 1)
 
+    def test_status_in_first_data_cell_counts_one_staged_row(self):
+        from memory_candidates import staged_count
+
+        for note in ("", " Source phrase |"):
+            with self.subTest(note=note):
+                table = "Candidate | Status | Note |\n---|---|---|\nStatus | staged |" + note
+                self.assertEqual(staged_count(table), 1)
+
+    def test_status_in_prose_without_a_separator_is_not_a_table(self):
+        from memory_candidates import staged_count
+
+        self.assertEqual(staged_count("Candidate | Status |\nproof | staged |"), 0)
+
     def test_digest_counts_pending_status_cells_and_unbanked_capsule_bullets(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

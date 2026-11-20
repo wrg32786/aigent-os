@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Check disk -> index and index -> disk, following one level of linked sub-indexes.
-// node daemons/memory-orphan-check.mjs [--root ROOT | --dir MEMORIES] [--index MEMORY.md]
+// node daemons/memory-orphan-check.mjs [--root ROOT | --dir MEMORIES] [--index MEMORY.md] [--staged FILE]
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { resolveNightlyPaths } from './nightly-paths.mjs';
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-  root: { type: 'string' }, dir: { type: 'string' }, index: { type: 'string' },
+  root: { type: 'string' }, dir: { type: 'string' }, index: { type: 'string' }, staged: { type: 'string' },
 } });
 if (positionals.length > 1 || (positionals.length && values.dir)) throw new Error('expected one memory directory');
 const dir = path.resolve(values.dir || positionals[0] || resolveNightlyPaths(values.root).memoryRoot);
@@ -51,7 +51,7 @@ function orphans(files, text) {
 
 function run() {
   console.log('memories dir: ' + dir + '\nindex: ' + index);
-  const main = fs.readFileSync(index, 'utf8');
+  const main = fs.readFileSync(values.staged || index, 'utf8');
   const files = memories();
   if (!files.length) throw new Error('zero memories enumerated');
   const sources = new Map([[index, main]]);

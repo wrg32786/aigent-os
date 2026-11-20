@@ -12,13 +12,22 @@ CLOSED = re.compile(
 )
 
 
+def table_cells(line: str) -> list[str]:
+    row = line.lstrip(" ")
+    if "|" not in row or line.startswith("    ") or row.startswith("\t"):
+        return []
+    body = row.rstrip().removeprefix("|").removesuffix("|")
+    return [s.strip().lower() for s in re.split(r"(?<!\\)\|", body)]
+
+
 def staged_count(text: str) -> int:
     count = 0
     status_column = None
     capsule = False
     bullet = []
     fence = ""
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         marker = re.match(r"^\s*(`{3,}|~{3,})", line)
         if fence:
             if line.strip().startswith(fence) and not line.strip().strip(fence[0]):
@@ -28,10 +37,7 @@ def staged_count(text: str) -> int:
             fence = marker[1]
             continue
         row = line.lstrip(" ")
-        cells = []
-        if "|" in row and not line.startswith("    ") and not row.startswith("\t"):
-            body = row.rstrip().removeprefix("|").removesuffix("|")
-            cells = [s.strip().lower() for s in re.split(r"(?<!\\)\|", body)]
+        cells = table_cells(line)
         if cells and (row.startswith("|") or "status" in cells or status_column is not None):
             line = row
         if bullet and (line.startswith((" ", "\t")) or not line.strip()):
@@ -47,9 +53,11 @@ def staged_count(text: str) -> int:
         if not cells:
             status_column = None
             continue
-        if "status" in cells and (status_column is None or "source phrase" in cells):
-            status_column = cells.index("status")
-            continue
+        if "status" in cells and i + 1 < len(lines):
+            separator = table_cells(lines[i + 1])
+            if len(separator) == len(cells) and all(re.fullmatch(r":?-+:?", cell) for cell in separator):
+                status_column = cells.index("status")
+                continue
         column = status_column
         # Capture can append a canonical eight-cell row after a prose section.
         if column is None and len(cells) == 8 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", cells[0]):

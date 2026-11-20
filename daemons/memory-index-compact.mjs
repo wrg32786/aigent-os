@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // node daemons/memory-index-compact.mjs [--dir MEMORIES | --root ROOT] [--threshold 50] [--apply]
 // Keep the newest N loose entries by target file mtime (UTC), breaking ties by
-// original line order. Preview by default. Existing sub-indexes are never replaced.
+// original line order. Preview by default. Archives are exclusive and are never
+// retired automatically, even after a failed check. Each successful replacement
+// leaves a dated hard-link backup of the previous MEMORY.md beside the index.
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -73,113 +74,30 @@ function compact() {
   for (const entry of moved) lines.fill('', entry.i, entry.end);
   lines[first] = pointer;
   const next = Buffer.from(lines.join(''));
-  const backup = path.join(dir, 'MEMORY.backup-compact');
-  const work = backup + '.tmp';
-  const pending = path.join(work, 'pending');
-  const displaced = path.join(work, 'displaced');
-  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-  const archiveHash = hash(contents);
-  const mode = fs.statSync(index).mode;
+  const backup = path.join(dir, 'MEMORY.backup-compact-' + from + '-to-' + end);
+  const pending = path.join(dir, 'MEMORY.compact.tmp');
+  const stagedArchive = pending + '.archive';
 
-  let keepWork = false;
-
-  const stagedArchive = path.join(work, 'archive');
-  function checkArchive(file = archive) {
-    const owned = fs.statSync(stagedArchive, { bigint: true });
-    const found = fs.lstatSync(file, { bigint: true });
-    if (owned.dev !== found.dev || owned.ino !== found.ino || hash(fs.readFileSync(file)) !== archiveHash) {
-      throw new Error('archive changed; kept ' + archive);
-    }
-  }
-
-  function liveNamesArchive() {
-    return fs.readFileSync(index, 'utf8').toLowerCase().includes(path.basename(name, '.md'));
-  }
-
-  function removeArchive() {
-    if (liveNamesArchive()) return;
-    const retired = path.join(work, 'retired');
-    fs.renameSync(archive, retired);
-    try {
-      checkArchive(retired);
-      if (!liveNamesArchive()) {
-        fs.unlinkSync(retired);
-        return;
-      }
-    } finally {
-      if (fs.existsSync(retired)) {
-        // Restore this exact file without replacing another arrival.
-        const previous = keepWork;
-        keepWork = true;
-        fs.linkSync(retired, archive);
-        keepWork = previous;
-      }
-    }
-  }
-
-  function installIndex(expected, replacement) {
-    if (!fs.readFileSync(index).equals(expected)) throw new Error('index changed before rename');
-    fs.renameSync(index, displaced);
-    keepWork = true;
-    try {
-      // Publish only into the empty name. A save during the gap wins.
-      fs.linkSync(pending, index);
-    } catch (error) {
-      if (!fs.existsSync(index)) {
-        fs.linkSync(displaced, index);
-        keepWork = false;
-      }
-      throw error;
-    }
-    if (!fs.readFileSync(displaced).equals(expected)) {
-      if (!fs.readFileSync(index).equals(replacement)) {
-        throw new Error('index changed again; displaced edit kept at ' + displaced);
-      }
-      fs.renameSync(displaced, index);
-      keepWork = false;
-      throw new Error('index changed during rename');
-    }
-    fs.unlinkSync(displaced);
-    fs.unlinkSync(pending);
-    keepWork = false;
-  }
-
-  fs.mkdirSync(work);
-  let wroteBackup = false;
-  let wroteArchive = false;
-  let installed = false;
-  let keepBackup = false;
+  fs.writeFileSync(pending, next, { flag: 'wx', mode: fs.statSync(index).mode });
   try {
-    if (fs.existsSync(backup)) throw new Error('recovery backup already exists: ' + backup);
-    fs.copyFileSync(index, pending, fs.constants.COPYFILE_EXCL);
-    if (!fs.readFileSync(pending).equals(original)) throw new Error('index changed before backup');
-    fs.renameSync(pending, backup);
-    wroteBackup = true;
-    // Keep a private link to the complete archive for ownership checks during cleanup.
     fs.writeFileSync(stagedArchive, contents, { flag: 'wx' });
-    fs.linkSync(stagedArchive, archive);
-    wroteArchive = true;
-    fs.writeFileSync(pending, next, { mode });
-    installIndex(original, next);
-    installed = true;
-    const checker = fileURLToPath(new URL('./memory-orphan-check.mjs', import.meta.url));
-    const result = spawnSync(process.execPath, [checker, '--dir', dir], { stdio: 'inherit' });
-    if (result.status !== 0) throw new Error('orphan check failed');
-  } catch (error) {
-    if (installed) {
-      keepBackup = true;
-      checkArchive();
-      fs.copyFileSync(backup, pending, fs.constants.COPYFILE_EXCL);
-      if (!fs.readFileSync(pending).equals(original)) throw new Error('recovery backup changed: ' + backup);
-      installIndex(next, original);
-      keepBackup = false;
-      console.error('Restored MEMORY.md from backup');
+    try {
+      fs.linkSync(stagedArchive, archive);
+    } finally {
+      fs.unlinkSync(stagedArchive);
     }
-    if (wroteArchive) removeArchive();
+    const checker = fileURLToPath(new URL('./memory-orphan-check.mjs', import.meta.url));
+    const result = spawnSync(process.execPath, [checker, '--dir', dir, '--staged', pending], { stdio: 'inherit' });
+    if (result.status !== 0) throw new Error('orphan check failed');
+
+    fs.linkSync(index, backup);
+    fs.renameSync(pending, index);
+  } catch (error) {
+    fs.rmSync(pending, { force: true });
     throw error;
-  } finally {
-    if (wroteBackup && !keepBackup && !keepWork) fs.unlinkSync(backup);
-    if (!keepWork) fs.rmSync(work, { recursive: true });
+  }
+  if (!fs.readFileSync(backup).equals(original)) {
+    throw new Error('index changed during compaction; kept backup ' + backup + ' and new index ' + index);
   }
 }
 
