@@ -3,6 +3,7 @@
 // Keep the newest N loose entries by target file mtime (UTC), breaking ties by
 // original line order. Preview by default. Existing sub-indexes are never replaced.
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -53,31 +54,74 @@ function compact() {
   if (!values.apply) return;
 
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
-  const rows = moved.map(entry => lines[entry.i].replace(/\r?\n$/, ''));
-  const contents = ['# ' + label, '', 'Sub-index of MEMORY.md. One line per memory; open the file for the fact.',
+  moved.sort((a, b) => a.i - b.i);
+  const rows = [];
+  for (const entry of moved) {
+    let end = entry.i + 1;
+    for (let i = end; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      if (!/^[ \t]/.test(lines[i])) break;
+      end = i + 1;
+    }
+    rows.push(lines.slice(entry.i, end).join('').replace(/\r?\n$/, ''));
+    entry.end = end;
+  }
+  const contents = ['# ' + label, '', 'Sub-index of MEMORY.md. One entry per memory; open the file for the fact.',
     '', ...rows, ''].join(eol);
-  const first = Math.min(...moved.map(entry => entry.i));
+  const first = moved[0].i;
   const pointer = '- [' + label + '](' + name + ')' + (lines[first].endsWith('\n') ? eol : '');
-  for (const entry of moved) lines[entry.i] = entry.i === first ? pointer : '';
+  for (const entry of moved) lines.fill('', entry.i, entry.end);
+  lines[first] = pointer;
   const next = Buffer.from(lines.join(''));
   const backup = path.join(dir, 'MEMORY.backup-compact');
-  const pending = path.join(dir, 'MEMORY.backup-compact.tmp');
-  // Exclusive backup also reserves the transaction. A killed process leaves the
-  // original bytes here for recovery and a subsequent run cannot overwrite them.
-  fs.copyFileSync(index, backup, fs.constants.COPYFILE_EXCL);
+  const work = backup + '.tmp';
+  const pending = path.join(work, 'pending');
+  const displaced = path.join(work, 'displaced');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const archiveHash = hash(contents);
+  const mode = fs.statSync(index).mode;
+
+  let keepWork = false;
+
+  function checkArchive() {
+    if (hash(fs.readFileSync(archive)) !== archiveHash) throw new Error('archive changed; kept ' + archive);
+  }
+
+  function installIndex(expected, replacement) {
+    // Pin the displaced inode so a write through an open handle at rename time
+    // can still be detected and recovered after the name switches.
+    fs.linkSync(index, displaced);
+    if (!fs.readFileSync(index).equals(expected)) throw new Error('index changed before rename');
+    fs.renameSync(pending, index);
+    if (!fs.readFileSync(displaced).equals(expected)) {
+      keepWork = true;
+      if (!fs.readFileSync(index).equals(replacement)) {
+        throw new Error('index changed again; displaced edit kept at ' + displaced);
+      }
+      fs.renameSync(displaced, index);
+      keepWork = false;
+      throw new Error('index changed during rename');
+    }
+    fs.unlinkSync(displaced);
+  }
+
+  fs.mkdirSync(work);
+  let wroteBackup = false;
   let wroteArchive = false;
-  let wrotePending = false;
   let installed = false;
   let keepBackup = false;
   try {
-    if (!fs.readFileSync(backup).equals(original)) throw new Error('index changed since planning');
-    fs.writeFileSync(pending, next, { flag: 'wx', mode: fs.statSync(index).mode });
-    wrotePending = true;
-    fs.writeFileSync(archive, contents, { flag: 'wx' });
+    if (fs.existsSync(backup)) throw new Error('recovery backup already exists: ' + backup);
+    fs.copyFileSync(index, pending, fs.constants.COPYFILE_EXCL);
+    if (!fs.readFileSync(pending).equals(original)) throw new Error('index changed before backup');
+    fs.renameSync(pending, backup);
+    wroteBackup = true;
+    fs.writeFileSync(pending, contents);
+    if (fs.existsSync(archive)) throw new Error('archive already exists: ' + archive);
+    fs.renameSync(pending, archive);
     wroteArchive = true;
-    if (!fs.readFileSync(index).equals(original)) throw new Error('index changed since backup');
-    fs.renameSync(pending, index);
-    wrotePending = false;
+    fs.writeFileSync(pending, next, { mode });
+    installIndex(original, next);
     installed = true;
     const checker = fileURLToPath(new URL('./memory-orphan-check.mjs', import.meta.url));
     const result = spawnSync(process.execPath, [checker, '--dir', dir], { stdio: 'inherit' });
@@ -85,17 +129,21 @@ function compact() {
   } catch (error) {
     if (installed) {
       keepBackup = true;
-      if (!fs.readFileSync(index).equals(next)) {
-        throw new Error('index changed during gate; recovery backup: ' + backup);
-      }
-      fs.renameSync(backup, index);
+      checkArchive();
+      fs.copyFileSync(backup, pending, fs.constants.COPYFILE_EXCL);
+      if (!fs.readFileSync(pending).equals(original)) throw new Error('recovery backup changed: ' + backup);
+      installIndex(next, original);
+      keepBackup = false;
       console.error('Restored MEMORY.md from backup');
     }
-    if (wroteArchive) fs.unlinkSync(archive);
+    if (wroteArchive) {
+      checkArchive();
+      fs.unlinkSync(archive);
+    }
     throw error;
   } finally {
-    if (wrotePending) fs.unlinkSync(pending);
-    if (!keepBackup) fs.unlinkSync(backup);
+    if (wroteBackup && !keepBackup) fs.unlinkSync(backup);
+    if (!keepWork) fs.rmSync(work, { recursive: true });
   }
 }
 

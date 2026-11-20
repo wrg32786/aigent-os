@@ -80,7 +80,7 @@ On Friday, include one line summarizing honesty entries, trust-decay captures, f
 
 ### Review staged memory
 
-Read `vault/memory/MEMORY_CANDIDATES.md`. If staged candidates exist, run `/digest`. Promotion remains human-gated; a close may record deferral but must not silently promote candidates.
+Read `<memory-root>/MEMORY_CANDIDATES.md`. If staged candidates exist, run `/digest`. Promotion remains human-gated; a close may record deferral but must not silently promote candidates.
 
 ### Create a context capsule when needed
 

@@ -729,6 +729,21 @@ seed_nightly_templates() {
   safe_mkdir_p "$TARGET/$MEMORY_REL/runtime" \
     || fail "cannot create $TARGET/$MEMORY_REL/runtime"
 
+  local resolved="$TARGET/$MEMORY_REL/MEMORY_CANDIDATES.md" stray count
+  while IFS= read -r -d '' stray; do
+    [[ "$stray" == "$resolved" || "$stray" -ef "$resolved" ]] && continue
+    if count="$(python3 "$SRC/daemons/memory_candidates.py" "$stray")" \
+      || count="$(python "$SRC/daemons/memory_candidates.py" "$stray")"; then
+      count="${count%$'\r'}"
+      if [[ "$count" != 0 ]]; then
+        printf 'WARNING: %s has %s staged entries outside the resolved ledger %s. Review both files.\n' \
+          "$stray" "$count" "$resolved" >&2
+      fi
+    else
+      printf 'WARNING: could not count staged entries in %s (resolved ledger %s).\n' "$stray" "$resolved" >&2
+    fi
+  done < <(find "$TARGET" \( -name .git -o -name node_modules \) -prune -o -type f -name MEMORY_CANDIDATES.md -print0)
+
   local memory_file
   for memory_file in DREAM_LOG.md MEMORY_CANDIDATES.md SWEEP_LOG.md; do
     copy_missing_file \

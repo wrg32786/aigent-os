@@ -27,6 +27,7 @@ def staged_count(text: str) -> int:
         if marker:
             fence = marker[1]
             continue
+        line = re.sub(r"^ {1,3}(?=\|)", "", line)
         if bullet and (line.startswith((" ", "\t")) or not line.strip()):
             bullet.append(line.strip())
             continue

@@ -6,11 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-test('Dream and nightly print the newest dated file in both daily trees', (t) => {
+test('Dream and nightly name the inventory helper, which prints the newest dated file in each tree', (t) => {
   for (const skill of ['dream', 'nightly']) {
     const doc = readFileSync(new URL('../../skills/' + skill + '/SKILL.md', import.meta.url), 'utf8');
     assert.ok(doc.includes('<root>/vault/daily'), skill + ' must name the live hook tree');
-    assert.ok(doc.includes('daemons/dream-daily.mjs'), skill + ' must run the inventory');
+    assert.ok(doc.includes('daemons/dream-daily.mjs'), skill + ' must reference the inventory helper');
   }
   const root = mkdtempSync(path.join(tmpdir(), 'dream-daily-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

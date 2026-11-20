@@ -43,6 +43,14 @@ fitness_report_spec.loader.exec_module(agent_fitness_report)
 
 
 class RuntimePathTests(unittest.TestCase):
+    def test_indented_status_table_counts_one_staged_row(self):
+        from memory_candidates import staged_count
+
+        for spaces in range(1, 4):
+            with self.subTest(spaces=spaces):
+                table = "\n".join(" " * spaces + row for row in ("| Status |", "|---|", "| staged |"))
+                self.assertEqual(staged_count(table), 1)
+
     def test_digest_counts_pending_status_cells_and_unbanked_capsule_bullets(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

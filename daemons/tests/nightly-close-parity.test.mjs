@@ -775,3 +775,12 @@ test('mutation proof: every nightly checkpoint re-derives its own postcondition'
     },
   );
 });
+
+test('digest refuses a no-staged-candidates skip for an indented table', () => {
+  const { root } = fixture('indented-table');
+  begin(root);
+  write(root, 'vault/memory/MEMORY_CANDIDATES.md', ' | Candidate | Status |\n |---|---|\n | proof | staged |\n');
+  const result = record(root, 'digest', { artifact: 'none:no-staged-candidates', status: 'skipped' });
+  assert.notEqual(result.status, 0, 'digest accepted a skip with one staged row');
+  assert.match(result.stdout + result.stderr, /staged rows exist/);
+});

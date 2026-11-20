@@ -625,3 +625,38 @@ test('W5d: the Python door returns the declared root byte for byte through node,
     for (const base of bases) rmSync(base, { recursive: true, force: true });
   }
 });
+
+test('operational candidate references use the resolved memory root', () => {
+  for (const file of ['skills/context-capsule/SKILL.md', 'skills/close/SKILL.md', 'skills/body-check/SKILL.md',
+    'daemons/session-engine.md']) {
+    const references = readFileSync(path.join(REPO, file), 'utf8').match(/`[^`\n]*MEMORY_CANDIDATES\.md`/g);
+    assert.ok(references?.length, file);
+    for (const reference of references) assert.equal(reference, '`<memory-root>/MEMORY_CANDIDATES.md`', file);
+  }
+});
+
+test('installer seeding warns with the stray ledger, resolved ledger and staged count', t => {
+  const fx = mkRoot({ dirs: ['previous/mem', 'notes/mem'], declare: 'notes/mem' });
+  t.after(() => rmSync(fx.base, { recursive: true, force: true }));
+  const name = 'MEMORY_CANDIDATES.md';
+  const stray = path.join(fx.root, 'previous/mem', name);
+  const resolved = path.join(fx.root, 'notes/mem', name);
+  const ledger = '| Status |\n|---|\n| staged |\n| promoted |\n| staged |\n';
+  writeFileSync(stray, ledger);
+  writeFileSync(resolved, 'canonical contents');
+  // Exercise the installer seeding function with copies disabled, as on an upgrade
+  // where all seeds already exist.
+  const seed = readFileSync(path.join(REPO, 'install.sh'), 'utf8').match(/^seed_nightly_templates\(\) \{[\s\S]*?^\}/m)[0];
+  const command = 'set -eu\nSRC=$1 TARGET=$2 MEMORY_REL=notes/mem\nsafe_mkdir_p() { mkdir -p "$1"; }\n'
+    + 'copy_missing_file() { :; }\n' + seed + '\nseed_nightly_templates';
+  const result = spawnSync('bash', ['-c', command, 'seed', REPO.replaceAll('\\', '/'), fx.root.replaceAll('\\', '/')],
+    { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const warning = result.stderr.replaceAll('\\', '/');
+  assert.match(warning, /warn/i, 'no stray ledger warning');
+  assert.ok(warning.includes(stray.replaceAll('\\', '/')), warning);
+  assert.ok(warning.includes(resolved.replaceAll('\\', '/')), warning);
+  assert.match(warning, /2 staged/);
+  assert.equal(readFileSync(stray, 'utf8'), ledger);
+  assert.equal(readFileSync(resolved, 'utf8'), 'canonical contents');
+});

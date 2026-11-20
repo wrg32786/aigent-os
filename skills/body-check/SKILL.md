@@ -26,7 +26,7 @@ Reports current body state by reading existing signals — does NOT maintain a s
 - `memory/DECISION_LOG.md` + `DECISION_OUTCOMES.md` → decisions due (30/60/90 day intervals)
 - `memory/ACTIVE_PRIORITIES.md` → tier-1 / mode
 - `memory/DELEGATION_TRACKER.md` → open delegations
-- `memory/MEMORY_CANDIDATES.md` → staged backlog count
+- `<memory-root>/MEMORY_CANDIDATES.md` → staged backlog count
 - `memory/HESTIA_SWEEP_LOG.md` → last Hestia sweep date (v0.4.4)
 - Comms API → unread count (only if invoked with `--full`)
 

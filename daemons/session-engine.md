@@ -59,7 +59,7 @@ created: 2026-05-11
 ### Step 6: `runDigest()`
 **What:** Process staged memory candidates: surface each with promote/skip/supersede options
 **Agent:** the AIgent inline (interactive, never auto-promotes)
-**Inputs:** `memory/MEMORY_CANDIDATES.md` filtered to `status: staged`
+**Inputs:** `<memory-root>/MEMORY_CANDIDATES.md` filtered to `status: staged`
 **Outputs:** Per-candidate actions applied; `status` + `digested_on` updated
 **Trigger condition:** Only if staged candidates exist
 **Current impl:** NEW: added to /open per the operator's request (S41d). Mirrors /close Step 0.5 behavior on session start so backlog doesn't accumulate between sessions.
@@ -86,7 +86,7 @@ created: 2026-05-11
 ### Step 1: `runDigest()`
 **What:** Process any staged memory candidates BEFORE vault commit
 **Agent:** the AIgent inline (interactive, never auto-promotes)
-**Inputs:** `memory/MEMORY_CANDIDATES.md` filtered to `status: staged`
+**Inputs:** `<memory-root>/MEMORY_CANDIDATES.md` filtered to `status: staged`
 **Outputs:** Per-candidate actions applied; promoted notes ready for Step 2
 **Trigger condition:** Only if staged candidates exist; skip silently if none
 **Ordering invariant:** MUST run before `commitMemory()` so any promoted candidates are included in the vault update pass
