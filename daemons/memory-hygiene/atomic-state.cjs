@@ -152,13 +152,7 @@ function renameWithRetry(from, to, fsImpl, delays = RENAME_RETRY_DELAYS_MS) {
       fsImpl.renameSync(from, to);
       return;
     } catch (error) {
-      if (!RENAME_RETRY_CODES.has(error && error.code)) throw error;
-      if (attempt >= delays.length) {
-        // Named here, where it is known: the same codes from any other call (opening the lock file, a
-        // read) are not "the target is locked", and a caller that waits a lock out must not wait for those.
-        error.renameLocked = true;
-        throw error;
-      }
+      if (!RENAME_RETRY_CODES.has(error && error.code) || attempt >= delays.length) throw error;
       sleepSync(delays[attempt]);
     }
   }

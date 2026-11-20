@@ -815,8 +815,8 @@ function wrapCore(core, guards) {
     get sessionId() {
       return core.sessionId;
     },
-    tick() {
-      const result = core.tick();
+    tick(options) {
+      const result = core.tick(options);
       if (guards.stopIdle === 'missing'
         && result?.state?.state === 'checkpoint-confirmed') {
         const shaped = clone(result);
@@ -14855,161 +14855,107 @@ dialogCase('I23 CLAUDE_CONFIG_DIR: the wiring leg reads the profile the HOST use
 });
 
 // 2026-11-06: one failed transport tick (EPERM renaming auto-clear-cycle.json) disabled a seat's
-// automatic refresh until a relaunch. A failure below the limit is retried; a good tick resets the
-// count; only TRANSPORT_TICK_FAILURE_LIMIT failures in a row turn automation off, loudly.
-test('a transport tick that fails a few times is retried, not a permanent disable', async () => {
-  const { TRANSPORT_TICK_FAILURE_LIMIT } = await import('../pty-runner.mjs');
-  assert.equal(TRANSPORT_TICK_FAILURE_LIMIT, 5, 'a failure that is not a lock keeps the short count');
-  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
-  try {
-    const transport = harness.runner.transport;
-    const realTick = transport.tick.bind(transport);
-    const broken = () => { throw new Error('ATOMIC_STATE drift: not a lock'); };
-    assert.equal(harness.runner.automationEnabled, true, 'precondition: automation on');
-    transport.tick = broken;
-    for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) {
-      const result = harness.drive();
-      assert.equal(result.status, 'retrying', `failure ${i} is retried`);
-      assert.equal(harness.runner.automationEnabled, true, `still on after failure ${i}`);
-    }
-    transport.tick = realTick;
-    harness.drive();
-    assert.equal(harness.runner.automationEnabled, true, 'a good tick');
-    transport.tick = broken;
-    for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) harness.drive();
-    assert.equal(harness.runner.automationEnabled, true, 'the good tick reset the count');
-    const last = harness.drive();
-    assert.equal(last.status, 'disabled');
-    assert.equal(harness.runner.automationEnabled, false, 'the limit in a row turns automation off');
-    const disabled = harness.events('automation-disabled').map((e) => e.detail?.code);
-    assert.ok(disabled.includes('runner-transport-tick-failed'), 'and says so');
-  } finally {
-    harness.cleanup();
-  }
-});
+// automatic refresh until a relaunch; a count of 5 followed. 2026-11-19 17:58:28Z: five ticks failed on the
+// same lock in about 3 s and the seat's refresh stayed off for the day. The rule is now one, by the clock:
+// automation goes off only when the transport tick has failed for TRANSPORT_TICK_FAILURE_WAIT_MS without
+// one good tick, whatever the failures were.
+const tickLocked = () => { throw Object.assign(new Error("EPERM: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'"), { code: 'EPERM' }); };
+const tickBroken = () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); };
 
-// 2026-11-19 17:58:28Z: five ticks failed on "EPERM ... rename auto-clear-cycle.json.tmp" in about 3 s and
-// the seat's refresh stayed off for the day. A locked cycle file is waited out by the clock, one rename try
-// per tick, so the thread that carries keystrokes and output is never blocked while it waits.
-test('a locked cycle file is waited out for a minute by the clock, without blocking retries', async () => {
-  const { TRANSPORT_TICK_LOCK_WAIT_MS } = await import('../pty-runner.mjs');
-  assert.equal(TRANSPORT_TICK_LOCK_WAIT_MS, 60_000);
-  for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+test('a failing transport tick is retried for a minute by the clock, then automation goes off', async () => {
+  const { TRANSPORT_TICK_FAILURE_WAIT_MS } = await import('../pty-runner.mjs');
+  assert.equal(TRANSPORT_TICK_FAILURE_WAIT_MS, 60_000);
+  for (const failing of [tickLocked, tickBroken]) {
     const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
     try {
       const runner = harness.runner;
       const transport = runner.transport;
       const realTick = transport.tick.bind(transport);
       const seen = [];
-      const locked = (options) => {
-        seen.push(options);
-        throw Object.assign(new Error(`${code}: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'`), { code, renameLocked: true });
-      };
+      const spy = (options) => { seen.push(options); return failing(); };
       let t = Date.parse('2026-11-19T17:58:28Z');
       runner.now = () => new Date(t);
-      transport.tick = locked;
+      transport.tick = spy;
       // 100 failed ticks inside the minute: far past the old count of 5 -- red on master.
       for (let i = 0; i < 100; i += 1) {
-        const result = harness.drive();
-        assert.equal(result.status, 'retrying', `${code}: tick ${i} inside the minute is retried`);
+        assert.equal(harness.drive().status, 'retrying', `tick ${i} inside the minute is retried`);
         t += 500;
       }
-      assert.equal(runner.automationEnabled, true, `${code}: still on after 50 s of a locked file`);
-      assert.equal(seen[0], undefined, 'the first tick runs with the helper\'s own retry');
+      assert.equal(runner.automationEnabled, true, 'still on after 50 s of failing ticks');
+      assert.equal(seen[0], undefined, 'the first tick runs with the helper\'s own rename retry');
       assert.ok(seen.slice(1).every((o) => Array.isArray(o?.renameRetryDelaysMs) && o.renameRetryDelaysMs.length === 0),
-        'while waiting, each tick is told to try the rename once -- red when the wait blocks');
-      assert.equal(Object.prototype.hasOwnProperty.call(transport, 'renameRetryDelaysMs') && transport.renameRetryDelaysMs !== undefined, false,
-        'and nothing is left set on the transport');
+        'while failing, each tick is told to try its rename once -- red when the wait blocks');
       const lines = harness.events('transport-tick-failed-retrying').length;
       assert.ok(lines >= 5 && lines <= 6, `one line per 10 s, not one per tick: ${lines}`);
-      // The lock lets go: everything is back to normal, and a later lock gets its own full minute.
+      // One good tick ends the wait; a later failure gets its own full minute.
       transport.tick = realTick;
       harness.drive();
       t += 10 * 60_000;
-      transport.tick = locked;
+      transport.tick = spy;
       seen.length = 0;
       assert.equal(harness.drive().status, 'retrying');
       assert.equal(seen[0], undefined, 'a good tick ended the wait: the helper\'s retry is back');
-      t += TRANSPORT_TICK_LOCK_WAIT_MS - 1;
+      t += TRANSPORT_TICK_FAILURE_WAIT_MS - 1;
       assert.equal(harness.drive().status, 'retrying', 'one millisecond inside the minute');
       t += 1;
-      const last = harness.drive();
-      assert.equal(last.status, 'disabled', `${code}: a full minute locked turns automation off`);
+      assert.equal(harness.drive().status, 'disabled', 'a full minute of failing ticks turns automation off');
       assert.equal(runner.automationEnabled, false);
       const off = harness.events('automation-disabled').map((e) => e.detail);
-      assert.ok(off.some((d) => d?.code === 'runner-transport-tick-failed' && /rename failing for 60000 ms/.test(String(d?.detail))), 'and says how long');
+      assert.ok(off.some((d) => d?.code === 'runner-transport-tick-failed' && /failing for 60000 ms without one good tick/.test(String(d?.detail))), 'and says how long');
     } finally {
       harness.cleanup();
     }
   }
 });
 
-// Review of 1296d384, item 1: the two streaks never ended each other. Four failures that are not a lock,
-// four locked ticks, one more that is not a lock read "5 consecutive failures", which was false; and a
-// lock wait kept its old clock across a failure of the other kind.
-test('a lock and a failure that is not a lock each end the other\'s streak', async () => {
-  const { TRANSPORT_TICK_FAILURE_LIMIT, TRANSPORT_TICK_LOCK_WAIT_MS } = await import('../pty-runner.mjs');
+// Review of 1296d384 item 1 and of 101ed623 item 2: two streaks, one per kind of failure, either read
+// false ("5 consecutive failures" that were not) or never ended (kinds alternating reset each other for
+// ever, and every other tick paid the blocking retry). One clock for every kind has neither fault.
+test('failures of different kinds share one clock: alternating kinds still turn automation off at a minute', async () => {
+  const { TRANSPORT_TICK_FAILURE_WAIT_MS } = await import('../pty-runner.mjs');
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     const runner = harness.runner;
-    const transport = runner.transport;
-    const broken = () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); };
-    const locked = () => { throw Object.assign(new Error("EPERM: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'"), { code: 'EPERM', renameLocked: true }); };
-    // The same code from anywhere but the rename (opening the lock file, say) carries no tag: it is counted.
-    const untagged = () => { throw Object.assign(new Error("EPERM: operation not permitted, open 'auto-clear-cycle.json.lock'"), { code: 'EPERM' }); };
+    const seen = [];
+    let n = 0;
     let t = Date.parse('2026-11-19T17:58:28Z');
     runner.now = () => new Date(t);
-    transport.tick = broken;
-    for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) harness.drive();
-    transport.tick = locked;
-    for (let i = 0; i < 4; i += 1) { assert.equal(harness.drive().status, 'retrying'); t += 1000; }
-    transport.tick = broken;
-    assert.equal(harness.drive().status, 'retrying', 'the lock ended the count: this is failure 1 again -- red on 1296d384');
-    assert.equal(runner.automationEnabled, true);
-    // The other way round: 50 s into a wait, one failure of the other kind, then the lock again 20 s later.
-    transport.tick = locked;
-    harness.drive();
-    t += 50_000;
-    assert.equal(harness.drive().status, 'retrying');
-    transport.tick = untagged;
-    assert.equal(harness.drive().status, 'retrying', 'an EPERM that is not the rename is counted, not waited');
-    t += 20_000;
-    transport.tick = locked;
-    assert.equal(harness.drive().status, 'retrying', 'a new wait, with its own minute -- red on 1296d384 (70 s on the old clock)');
-    t += TRANSPORT_TICK_LOCK_WAIT_MS;
-    assert.equal(harness.drive().status, 'disabled');
-    // And the count, uninterrupted, still means what it says.
-    const fresh = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
-    try {
-      fresh.runner.transport.tick = untagged;
-      for (let i = 1; i < TRANSPORT_TICK_FAILURE_LIMIT; i += 1) assert.equal(fresh.drive().status, 'retrying');
-      assert.equal(fresh.drive().status, 'disabled', 'an untagged EPERM five times in a row turns automation off');
-    } finally {
-      fresh.cleanup();
+    runner.transport.tick = (options) => { seen.push(options); n += 1; return n % 2 ? tickLocked() : tickBroken(); };
+    let result;
+    let ticks = 0;
+    while (ticks < 120) {
+      result = harness.drive();
+      ticks += 1;
+      if (result.status !== 'retrying') break;
+      t += 5000;
     }
+    assert.equal(result.status, 'disabled', 'red on 101ed623: 120 alternating ticks over ten minutes all returned retrying');
+    assert.equal(ticks, TRANSPORT_TICK_FAILURE_WAIT_MS / 5000 + 1, 'at the minute, not later');
+    assert.ok(seen.slice(1).every((o) => Array.isArray(o?.renameRetryDelaysMs) && o.renameRetryDelaysMs.length === 0),
+      'and no tick after the first paid the blocking retry -- red on 101ed623');
+    assert.ok(harness.events('transport-tick-failed-retrying').length <= 7, 'one line per 10 s');
   } finally {
     harness.cleanup();
   }
 });
 
 // Review of 1296d384, item 2: the wait lived on the runner and outlived the transport it was about. After
-// a rebind, the new transport's first locked tick was judged on the old clock and disabled at once.
-test('a lock wait does not carry over to the transport of a new session', async () => {
+// a rebind, the new transport's first failing tick was judged on the old clock and disabled at once.
+test('a failure wait does not carry over to the transport of a new session', async () => {
   const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
   try {
     const runner = harness.runner;
-    const locked = () => { throw Object.assign(new Error("EPERM: operation not permitted, rename 'auto-clear-cycle.json.tmp-1'"), { code: 'EPERM', renameLocked: true }); };
     let t = Date.parse('2026-11-19T17:58:28Z');
     runner.now = () => new Date(t);
     const first = runner.transport;
-    first.tick = locked;
+    first.tick = tickLocked;
     assert.equal(harness.drive().status, 'retrying');
     assert.equal(runner._rebindAfterClear(clearReceiptFor(harness, NEXT_SESSION_ID)), true);
     assert.notEqual(runner.transport, first, 'precondition: a new transport');
-    assert.equal(runner.transportTickLockedSince, null, 'the wait ended with the old transport');
+    assert.equal(runner.transportTickFailingSince, null, 'the wait ended with the old transport');
     t += 65_000;
     const seen = [];
-    runner.transport.tick = (options) => { seen.push(options); return locked(); };
+    runner.transport.tick = (options) => { seen.push(options); return tickLocked(); };
     // The rebind's own wake Enter owns the ticks until it is written; the tick that then reaches the
     // transport is the one judged.
     harness.fireEnter();
@@ -15017,8 +14963,77 @@ test('a lock wait does not carry over to the transport of a new session', async 
     for (let i = 0; i < 20 && seen.length === 0; i += 1) result = harness.drive();
     assert.equal(seen.length, 1, 'the new transport was ticked');
     assert.equal(seen[0], undefined, 'with the helper\'s own retry: no wait is open');
-    assert.equal(result.status, 'retrying', 'its first locked tick opens its own minute -- red on 1296d384');
+    assert.equal(result.status, 'retrying', 'its first failing tick opens its own minute -- red on 1296d384');
     assert.equal(runner.automationEnabled, true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review of 101ed623, item 1: the transport can take a new session id inside a tick (a newer boot receipt)
+// and then fail its write. That failure was charged to the old session's wait: 65 s into it, the new
+// session's first failed write turned automation off.
+test('a session change inside a failing tick starts the wait again for the new session', async () => {
+  const { TRANSPORT_TICK_FAILURE_WAIT_MS } = await import('../pty-runner.mjs');
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    let t = Date.parse('2026-11-19T17:58:28Z');
+    runner.now = () => new Date(t);
+    let session = 'session-a';
+    const fake = { get sessionId() { return session; }, tick() { return tickLocked(); } };
+    runner.transport = fake;
+    assert.equal(harness.drive().status, 'retrying');
+    t += 65_000;
+    // The same transport object, now bound to another session, fails its first write for it.
+    fake.tick = () => { session = 'session-b'; return tickLocked(); };
+    assert.equal(harness.drive().status, 'retrying', 'the new session gets its own minute -- red on 101ed623');
+    assert.equal(runner.automationEnabled, true);
+    fake.tick = tickLocked;
+    t += TRANSPORT_TICK_FAILURE_WAIT_MS - 1;
+    assert.equal(harness.drive().status, 'retrying');
+    t += 1;
+    assert.equal(harness.drive().status, 'disabled', 'and that minute is a real limit');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// Review of 101ed623, note 4: the tests above replace tick with a spy. This one leaves the REAL core in
+// place and counts renames of the cycle file: the first failing tick pays the helper's retry (7 tries),
+// every later one tries once, and when the lock lets go the write commits.
+test('through the real core: a failing tick after the first costs one rename try', () => {
+  const harness = new RunnerHarness({ mode: 'managed', ptyLoad: 'ok', lockState: 'free' });
+  try {
+    const runner = harness.runner;
+    const core = harness.core;
+    let locked = true;
+    let tries = 0;
+    core.fs = {
+      ...core.fs,
+      renameSync(from, to) {
+        if (path.basename(String(to)) === 'auto-clear-cycle.json') {
+          tries += 1;
+          if (locked) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
+        }
+        return fs.renameSync(from, to);
+      },
+    };
+    const before = core.state.state;
+    assert.equal(harness.drive().status, 'retrying', 'the first tick wants to write (pressure) and cannot');
+    assert.equal(tries, 7, 'the helper\'s own retry: one try and six more');
+    assert.equal(harness.drive().status, 'retrying');
+    assert.equal(tries, 8, 'one try -- red when the harness or the runner drops the option');
+    assert.equal(harness.drive().status, 'retrying');
+    assert.equal(tries, 9);
+    assert.equal(core.state.state, before, 'nothing moved while the file was locked');
+    assert.equal(core.renameRetryDelaysMs, undefined, 'and the setting did not outlive the tick');
+    locked = false;
+    harness.drive();
+    assert.ok(tries >= 10, 'the lock let go: the write commits on the next tick (which may write more than once)');
+    assert.notEqual(core.state.state, before);
+    assert.equal(runner.automationEnabled, true);
+    assert.equal(runner.transportTickFailingSince, null, 'the good tick ended the wait');
   } finally {
     harness.cleanup();
   }
