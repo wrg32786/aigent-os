@@ -2,7 +2,7 @@
 // Deterministic seven-calendar-day attention reconciliation.
 
 import {
-  existsSync, readFileSync, readdirSync,
+  existsSync, readFileSync, readdirSync, realpathSync, statSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -159,12 +159,7 @@ function scoreNote(text, projects, projectIndex) {
   };
 }
 
-export function reconcileAttention({
-  prioritiesText,
-  dailyNotes,
-  asOf,
-  projectNotes = [],
-} = {}) {
+function assertAsOf(asOf) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(asOf || ''))) {
     throw new Error('RECONCILE FAIL reason=invalid-as-of');
   }
@@ -173,6 +168,15 @@ export function reconcileAttention({
       || parsedAsOf.toISOString().slice(0, 10) !== asOf) {
     throw new Error('RECONCILE FAIL reason=invalid-as-of');
   }
+}
+
+export function reconcileAttention({
+  prioritiesText,
+  dailyNotes,
+  asOf,
+  projectNotes = [],
+} = {}) {
+  assertAsOf(asOf);
   const projects = parseIntendedShares(prioritiesText);
   const projectIndex = suppliedProjectIndex(projectNotes);
   const start = addDays(asOf, -6);
@@ -181,8 +185,23 @@ export function reconcileAttention({
   const selected = Object.entries(dailyNotes || {})
     .filter(([date]) => date >= start && date <= asOf)
     .sort(([left], [right]) => left.localeCompare(right));
-  for (const [, text] of selected) {
-    const scored = scoreNote(text, projects, projectIndex);
+  // A date maps to a note string (labelled daily/<date>.md), or to an array of
+  // note strings and { source, text, projectNotes } entries, one per daily
+  // file. Every file is scored on its own, against its own vault's project
+  // notes when it names them, and listed on the receipt.
+  const indexes = new Map();
+  const indexOf = (notes) => {
+    if (!indexes.has(notes)) indexes.set(notes, suppliedProjectIndex(notes));
+    return indexes.get(notes);
+  };
+  const entryFile = (date, entry) => (entry === null || typeof entry !== 'object'
+    ? { source: `daily/${date}.md`, body: entry, index: projectIndex }
+    : { source: entry.source, body: entry.text, index: entry.projectNotes ? indexOf(entry.projectNotes) : projectIndex });
+  const files = selected.flatMap(([date, value]) => (Array.isArray(value)
+    ? value.map((entry) => entryFile(date, entry))
+    : [entryFile(date, value)]));
+  for (const file of files) {
+    const scored = scoreNote(file.body, projects, file.index);
     for (const [name, points] of scored.scores) totals.set(name, totals.get(name) + points);
     nonTier += scored.nonTier;
   }
@@ -204,9 +223,9 @@ export function reconcileAttention({
   });
   const nonTierActual = Math.round((nonTier / denominator) * 1000) / 10;
   const lines = [
-    `RECONCILE PASS window=${start}..${asOf} notes=${selected.length}`,
-    `sources=${selected.length
-      ? selected.map(([date]) => `daily/${date}.md`).join(',')
+    `RECONCILE PASS window=${start}..${asOf} notes=${files.length}`,
+    `sources=${files.length
+      ? files.map((file) => file.source).join(',')
       : 'none'}`,
     ...rows.map((row) => (
       `project=${row.name} points=${row.points}`
@@ -220,6 +239,7 @@ export function reconcileAttention({
     ok: true,
     window: { start, end: asOf },
     notes: selected.map(([date]) => date),
+    sources: files.map((file) => file.source),
     rows,
     nonTier: {
       points: nonTier,
@@ -240,20 +260,78 @@ if (direct) {
   );
   const asOf = dateIndex >= 0 ? process.argv[dateIndex + 1] : '';
   try {
+    assertAsOf(asOf);
     const paths = resolveNightlyPaths(root);
-    const dailyRoot = path.join(paths.vaultRoot, 'daily');
+    // The capture hooks write <root>/vault/daily. A declared memory root moves
+    // vaultRoot elsewhere, so read both vaults: each daily folder once, by its
+    // real path (case-folded on win32, so a second spelling or a junction is
+    // not a second tree). Only dated notes inside the seven-day window whose
+    // target is a regular file are opened (a symlinked note counts). A vault's
+    // project notes are read only once one of its daily notes is selected, and
+    // each note is scored against its own vault's notes. Same-date files stay
+    // separate entries, never joined text.
+    const start = addDays(asOf, -6);
+    const realKey = (dir) => {
+      const real = realpathSync.native(dir);
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    };
+    const seenDaily = new Set();
     const dailyNotes = {};
-    if (existsSync(dailyRoot)) {
-      for (const name of readdirSync(dailyRoot)) {
-        const match = name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
-        if (match) dailyNotes[match[1]] = readFileSync(path.join(dailyRoot, name), 'utf8');
+    // Only ENOENT means the tree is absent. Anything else is a measurement gap
+    // that fails loudly, never a PASS: EACCES on a vault the run cannot
+    // traverse, or a daily path that is not a directory (ENOTDIR). Windows
+    // reports a path through a regular file as ENOENT where POSIX says
+    // ENOTDIR, so on ENOENT the vault folder itself is checked too.
+    const treeExists = (dir) => {
+      const fail = (code) => {
+        const where = path.relative(paths.repositoryRoot, dir).split(path.sep).join('/');
+        throw new Error(`RECONCILE FAIL reason=daily-tree-unreadable path=${where} code=${code || 'unknown'}`);
+      };
+      let tree;
+      try {
+        tree = statSync(dir);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') fail(error?.code);
+        let parent = null;
+        try {
+          parent = statSync(path.dirname(dir));
+        } catch (parentError) {
+          if (parentError?.code !== 'ENOENT') fail(parentError?.code);
+        }
+        if (parent && !parent.isDirectory()) fail('ENOTDIR');
+        return false;
+      }
+      if (!tree.isDirectory()) fail('ENOTDIR');
+      return true;
+    };
+    for (const vault of [paths.vaultRoot, path.join(paths.repositoryRoot, 'vault')]) {
+      const dailyRoot = path.join(vault, 'daily');
+      if (!treeExists(dailyRoot) || seenDaily.has(realKey(dailyRoot))) continue;
+      seenDaily.add(realKey(dailyRoot));
+      let vaultNotes = null;
+      for (const entry of readdirSync(dailyRoot, { withFileTypes: true })) {
+        const match = entry.name.match(/^(\d{4}-\d{2}-\d{2})\.md$/);
+        if (!match || match[1] < start || match[1] > asOf) continue;
+        const file = path.join(dailyRoot, entry.name);
+        const source = path.relative(paths.repositoryRoot, file).split(path.sep).join('/');
+        // A dated note in the window that cannot be checked or read is a
+        // measurement gap: fail the run by name, never a PASS without it.
+        const unreadable = (error) => new Error(
+          `RECONCILE FAIL reason=daily-note-unreadable path=${source} code=${error?.code || 'unknown'}`,
+        );
+        let target;
+        try { target = statSync(file); } catch (error) { throw unreadable(error); }
+        if (!target.isFile()) continue;
+        vaultNotes ??= projectIndexFromRoot(vault);
+        let body;
+        try { body = readFileSync(file, 'utf8'); } catch (error) { throw unreadable(error); }
+        dailyNotes[match[1]] = [...(dailyNotes[match[1]] ?? []), { source, text: body, projectNotes: vaultNotes }];
       }
     }
     const result = reconcileAttention({
       prioritiesText: readFileSync(path.join(paths.memoryRoot, 'ACTIVE_PRIORITIES.md'), 'utf8'),
       dailyNotes,
       asOf,
-      projectNotes: projectIndexFromRoot(paths.vaultRoot),
     });
     process.stdout.write(result.output + '\n');
     process.exit(0);
