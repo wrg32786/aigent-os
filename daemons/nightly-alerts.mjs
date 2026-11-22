@@ -17,7 +17,6 @@ import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 const ALERT_REF = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
 const OLDER_CODE_LIMIT = 6;
-const UNREADABLE_CODE = Symbol('unreadable code');
 
 export function nightlyAlertPath(root = defaultNightlyRoot()) {
   return path.join(resolveNightlyPaths(root).runtimeRoot, 'NIGHTLY_ALERTS.jsonl');
@@ -227,19 +226,6 @@ function parseAlertTime(value) {
   return typeof value === 'string' ? Date.parse(value) : NaN;
 }
 
-function olderCodeKey(code, keysByLabel) {
-  const type = typeof code;
-  if (code === null || (type !== 'object' && type !== 'function' && type !== 'symbol')) return code;
-  try {
-    const text = String(code);
-    const label = inert(text, 80);
-    if (!keysByLabel.has(label)) keysByLabel.set(label, text);
-    return keysByLabel.get(label);
-  } catch {
-    return UNREADABLE_CODE;
-  }
-}
-
 function bootClockTime(now) {
   try {
     const time = typeof now === 'number' || typeof now === 'string'
@@ -266,14 +252,13 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   }
   const cutoff = bootClockTime(now) - 7 * 24 * 60 * 60 * 1000;
   const recent = [];
-  const olderByCode = new Map();
-  const keysByLabel = new Map();
+  const olderByLabel = new Map();
   for (const alert of parsed.alerts) {
     const raised = parseAlertTime(alert.raised_at);
     const time = Number.isFinite(raised) ? raised : parseAlertTime(alert.timestamp);
     if (time < cutoff) {
-      const key = olderCodeKey(alert.code, keysByLabel);
-      olderByCode.set(key, (olderByCode.get(key) || 0) + 1);
+      const label = quoteAlertField(alert.code, 80);
+      olderByLabel.set(label, (olderByLabel.get(label) || 0) + 1);
     } else {
       recent.push({ alert, time: Number.isFinite(time) ? time : -Infinity });
     }
@@ -289,13 +274,13 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
       + ` additional active alert(s) in ${ALERT_REF}`,
     );
   }
-  if (olderByCode.size) {
-    const counts = [...olderByCode]
+  if (olderByLabel.size) {
+    const counts = [...olderByLabel]
       .sort((left, right) => right[1] - left[1])
       .slice(0, OLDER_CODE_LIMIT)
-      .map(([code, count]) => `${quoteAlertField(code === UNREADABLE_CODE ? '' : code, 80)} ${count}`);
-    if (olderByCode.size > counts.length) {
-      counts.push(`+${olderByCode.size - counts.length} more code(s)`);
+      .map(([label, count]) => `${label} ${count}`);
+    if (olderByLabel.size > counts.length) {
+      counts.push(`+${olderByLabel.size - counts.length} more code(s)`);
     }
     lines.push(
       `[NIGHTLY-ALERT: OLDER] ${parsed.alerts.length - recent.length} active alert(s) older than 7 days`

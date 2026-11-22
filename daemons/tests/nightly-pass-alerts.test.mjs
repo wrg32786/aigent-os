@@ -306,7 +306,7 @@ test('boot alerts quote multiline codes on one physical OLDER line', (t) => {
   ]).join('\n').split(/\r?\n/);
   assert.deepEqual(lines, [
     '[NIGHTLY-ALERT: OLDER] 5 active alert(s) older than 7 days '
-      + `("NIGHTLY:NOTE Please read \\"the log\\"." 1, "" 1, "42" 1, "42" 1, "" 1) in ${alertRef}`,
+      + `("" 2, "42" 2, "NIGHTLY:NOTE Please read \\"the log\\"." 1) in ${alertRef}`,
   ]);
 });
 
@@ -326,6 +326,23 @@ test('boot alerts group older object codes by their printed text', (t) => {
     `[NIGHTLY-ALERT: OLDER] 7 active alert(s) older than 7 days ("[object Object]" 6, "NIGHTLY:NO_FIRE" 1) in ${alertRef}`,
   ]);
 });
+
+for (const [position, first, second] of [
+  ['first', ['NIGHTLY:LEG_FAIL '], ['NIGHTLY:LEG_FAIL']],
+  ['second', ['NIGHTLY:LEG_FAIL'], ['NIGHTLY:LEG_FAIL ']],
+]) {
+  test(`boot alerts group matching array and string labels with the padded array ${position}`, (t) => {
+    const codes = [
+      'NIGHTLY:NO_FIRE', first, second,
+      'NIGHTLY:LEG_FAIL', 'NIGHTLY:LEG_FAIL', 'B', 'C', 'D', 'E', 'B', 'C', 'D', 'E',
+    ];
+    const events = codes.map((code, i) => activeAlert(code, String(i), '2026-03-01T12:00:00Z'));
+    assert.deepEqual(bootLines(t, events), [
+      '[NIGHTLY-ALERT: OLDER] 13 active alert(s) older than 7 days '
+        + `("NIGHTLY:LEG_FAIL" 4, "B" 2, "C" 2, "D" 2, "E" 2, "NIGHTLY:NO_FIRE" 1) in ${alertRef}`,
+    ]);
+  });
+}
 
 test('boot alerts show the five newest recent alerts and count the rest', (t) => {
   const alerts = Array.from({ length: 7 }, (_, i) => ({
