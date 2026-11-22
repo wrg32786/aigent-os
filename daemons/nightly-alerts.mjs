@@ -17,6 +17,7 @@ import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 const ALERT_REF = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
 const OLDER_CODE_LIMIT = 6;
+const UNREADABLE_CODE = Symbol('unreadable code');
 
 export function nightlyAlertPath(root = defaultNightlyRoot()) {
   return path.join(resolveNightlyPaths(root).runtimeRoot, 'NIGHTLY_ALERTS.jsonl');
@@ -222,10 +223,20 @@ export function resolveNightlyAlerts({
 }
 
 function parseAlertTime(value) {
+  if (Number.isFinite(value)) return value;
+  return typeof value === 'string' ? Date.parse(value) : NaN;
+}
+
+function olderCodeKey(code, keysByLabel) {
+  const type = typeof code;
+  if (code === null || (type !== 'object' && type !== 'function' && type !== 'symbol')) return code;
   try {
-    return Date.parse(value);
+    const text = String(code);
+    const label = inert(text, 80);
+    if (!keysByLabel.has(label)) keysByLabel.set(label, text);
+    return keysByLabel.get(label);
   } catch {
-    return NaN;
+    return UNREADABLE_CODE;
   }
 }
 
@@ -256,11 +267,13 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   const cutoff = bootClockTime(now) - 7 * 24 * 60 * 60 * 1000;
   const recent = [];
   const olderByCode = new Map();
+  const keysByLabel = new Map();
   for (const alert of parsed.alerts) {
     const raised = parseAlertTime(alert.raised_at);
     const time = Number.isFinite(raised) ? raised : parseAlertTime(alert.timestamp);
     if (time < cutoff) {
-      olderByCode.set(alert.code, (olderByCode.get(alert.code) || 0) + 1);
+      const key = olderCodeKey(alert.code, keysByLabel);
+      olderByCode.set(key, (olderByCode.get(key) || 0) + 1);
     } else {
       recent.push({ alert, time: Number.isFinite(time) ? time : -Infinity });
     }
@@ -280,7 +293,7 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
     const counts = [...olderByCode]
       .sort((left, right) => right[1] - left[1])
       .slice(0, OLDER_CODE_LIMIT)
-      .map(([code, count]) => `${quoteAlertField(code, 80)} ${count}`);
+      .map(([code, count]) => `${quoteAlertField(code === UNREADABLE_CODE ? '' : code, 80)} ${count}`);
     if (olderByCode.size > counts.length) {
       counts.push(`+${olderByCode.size - counts.length} more code(s)`);
     }

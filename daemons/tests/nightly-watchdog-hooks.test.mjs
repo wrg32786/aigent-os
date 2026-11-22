@@ -19,7 +19,7 @@ import {
   NIGHTLY_CHECKPOINTS,
   NIGHTLY_PROTOCOL,
 } from '../nightly-pass.mjs';
-import { expectedNightlyDate } from '../nightly-freshness.mjs';
+import { expectedNightlyDate, zonedDateKey } from '../nightly-freshness.mjs';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DAEMONS = path.resolve(TEST_DIR, '..');
@@ -350,9 +350,12 @@ test('mutation proof: an unreadable alert ledger cannot suppress SessionStart or
 
 test('mutation proof: a failed leg stays visible without optional external transport', () => {
   const brokenFixture = fixture('local-only-break');
-  begin(brokenFixture.root, 'local-only-break');
-  write(brokenFixture.root, 'vault/memory/DREAM_LOG.md', `# Dream Log\n\n## ${PASS_DATE}: incomplete\n`);
-  const broken = recordDream(brokenFixture.root);
+  const agedInstant = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const agedClock = ['--now', agedInstant.toISOString()];
+  const passDate = zonedDateKey(agedInstant, TIME_ZONE);
+  begin(brokenFixture.root, 'local-only-break', agedClock);
+  write(brokenFixture.root, 'vault/memory/DREAM_LOG.md', `# Dream Log\n\n## ${passDate}: incomplete\n`);
+  const broken = recordDream(brokenFixture.root, agedClock);
   assert.equal(broken.status, 1);
   assert.match(broken.stdout, /NIGHTLY_CHECKPOINT RED/);
   assert.match(broken.stderr, /\[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"\]/);
@@ -373,7 +376,6 @@ test('mutation proof: a failed leg stays visible without optional external trans
     input: JSON.stringify({ source: 'startup', cwd: brokenFixture.root }),
   });
   assert.equal(startup.status, 0, startup.stderr);
-  // The fixture stamps the alert with PASS_NOW, while the hook reads the real clock.
   assert.match(startup.stdout, /^\[NIGHTLY-ALERT: OLDER\] 1 active alert\(s\) older than 7 days \("NIGHTLY:LEG_FAIL:dream" 1\) in memory\/runtime\/NIGHTLY_ALERTS\.jsonl$/m);
   proof('BREAK local-only-leg', broken);
   proof('BREAK local-only-session-start', startup);
