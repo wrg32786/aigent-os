@@ -222,7 +222,7 @@ export function resolveNightlyAlerts({
 }
 
 function parseAlertTime(value) {
-  if (Number.isFinite(value)) return value;
+  if (typeof value === 'number') return new Date(value).getTime();
   return typeof value === 'string' ? Date.parse(value) : NaN;
 }
 

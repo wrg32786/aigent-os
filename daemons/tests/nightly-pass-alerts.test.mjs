@@ -377,6 +377,43 @@ for (const field of ['raised_at', 'timestamp']) {
   });
 }
 
+test('boot alerts use old timestamps when raised_at exceeds the numeric date range', (t) => {
+  const old = Array.from({ length: 5 }, (_, i) => ({
+    ...activeAlert('X', `old-${i}`, 8_640_000_000_000_001),
+    timestamp: '2026-03-01T00:00:00Z',
+  }));
+  const fresh = activeAlert('NIGHTLY:NO_FIRE', 'missed pass', bootNow);
+  assert.deepEqual(bootLines(t, [fresh, ...old]), [
+    '[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"] summary="missed pass" — evidence="missed pass"',
+    `[NIGHTLY-ALERT: OLDER] 5 active alert(s) older than 7 days ("X" 5) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts use a fresh timestamp when raised_at falls below the numeric date range', (t) => {
+  const fresh = {
+    ...activeAlert('NIGHTLY:NO_FIRE', 'missed pass', -8_640_000_000_000_001),
+    timestamp: bootNow.toISOString(),
+  };
+  assert.deepEqual(bootLines(t, [fresh]), [
+    '[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"] summary="missed pass" — evidence="missed pass"',
+  ]);
+});
+
+test('boot alerts accept both endpoints of the numeric date range', (t) => {
+  const latest = {
+    ...activeAlert('X', 'latest', 8_640_000_000_000_000),
+    timestamp: '2026-03-01T00:00:00Z',
+  };
+  const earliest = {
+    ...activeAlert('Y', 'earliest', -8_640_000_000_000_000),
+    timestamp: bootNow.toISOString(),
+  };
+  assert.deepEqual(bootLines(t, [earliest, latest]), [
+    '[NIGHTLY-ALERT: "X"] summary="latest" — evidence="latest"',
+    `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("Y" 1) in ${alertRef}`,
+  ]);
+});
+
 test('boot alerts keep the seven-day boundary and unreadable times in the recent count', (t) => {
   const boundary = activeAlert('NIGHTLY:BOUNDARY', 'boundary', '2026-03-14T12:00:00Z');
   const old = {
