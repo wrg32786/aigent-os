@@ -16,7 +16,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  emitNightlyAlert, resolveNightlyAlerts,
+  emitNightlyAlert, resolveNightlyAlerts, STANDING_SCOPE, writeLocalDelivery,
 } from './nightly-alerts.mjs';
 import {
   maskMarkdownFences, newestDatedHeader, validDateKey, zonedDateKey,
@@ -38,7 +38,7 @@ import {
   resolveNightlyPaths,
   resolveRepositoryOrMemoryPath,
 } from './nightly-paths.mjs';
-import { inert } from './lifecycle-common.mjs';
+import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 export const NIGHTLY_PROTOCOL = 'close-parity-v2-7L-11C';
 export const NIGHTLY_CHECKPOINTS = Object.freeze([
@@ -871,6 +871,7 @@ export async function recordNightlyCheckpoint({
     !skipAllowed ? `${checkpoint} is mandatory and cannot be skipped` : '',
     !artifactResult.ok ? artifactResult.detail : '',
   ].filter(Boolean).join('; ');
+  const alertCode = `NIGHTLY:LEG_FAIL:${checkpoint}`;
   const record = {
     checkpoint,
     status: normalizedStatus,
@@ -882,25 +883,39 @@ export async function recordNightlyCheckpoint({
     artifact: String(artifact || ''),
     validator: boundedOutput(artifactResult.validator || artifactResult.detail),
     alert: normalizedStatus === 'fail'
-      ? `memory/runtime/NIGHTLY_ALERTS.jsonl#NIGHTLY:LEG_FAIL:${checkpoint}:${state.run_id}`
+      ? `memory/runtime/NIGHTLY_ALERTS.jsonl#${alertCode}:${STANDING_SCOPE}`
       : 'none',
   };
   state.checkpoints[checkpoint] = record;
   atomicJson(statePath(root), state);
 
   if (normalizedStatus === 'fail') {
-    await emitNightlyAlert({
+    const alert = await emitNightlyAlert({
       root,
-      code: `NIGHTLY:LEG_FAIL:${checkpoint}`,
+      code: alertCode,
       summary: `${checkpoint} checkpoint failed (exit ${code})`,
       detail: record.detail,
-      evidence: `${record.artifact || 'none'} run=${state.run_id}`,
-      scope: state.run_id,
+      evidence: `recorded_at=${record.recorded_at} ${record.artifact || 'none'} run=${state.run_id}`,
+      scope: STANDING_SCOPE,
       now: instant,
       deliver,
       timeZone: state.time_zone,
       stderr,
     });
+    resolveNightlyAlerts({
+      root, code: alertCode, exceptAlertId: alert.alert_id, now: instant,
+      reason: 'replaced by the standing alert',
+    });
+  } else if (normalizedStatus === 'pass') {
+    try {
+      resolveNightlyAlerts({
+        root, code: alertCode, now: instant, raisedThrough: record.recorded_at,
+        reason: `checkpoint passed in run ${state.run_id}`,
+      });
+    } catch (error) {
+      const message = collapseLineBreaking(error?.message ?? error);
+      writeLocalDelivery(stderr, `${checkpoint} passed but its alert could not be cleared: ${message}`);
+    }
   }
   return record;
 }

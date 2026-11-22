@@ -401,12 +401,12 @@ test('boot alerts use a fresh timestamp when raised_at falls below the numeric d
 
 test('boot alerts accept both endpoints of the numeric date range', (t) => {
   const latest = {
-    ...activeAlert('X', 'latest', 8_640_000_000_000_000),
-    timestamp: '2026-03-01T00:00:00Z',
+    ...activeAlert('X', 'latest', '2026-03-01T00:00:00Z'),
+    timestamp: 8_640_000_000_000_000,
   };
   const earliest = {
-    ...activeAlert('Y', 'earliest', -8_640_000_000_000_000),
-    timestamp: bootNow.toISOString(),
+    ...activeAlert('Y', 'earliest', bootNow.toISOString()),
+    timestamp: -8_640_000_000_000_000,
   };
   assert.deepEqual(bootLines(t, [earliest, latest]), [
     '[NIGHTLY-ALERT: "X"] summary="latest" — evidence="latest"',
@@ -417,8 +417,8 @@ test('boot alerts accept both endpoints of the numeric date range', (t) => {
 test('boot alerts keep the seven-day boundary and unreadable times in the recent count', (t) => {
   const boundary = activeAlert('NIGHTLY:BOUNDARY', 'boundary', '2026-03-14T12:00:00Z');
   const old = {
-    ...activeAlert('NIGHTLY:OLD', 'old', '2026-03-14T11:59:59.999Z'),
-    timestamp: bootNow,
+    ...activeAlert('NIGHTLY:OLD', 'old', bootNow),
+    timestamp: '2026-03-14T11:59:59.999Z',
   };
   const undated = activeAlert('NIGHTLY:LEG_FAIL', 'undated', 'unknown');
   assert.deepEqual(bootLines(t, [undated, boundary, old], { limit: 1 }), [

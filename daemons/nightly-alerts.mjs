@@ -4,7 +4,7 @@
 // every still-active alert.
 
 import {
-  appendFileSync, mkdirSync, readFileSync,
+  appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync,
 } from 'node:fs';
 import path from 'node:path';
 import { zonedDateKey } from './nightly-freshness.mjs';
@@ -17,6 +17,7 @@ import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 const ALERT_REF = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
 const OLDER_CODE_LIMIT = 6;
+export const STANDING_SCOPE = 'standing';
 
 export function nightlyAlertPath(root = defaultNightlyRoot()) {
   return path.join(resolveNightlyPaths(root).runtimeRoot, 'NIGHTLY_ALERTS.jsonl');
@@ -25,7 +26,18 @@ export function nightlyAlertPath(root = defaultNightlyRoot()) {
 function appendEvent(root, event) {
   const file = nightlyAlertPath(root);
   mkdirSync(path.dirname(file), { recursive: true });
-  appendFileSync(file, JSON.stringify(event) + '\n', 'utf8');
+  let separator = '';
+  const size = statSync(file, { throwIfNoEntry: false })?.size;
+  if (size) {
+    const fd = openSync(file, 'r');
+    try {
+      const tail = Buffer.alloc(1);
+      if (readSync(fd, tail, 0, 1, size - 1) === 0 || tail[0] !== 0x0a) separator = '\n';
+    } finally {
+      closeSync(fd);
+    }
+  }
+  appendFileSync(file, separator + JSON.stringify(event) + '\n', 'utf8');
   return file;
 }
 
@@ -96,7 +108,7 @@ export function formatNightlyAlertLine(event) {
     + ` — evidence=${quoteAlertField(event.evidence, 220)}`;
 }
 
-function writeLocalDelivery(stderr, line) {
+export function writeLocalDelivery(stderr, line) {
   try {
     if (typeof stderr === 'function') stderr(line + '\n');
     else if (stderr && typeof stderr.write === 'function') stderr.write(line + '\n');
@@ -194,13 +206,18 @@ export function resolveNightlyAlerts({
   code,
   codePrefix,
   scope,
+  exceptAlertId,
+  raisedThrough,
   reason,
   now = new Date(),
 } = {}) {
   const instant = now instanceof Date ? now : new Date(now);
   if (!Number.isFinite(instant.getTime())) throw new Error(`invalid now value: ${now}`);
   const timestamp = instant.toISOString();
+  const through = parseAlertTime(raisedThrough);
   const active = readActiveNightlyAlerts(root, { throwOnReadError: true }).alerts
+    .filter((alert) => alert.alert_id !== exceptAlertId)
+    .filter((alert) => raisedThrough === undefined || lastWrittenTime(alert) <= through)
     .filter((alert) => !code || alert.code === code)
     .filter((alert) => !codePrefix || String(alert.code).startsWith(codePrefix))
     .filter((alert) => !scope || alert.scope === scope);
@@ -224,6 +241,11 @@ export function resolveNightlyAlerts({
 function parseAlertTime(value) {
   if (typeof value === 'number') return new Date(value).getTime();
   return typeof value === 'string' ? Date.parse(value) : NaN;
+}
+
+function lastWrittenTime(alert) {
+  const time = parseAlertTime(alert.timestamp);
+  return Number.isFinite(time) ? time : parseAlertTime(alert.raised_at);
 }
 
 function bootClockTime(now) {
@@ -254,8 +276,7 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   const recent = [];
   const olderByLabel = new Map();
   for (const alert of parsed.alerts) {
-    const raised = parseAlertTime(alert.raised_at);
-    const time = Number.isFinite(raised) ? raised : parseAlertTime(alert.timestamp);
+    const time = lastWrittenTime(alert);
     if (time < cutoff) {
       const label = quoteAlertField(alert.code, 80);
       olderByLabel.set(label, (olderByLabel.get(label) || 0) + 1);
