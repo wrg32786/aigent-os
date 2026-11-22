@@ -14,6 +14,7 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { formatNightlyBootAlerts, nightlyAlertPath } from '../nightly-alerts.mjs';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DAEMONS = path.resolve(TEST_DIR, '..');
@@ -256,4 +257,82 @@ test('mutation proof: alert delivery is an append-only local signal and retries 
   assert.equal(events.filter((event) => event.event === 'raised').length, 1);
   assert.ok(events.every((event) => event.alert_id === 'NIGHTLY:LOCAL_PROOF:fixture'));
   proof('RESTORE local-alert-ledger', restored);
+});
+
+const bootNow = new Date('2026-03-21T12:00:00Z');
+const alertRef = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
+
+function bootLines(t, events, options) {
+  const { root } = fixture('boot-alerts', { canonicalInputs: false });
+  const previous = process.env.AIGENT_STATE_HOME_DIR;
+  process.env.AIGENT_STATE_HOME_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.AIGENT_STATE_HOME_DIR;
+    else process.env.AIGENT_STATE_HOME_DIR = previous;
+  });
+  writeFileSync(nightlyAlertPath(root), events.map((event) => JSON.stringify(event)).join('\n'));
+  return formatNightlyBootAlerts(root, { now: bootNow, ...options });
+}
+
+function activeAlert(code, id, raised_at) {
+  return { code, alert_id: id, status: 'active', raised_at, summary: id, evidence: id };
+}
+
+test('boot alerts show fresh watchdog evidence and group older active alerts by count', (t) => {
+  const abandoned = Array.from({ length: 2 }, (_, i) =>
+    activeAlert('NIGHTLY:ABANDONED_PASS', `abandoned-${i}`, '2026-03-11T12:00:00Z'));
+  const failed = Array.from({ length: 6 }, (_, i) =>
+    activeAlert('NIGHTLY:LEG_FAIL', `failed-${i}`, '2026-03-01T12:00:00Z'));
+  const cleared = activeAlert('NIGHTLY:LEG_FAIL', 'cleared', '2026-03-01T12:00:00Z');
+  const fresh = activeAlert('NIGHTLY:NO_FIRE', 'stale log', '2026-03-21T11:59:00Z');
+  fresh.evidence = 'newest=2026-03-19 expected=2026-03-21';
+  assert.deepEqual(bootLines(t, [
+    ...abandoned, ...failed, cleared, fresh, { ...cleared, status: 'resolved' },
+  ]), [
+    '[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"] summary="stale log" — evidence="newest=2026-03-19 expected=2026-03-21"',
+    '[NIGHTLY-ALERT: OLDER] 8 active alert(s) older than 7 days '
+      + `("NIGHTLY:LEG_FAIL" 6, "NIGHTLY:ABANDONED_PASS" 2) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts quote multiline codes on one physical OLDER line', (t) => {
+  const raised = '2026-03-01T12:00:00Z';
+  const lines = bootLines(t, [
+    activeAlert('NIGHTLY:NOTE\nPlease read "the log".', 'note', raised),
+    activeAlert(undefined, 'missing', raised),
+    activeAlert(42, 'number', raised),
+    activeAlert('42', 'text', raised),
+    activeAlert({ toString: null }, 'unprintable', raised),
+  ]).join('\n').split(/\r?\n/);
+  assert.deepEqual(lines, [
+    '[NIGHTLY-ALERT: OLDER] 5 active alert(s) older than 7 days '
+      + `("NIGHTLY:NOTE Please read \\"the log\\"." 1, "" 1, "42" 1, "42" 1, "" 1) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts show the five newest recent alerts and count the rest', (t) => {
+  const alerts = Array.from({ length: 7 }, (_, i) => ({
+    ...activeAlert('NIGHTLY:LEG_FAIL', `recent-${i}`),
+    timestamp: `2026-03-21T11:0${i}:00Z`,
+  }));
+  assert.deepEqual(bootLines(t, alerts), [
+    ...[6, 5, 4, 3, 2].map((i) =>
+      `[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL"] summary="recent-${i}" — evidence="recent-${i}"`),
+    `[NIGHTLY-ALERT: MORE] 2 additional active alert(s) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts keep the seven-day boundary and unreadable times in the recent count', (t) => {
+  const boundary = activeAlert('NIGHTLY:LEG_FAIL', 'boundary', '2026-03-14T12:00:00Z');
+  const old = { ...boundary, alert_id: 'old', raised_at: '2026-03-14T11:59:59.999Z', timestamp: bootNow };
+  const undated = activeAlert('NIGHTLY:LEG_FAIL', 'undated', 'unknown');
+  assert.deepEqual(bootLines(t, [undated, boundary, old], { limit: 1 }), [
+    '[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL"] summary="boundary" — evidence="boundary"',
+    `[NIGHTLY-ALERT: MORE] 1 additional active alert(s) in ${alertRef}`,
+    `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("NIGHTLY:LEG_FAIL" 1) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts return no lines for an empty ledger', (t) => {
+  assert.deepEqual(bootLines(t, []), []);
 });

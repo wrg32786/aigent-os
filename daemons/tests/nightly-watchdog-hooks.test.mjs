@@ -374,7 +374,8 @@ test('mutation proof: a failed leg stays visible without optional external trans
     input: JSON.stringify({ source: 'startup', cwd: brokenFixture.root }),
   });
   assert.equal(startup.status, 0, startup.stderr);
-  assert.match(startup.stdout, /\[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"\]/);
+  // The fixture stamps the alert with PASS_NOW, while the hook reads the real clock.
+  assert.match(startup.stdout, /^\[NIGHTLY-ALERT: OLDER\] 1 active alert\(s\) older than 7 days \("NIGHTLY:LEG_FAIL:dream" 1\) in memory\/runtime\/NIGHTLY_ALERTS\.jsonl$/m);
   proof('BREAK local-only-leg', broken);
   proof('BREAK local-only-session-start', startup);
 
@@ -385,6 +386,12 @@ test('mutation proof: a failed leg stays visible without optional external trans
   assert.equal(restored.status, 0, restored.stderr || restored.stdout);
   assert.match(restored.stdout, /NIGHTLY_CHECKPOINT GREEN/);
   assert.doesNotMatch(restored.stderr, /external transport/i);
+  const restoredStartup = runNode(SESSIONSTART, [], {
+    root: restoredFixture.root,
+    input: JSON.stringify({ source: 'startup', cwd: restoredFixture.root }),
+  });
+  assert.equal(restoredStartup.status, 0, restoredStartup.stderr);
+  assert.doesNotMatch(restoredStartup.stdout, /NIGHTLY:LEG_FAIL:dream/);
   proof('RESTORE local-only-leg', restored);
 });
 

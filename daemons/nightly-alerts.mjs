@@ -82,8 +82,17 @@ function sanitize(value, max = 240) {
   return result;
 }
 
+function formatAlertCode(code) {
+  try {
+    return inert(code, 80);
+  } catch {
+    // A ledger object can shadow toString. Render it like a missing code.
+    return inert('', 80);
+  }
+}
+
 export function formatNightlyAlertLine(event) {
-  return `[NIGHTLY-ALERT: ${inert(event.code, 80)}] summary=${inert(event.summary, 160)}`
+  return `[NIGHTLY-ALERT: ${formatAlertCode(event.code)}] summary=${inert(event.summary, 160)}`
     + ` — evidence=${inert(event.evidence, 220)}`;
 }
 
@@ -214,6 +223,7 @@ export function resolveNightlyAlerts({
 
 export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   limit = 5,
+  now = new Date(),
 } = {}) {
   const parsed = readActiveNightlyAlerts(root);
   const lines = [];
@@ -223,13 +233,37 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
       + ` — file=${inert(String(parsed.file).replace(/\\/g, '/'))}`,
     );
   }
-  for (const alert of parsed.alerts.slice(0, limit)) {
+  const cutoff = new Date(now).getTime() - 7 * 24 * 60 * 60 * 1000;
+  const recent = [];
+  const olderByCode = new Map();
+  for (const alert of parsed.alerts) {
+    const raised = Date.parse(alert.raised_at);
+    const time = Number.isFinite(raised) ? raised : Date.parse(alert.timestamp);
+    if (time < cutoff) {
+      olderByCode.set(alert.code, (olderByCode.get(alert.code) || 0) + 1);
+    } else {
+      recent.push({ alert, time: Number.isFinite(time) ? time : -Infinity });
+    }
+  }
+  recent.sort((left, right) => right.time - left.time);
+  const visible = recent.slice(0, limit);
+  for (const { alert } of visible) {
     lines.push(formatNightlyAlertLine(alert));
   }
-  if (parsed.alerts.length > limit) {
+  if (recent.length > visible.length) {
     lines.push(
-      `[NIGHTLY-ALERT: MORE] ${parsed.alerts.length - limit}`
+      `[NIGHTLY-ALERT: MORE] ${recent.length - visible.length}`
       + ` additional active alert(s) in ${ALERT_REF}`,
+    );
+  }
+  if (olderByCode.size) {
+    const counts = [...olderByCode]
+      .sort((left, right) => right[1] - left[1])
+      .map(([code, count]) => `${formatAlertCode(code)} ${count}`)
+      .join(', ');
+    lines.push(
+      `[NIGHTLY-ALERT: OLDER] ${parsed.alerts.length - recent.length} active alert(s) older than 7 days`
+      + ` (${counts}) in ${ALERT_REF}`,
     );
   }
   return lines;
