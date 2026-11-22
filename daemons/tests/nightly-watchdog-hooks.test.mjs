@@ -185,13 +185,12 @@ function proof(label, result) {
   console.log(`${label} status=${result.status} stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr)}`);
 }
 
-function begin(root, runId) {
+function begin(root, runId, clockArgs = ['--date', PASS_DATE, '--now', PASS_NOW]) {
   const result = runNode(PASS_CLI, [
     'begin',
     '--root', root,
-    '--date', PASS_DATE,
     '--run-id', runId,
-    '--now', PASS_NOW,
+    ...clockArgs,
     '--time-zone', TIME_ZONE,
     '--cutoff-hour', CUTOFF_HOUR,
   ], { root });
@@ -199,7 +198,7 @@ function begin(root, runId) {
   return result;
 }
 
-function recordDream(root) {
+function recordDream(root, clockArgs = ['--now', '2026-03-10T20:01:00.000Z']) {
   return runNode(PASS_CLI, [
     'record',
     '--root', root,
@@ -208,7 +207,7 @@ function recordDream(root) {
     '--exit-code', '0',
     '--detail', 'local-only mutation proof',
     '--artifact', 'file:memory/DREAM_LOG.md',
-    '--now', '2026-03-10T20:01:00.000Z',
+    ...clockArgs,
   ], { root });
 }
 
@@ -393,6 +392,28 @@ test('mutation proof: a failed leg stays visible without optional external trans
   assert.equal(restoredStartup.status, 0, restoredStartup.stderr);
   assert.doesNotMatch(restoredStartup.stdout, /NIGHTLY:LEG_FAIL:dream/);
   proof('RESTORE local-only-leg', restored);
+});
+
+test('SessionStart prints a fresh failed checkpoint with its evidence', () => {
+  const { root } = fixture('fresh-leg');
+  begin(root, 'fresh-leg', []);
+  // A second active alert with an unreadable time must not hide the checkpoint.
+  write(root, 'vault/memory/runtime/NIGHTLY_ALERTS.jsonl', JSON.stringify({
+    alert_id: 'undated', status: 'active', code: 'NIGHTLY:UNDATED',
+    raised_at: 'unknown', timestamp: { toString: null },
+  }) + '\n');
+  const failed = recordDream(root, []);
+  assert.equal(failed.status, 1, failed.stderr || failed.stdout);
+  assert.match(failed.stdout, /NIGHTLY_CHECKPOINT RED/);
+
+  const startup = runNode(SESSIONSTART, [], {
+    root,
+    input: JSON.stringify({ source: 'startup', cwd: root }),
+  });
+  assert.equal(startup.status, 0, startup.stderr);
+  const expected = '[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"] summary="dream checkpoint failed (exit 0)"'
+    + ' — evidence="file:memory/DREAM_LOG.md run=fresh-leg"';
+  assert.ok(startup.stdout.split(/\r?\n/).includes(expected), startup.stdout);
 });
 
 // A nightly that ran every checkpoint and honestly reported failures DID run.

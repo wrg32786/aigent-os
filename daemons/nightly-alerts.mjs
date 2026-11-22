@@ -16,6 +16,7 @@ import {
 import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
 
 const ALERT_REF = 'memory/runtime/NIGHTLY_ALERTS.jsonl';
+const OLDER_CODE_LIMIT = 6;
 
 export function nightlyAlertPath(root = defaultNightlyRoot()) {
   return path.join(resolveNightlyPaths(root).runtimeRoot, 'NIGHTLY_ALERTS.jsonl');
@@ -82,18 +83,17 @@ function sanitize(value, max = 240) {
   return result;
 }
 
-function formatAlertCode(code) {
+function quoteAlertField(value, max) {
   try {
-    return inert(code, 80);
+    return inert(value, max);
   } catch {
-    // A ledger object can shadow toString. Render it like a missing code.
-    return inert('', 80);
+    return '""';
   }
 }
 
 export function formatNightlyAlertLine(event) {
-  return `[NIGHTLY-ALERT: ${formatAlertCode(event.code)}] summary=${inert(event.summary, 160)}`
-    + ` — evidence=${inert(event.evidence, 220)}`;
+  return `[NIGHTLY-ALERT: ${quoteAlertField(event.code, 80)}] summary=${quoteAlertField(event.summary, 160)}`
+    + ` — evidence=${quoteAlertField(event.evidence, 220)}`;
 }
 
 function writeLocalDelivery(stderr, line) {
@@ -221,6 +221,26 @@ export function resolveNightlyAlerts({
   return active.length;
 }
 
+function parseAlertTime(value) {
+  try {
+    return Date.parse(value);
+  } catch {
+    return NaN;
+  }
+}
+
+function bootClockTime(now) {
+  try {
+    const time = typeof now === 'number' || typeof now === 'string'
+      ? new Date(now).getTime()
+      : Date.prototype.getTime.call(now);
+    if (Number.isFinite(time)) return time;
+  } catch {
+    // The supplied clock value has no Date timestamp.
+  }
+  return Date.now();
+}
+
 export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   limit = 5,
   now = new Date(),
@@ -233,12 +253,12 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
       + ` — file=${inert(String(parsed.file).replace(/\\/g, '/'))}`,
     );
   }
-  const cutoff = new Date(now).getTime() - 7 * 24 * 60 * 60 * 1000;
+  const cutoff = bootClockTime(now) - 7 * 24 * 60 * 60 * 1000;
   const recent = [];
   const olderByCode = new Map();
   for (const alert of parsed.alerts) {
-    const raised = Date.parse(alert.raised_at);
-    const time = Number.isFinite(raised) ? raised : Date.parse(alert.timestamp);
+    const raised = parseAlertTime(alert.raised_at);
+    const time = Number.isFinite(raised) ? raised : parseAlertTime(alert.timestamp);
     if (time < cutoff) {
       olderByCode.set(alert.code, (olderByCode.get(alert.code) || 0) + 1);
     } else {
@@ -246,7 +266,7 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
     }
   }
   recent.sort((left, right) => right.time - left.time);
-  const visible = recent.slice(0, limit);
+  const visible = recent.slice(0, Number.isInteger(limit) && limit >= 0 ? limit : 5);
   for (const { alert } of visible) {
     lines.push(formatNightlyAlertLine(alert));
   }
@@ -259,11 +279,14 @@ export function formatNightlyBootAlerts(root = defaultNightlyRoot(), {
   if (olderByCode.size) {
     const counts = [...olderByCode]
       .sort((left, right) => right[1] - left[1])
-      .map(([code, count]) => `${formatAlertCode(code)} ${count}`)
-      .join(', ');
+      .slice(0, OLDER_CODE_LIMIT)
+      .map(([code, count]) => `${quoteAlertField(code, 80)} ${count}`);
+    if (olderByCode.size > counts.length) {
+      counts.push(`+${olderByCode.size - counts.length} more code(s)`);
+    }
     lines.push(
       `[NIGHTLY-ALERT: OLDER] ${parsed.alerts.length - recent.length} active alert(s) older than 7 days`
-      + ` (${counts}) in ${ALERT_REF}`,
+      + ` (${counts.join(', ')}) in ${ALERT_REF}`,
     );
   }
   return lines;

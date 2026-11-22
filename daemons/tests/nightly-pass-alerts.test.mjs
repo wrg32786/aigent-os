@@ -323,15 +323,85 @@ test('boot alerts show the five newest recent alerts and count the rest', (t) =>
 });
 
 test('boot alerts keep the seven-day boundary and unreadable times in the recent count', (t) => {
-  const boundary = activeAlert('NIGHTLY:LEG_FAIL', 'boundary', '2026-03-14T12:00:00Z');
-  const old = { ...boundary, alert_id: 'old', raised_at: '2026-03-14T11:59:59.999Z', timestamp: bootNow };
+  const boundary = activeAlert('NIGHTLY:BOUNDARY', 'boundary', '2026-03-14T12:00:00Z');
+  const old = {
+    ...activeAlert('NIGHTLY:OLD', 'old', '2026-03-14T11:59:59.999Z'),
+    timestamp: bootNow,
+  };
   const undated = activeAlert('NIGHTLY:LEG_FAIL', 'undated', 'unknown');
   assert.deepEqual(bootLines(t, [undated, boundary, old], { limit: 1 }), [
-    '[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL"] summary="boundary" — evidence="boundary"',
+    '[NIGHTLY-ALERT: "NIGHTLY:BOUNDARY"] summary="boundary" — evidence="boundary"',
     `[NIGHTLY-ALERT: MORE] 1 additional active alert(s) in ${alertRef}`,
-    `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("NIGHTLY:LEG_FAIL" 1) in ${alertRef}`,
+    `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("NIGHTLY:OLD" 1) in ${alertRef}`,
   ]);
 });
+
+test('boot alerts preserve recent lines when timestamp conversion throws', (t) => {
+  const unreadable = {
+    ...activeAlert('NIGHTLY:UNDATED', 'undated', 'unknown'),
+    timestamp: { toString: null },
+  };
+  assert.deepEqual(bootLines(t, [unreadable, activeAlert('NIGHTLY:FRESH', 'fresh', bootNow)]), [
+    '[NIGHTLY-ALERT: "NIGHTLY:FRESH"] summary="fresh" — evidence="fresh"',
+    '[NIGHTLY-ALERT: "NIGHTLY:UNDATED"] summary="undated" — evidence="undated"',
+  ]);
+});
+
+test('boot alerts use the fallback timestamp when raised_at conversion throws', (t) => {
+  const alert = {
+    ...activeAlert('NIGHTLY:OLD', 'old', { toString: null }),
+    timestamp: '2026-03-01T12:00:00Z',
+  };
+  assert.deepEqual(bootLines(t, [alert]), [
+    `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("NIGHTLY:OLD" 1) in ${alertRef}`,
+  ]);
+});
+
+test('boot alerts quote unreadable summary and evidence fields individually', (t) => {
+  const unreadable = { toString: null };
+  assert.deepEqual(bootLines(t, [
+    { ...activeAlert('NIGHTLY:FIRST', 'first', bootNow), summary: unreadable },
+    { ...activeAlert('NIGHTLY:SECOND', 'second', bootNow), evidence: unreadable },
+  ]), [
+    '[NIGHTLY-ALERT: "NIGHTLY:FIRST"] summary="" — evidence="first"',
+    '[NIGHTLY-ALERT: "NIGHTLY:SECOND"] summary="second" — evidence=""',
+  ]);
+});
+
+test('boot alerts show the six largest older groups with ties in reader order', (t) => {
+  const tied = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const groups = ['h', 'h', 'h', 'h', 'g', 'g', 'g', ...tied, ...tied];
+  const events = groups.map((code, i) =>
+    activeAlert(code, String(i), `2026-03-01T12:${String(groups.length - i).padStart(2, '0')}:00Z`));
+  assert.deepEqual(bootLines(t, events), [
+    '[NIGHTLY-ALERT: OLDER] 19 active alert(s) older than 7 days '
+      + `("h" 4, "g" 3, "f" 2, "e" 2, "d" 2, "c" 2, +2 more code(s)) in ${alertRef}`,
+  ]);
+});
+
+for (const limit of [-1, 2.5, '2', NaN]) {
+  test(`boot alerts default to five visible lines for invalid limit ${limit}`, (t) => {
+    const events = Array.from({ length: 7 }, (_, i) => activeAlert('NIGHTLY:RECENT', String(i), bootNow));
+    assert.deepEqual(bootLines(t, events, { limit }), [
+      ...events.slice(0, 5).map(({ summary }) =>
+        `[NIGHTLY-ALERT: "NIGHTLY:RECENT"] summary="${summary}" — evidence="${summary}"`),
+      `[NIGHTLY-ALERT: MORE] 2 additional active alert(s) in ${alertRef}`,
+    ]);
+  });
+}
+
+for (const now of ['invalid', { toString: null }]) {
+  test(`boot alerts use the real clock for unreadable now of type ${typeof now}`, (t) => {
+    const old = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    assert.deepEqual(bootLines(t, [
+      activeAlert('NIGHTLY:OLD', 'old', old),
+      activeAlert('NIGHTLY:FRESH', 'fresh', new Date()),
+    ], { now }), [
+      '[NIGHTLY-ALERT: "NIGHTLY:FRESH"] summary="fresh" — evidence="fresh"',
+      `[NIGHTLY-ALERT: OLDER] 1 active alert(s) older than 7 days ("NIGHTLY:OLD" 1) in ${alertRef}`,
+    ]);
+  });
+}
 
 test('boot alerts return no lines for an empty ledger', (t) => {
   assert.deepEqual(bootLines(t, []), []);
