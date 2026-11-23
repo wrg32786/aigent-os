@@ -38,7 +38,7 @@ import {
   resolveNightlyPaths,
   resolveRepositoryOrMemoryPath,
 } from './nightly-paths.mjs';
-import { collapseLineBreaking, inert } from './lifecycle-common.mjs';
+import { inert } from './lifecycle-common.mjs';
 
 export const NIGHTLY_PROTOCOL = 'close-parity-v2-7L-11C';
 export const NIGHTLY_CHECKPOINTS = Object.freeze([
@@ -913,7 +913,7 @@ export async function recordNightlyCheckpoint({
         reason: `checkpoint passed in run ${state.run_id}`,
       });
     } catch (error) {
-      const message = collapseLineBreaking(error?.message ?? error);
+      const message = inert(error?.message ?? error, 300);
       writeLocalDelivery(stderr, `${checkpoint} passed but its alert could not be cleared: ${message}`);
     }
   }
