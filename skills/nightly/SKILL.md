@@ -60,6 +60,8 @@ node daemons/nightly-route-check.mjs --root <aigent-root>
 node daemons/nightly-pass.mjs begin --root <aigent-root> [--date YYYY-MM-DD] [--replace]
 ```
 
+`begin` reports a missed or failed previous night, and the runner copies that alert line into its final report.
+
 Begin requires both canonical inputs to exist and be readable:
 
 - `vault/memory/MEMORY_CANDIDATES.md`

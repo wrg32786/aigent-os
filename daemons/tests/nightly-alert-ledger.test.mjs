@@ -255,10 +255,28 @@ for (const shortRead of [false, true]) {
   });
 }
 
+test('begin reports a delivery error and still starts the pass', async t => {
+  const root = fixture(t);
+  const messages = [];
+  const state = await beginNightlyPass({
+    ...night(root, 1), deliver: true,
+    stderr(line) {
+      if (line.startsWith('[NIGHTLY-ALERT:')) throw new Error('alert write failed');
+      messages.push(line);
+    },
+  });
+  assert.equal(state.status, 'running');
+  const { events } = ledger(root, 'NIGHTLY:NO_FIRE');
+  assert.deepEqual(events.map(row => row.event), ['raised', 'delivery']);
+  assert.equal(events[1].delivery.local, 'failed');
+  assert.deepEqual(messages, ['NIGHTLY_WATCHDOG ERROR "alert write failed"\n']);
+});
+
 test('an unreadable ledger leaves a passing record green with one diagnostic', async t => {
   const root = fixture(t);
   await beginNightlyPass(night(root, 1));
   const file = nightlyAlertPath(root);
+  fs.rmSync(file, { force: true });
   fs.mkdirSync(file);
   const messages = [];
   const result = await record(night(root, 1, 1), leg, 'pass', { stderr: line => messages.push(line) });
@@ -272,7 +290,9 @@ test('an unreadable ledger leaves a passing record green with one diagnostic', a
 test('an unreadable ledger propagates a failing record error', async t => {
   const root = fixture(t);
   await beginNightlyPass(night(root, 1));
-  fs.mkdirSync(nightlyAlertPath(root));
+  const file = nightlyAlertPath(root);
+  fs.rmSync(file, { force: true });
+  fs.mkdirSync(file);
   await assert.rejects(record(night(root, 1, 1), leg, 'fail'), { code: 'EISDIR' });
 });
 

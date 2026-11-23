@@ -353,6 +353,8 @@ test('mutation proof: a failed leg stays visible without optional external trans
   const agedInstant = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   const agedClock = ['--now', agedInstant.toISOString()];
   const passDate = zonedDateKey(agedInstant, TIME_ZONE);
+  const expected = expectedNightlyDate({ now: agedInstant, timeZone: TIME_ZONE, cutoffHour: CUTOFF_HOUR });
+  write(brokenFixture.root, 'vault/memory/runtime/NIGHTLY_LOG.md', protocolBlock('PASS', expected));
   begin(brokenFixture.root, 'local-only-break', agedClock);
   write(brokenFixture.root, 'vault/memory/DREAM_LOG.md', `# Dream Log\n\n## ${passDate}: incomplete\n`);
   const broken = recordDream(brokenFixture.root, agedClock);

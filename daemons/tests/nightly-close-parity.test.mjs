@@ -220,16 +220,15 @@ function proof(label, result) {
   console.log(`${label} status=${result.status} stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr)}`);
 }
 
-function begin(root, runId = 'fixture-run', date = PASS_DATE, now = PASS_NOW) {
+function begin(root, runId, date = PASS_DATE, now = PASS_NOW) {
   const result = runNode(PASS_CLI, [
     'begin',
     '--root', root,
     '--date', date,
-    '--run-id', runId,
+    ...(runId ? ['--run-id', runId] : []),
     '--now', now,
     '--time-zone', TIME_ZONE,
     '--cutoff-hour', CUTOFF_HOUR,
-    '--no-deliver',
   ], { root });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /^NIGHTLY_PASS BEGIN\b/);
@@ -691,9 +690,9 @@ function healthySystemCheck(root, now = PASS_NOW) {
   }));
 }
 
-function runSystemCheck(stateHome, extraEnv, repository = sourceRoot) {
-  const result = spawnSync(BASH_EXE, ['daemons/system-check.sh'], {
-    cwd: repository,
+function runSystemCheck(stateHome, extraEnv, repository = sourceRoot, cwd = repository) {
+  const result = spawnSync(BASH_EXE, [path.join(repository, 'daemons', 'system-check.sh')], {
+    cwd,
     env: isolatedEnv(stateHome, { AIGENT_ROOT: repository, ...extraEnv }),
     encoding: 'utf8',
     windowsHide: true,
@@ -739,12 +738,12 @@ for (const log of ['failed', 'missing']) {
     healthySystemCheck(root);
     write(root, 'vault/memory/DREAM_LOG.md', canonicalDream());
     if (log === 'failed') write(root, nightlyLog, previousNight('FAIL'));
-    begin(root, 'current', PASS_DATE, beforeCutoff);
+    const runId = begin(root, undefined, PASS_DATE, beforeCutoff).stdout.match(/\brun=(\S+)/)[1];
     const run = runSystemCheck(root, {
-      AIGENT_NIGHTLY_RUN_ID: 'current', AIGENT_SYSTEM_CHECK_NOW: beforeCutoff,
+      AIGENT_NIGHTLY_RUN_ID: runId, AIGENT_SYSTEM_CHECK_NOW: beforeCutoff,
     });
     assert.ok(run.stdout.split(/\r?\n/).includes(
-      `ℹ ${nightlyLabel} - "Inside nightly pass current. The watchdog reports the previous night."`,
+      `ℹ ${nightlyLabel} - "Inside nightly pass ${runId}. The watchdog reports the previous night."`,
     ), run.stdout);
     assert.equal(run.status, 0, run.stdout);
   });
@@ -756,15 +755,16 @@ for (const state of ['pass', 'fail', 'abandoned', 'other run', 'missing', 'unrea
     healthySystemCheck(root);
     write(root, 'vault/memory/DREAM_LOG.md', canonicalDream());
     const file = path.join(runtime, 'NIGHTLY_PASS_STATE.json');
+    const runId = '2026-03-10-2026-03-10T080000000Z';
     if (state === 'unreadable') mkdirSync(file);
     else if (state !== 'missing') {
       writeFileSync(file, JSON.stringify({
         status: ['other run', 'empty id'].includes(state) ? 'running' : state,
-        run_id: state === 'other run' ? 'another' : 'current',
+        run_id: state === 'other run' ? runId.replace('T08', 'T09') : runId,
       }));
     }
     const run = runSystemCheck(root, {
-      AIGENT_NIGHTLY_RUN_ID: state === 'empty id' ? '' : 'current',
+      AIGENT_NIGHTLY_RUN_ID: state === 'empty id' ? '' : runId,
       AIGENT_SYSTEM_CHECK_NOW: beforeCutoff,
     });
     assert.ok(run.stdout.split(/\r?\n/).some(line =>
@@ -773,23 +773,71 @@ for (const state of ['pass', 'fail', 'abandoned', 'other run', 'missing', 'unrea
   });
 }
 
-test('system check checkpoint and pass finish green after a failed night', () => {
+test('system check uses the watchdog for a sibling state home with a leading space', () => {
+  const { base, root } = fixture('seat');
+  healthySystemCheck(root);
+  write(root, 'vault/memory/DREAM_LOG.md', canonicalDream());
+  cpSync(root, path.join(base, ' seat'), { recursive: true });
+  const runId = begin(root).stdout.match(/\brun=(\S+)/)[1];
+  const run = runSystemCheck(' seat', {
+    AIGENT_NIGHTLY_RUN_ID: runId, AIGENT_SYSTEM_CHECK_NOW: beforeCutoff,
+  }, sourceRoot, base);
+  assert.match(run.stdout, /✗ "Nightly fire freshness and terminal evidence".*code=missing/);
+  assert.equal(run.status, 1);
+});
+
+test('running pass query rejects matching IDs outside the generated format', () => {
+  const { root, runtime } = fixture();
+  for (const runId of ['custom', '2026-03-10-2026-03-10T080000000Z\n', '/nightly/run']) {
+    writeFileSync(path.join(runtime, 'NIGHTLY_PASS_STATE.json'), JSON.stringify({
+      status: 'running', run_id: runId,
+    }));
+    const run = runNode(PASS_CLI, ['is-running', '--root', root], {
+      root, extraEnv: { AIGENT_NIGHTLY_RUN_ID: runId },
+    });
+    assert.equal(run.status, 1, JSON.stringify(runId));
+  }
+});
+
+test('system check rejects a path in the run ID even if Bash converts it', () => {
   const { root } = fixture();
+  healthySystemCheck(root);
+  write(root, 'vault/memory/DREAM_LOG.md', canonicalDream());
+  const runId = '/nightly/run';
+  const env = { AIGENT_NIGHTLY_RUN_ID: runId, AIGENT_SYSTEM_CHECK_NOW: beforeCutoff };
+  const probe = spawnSync(BASH_EXE, ['-c', 'node -p "process.env.AIGENT_NIGHTLY_RUN_ID"'], {
+    cwd: root, env: isolatedEnv(root, env), encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(probe.status, 0, probe.stderr);
+  const storedId = process.platform === 'win32' ? probe.stdout.trimEnd() : '/another/run';
+  assert.notEqual(storedId, runId);
+  begin(root, storedId);
+  const run = runSystemCheck(root, env);
+  assert.match(run.stdout, /✗ "Nightly fire freshness and terminal evidence".*code=missing/);
+  assert.equal(run.status, 1);
+});
+
+test('begin reports a watchdog error once and still starts the pass', () => {
+  const { root, runtime } = fixture();
+  mkdirSync(path.join(runtime, 'NIGHTLY_ALERTS.jsonl'));
+  const started = begin(root);
+  assert.match(started.stderr, /^NIGHTLY_WATCHDOG ERROR [^\r\n]+\r?\n$/);
+  const state = JSON.parse(readFileSync(path.join(runtime, 'NIGHTLY_PASS_STATE.json'), 'utf8'));
+  assert.equal(state.status, 'running');
+});
+
+function prepareGreenPass(root, now, date) {
   cpSync(DAEMONS, path.join(root, 'daemons'), {
     recursive: true, filter: file => file !== TEST_DIR,
   });
   cpSync(path.join(sourceRoot, 'skills'), path.join(root, 'skills'), { recursive: true });
   write(root, 'evals/check.json', '{}');
   initIgnoredGitFixture(root);
-  const now = new Date().toISOString();
-  const date = zonedDateKey(now, TIME_ZONE);
   writeValidReconcileInputs(root, date);
-  const yesterday = new Date(`${date}T00:00:00Z`);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  write(root, nightlyLog, previousNight('FAIL', yesterday.toISOString().slice(0, 10)));
   healthySystemCheck(root, now);
-  const started = begin(root, 'next-night', date, now);
-  const runId = started.stdout.match(/\brun=(\S+)/)[1];
+}
+
+function finishGreenPass(root, runId, now, date) {
   write(root, 'vault/memory/DREAM_LOG.md', `# Dream Log\n\n${canonicalDream(date)}`);
   for (const [name, artifact] of [
     ['dream', 'file:memory/DREAM_LOG.md'],
@@ -820,8 +868,65 @@ test('system check checkpoint and pass finish green after a failed night', () =>
   }
   const finished = runNode(PASS_CLI, ['finish', '--root', root, '--no-deliver'], { root });
   assert.equal(finished.status, 0, finished.stdout || finished.stderr);
-  assert.match(finished.stdout, /NIGHTLY_PASS GREEN run=next-night status=pass/);
+  assert.ok(finished.stdout.includes(`NIGHTLY_PASS GREEN run=${runId} status=pass`), finished.stdout);
   assert.match(readFileSync(path.join(root, nightlyLog), 'utf8'), /- system-check: status=PASS exit=0/);
+}
+
+test('system check checkpoint and pass finish green after a failed night', () => {
+  const { root } = fixture();
+  const now = new Date().toISOString();
+  const date = zonedDateKey(now, TIME_ZONE);
+  prepareGreenPass(root, now, date);
+  const yesterday = new Date(`${date}T00:00:00Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  write(root, nightlyLog, previousNight('FAIL', yesterday.toISOString().slice(0, 10)));
+  const started = begin(root, undefined, date, now);
+  finishGreenPass(root, started.stdout.match(/\brun=(\S+)/)[1], now, date);
+});
+
+test('begin prints only the start line and writes no alert after a green night', () => {
+  const { root, runtime } = fixture();
+  write(root, nightlyLog, previousNight('PASS'));
+  const started = begin(root, undefined, PASS_DATE, beforeCutoff);
+  assert.equal(started.stderr, '');
+  assert.match(started.stdout, /^NIGHTLY_PASS BEGIN [^\r\n]+\r?\n$/);
+  assert.equal(existsSync(path.join(runtime, 'NIGHTLY_ALERTS.jsonl')), false);
+});
+
+test('begin reports a missed night before a green pass and the next session start', () => {
+  const { root, runtime } = fixture();
+  const now = new Date().toISOString();
+  const date = zonedDateKey(now, TIME_ZONE);
+  prepareGreenPass(root, now, date);
+  const day = new Date(`${date}T08:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - 1);
+  const missed = day.toISOString().slice(0, 10);
+  day.setUTCDate(day.getUTCDate() - 1);
+  write(root, nightlyLog, previousNight('PASS', day.toISOString().slice(0, 10)));
+
+  const started = begin(root, undefined, date, `${date}T08:00:00Z`);
+  assert.match(started.stderr, /^\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\][^\r\n]+\r?\n$/);
+  assert.ok(started.stderr.includes(`expected=${missed}`), started.stderr);
+  const ledger = path.join(runtime, 'NIGHTLY_ALERTS.jsonl');
+  const gapEvents = () => readFileSync(ledger, 'utf8').trimEnd().split('\n')
+    .map(line => JSON.parse(line)).filter(row => row.alert_id === `NIGHTLY:NO_FIRE:${missed}`);
+  const raised = gapEvents();
+  assert.deepEqual(raised.map(row => row.event), ['raised', 'delivery']);
+  assert.equal(raised[1].status, 'active');
+  assert.equal(raised[1].delivery.local, 'stderr');
+  finishGreenPass(root, started.stdout.match(/\brun=(\S+)/)[1], now, date);
+  assert.deepEqual(gapEvents(), raised);
+
+  const boot = runNode(path.join(DAEMONS, 'sessionstart-reinject.mjs'), [], {
+    root, input: JSON.stringify({ cwd: root, source: 'startup' }),
+  });
+  assert.equal(boot.status, 0, boot.stderr);
+  assert.doesNotMatch(boot.stdout + boot.stderr, /NIGHTLY:NO_FIRE/);
+  const events = gapEvents();
+  assert.deepEqual(events.map(row => row.event), ['raised', 'delivery', 'resolved']);
+  assert.equal(events[2].status, 'resolved');
+  assert.equal(events[2].resolution, `fresh complete nightly block ${date}`);
+  console.log(`Missed ${missed}: active after begin and finish, cleared at session start by ${date}.`);
 });
 
 test('mutation proof: every nightly checkpoint re-derives its own postcondition', () => {

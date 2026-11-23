@@ -39,6 +39,7 @@ import {
   resolveRepositoryOrMemoryPath,
 } from './nightly-paths.mjs';
 import { inert } from './lifecycle-common.mjs';
+import { runNightlyWatchdog } from './nightly-watchdog.mjs';
 
 export const NIGHTLY_PROTOCOL = 'close-parity-v2-7L-11C';
 export const NIGHTLY_CHECKPOINTS = Object.freeze([
@@ -81,8 +82,8 @@ const NONE_REASONS = Object.freeze({
 
 const DAEMON_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-function statePath(root) {
-  return path.join(resolveNightlyPaths(root).runtimeRoot, 'NIGHTLY_PASS_STATE.json');
+function statePath(root, runtimeRoot = resolveNightlyPaths(root).runtimeRoot) {
+  return path.join(runtimeRoot, 'NIGHTLY_PASS_STATE.json');
 }
 
 function logPath(root) {
@@ -96,8 +97,8 @@ function atomicJson(file, value) {
   renameSync(temp, file);
 }
 
-function readState(root) {
-  const file = statePath(root);
+function readState(root, runtimeRoot) {
+  const file = statePath(root, runtimeRoot);
   if (!existsSync(file)) throw new Error(`nightly state missing: ${file}`);
   return JSON.parse(readFileSync(file, 'utf8'));
 }
@@ -253,6 +254,19 @@ function normalizedDate(value) {
   const date = String(value || '');
   if (!validDateKey(date)) throw new Error(`invalid pass date: ${date}`);
   return date;
+}
+
+function generatedRunId(passDate, timestamp) {
+  return `${passDate}-${timestamp.replace(/[:.]/g, '')}`;
+}
+
+function isGeneratedRunId(id) {
+  if (typeof id !== 'string') return false;
+  const passDate = id.slice(0, 10);
+  if (!validDateKey(passDate)) return false;
+  const timestamp = id.slice(11).replace(/T(\d{2})(\d{2})(\d{2})(\d{3})Z$/, 'T$1:$2:$3.$4Z');
+  const instant = new Date(timestamp);
+  return Number.isFinite(instant.getTime()) && generatedRunId(passDate, instant.toISOString()) === id;
 }
 
 function realPathAllowed(paths, target) {
@@ -766,10 +780,16 @@ export async function beginNightlyPass({
   }
   const paths = resolveNightlyPaths(root);
   const snapshots = captureFireSnapshot(paths);
+  try {
+    const { alert } = await runNightlyWatchdog({ root, now: instant, ...config, persist: true, deliver, stderr });
+    if (alert?.delivery.local === 'failed') throw new Error(alert.delivery.error);
+  } catch (error) {
+    writeLocalDelivery(stderr, `NIGHTLY_WATCHDOG ERROR ${inert(error?.message || error, 300)}`);
+  }
   const state = {
     schema_version: 1,
     protocol: NIGHTLY_PROTOCOL,
-    run_id: String(runId || `${passDate}-${timestamp.replace(/[:.]/g, '')}`),
+    run_id: String(runId || generatedRunId(passDate, timestamp)),
     pass_date: passDate,
     time_zone: config.timeZone,
     cutoff_hour: config.cutoffHour,
@@ -1185,8 +1205,9 @@ if (direct) {
       );
     } else if (action === 'is-running') {
       const runId = process.env.AIGENT_NIGHTLY_RUN_ID;
-      const state = readState(root);
-      process.exit(runId && state.status === 'running' && state.run_id === runId ? 0 : 1);
+      if (!isGeneratedRunId(runId)) process.exit(1);
+      const state = readState(root, args['runtime-root']);
+      process.exit(state.status === 'running' && state.run_id === runId ? 0 : 1);
     } else if (action === 'record') {
       result = await recordNightlyCheckpoint({
         root,
