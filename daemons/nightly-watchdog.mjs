@@ -13,7 +13,7 @@ import {
   NIGHTLY_CHECKPOINTS, NIGHTLY_PROTOCOL, NIGHTLY_SKIPPABLE_CHECKPOINTS,
 } from './nightly-pass.mjs';
 import {
-  emitNightlyAlert, nightlyAlertPath, resolveNightlyAlerts,
+  emitNightlyAlert, nightlyAlertPath, resolveNightlyAlerts, STANDING_SCOPE,
 } from './nightly-alerts.mjs';
 import {
   defaultNightlyRoot as resolveDefaultNightlyRoot,
@@ -413,12 +413,18 @@ export async function runNightlyWatchdog({
       evidence: `memory/runtime/NIGHTLY_LOG.md`
         + ` newest=${freshness.newest ?? 'none'}`
         + ` expected=${freshness.expected ?? 'unknown'}`,
-      scope: freshness.expected || 'missing',
+      scope: firedButFailed ? STANDING_SCOPE : (freshness.expected || 'missing'),
       now,
       deliver,
       timeZone: config.timeZone,
       stderr,
     });
+    if (firedButFailed) {
+      resolveNightlyAlerts({
+        root, code: ALERT_PASS_FAILED, exceptAlertId: alert.alert_id, now,
+        reason: 'replaced by the standing alert',
+      });
+    }
   }
   return {
     ok: false,

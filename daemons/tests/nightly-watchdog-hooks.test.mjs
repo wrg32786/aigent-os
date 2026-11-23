@@ -404,7 +404,8 @@ test('SessionStart prints a fresh failed checkpoint with its evidence', () => {
     alert_id: 'undated', status: 'active', code: 'NIGHTLY:UNDATED',
     raised_at: 'unknown', timestamp: { toString: null },
   }) + '\n');
-  const failed = recordDream(root, []);
+  const recordedAt = new Date().toISOString();
+  const failed = recordDream(root, ['--now', recordedAt]);
   assert.equal(failed.status, 1, failed.stderr || failed.stdout);
   assert.match(failed.stdout, /NIGHTLY_CHECKPOINT RED/);
 
@@ -414,7 +415,7 @@ test('SessionStart prints a fresh failed checkpoint with its evidence', () => {
   });
   assert.equal(startup.status, 0, startup.stderr);
   const expected = '[NIGHTLY-ALERT: "NIGHTLY:LEG_FAIL:dream"] summary="dream checkpoint failed (exit 0)"'
-    + ' — evidence="file:memory/DREAM_LOG.md run=fresh-leg"';
+    + ` — evidence="recorded_at=${recordedAt} file:memory/DREAM_LOG.md run=fresh-leg"`;
   assert.ok(startup.stdout.split(/\r?\n/).includes(expected), startup.stdout);
 });
 
