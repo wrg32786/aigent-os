@@ -361,7 +361,7 @@ function commandPostcondition(root, checkpoint, state, exitCode, now) {
         [path.join(context.paths.repositoryRoot, 'daemons', 'system-check.sh')],
         {
           cwd: context.paths.repositoryRoot,
-          env: context.env,
+          env: { ...context.env, AIGENT_NIGHTLY_RUN_ID: state.run_id },
         },
       );
       return {
@@ -1183,6 +1183,10 @@ if (direct) {
         + ` time_zone=${result.time_zone}`
         + ' state=memory/runtime/NIGHTLY_PASS_STATE.json\n',
       );
+    } else if (action === 'is-running') {
+      const runId = process.env.AIGENT_NIGHTLY_RUN_ID;
+      const state = readState(root);
+      process.exit(runId && state.status === 'running' && state.run_id === runId ? 0 : 1);
     } else if (action === 'record') {
       result = await recordNightlyCheckpoint({
         root,
@@ -1238,7 +1242,7 @@ if (direct) {
     } else {
       throw new Error(
         'usage: nightly-pass.mjs'
-        + ' begin|record|finish|evidence-fail|evidence-success [options]',
+        + ' begin|is-running|record|finish|evidence-fail|evidence-success [options]',
       );
     }
     process.exit(result.status === 'fail' ? 1 : 0);

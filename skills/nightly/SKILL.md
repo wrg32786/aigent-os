@@ -237,8 +237,9 @@ operator answer.
 
 ### E1 - `system-check`
 
-Run `bash daemons/system-check.sh` from the aigent-OS root with explicit
-`AIGENT_ROOT`, vault, time-zone, and cutoff values. Record
+Use the `run=` value printed by `begin` as `run_id`. From the aigent-OS root,
+run `AIGENT_NIGHTLY_RUN_ID="$run_id" bash daemons/system-check.sh` with the
+same root, state home, vault, time zone, and cutoff as the controller. Record
 `stdout:system-check@exit=<literal-exit>`. A nonzero result is a failed
 checkpoint, but later safe legs still run.
 
