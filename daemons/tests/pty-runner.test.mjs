@@ -4912,6 +4912,16 @@ test('L1 stale composer bytes are separated from clear by an unconditional kill-
   }
 });
 
+// 2026-11-22: one Ctrl-U removed only the wrapped tail of the operator's text and '/clear' was typed
+// after the rest. The wipe is a burst now, and its size is measured on both sides: enough presses to
+// empty a real draft, few enough that the host still reads the write as keys and not as a paste.
+test('L1a the kill-line is a burst of Ctrl-U that fits under the host\'s paste threshold with the control text', () => {
+  assert.match(COMPOSER_KILL_LINE, /^\u0015+$/, 'nothing but Ctrl-U');
+  assert.ok(COMPOSER_KILL_LINE.length >= 32, `one press leaves a wrapped draft standing; ${COMPOSER_KILL_LINE.length} presses`);
+  assert.ok(COMPOSER_KILL_LINE.length + CLEAR_CONTROL_TEXT.length <= 56,
+    'a 70-byte burst was read as a paste and wiped nothing; 64 bytes was the largest that still wiped');
+});
+
 test('L1 kill-line write failure is named and fails closed before clear or ack spend', () => {
   const harness = new RunnerHarness({
     mode: 'managed',
