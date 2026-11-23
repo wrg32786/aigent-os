@@ -60,7 +60,8 @@ node daemons/nightly-route-check.mjs --root <aigent-root>
 node daemons/nightly-pass.mjs begin --root <aigent-root> [--date YYYY-MM-DD] [--replace]
 ```
 
-`begin` reports a missed or failed previous night, and the runner copies that alert line into its final report.
+When the watchdog's assessment is not green, `begin` prints one line starting with `NIGHTLY_WATCHDOG RED` on stderr. An alert line also appears there the first time the alert is delivered. The runner copies the `NIGHTLY_WATCHDOG RED` line into its final report.
+In the configured time zone, the expected date is yesterday before the cutoff hour and today at or after it, even if yesterday's pass was green.
 
 Begin requires both canonical inputs to exist and be readable:
 

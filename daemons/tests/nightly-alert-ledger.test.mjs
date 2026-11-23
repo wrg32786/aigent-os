@@ -263,13 +263,16 @@ test('begin reports a delivery error and still starts the pass', async t => {
     stderr(line) {
       if (line.startsWith('[NIGHTLY-ALERT:')) throw new Error('alert write failed');
       messages.push(line);
+      if (line.startsWith('NIGHTLY_WATCHDOG RED')) throw new Error('watchdog write failed');
     },
   });
   assert.equal(state.status, 'running');
   const { events } = ledger(root, 'NIGHTLY:NO_FIRE');
   assert.deepEqual(events.map(row => row.event), ['raised', 'delivery']);
   assert.equal(events[1].delivery.local, 'failed');
-  assert.deepEqual(messages, ['NIGHTLY_WATCHDOG ERROR "alert write failed"\n']);
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /^NIGHTLY_WATCHDOG RED code=missing [^\r\n]* delivery=failed\n$/);
+  assert.equal(messages[1], 'NIGHTLY_WATCHDOG ERROR "alert write failed"\n');
 });
 
 test('an unreadable ledger leaves a passing record green with one diagnostic', async t => {

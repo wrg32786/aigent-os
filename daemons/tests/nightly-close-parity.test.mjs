@@ -866,7 +866,7 @@ function finishGreenPass(root, runId, now, date) {
     const result = record(root, name, { artifact, status: name === 'digest' ? 'skipped' : 'pass', now });
     assert.equal(result.status, 0, result.stdout || result.stderr);
   }
-  const finished = runNode(PASS_CLI, ['finish', '--root', root, '--no-deliver'], { root });
+  const finished = runNode(PASS_CLI, ['finish', '--root', root, '--now', now, '--no-deliver'], { root });
   assert.equal(finished.status, 0, finished.stdout || finished.stderr);
   assert.ok(finished.stdout.includes(`NIGHTLY_PASS GREEN run=${runId} status=pass`), finished.stdout);
   assert.match(readFileSync(path.join(root, nightlyLog), 'utf8'), /- system-check: status=PASS exit=0/);
@@ -893,6 +893,50 @@ test('begin prints only the start line and writes no alert after a green night',
   assert.equal(existsSync(path.join(runtime, 'NIGHTLY_ALERTS.jsonl')), false);
 });
 
+test('begin reports a missing log after an earlier session start delivered the alert', () => {
+  const { root, runtime } = fixture();
+  prepareGreenPass(root, beforeCutoff, PASS_DATE);
+  // Give the system check and the controller's replay the same fixture clock.
+  cpSync(path.join(DAEMONS, 'system-check.sh'), path.join(root, 'daemons', 'system-check-at-clock.sh'));
+  write(root, 'daemons/system-check.sh', [
+    '#!/usr/bin/env bash',
+    `export AIGENT_SYSTEM_CHECK_NOW='${beforeCutoff}'`,
+    'exec bash "$(dirname "$0")/system-check-at-clock.sh"',
+    '',
+  ].join('\n'));
+  const assess = now => runNode(path.join(DAEMONS, 'nightly-watchdog.mjs'), [
+    '--root', root, '--now', now,
+  ], { root });
+  const ledger = path.join(runtime, 'NIGHTLY_ALERTS.jsonl');
+  const events = () => readFileSync(ledger, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line));
+
+  const first = assess('2026-03-08T08:00:00Z');
+  assert.equal(first.status, 1, first.stderr);
+  assert.match(first.stderr, /^\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
+  const delivered = events();
+  assert.deepEqual(delivered.map(row => [row.event, row.alert_id, row.scope, row.delivery.local]), [
+    ['raised', 'NIGHTLY:NO_FIRE:missing', 'missing', 'pending'],
+    ['delivery', 'NIGHTLY:NO_FIRE:missing', 'missing', 'stderr'],
+  ]);
+
+  const started = begin(root, undefined, PASS_DATE, beforeCutoff);
+  assert.match(started.stderr, /^NIGHTLY_WATCHDOG RED [^\r\n]*\bcode=missing\b[^\r\n]*\r?\n$/);
+  assert.deepEqual(events(), delivered);
+  const state = JSON.parse(readFileSync(path.join(runtime, 'NIGHTLY_PASS_STATE.json'), 'utf8'));
+  assert.equal(state.status, 'running');
+  finishGreenPass(root, state.run_id, beforeCutoff, PASS_DATE);
+  assert.deepEqual(events(), delivered);
+
+  const next = assess('2026-03-10T12:00:00Z');
+  assert.equal(next.status, 0, next.stdout + next.stderr);
+  const resolved = events();
+  assert.deepEqual(resolved.slice(0, -1), delivered);
+  assert.equal(resolved.at(-1).alert_id, delivered[0].alert_id);
+  assert.equal(resolved.at(-1).event, 'resolved');
+  assert.equal(resolved.at(-1).status, 'resolved');
+  assert.equal(resolved.at(-1).resolution, `fresh complete nightly block ${PASS_DATE}`);
+});
+
 test('begin reports a missed night before a green pass and the next session start', () => {
   const { root, runtime } = fixture();
   const now = new Date().toISOString();
@@ -902,16 +946,21 @@ test('begin reports a missed night before a green pass and the next session star
   day.setUTCDate(day.getUTCDate() - 1);
   const missed = day.toISOString().slice(0, 10);
   day.setUTCDate(day.getUTCDate() - 1);
-  write(root, nightlyLog, previousNight('PASS', day.toISOString().slice(0, 10)));
+  const newest = day.toISOString().slice(0, 10);
+  write(root, nightlyLog, previousNight('PASS', newest));
 
   const started = begin(root, undefined, date, `${date}T08:00:00Z`);
-  assert.match(started.stderr, /^\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\][^\r\n]+\r?\n$/);
-  assert.ok(started.stderr.includes(`expected=${missed}`), started.stderr);
+  const [alert, watchdog, ...rest] = started.stderr.split(/\r?\n/);
+  assert.match(alert, /^\[NIGHTLY-ALERT: "NIGHTLY:NO_FIRE"\]/);
+  assert.ok(alert.includes(`expected=${missed}`), alert);
+  assert.ok(watchdog.startsWith(`NIGHTLY_WATCHDOG RED code=stale newest=${newest} expected=${missed} `), started.stderr);
+  assert.deepEqual(rest, ['']);
   const ledger = path.join(runtime, 'NIGHTLY_ALERTS.jsonl');
   const gapEvents = () => readFileSync(ledger, 'utf8').trimEnd().split('\n')
-    .map(line => JSON.parse(line)).filter(row => row.alert_id === `NIGHTLY:NO_FIRE:${missed}`);
+    .map(line => JSON.parse(line));
   const raised = gapEvents();
   assert.deepEqual(raised.map(row => row.event), ['raised', 'delivery']);
+  assert.ok(raised.every(row => row.alert_id === `NIGHTLY:NO_FIRE:${missed}`));
   assert.equal(raised[1].status, 'active');
   assert.equal(raised[1].delivery.local, 'stderr');
   finishGreenPass(root, started.stdout.match(/\brun=(\S+)/)[1], now, date);

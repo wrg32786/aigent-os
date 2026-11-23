@@ -781,7 +781,14 @@ export async function beginNightlyPass({
   const paths = resolveNightlyPaths(root);
   const snapshots = captureFireSnapshot(paths);
   try {
-    const { alert } = await runNightlyWatchdog({ root, now: instant, ...config, persist: true, deliver, stderr });
+    const { ok, output, alert } = await runNightlyWatchdog({ root, now: instant, ...config, persist: true, deliver, stderr });
+    if (!ok) {
+      // With delivery disabled, a repeat alert can reuse any delivery value from the ledger.
+      const line = !deliver && alert?.deduped
+        ? output.replace(/ delivery=([\s\S]*)$/, (_, value) => ` delivery=${inert(value, 80)}`)
+        : output;
+      writeLocalDelivery(stderr, line);
+    }
     if (alert?.delivery.local === 'failed') throw new Error(alert.delivery.error);
   } catch (error) {
     writeLocalDelivery(stderr, `NIGHTLY_WATCHDOG ERROR ${inert(error?.message || error, 300)}`);
