@@ -84,7 +84,22 @@ export const DEFAULT_CONTROL_ENTER_DELAY_MS = 400;
 // Kill-line (Ctrl-U): unconditionally destroys stale composer text before an
 // automatic clear, and protects queued-input release if control text strands.
 // A no-op on an empty composer.
-export const COMPOSER_KILL_LINE = '\u0015';
+//
+// FORTY presses, one write. ONE Ctrl-U removes only the last visual row of the composer: text that
+// wraps, or has several lines, keeps the rest. 2026-11-22 23:07:03Z, live: the operator had a file
+// path in a 65-column window, the single press removed its wrapped tail, '/clear' was typed after
+// what was left and the Enter sent `<the path>/clear` to the seat as a prompt. No clear ran, the
+// input hold kept his keyboard for five minutes and the watchdog turned automatic refresh off.
+// Measured on Claude Code 2.1.330 in a 65-column PTY (nothing submitted; the composer was read back
+// after a repaint): each further press removes one more row or line break; 12 presses left a
+// 12-line, 24-row draft half standing and 40 emptied it.
+// NOT MORE THAN THIS IN ONE WRITE. The host treats a long burst of input as a paste and then reads
+// none of it as keys: 58 presses followed at once by a 6-byte control text (64 bytes) still wiped;
+// 64 presses (70 bytes) wiped nothing. 40 + '/clear' is 46 bytes, which leaves room for operator
+// bytes the host has not read yet.
+// shortcut: a draft of more than about 40 rows and line breaks keeps its head and still meets the
+// control text; wipe in several spaced writes if that is ever seen.
+export const COMPOSER_KILL_LINE = '\u0015'.repeat(40);
 // The transport reaches 'checkpoint-requested' and then waits for a capsule to
 // exist. Nothing was ever asking the seat to write one: tick() returns
 // action:'request-checkpoint' (auto-clear-transport.mjs:1019) and this file had
@@ -6298,7 +6313,7 @@ export class ManagedPtyRunner {
     // direct calls.
     if (this.composerMayHoldControlText && this.queuedInput.length > 0) {
       try {
-        this._event('composer-kill-line', COMPOSER_KILL_LINE);
+        this._event('composer-kill-line', { presses: COMPOSER_KILL_LINE.length });
         this.pty.write(COMPOSER_KILL_LINE);
         this.composerMayHoldControlText = false;
       } catch (error) {
@@ -6910,7 +6925,7 @@ export class ManagedPtyRunner {
     // named refusal, terminal, pre-submit.
     this.controlWriteAttempts += 1;
     try {
-      this._event('composer-kill-line', COMPOSER_KILL_LINE);
+      this._event('composer-kill-line', { presses: COMPOSER_KILL_LINE.length });
       this.pty.write(COMPOSER_KILL_LINE);
     } catch (error) {
       this._abortPrepared('runner-composer-kill-line-failed', errorText(error));

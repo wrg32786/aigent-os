@@ -1,7 +1,7 @@
 {
   "schema": "FleetBaselineManifest/v8",
-  "baseline_id": "aigent-os-2026-11-20-6de52eba",
-  "public_product_commit": "6de52eba0aa8fcf31ecd4410d8671238ef701491",
+  "baseline_id": "aigent-os-2026-11-22-b4a5b7d0",
+  "public_product_commit": "b4a5b7d0cf1fcd72155dc54cd88116ec0a9511a2",
   "notes": [
     "Every sha256 below is the blob at public_product_commit. .gitattributes forces eol=lf, so an installed tree's bytes match on every platform.",
     "Population rule: every executable .claude/settings.json.template wires as a hook or statusLine, plus the entry points install.sh names by path (managed runner, its dependency root, managed launcher), the settings template, the post-compact rule, and the system kernel root.",
@@ -73,7 +73,8 @@
     "v8 recut for the post-clear wake (cdcb7241): pins that moved: daemons/pty-runner.mjs. the runner types the post-clear wake only once the new transcript holds the clear's rows (Titus 2026-11-18). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the wake fix round (0966b3b1): pins that moved: daemons/pty-runner.mjs. the deferred wake parses the clear rows and owns the composer while owed (review of c02f1ae). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
     "v8 recut for the wake kill-switch rule (2f9c6b58): pins that moved: daemons/pty-runner.mjs. an owed wake is dropped while the kill switch is on (review of 3e1e3b9, F4). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
-    "v8 recut for the transport tick failure wait (6de52eba): pins that moved: daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. a failing transport tick is retried for a minute by the clock, one rename try per tick after the first, before automation goes off (2026-11-19 17:58Z EPERM lock). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
+    "v8 recut for the transport tick failure wait (6de52eba): pins that moved: daemons/pty-runner.mjs, daemons/auto-clear-transport.mjs. a failing transport tick is retried for a minute by the clock, one rename try per tick after the first, before automation goes off (2026-11-19 17:58Z EPERM lock). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash.",
+    "v8 recut for the kill-line burst (b4a5b7d0): pins that moved: daemons/pty-runner.mjs. the kill-line before an automatic clear is 40 Ctrl-U in one write, so a wrapped or multi-line composer is emptied (2026-11-22 23:07Z: one press left the head of the operator's text and '/clear' was sent after it). Every other hash was recomputed from this baseline's commit and found unchanged. Recomputed: 39 pinned, 39 matching, 0 missing; no pin was added or removed. public_product_commit names that commit, so the merge that lands this baseline must be a normal merge, never a squash."
   ],
   "required_files": {
     "daemons/statusline-ctx.sh": "dbe2b7c9625aff8eebab072ce92abf4f02fce5a6f791cdb573191c4619648d19",
@@ -98,7 +99,7 @@
     "daemons/sessionend-flush.mjs": "d78b4c848f3be48e6eeaedaeb4fc1126803428fb1c9ab0f82b50363ee9e59974",
     ".claude/settings.json.template": "9bcf179bb03cd91cd71a8863e75309c36bc350f7926aaa50ad3c40d7840e483e",
     "system/00_identity.md": "593db8cc6acff24e6fb46e2afaf37b2d47d7b571d70b745a8dc6ac322a15d5b9",
-    "daemons/pty-runner.mjs": "69e728ae727a13c72bf6532b1a45ad61859f7b1dc398dbb9e0fe9ecaae32d8fd",
+    "daemons/pty-runner.mjs": "82fb7b549d0dad54f140dc2be612d468afa06e386168a3e4a3261d12e4ee732e",
     "daemons/auto-clear-transport.mjs": "ff6c862edb038efe202acdca595be911c5b00bb0f28d52ae6cfb42916be38c4a",
     "daemons/lifecycle-common.mjs": "0ceba10b4153ab65f692a725ca9883e679d3f119c9bf15681cdcfb7990dcc2e9",
     "daemons/memory_root.py": "ee70f76e914b1c5abc4691e0c0c62b57eae7361e14275a58b83f5d56498d1a99",
