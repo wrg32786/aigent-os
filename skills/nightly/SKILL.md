@@ -60,6 +60,9 @@ node daemons/nightly-route-check.mjs --root <aigent-root>
 node daemons/nightly-pass.mjs begin --root <aigent-root> [--date YYYY-MM-DD] [--replace]
 ```
 
+When the watchdog's assessment is not green, `begin` prints one line starting with `NIGHTLY_WATCHDOG RED` on stderr. An alert line also appears there the first time the alert is delivered. The runner copies the `NIGHTLY_WATCHDOG RED` line into its final report.
+In the configured time zone, the expected date is yesterday before the cutoff hour and today at or after it, even if yesterday's pass was green.
+
 Begin requires both canonical inputs to exist and be readable:
 
 - `vault/memory/MEMORY_CANDIDATES.md`
@@ -237,8 +240,9 @@ operator answer.
 
 ### E1 - `system-check`
 
-Run `bash daemons/system-check.sh` from the aigent-OS root with explicit
-`AIGENT_ROOT`, vault, time-zone, and cutoff values. Record
+Use the `run=` value printed by `begin` as `run_id`. From the aigent-OS root,
+run `AIGENT_NIGHTLY_RUN_ID="$run_id" bash daemons/system-check.sh` with the
+same root, state home, vault, time zone, and cutoff as the controller. Record
 `stdout:system-check@exit=<literal-exit>`. A nonzero result is a failed
 checkpoint, but later safe legs still run.
 

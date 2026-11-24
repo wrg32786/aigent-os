@@ -384,13 +384,15 @@ else
   ck "DREAM_LOG.md newest dated header" FAIL "$DREAM_RESULT"
 fi
 
-WATCHDOG_RESULT=$(env "${FRESHNESS_ENV[@]}" node "$DAEMONS_ROOT/nightly-watchdog.mjs" \
+if [[ -n "${AIGENT_NIGHTLY_RUN_ID:-}" ]] \
+  && node "$SYSTEM_CHECK_DIR/nightly-pass.mjs" is-running --runtime-root "$RUNTIME_ROOT" >/dev/null 2>&1; then
+  ck "Nightly fire freshness and terminal evidence" INFO \
+    "Inside nightly pass $AIGENT_NIGHTLY_RUN_ID. The watchdog reports the previous night."
+elif WATCHDOG_RESULT=$(env "${FRESHNESS_ENV[@]}" node "$DAEMONS_ROOT/nightly-watchdog.mjs" \
   --root "$ROOT" \
   --check-only \
   --no-deliver \
-  "${NOW_ARGS[@]}" 2>&1)
-WATCHDOG_EXIT=$?
-if [[ "$WATCHDOG_EXIT" == "0" ]]; then
+  "${NOW_ARGS[@]}" 2>&1); then
   ck "Nightly fire freshness and terminal evidence" PASS
 else
   ck "Nightly fire freshness and terminal evidence" FAIL "$WATCHDOG_RESULT"
