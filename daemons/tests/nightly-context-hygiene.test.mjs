@@ -163,3 +163,70 @@ test('the capsule skill writes a valid session entry', (t) => {
   assert.doesNotMatch(entry, /[<>]/);
   check(t, entry, { count: 1 });
 });
+
+const fieldBullet = block('06').replace('**Completed:** Read.', '**Completed:**\n' + lines[1]);
+const metadata = [
+  '---', 'dates:', '- 2026-03-06', '- 2026-03-05', '# A comment',
+  'example: |', '  <!--', '  ```', '---',
+].join('\n');
+for (const [name, log, ok, count, errors] of [
+  ['byte order mark before the title', '\uFEFF# Session Log\n' + block('06'), true, 1, []],
+  ['byte order mark before frontmatter', '\uFEFF---\ndates:\n- 2026-03-05\n---\n' + block('06'), true, 1, []],
+  ['byte order mark before the first dated header', '\uFEFF' + block('06'), false, 0, []],
+  ['dated field continuation', fieldBullet, true, 1, []],
+  ['dated field continuation with a byte order mark', '\uFEFF' + fieldBullet, false, 0, []],
+  ['fence marker, comments and bare dates in frontmatter',
+    [metadata, '<!--', '```', '-->', block('06')].join('\n'), true, 1, []],
+  ['CRLF line endings', [block('06'), '## 2026-02-30 - Notes'].join('\n').replaceAll('\n', '\r\n'), false, 1, [7]],
+  ['missing field', block('06').replace('**Completed:** Read.\n', ''), false, 1, [1]],
+  ['empty field', block('06').replace('**Completed:** Read.', '**Completed:**'), false, 1, [1]],
+  ['duplicate field', block('06') + '\n**Completed:** Reviewed.', false, 1, [1]],
+]) {
+  test(`block parity with master: ${name}`, (t) => {
+    check(t, log, { ok, count, errors });
+  });
+}
+
+for (const count of [5, 6]) {
+  test(`a byte order mark before ${count} capsule lines keeps the full count`, (t) => {
+    check(t, '\uFEFF' + lines.slice(0, count).join('\n'), { count, ok: count === 5 });
+  });
+}
+
+test('five capsule lines follow frontmatter with a fence marker and bare dates', (t) => {
+  check(t, [metadata, ...lines.slice(0, 5)].join('\n'), { count: 5 });
+});
+
+test('a summary can start with a nonbreaking space', (t) => {
+  check(t, '- 2026-03-06 notes:\u00a0Reviewed.', { count: 1 });
+});
+
+test('a nonbreaking space alone leaves the summary empty', (t) => {
+  check(t, [lines[0], '- 2026-03-05 notes:\u00a0', 'Reviewed.'].join('\n'),
+    { count: 1, ok: false, errors: [2] });
+});
+
+for (const [name, gap] of [['a tab', '\t'], ['two spaces', '  ']]) {
+  test(`${name} between the date and identifier reports the capsule line`, (t) => {
+    check(t, [lines[0], `- 2026-03-05${gap}notes: Reviewed.`].join('\n'),
+      { count: 1, ok: false, errors: [2] });
+  });
+}
+
+test('an impossible dated header ends the capsule region', (t) => {
+  check(t, [lines[0], '## 2026-02-30 - Notes', lines[1]].join('\n'),
+    { count: 1, ok: false, errors: [2] });
+});
+
+test('a dated header without a title ends the capsule region', (t) => {
+  check(t, [lines[0], '##\t2026-03-05', lines[1]].join('\n'), { count: 1 });
+});
+
+test('a dotted frontmatter closer preserves original CRLF line numbers', (t) => {
+  check(t, ['\uFEFF---\t', 'example: |', '  ```', '...', lines[0], '- 2026-03-05'].join('\r\n'),
+    { count: 1, ok: false, errors: [6] });
+});
+
+test('an opening delimiter without a closer leaves capsule lines visible', (t) => {
+  check(t, ['---', lines[0]].join('\n'), { count: 1 });
+});

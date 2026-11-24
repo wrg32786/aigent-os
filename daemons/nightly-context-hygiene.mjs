@@ -60,6 +60,16 @@ function sessionFieldBodies(block) {
   return { bodies, duplicates };
 }
 
+function capsuleRegion(source) {
+  const body = source.replace(/^\uFEFF/, '');
+  const frontmatter = body.match(/^---[ \t]*\r?\n(?:[^\n]*\n)*?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  const start = frontmatter?.[0].length ?? 0;
+  const bodyStart = source.length - body.length + start;
+  const searchable = maskMarkdownFences(body.slice(start));
+  const firstHeader = searchable.match(/^##[ \t]+\d{4}-\d{2}-\d{2}/m);
+  return { text: searchable.slice(0, firstHeader?.index ?? searchable.length), bodyStart };
+}
+
 export function inspectSessionLog(text, {
   retentionLimit = SESSION_RETENTION_LIMIT,
 } = {}) {
@@ -74,24 +84,23 @@ export function inspectSessionLog(text, {
     ...searchable.matchAll(/^##[ \t]+(\d{4}-\d{2}-\d{2})\b.*$/gm),
   ].filter((header) => !validDateKey(header[1]));
 
-  const frontmatter = searchable.match(/^\uFEFF?---[ \t]*\r?\n(?:[^\n]*\n)*?(?:---|\.\.\.)[ \t]*(?=\r?\n|$)/);
-  const bodyStart = frontmatter?.[0].length ?? 0;
-  const beforeBlocks = searchable.slice(bodyStart, validHeaders[0]?.index ?? searchable.length);
-  const entries = [];
+  const { text: beforeBlocks, bodyStart } = capsuleRegion(source);
+  const capsuleEntries = [];
   const malformedBulletLines = [];
   for (const bullet of beforeBlocks.matchAll(/^-[ \t]+(\d{4}-\d{2}-\d{2})(.*)$/gm)) {
-    const summary = bullet[2].match(/^ \S+?(?:[ \t]+\S+?)?:[ \t]*(\S.*)$/)?.[1];
+    const summary = bullet[2].match(/^ \S+?(?:[ \t]+\S+?)?:\s*(\S.*)$/)?.[1];
     const line = lineNumberAt(source, bodyStart + bullet.index);
     if (!validDateKey(bullet[1]) || !summary) {
       malformedBulletLines.push(line);
       continue;
     }
-    entries.push({
+    capsuleEntries.push({
       date: bullet[1], title: summary.trim(), line,
       missingFields: [], duplicateFields: [], ok: true,
     });
   }
-  for (const [index, header] of validHeaders.entries()) {
+
+  const blockEntries = validHeaders.map((header, index) => {
     const block = source.slice(
       header.index,
       validHeaders[index + 1]?.index ?? source.length,
@@ -100,7 +109,7 @@ export function inspectSessionLog(text, {
     const missingFields = SESSION_FIELDS.filter(
       (label) => !fields.bodies.has(label) || !fields.bodies.get(label),
     );
-    entries.push({
+    return {
       date: header[1],
       title: header[2].trim(),
       line: lineNumberAt(source, header.index),
@@ -109,8 +118,9 @@ export function inspectSessionLog(text, {
       ok: Boolean(header[2].trim())
         && missingFields.length === 0
         && fields.duplicates.length === 0,
-    });
-  }
+    };
+  });
+  const entries = [...capsuleEntries, ...blockEntries].sort((a, b) => a.line - b.line);
   const newestFirst = entries.every(
     (entry, index) => index === 0 || entry.date <= entries[index - 1].date,
   );
