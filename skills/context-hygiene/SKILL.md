@@ -34,9 +34,15 @@ Unreadable or unfamiliar content is a failure, not permission to rewrite.
 
 ## Session Log archive
 
-The executable target schema uses newest-first dated H2 blocks. A canonical
-block starts with `## YYYY-MM-DD - title` and contains one nonempty occurrence
-of each field:
+Live entries appear newest first by date. A capsule entry is one line in the
+form `- YYYY-MM-DD capsule-id: summary`. The date must be a real calendar
+date. The capsule id and its optional preceding short name are each one token
+without whitespace. The summary must have text on the same line.
+Capsule lines go above the dated blocks, and a dated line inside a block is part of that block.
+The checker treats frontmatter as ordinary text, so keep lines starting with a dash and a date or with `##` and a date out of it, and keep fence markers balanced.
+
+A dated H2 block starts with `## YYYY-MM-DD - title` and contains one
+nonempty occurrence of each bold field listed below.
 
 - `Objective`
 - `Completed`
@@ -46,12 +52,12 @@ of each field:
 
 Archival rules:
 
-- Keep the newest five live dated blocks.
-- Move older whole blocks to
+- Keep the newest five entries across both formats.
+- Move older entries as whole lines or whole blocks to
   `vault/memory/SESSION_LOG_ARCHIVE_<YYYY-MM-DD>.md`.
 - Preserve source text and order.
 - Preserve frontmatter, title, schema guidance, and archive links.
-- Dedupe by exact dated heading plus block hash.
+- Dedupe one-line entries by exact line and blocks by exact dated heading plus block hash.
 - Refuse a block whose boundary cannot be determined without judgment.
 
 ## Active Priorities archive

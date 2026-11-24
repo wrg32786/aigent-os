@@ -21,7 +21,7 @@ making mechanical claims reproducible.
 Read:
 
 - today's valid capsules by frontmatter `created_at`;
-- canonical dated Session Log blocks;
+- dated Session Log entries (capsule lines or blocks)
 - explicitly referenced local Git commits and diffs;
 - current `HONESTY_LEDGER.md`, `TRUST_DECAY.md`, and `FAILURE_MODES.md`;
 - `DECISION_LOG.md` and `DECISION_OUTCOMES.md`.

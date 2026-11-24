@@ -63,7 +63,7 @@ function sessionFieldBodies(block) {
 export function inspectSessionLog(text, {
   retentionLimit = SESSION_RETENTION_LIMIT,
 } = {}) {
-  const source = String(text ?? '');
+  const source = String(text ?? '').replace(/^\uFEFF/, '');
   const searchable = maskMarkdownFences(source);
   const validHeaders = [
     ...searchable.matchAll(
@@ -74,7 +74,24 @@ export function inspectSessionLog(text, {
     ...searchable.matchAll(/^##[ \t]+(\d{4}-\d{2}-\d{2})\b.*$/gm),
   ].filter((header) => !validDateKey(header[1]));
 
-  const entries = validHeaders.map((header, index) => {
+  const firstHeader = searchable.match(/^##[ \t]+\d{4}-\d{2}-\d{2}/m);
+  const beforeBlocks = searchable.slice(0, firstHeader?.index ?? searchable.length);
+  const capsuleEntries = [];
+  const malformedBulletLines = [];
+  for (const bullet of beforeBlocks.matchAll(/^-[ \t]+(\d{4}-\d{2}-\d{2})(.*)$/gm)) {
+    const summary = bullet[2].match(/^ \S+?(?:[ \t]+\S+?)?:\s*(\S.*)$/)?.[1];
+    const line = lineNumberAt(source, bullet.index);
+    if (!validDateKey(bullet[1]) || !summary) {
+      malformedBulletLines.push(line);
+      continue;
+    }
+    capsuleEntries.push({
+      date: bullet[1], title: summary.trim(), line,
+      missingFields: [], duplicateFields: [], ok: true,
+    });
+  }
+
+  const blockEntries = validHeaders.map((header, index) => {
     const block = source.slice(
       header.index,
       validHeaders[index + 1]?.index ?? source.length,
@@ -94,6 +111,7 @@ export function inspectSessionLog(text, {
         && fields.duplicates.length === 0,
     };
   });
+  const entries = [...capsuleEntries, ...blockEntries].sort((a, b) => a.line - b.line);
   const newestFirst = entries.every(
     (entry, index) => index === 0 || entry.date <= entries[index - 1].date,
   );
@@ -101,8 +119,10 @@ export function inspectSessionLog(text, {
   const unfamiliarLines = [
     ...malformedDateHeaders.map((header) => lineNumberAt(source, header.index)),
     ...invalidEntries.map((entry) => entry.line),
+    ...malformedBulletLines,
   ];
   const total = entries.length;
+  const entryCount = `${total} session ${total === 1 ? 'entry' : 'entries'}`;
   const unfamiliar = unfamiliarLines.length;
   const ok = total >= 1
     && total <= retentionLimit
@@ -119,8 +139,8 @@ export function inspectSessionLog(text, {
     retentionLimit,
     entries,
     detail: ok
-      ? `${total} detailed session block(s), newest first (limit ${retentionLimit})`
-      : `${total} detailed session block(s); limit=${retentionLimit};`
+      ? `${entryCount}, newest first (limit ${retentionLimit})`
+      : `${entryCount}; limit=${retentionLimit};`
         + ` malformed=${unfamiliar}; newest_first=${newestFirst ? 'yes' : 'no'}`,
   };
 }

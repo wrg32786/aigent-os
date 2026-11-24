@@ -184,9 +184,9 @@ absence a skip. Record `stdout:reconcile@exit=<literal-exit>`.
 
 ### B2 - `context-hygiene`
 
-Execute `skills/context-hygiene/SKILL.md`. It archives old dated Session Log
-blocks before removal, keeps the documented five-entry newest-first live
-window, and requires one operating-mode heading plus one to five priorities
+Execute `skills/context-hygiene/SKILL.md`. It keeps the newest five Session Log
+entries and archives older capsule lines or dated blocks before removal.
+It requires one operating-mode heading plus one to five priorities
 under Tier 1-3 headings. It refuses ambiguous content and uses pre-write
 SHA-256 compare-and-swap.
 
