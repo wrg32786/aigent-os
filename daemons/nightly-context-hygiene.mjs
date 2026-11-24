@@ -60,20 +60,10 @@ function sessionFieldBodies(block) {
   return { bodies, duplicates };
 }
 
-function capsuleRegion(source) {
-  const body = source.replace(/^\uFEFF/, '');
-  const frontmatter = body.match(/^---[ \t]*\r?\n(?:[^\n]*\n)*?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
-  const start = frontmatter?.[0].length ?? 0;
-  const bodyStart = source.length - body.length + start;
-  const searchable = maskMarkdownFences(body.slice(start));
-  const firstHeader = searchable.match(/^##[ \t]+\d{4}-\d{2}-\d{2}/m);
-  return { text: searchable.slice(0, firstHeader?.index ?? searchable.length), bodyStart };
-}
-
 export function inspectSessionLog(text, {
   retentionLimit = SESSION_RETENTION_LIMIT,
 } = {}) {
-  const source = String(text ?? '');
+  const source = String(text ?? '').replace(/^\uFEFF/, '');
   const searchable = maskMarkdownFences(source);
   const validHeaders = [
     ...searchable.matchAll(
@@ -84,12 +74,13 @@ export function inspectSessionLog(text, {
     ...searchable.matchAll(/^##[ \t]+(\d{4}-\d{2}-\d{2})\b.*$/gm),
   ].filter((header) => !validDateKey(header[1]));
 
-  const { text: beforeBlocks, bodyStart } = capsuleRegion(source);
+  const firstHeader = searchable.match(/^##[ \t]+\d{4}-\d{2}-\d{2}/m);
+  const beforeBlocks = searchable.slice(0, firstHeader?.index ?? searchable.length);
   const capsuleEntries = [];
   const malformedBulletLines = [];
   for (const bullet of beforeBlocks.matchAll(/^-[ \t]+(\d{4}-\d{2}-\d{2})(.*)$/gm)) {
     const summary = bullet[2].match(/^ \S+?(?:[ \t]+\S+?)?:\s*(\S.*)$/)?.[1];
-    const line = lineNumberAt(source, bodyStart + bullet.index);
+    const line = lineNumberAt(source, bullet.index);
     if (!validDateKey(bullet[1]) || !summary) {
       malformedBulletLines.push(line);
       continue;

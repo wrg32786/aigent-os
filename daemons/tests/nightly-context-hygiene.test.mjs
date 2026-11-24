@@ -142,13 +142,13 @@ for (const [name, gap] of [['two spaces', '  '], ['a tab', '\t']]) {
   });
 }
 
-test('frontmatter, title, guidance, fenced examples and archive links are ignored', (t) => {
+test('a capsule in frontmatter counts alongside entries outside fenced examples', (t) => {
   check(t, [
-    '---', 'examples:', lines[5], '---', '# Session Log', 'Record the newest entry first.',
+    '---', 'examples:', lines[0], '---', '# Session Log', 'Record the newest entry first.',
     '- [Older entries](SESSION_LOG_ARCHIVE_2026-03-01.md)', lines[0],
     '```text', lines[1], '```', '- 2026-03-06 morning notes: Reviewed: all changes.',
     'See [[SESSION_LOG_ARCHIVE_2026-03-01]].',
-  ].join('\n'), { count: 2 });
+  ].join('\n'), { count: 3 });
 });
 
 test('the capsule skill writes a valid session entry', (t) => {
@@ -171,12 +171,8 @@ const metadata = [
 ].join('\n');
 for (const [name, log, ok, count, errors] of [
   ['byte order mark before the title', '\uFEFF# Session Log\n' + block('06'), true, 1, []],
-  ['byte order mark before frontmatter', '\uFEFF---\ndates:\n- 2026-03-05\n---\n' + block('06'), true, 1, []],
-  ['byte order mark before the first dated header', '\uFEFF' + block('06'), false, 0, []],
+  ['byte order mark before frontmatter', '\uFEFF---\ntitle: Notes\n---\n' + block('06'), true, 1, []],
   ['dated field continuation', fieldBullet, true, 1, []],
-  ['dated field continuation with a byte order mark', '\uFEFF' + fieldBullet, false, 0, []],
-  ['fence marker, comments and bare dates in frontmatter',
-    [metadata, '<!--', '```', '-->', block('06')].join('\n'), true, 1, []],
   ['CRLF line endings', [block('06'), '## 2026-02-30 - Notes'].join('\n').replaceAll('\n', '\r\n'), false, 1, [7]],
   ['missing field', block('06').replace('**Completed:** Read.\n', ''), false, 1, [1]],
   ['empty field', block('06').replace('**Completed:** Read.', '**Completed:**'), false, 1, [1]],
@@ -187,15 +183,65 @@ for (const [name, log, ok, count, errors] of [
   });
 }
 
+test('a byte order mark before frontmatter leaves a bare date visible', (t) => {
+  check(t, '\uFEFF---\ndates:\n- 2026-03-05\n---\n' + block('06'),
+    { count: 1, ok: false, errors: [3] });
+});
+
+test('a byte order mark before the first dated header leaves the block visible', (t) => {
+  check(t, '\uFEFF' + block('06'), { count: 1 });
+});
+
+test('a dated field continuation stays in the first block after a byte order mark', (t) => {
+  check(t, '\uFEFF' + fieldBullet, { count: 1 });
+});
+
+test('bare dates before a balanced fence are malformed and the following block counts', (t) => {
+  check(t, [metadata, '<!--', '```', '-->', block('06')].join('\n'),
+    { count: 1, ok: false, errors: [3, 4] });
+});
+
 for (const count of [5, 6]) {
   test(`a byte order mark before ${count} capsule lines keeps the full count`, (t) => {
     check(t, '\uFEFF' + lines.slice(0, count).join('\n'), { count, ok: count === 5 });
   });
+
+  test(`a byte order mark before ${count} blocks keeps the full count`, (t) => {
+    const blocks = ['06', '05', '04', '03', '02', '01'].slice(0, count).map(block);
+    check(t, '\uFEFF' + blocks.join('\n'), { count, ok: count === 5 });
+  });
+
+  test(`ordinary frontmatter above ${count} capsule lines keeps the full count`, (t) => {
+    check(t, ['---', 'title: Log', 'tags:', '- notes', 'created: 2026-03-01', '---',
+      ...lines.slice(0, count)].join('\n'), { count, ok: count === 5 });
+  });
 }
 
-test('five capsule lines follow frontmatter with a fence marker and bare dates', (t) => {
-  check(t, [metadata, ...lines.slice(0, 5)].join('\n'), { count: 5 });
+test('bare dates are malformed and an open fence hides the five capsules below', (t) => {
+  check(t, [metadata, ...lines.slice(0, 5)].join('\n'), { count: 0, ok: false, errors: [3, 4] });
 });
+
+test('an open fence in frontmatter hides five capsules and one block', (t) => {
+  check(t, ['---', 'example: |', '  ~~~', '---', ...lines.slice(0, 5), block('01')].join('\n'),
+    { count: 0, ok: false });
+});
+
+test('a balanced fence after a byte order mark leaves five capsules and one block visible', (t) => {
+  check(t, ['\uFEFF~~~', 'An example.', '~~~', ...lines.slice(0, 5), block('01')].join('\n'),
+    { count: 6, ok: false });
+});
+
+test('a dated heading in frontmatter starts a block above a capsule line', (t) => {
+  check(t, ['---', 'title: Log', '## 2026-03-05 - Note', '---', lines[0]].join('\n'),
+    { count: 1, ok: false, errors: [3] });
+});
+
+for (const [name, rule] of [['leading', '  ---'], ['trailing', '---  ']]) {
+  test(`a rule with ${name} spaces leaves all six capsules visible`, (t) => {
+    check(t, [rule, 'Session log follows.', '', ...lines.slice(0, 5), '---', lines[5]].join('\n'),
+      { count: 6, ok: false });
+  });
+}
 
 test('a summary can start with a nonbreaking space', (t) => {
   check(t, '- 2026-03-06 notes:\u00a0Reviewed.', { count: 1 });
@@ -222,9 +268,13 @@ test('a dated header without a title ends the capsule region', (t) => {
   check(t, [lines[0], '##\t2026-03-05', lines[1]].join('\n'), { count: 1 });
 });
 
-test('a dotted frontmatter closer preserves original CRLF line numbers', (t) => {
+test('an undated heading above a capsule leaves it visible', (t) => {
+  check(t, ['## Notes', lines[0]].join('\n'), { count: 1 });
+});
+
+test('a dotted delimiter inside a fence leaves later CRLF lines masked', (t) => {
   check(t, ['\uFEFF---\t', 'example: |', '  ```', '...', lines[0], '- 2026-03-05'].join('\r\n'),
-    { count: 1, ok: false, errors: [6] });
+    { count: 0, ok: false });
 });
 
 test('an opening delimiter without a closer leaves capsule lines visible', (t) => {

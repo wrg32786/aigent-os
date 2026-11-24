@@ -39,6 +39,7 @@ form `- YYYY-MM-DD capsule-id: summary`. The date must be a real calendar
 date. The capsule id and its optional preceding short name are each one token
 without whitespace. The summary must have text on the same line.
 Capsule lines go above the dated blocks, and a dated line inside a block is part of that block.
+The checker treats frontmatter as ordinary text, so keep lines starting with a dash and a date or with `##` and a date out of it, and keep fence markers balanced.
 
 A dated H2 block starts with `## YYYY-MM-DD - title` and contains one
 nonempty occurrence of each bold field listed below.
