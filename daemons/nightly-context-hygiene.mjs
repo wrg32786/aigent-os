@@ -74,7 +74,24 @@ export function inspectSessionLog(text, {
     ...searchable.matchAll(/^##[ \t]+(\d{4}-\d{2}-\d{2})\b.*$/gm),
   ].filter((header) => !validDateKey(header[1]));
 
-  const entries = validHeaders.map((header, index) => {
+  const frontmatter = searchable.match(/^\uFEFF?---[ \t]*\r?\n(?:[^\n]*\n)*?(?:---|\.\.\.)[ \t]*(?=\r?\n|$)/);
+  const bodyStart = frontmatter?.[0].length ?? 0;
+  const beforeBlocks = searchable.slice(bodyStart, validHeaders[0]?.index ?? searchable.length);
+  const entries = [];
+  const malformedBulletLines = [];
+  for (const bullet of beforeBlocks.matchAll(/^-[ \t]+(\d{4}-\d{2}-\d{2})(.*)$/gm)) {
+    const summary = bullet[2].match(/^ \S+?(?:[ \t]+\S+?)?:[ \t]*(\S.*)$/)?.[1];
+    const line = lineNumberAt(source, bodyStart + bullet.index);
+    if (!validDateKey(bullet[1]) || !summary) {
+      malformedBulletLines.push(line);
+      continue;
+    }
+    entries.push({
+      date: bullet[1], title: summary.trim(), line,
+      missingFields: [], duplicateFields: [], ok: true,
+    });
+  }
+  for (const [index, header] of validHeaders.entries()) {
     const block = source.slice(
       header.index,
       validHeaders[index + 1]?.index ?? source.length,
@@ -83,7 +100,7 @@ export function inspectSessionLog(text, {
     const missingFields = SESSION_FIELDS.filter(
       (label) => !fields.bodies.has(label) || !fields.bodies.get(label),
     );
-    return {
+    entries.push({
       date: header[1],
       title: header[2].trim(),
       line: lineNumberAt(source, header.index),
@@ -92,8 +109,8 @@ export function inspectSessionLog(text, {
       ok: Boolean(header[2].trim())
         && missingFields.length === 0
         && fields.duplicates.length === 0,
-    };
-  });
+    });
+  }
   const newestFirst = entries.every(
     (entry, index) => index === 0 || entry.date <= entries[index - 1].date,
   );
@@ -101,8 +118,10 @@ export function inspectSessionLog(text, {
   const unfamiliarLines = [
     ...malformedDateHeaders.map((header) => lineNumberAt(source, header.index)),
     ...invalidEntries.map((entry) => entry.line),
+    ...malformedBulletLines,
   ];
   const total = entries.length;
+  const entryCount = `${total} session ${total === 1 ? 'entry' : 'entries'}`;
   const unfamiliar = unfamiliarLines.length;
   const ok = total >= 1
     && total <= retentionLimit
@@ -119,8 +138,8 @@ export function inspectSessionLog(text, {
     retentionLimit,
     entries,
     detail: ok
-      ? `${total} detailed session block(s), newest first (limit ${retentionLimit})`
-      : `${total} detailed session block(s); limit=${retentionLimit};`
+      ? `${entryCount}, newest first (limit ${retentionLimit})`
+      : `${entryCount}; limit=${retentionLimit};`
         + ` malformed=${unfamiliar}; newest_first=${newestFirst ? 'yes' : 'no'}`,
   };
 }

@@ -46,7 +46,7 @@ infer approval from silence, an automated status, another agent, or prior prose.
 Read, in order:
 
 1. The newest five valid capsules by frontmatter `created_at`.
-2. The newest five dated live Session Log blocks.
+2. The newest five live Session Log entries, including capsule lines and dated blocks.
 3. Open Trust Decay captures.
 4. The newest three dated Honesty Ledger sessions.
 5. Recent Failed Experiments and Failure Modes entries.

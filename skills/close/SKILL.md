@@ -185,8 +185,8 @@ See [[YYYY-MM-DD]].
 ```
 
 Use the current session's stable local key for idempotency. If the same entry
-already exists, update it instead of appending another block. Keep five
-detailed recent entries and collapse older entries into the archive.
+already exists, update it instead of appending another block. Keep the newest
+five entries across dated blocks and one-line capsule entries.
 
 ## Step 4.5: synthesis and bounded context hygiene
 
@@ -200,9 +200,9 @@ Then run:
 node "$AIGENT_ROOT/daemons/nightly-context-hygiene.mjs" --root "$AIGENT_ROOT"
 ```
 
-If it reports red, use `skills/context-hygiene/SKILL.md` to archive whole dated
-blocks before trimming, then re-run the checker. Refuse unfamiliar shapes and
-compare-and-swap races.
+If it reports red, use `skills/context-hygiene/SKILL.md` to archive whole
+blocks or whole lines before trimming, then re-run the checker. Refuse
+unfamiliar shapes and compare-and-swap races.
 
 ## Step 5: rebuild memory heat
 
