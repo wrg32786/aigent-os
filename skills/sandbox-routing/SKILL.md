@@ -1,5 +1,5 @@
 ---
-name: Sandbox Routing
+name: sandbox-routing
 description: "Route large files and command output through sandbox tools that return summaries. Use when extracting small details from huge files or avoiding context flooding."
 ---
 

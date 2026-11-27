@@ -9,6 +9,7 @@ For changes to the kernel itself (the 16 numbered system documents and extended 
 ## [Unreleased]
 
 - README, docs and the installer point to The AIgent Academy, with a tagged join link and an opt-out (`AIGENT_NO_SKOOL=1`, also off in CI or when stdout is not a TTY). A Get help contact link is available on new issues.
+- Twelve skill `name` fields now use lowercase kebab-case that matches the skill folder, so they satisfy the [Agent Skills](https://agentskills.io/specification) spec and load in Cursor, Codex, OpenCode, and other compatible clients. Skill bodies are unchanged. Install notes for each agent are in [docs/agent-skills.md](docs/agent-skills.md).
 
 ## [1.2.0] (2026-11-10): "Native skill matching and Caddy retirement"
 

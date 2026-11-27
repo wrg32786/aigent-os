@@ -1,5 +1,5 @@
 ---
-name: Promote
+name: promote
 description: "Promote conversation insights into durable vault notes, project updates, profiles, or doctrine. Use when saving an insight permanently or turning chat into a note."
 ---
 

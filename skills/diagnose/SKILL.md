@@ -1,5 +1,5 @@
 ---
-name: Diagnose
+name: diagnose
 description: "Diagnose kernel, skills, hooks, daemons, vault, doctrine, and principal config. Use when hooks fail, routing breaks, or agent behavior changes."
 ---
 
