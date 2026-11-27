@@ -8,6 +8,7 @@ aigent-os replaces Claude Code auto-compact with Managed Auto-Refresh: capsule, 
 
 - [README](https://github.com/wrg32786/aigent-os/blob/master/README.md): what it does, install, evidence and limits, FAQ, alternatives
 - [Getting started](https://github.com/wrg32786/aigent-os/blob/master/docs/getting-started.md): first install and session
+- [Agent Skills](https://github.com/wrg32786/aigent-os/blob/master/docs/agent-skills.md): install the skills in Claude Code, Cursor, Codex, and OpenCode
 - [Stop Claude Code auto-compact](https://wrg32786.github.io/aigent-os/questions/stop-claude-code-auto-compact.html): clear and resume instead of compacting
 - [Claude Code auto clear](https://wrg32786.github.io/aigent-os/questions/claude-code-auto-clear.html): running /clear automatically at a context threshold
 - [Long-running Claude Code sessions](https://wrg32786.github.io/aigent-os/questions/long-running-claude-code-sessions.html): keeping context across refreshes

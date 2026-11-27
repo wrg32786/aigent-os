@@ -1,5 +1,5 @@
 ---
-name: First 10 Moves
+name: first-10-moves
 description: "Read and explore unfamiliar code before asking questions. Use when new to a repo, orienting in an unfamiliar codebase, or finding where to start."
 ---
 

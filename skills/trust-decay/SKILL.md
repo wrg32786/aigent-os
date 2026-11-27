@@ -1,5 +1,5 @@
 ---
-name: Trust Decay
+name: trust-decay
 description: "Log confident agent claims and resolve them as right or wrong in TRUST_DECAY.md. Use when capturing confidence, tracking wrong claims, or a supposedly fixed bug returns."
 ---
 

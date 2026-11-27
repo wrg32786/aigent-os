@@ -1,5 +1,5 @@
 ---
-name: Envelope
+name: envelope
 description: "Classify directives as Ship, Ask one question, or Propose first. Use when deciding whether to act, clarify, or seek approval for a request."
 ---
 

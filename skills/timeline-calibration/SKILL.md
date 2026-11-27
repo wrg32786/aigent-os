@@ -1,5 +1,5 @@
 ---
-name: Timeline Calibration
+name: timeline-calibration
 description: "Calibrate AI work estimates in tool calls and session cycles. Use when estimating timelines, hours, days, or how long a coding task will take."
 ---
 

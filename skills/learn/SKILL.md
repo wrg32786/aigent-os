@@ -1,5 +1,5 @@
 ---
-name: Learn
+name: learn
 description: "Capture structured learning notes in the vault with relevance and reconsideration triggers. Use when reading a repo, watching a talk, or learning a tool."
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: Skill Audit
+name: skill-audit
 description: "Audit skill usage and description-trigger fit. Use when finding unused skills, reviewing invocation history, or identifying missing capabilities."
 ---
 

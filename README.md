@@ -8,7 +8,7 @@ aigent-OS is an open-source (MIT) Claude Code harness. It replaces Claude Code c
 
 What I actually run every day: four Claude Code agents on aigent-os. Titus is the overseer, Pheme owns the newsletter business, Davinci is the builder and architect, and Metis handles job task assignments and clerical work. They write [The AIgent](https://theaigent.xyz) newsletter every day (over 9k subscribers and closing in on 10k), build my courses, run a video engine that posts to Instagram, set up ad deals and build email funnels. aigent-os is what keeps them from forgetting: at 80% context each one writes a capsule, runs /clear and picks up right where it left off. *(Will)*
 
-[Install](#install) · [Demo](#see-it-resume-itself) · [Evidence and limits](#evidence-and-limits) · [Operator](#operator) · [What it changes](#what-this-changes-on-your-machine) · [Uninstall](#uninstall) · [FAQ](#faq) · [Alternatives](#alternatives) · [Docs](docs/getting-started.md)
+[Install](#install) · [Skills in other agents](#use-the-skills-in-other-agents) · [Demo](#see-it-resume-itself) · [Evidence and limits](#evidence-and-limits) · [Operator](#operator) · [What it changes](#what-this-changes-on-your-machine) · [Uninstall](#uninstall) · [FAQ](#faq) · [Alternatives](#alternatives) · [Docs](docs/getting-started.md)
 
 [![GitHub stars](https://img.shields.io/github/stars/wrg32786/aigent-os?style=flat-square)](https://github.com/wrg32786/aigent-os/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -50,6 +50,16 @@ Don't want the full install? [context-capsule](plugins/context-capsule) is the p
 /plugin marketplace add wrg32786/aigent-os
 /plugin install context-capsule@aigent-os
 ```
+
+## Use the skills in other agents
+
+The skills under `skills/` follow the [Agent Skills](https://agentskills.io) open standard, so Claude Code, Cursor, Codex, and other compatible agents can load them. A full aigent-OS install already wires them into Claude Code. To use the skill briefs in another agent, without installing the harness:
+
+```bash
+npx skills add wrg32786/aigent-os --yes
+```
+
+Some skills assume an aigent-OS vault, capsules, or hooks. Skills that are general procedures still work on their own. The Managed Auto-Refresh loop stays a Claude Code install. Per-agent setup (Cursor, Codex, OpenCode, and a Cursor rule example) is in [docs/agent-skills.md](docs/agent-skills.md).
 
 ## Evidence and limits
 

@@ -1,5 +1,5 @@
 ---
-name: Honesty Check
+name: honesty-check
 description: "Surface changes, omissions, guesses, and tradeoffs in an honesty ledger. Use when declaring work done, preparing review, or explaining what remains unfixed."
 ---
 

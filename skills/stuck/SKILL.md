@@ -1,5 +1,5 @@
 ---
-name: Stuck
+name: stuck
 description: "Walk a six-rung escalation ladder before declaring stuck. Use when out of ideas, hitting a wall, or unsure what approach to try before asking for help."
 ---
 

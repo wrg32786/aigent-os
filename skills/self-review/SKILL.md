@@ -1,5 +1,5 @@
 ---
-name: Self-Review
+name: self-review
 description: "Spawn a reviewer with specific verification questions. Use when reviewing code changes over 30 lines, across files, in hot paths or prompts, or with uncertainty."
 ---
 
